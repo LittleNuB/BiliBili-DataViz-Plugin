@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "B站消费数据中心",
+  "version": "1.0.0",
+  "description": "分析你的B站观看习惯，提供个性化消费洞察",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "cookies",
+    "storage",
+    "unlimitedStorage",
+    "alarms",
+    "tabs"
+  ],
+  "host_permissions": [
+    "*://api.bilibili.com/*",
+    "*://www.bilibili.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://www.bilibili.com/video/*"],
+      "js": ["content/player-monitor.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://www.bilibili.com/"],
+      "js": ["content/sidebar-card.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/index.html",
+    "default_title": "B站消费数据",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["dashboard/index.html"],
+      "matches": ["*://www.bilibili.com/*"]
+    }
+  ]
+}

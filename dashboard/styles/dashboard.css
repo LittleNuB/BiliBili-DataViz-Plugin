@@ -1,0 +1,20 @@
+/* BiliViz Dashboard Styles */
+:root {
+  --bili-pink: #FB7299;
+  --bili-pink-hover: #FC8CAB;
+  --bg-dark: #1A1A2E;
+  --bg-card: #222244;
+  --bg-card-hover: #2A2A4A;
+  --text-primary: #FFFFFF;
+  --text-secondary: #A0A0B0;
+  --border: #333355;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg-dark);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;
+  overflow-x: hidden;
+}
