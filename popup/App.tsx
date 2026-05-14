@@ -24,6 +24,8 @@ export function App() {
     }
   }
 
+  const isNotLoggedIn = error.value?.includes('NOT_LOGGED_IN') || error.value?.includes('-101');
+
   return (
     <div style={{ padding: '12px 0' }}>
       <h1 style={{
@@ -43,7 +45,30 @@ export function App() {
         </div>
       )}
 
-      {error.value && (
+      {error.value && isNotLoggedIn && (
+        <div style={{ textAlign: 'center', padding: '30px 20px' }}>
+          <div style={{ fontSize: '32px', marginBottom: '12px' }}>🔐</div>
+          <p style={{ color: '#A0A0B0', fontSize: '14px', marginBottom: '16px' }}>
+            请先登录B站账号
+          </p>
+          <button
+            onClick={() => chrome.tabs.create({ url: 'https://www.bilibili.com' })}
+            style={{
+              padding: '8px 24px',
+              background: '#FB7299',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '13px',
+            }}
+          >
+            打开B站登录 →
+          </button>
+        </div>
+      )}
+
+      {error.value && !isNotLoggedIn && (
         <div style={{ textAlign: 'center', padding: '20px', color: '#FF6B6B' }}>
           <p>{error.value}</p>
           <button

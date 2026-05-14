@@ -9,7 +9,9 @@ export type RequestAction =
   | 'GET_BEHAVIOR_DATA'
   | 'GET_EXPERIMENT_DATA'
   | 'SYNC_NOW'
-  | 'UPDATE_CONFIG';
+  | 'UPDATE_CONFIG'
+  | 'EXPORT_DATA'
+  | 'GET_SYNC_STATUS';
 
 // Content Script → Service Worker
 export type ContentAction =

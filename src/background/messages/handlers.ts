@@ -1,6 +1,6 @@
 import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse, PlayerActionPayload, PlayerHeartbeatPayload } from '../../shared/types/messages';
 import { syncLatestHistory } from '../sync/history-sync';
-import { loadConfig, saveConfig } from '../storage/config-store';
+import { loadConfig, saveConfig, getLastSyncTime } from '../storage/config-store';
 import { db } from '../storage/db';
 import type { UserConfig } from '../../shared/types/config';
 import {
@@ -95,6 +95,16 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     case 'UPDATE_CONFIG':
       await saveConfig(request.params as Partial<UserConfig>);
       return { success: true };
+    case 'EXPORT_DATA': {
+      const allRecords = await db.watchHistory.toArray();
+      const format = (request.params?.format as string) ?? 'json';
+      return { success: true, data: { records: allRecords, format } as T };
+    }
+    case 'GET_SYNC_STATUS': {
+      const lastSync = await getLastSyncTime();
+      const count = await db.watchHistory.count();
+      return { success: true, data: { lastSyncTime: lastSync, totalRecords: count } as T };
+    }
     default:
       return { success: false, error: `Unknown action: ${request.action}` };
   }
