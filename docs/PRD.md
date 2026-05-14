@@ -101,10 +101,25 @@
 
 | 数据 | 来源 | 说明 |
 |------|------|------|
-| 观看历史 | B站 API: `/x/web-interface/history/cursor` | 每 5 分钟增量拉取，首次安装全量回填 |
-| 视频详情 | B站 API: `/x/web-interface/view` | 批量获取分类、标签、UP 主信息，缓存 12h |
-| 播放行为 | Content Script 监听播放器事件 | play / pause / seek / ended / heartbeat |
+| 观看历史 | B站 API: `/x/web-interface/history/cursor` | 每 5 分钟增量拉取，首次安装或本地历史为空时全量回填 |
+| 视频详情 | B站 API: `/x/web-interface/view` | 批量补全分类、标签、UP 主、封面、时长等字段，缓存 12h |
+| 播放行为 | Content Script 监听播放器事件 | play / pause / seek / ended / ratechange / heartbeat |
 | 本地累积 | IndexedDB + chrome.storage.local | API 历史受限（~1000条），本地持续累积形成完整数据 |
+
+### 5.1 统计口径
+
+- **自然周**：本周数据范围为周一 00:00 到今天当前可用数据。
+- **自然月**：本月数据范围为当月 1 日 00:00 到今天当前可用数据。例如 5 月 14 日展示的是 5 月 1 日到 5 月 14 日。
+- **本地时区**：日期键与按日聚合使用浏览器本地时间，不使用 UTC 日期切分。
+- **同比区间**：周变化对比上一自然周；月变化对比上一自然月。
+- **播放行为**：seek / pause / session / 首播延迟从 `playerEvents` 聚合进入行为诊断与 daily aggregate。
+
+### 5.2 登录与同步容错
+
+- 扩展通过 `www.bilibili.com`、`api.bilibili.com`、`passport.bilibili.com` 的 `SESSDATA` Cookie 判断登录态，并通过 `credentials: include` 携带浏览器登录态请求 B站 API。
+- 如果安装时未登录导致首次回填失败，用户登录后点击 Popup 刷新会再次触发全量回填。
+- 如果历史表为空但 `backfillComplete` 被旧版本误标记为 true，刷新时会强制重新回填，避免 Dashboard 永久无数据。
+- 同步完成后按已保存历史逐日补算聚合，保证 Dashboard 使用的 `dailyAggregates` 与 `watchHistory` 保持一致。
 
 ---
 
@@ -136,7 +151,7 @@
 | 图表 | ECharts (模块化导入) | 原生支持所有图表类型（热力图/树图/词云/仪表盘），中文文档齐全 |
 | 数据库 | Dexie.js (IndexedDB) | Promise API、复合索引、批量操作，适合时序行为数据 |
 | 配置存储 | chrome.storage.local | 轻量 K-V，存放用户设置 |
-| 包管理 | pnpm | 快速、磁盘高效 |
+| 包管理 | npm | 使用 `package-lock.json` 固定依赖版本 |
 
 ## 8. 项目目录结构
 
@@ -496,7 +511,7 @@ efficiencyScore = (
 - [x] Dexie 数据库 Schema（3 张表 + 复合索引）
 - [x] B站 API 客户端（cookie 透传 + Token bucket 限速器 + 重试）
 - [x] 历史记录增量同步（cursor 分页 + kid 去重 + 持久化）
-- [x] 首次安装全量回填（分页拉取所有可用历史）
+- [x] 首次安装全量回填（分页拉取所有可用历史，支持登录后重试与空库强制回填）
 - [x] chrome.alarms 调度器（每 5 分钟同步，每天聚合）
 - [x] 消息路由基础架构
 
@@ -506,9 +521,9 @@ efficiencyScore = (
 - [x] 消费指标计算（metrics.ts: watch time / completion / streak）
 - [x] 内容偏好分析（category.ts: distribution / drift / buckets / tags）
 - [x] UP 主关系分析（creator.ts: ranking / deep bond / new creator / over-dependency）
-- [x] 行为模式诊断（behavior.ts: sessions / completion distribution）
+- [x] 行为模式诊断（behavior.ts: sessions / completion distribution / seek / pause / decision time）
 - [x] 效率评分 + 建议生成（scores.ts + suggestions.ts）
-- [x] 编排器 + 集成（engine.ts + wires into index.ts + handlers.ts）
+- [x] 编排器 + 集成（engine.ts + wires into index.ts + handlers.ts，支持历史逐日聚合补算）
 
 ### Phase 3: Content Scripts（约 1 周） ✅
 

@@ -7,6 +7,7 @@ import { getCreatorData } from './creator';
 import { getBehaviorData } from './behavior';
 import { computeAndStoreScore } from './scores';
 import { getExperimentData } from './suggestions';
+import { db } from '../storage/db';
 import { upsertAggregate } from '../storage/aggregate-repo';
 import { getRecordsByDateRange } from '../storage/watch-history-repo';
 
@@ -29,4 +30,18 @@ export async function computeDailyAggregate(forDate?: string): Promise<DailyAggr
   console.log(`[BiliViz] Computed daily aggregate for ${date}: ${aggregate.videoCount} videos, score=${score}`);
 
   return aggregate;
+}
+
+export async function computeStoredHistoryAggregates(): Promise<void> {
+  const records = await db.watchHistory.toArray();
+  const dates = new Set(records.map(r => dateKey(new Date(r.viewAt * 1000))));
+
+  if (dates.size === 0) {
+    await computeDailyAggregate();
+    return;
+  }
+
+  for (const date of dates) {
+    await computeDailyAggregate(date);
+  }
 }

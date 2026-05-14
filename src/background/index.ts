@@ -3,8 +3,9 @@ import { syncLatestHistory } from './sync/history-sync';
 import { runInitialBackfill } from './sync/initial-backfill';
 import { setupMessageHandlers } from './messages/handlers';
 import { deleteOlderThan } from './storage/watch-history-repo';
-import { loadConfig } from './storage/config-store';
-import { computeDailyAggregate } from './analytics/engine';
+import { loadConfig, getBackfillComplete } from './storage/config-store';
+import { db } from './storage/db';
+import { computeDailyAggregate, computeStoredHistoryAggregates } from './analytics/engine';
 
 console.log('[BiliViz] Service Worker started');
 
@@ -16,9 +17,14 @@ onAlarm(async (name) => {
   switch (name) {
     case 'history-sync':
       try {
-        const count = await syncLatestHistory();
+        const backfillComplete = await getBackfillComplete();
+        const storedCount = await db.watchHistory.count();
+        const shouldBackfill = !backfillComplete || storedCount === 0;
+        const count = shouldBackfill
+          ? await runInitialBackfill(storedCount === 0)
+          : await syncLatestHistory();
         if (count > 0) {
-          await computeDailyAggregate();
+          await computeStoredHistoryAggregates();
         }
       } catch (e) {
         console.error('[BiliViz] History sync failed:', e);
@@ -54,7 +60,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === 'install') {
     try {
       await runInitialBackfill();
-      await computeDailyAggregate();
+      await computeStoredHistoryAggregates();
     } catch (e) {
       console.error('[BiliViz] Initial backfill failed:', e);
     }

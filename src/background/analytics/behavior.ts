@@ -1,17 +1,21 @@
-import type { WatchHistoryRecord } from '../../shared/types/watch-event';
+import type { WatchHistoryRecord, PlayerEvent } from '../../shared/types/watch-event';
 import type { CompletionBucket, SessionPattern, BehaviorMetrics } from '../../shared/types/analytics';
 import { COMPLETION_BUCKETS } from '../../shared/constants';
 import { getRecordsByDateRange } from '../storage/watch-history-repo';
 import { dateKey } from '../../shared/utils/time';
+import { clamp } from '../../shared/utils/math';
+import { db } from '../storage/db';
 
 export function computeCompletionDistribution(records: WatchHistoryRecord[]): CompletionBucket[] {
   const buckets = new Map<string, number>();
   for (const b of COMPLETION_BUCKETS) buckets.set(b.label, 0);
 
   for (const r of records) {
-    const rate = r.duration > 0 ? r.progress / r.duration : 0;
-    for (const b of COMPLETION_BUCKETS) {
-      if (rate >= b.range[0] && rate < b.range[1]) {
+    const rate = r.duration > 0 ? clamp(r.progress / r.duration, 0, 1) : 0;
+    for (let i = 0; i < COMPLETION_BUCKETS.length; i++) {
+      const b = COMPLETION_BUCKETS[i];
+      const isLast = i === COMPLETION_BUCKETS.length - 1;
+      if (rate >= b.range[0] && (rate < b.range[1] || (isLast && rate <= b.range[1]))) {
         buckets.set(b.label, (buckets.get(b.label) ?? 0) + 1);
         break;
       }
@@ -104,14 +108,45 @@ export async function getBehaviorData(): Promise<BehaviorMetrics> {
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
   const records = await getRecordsByDateRange(dateKey(thirtyDaysAgo), dateKey(now));
+  const events = await db.playerEvents
+    .where('timestamp')
+    .between(thirtyDaysAgo.getTime(), now.getTime(), true, true)
+    .toArray();
+  const seekEvents = events.filter(e => e.eventType === 'seek');
+  const pauseEvents = events.filter(e => e.eventType === 'pause');
+  const seekFromValues = seekEvents.map(e => e.seekFrom).filter((v): v is number => typeof v === 'number');
+  const seekToValues = seekEvents.map(e => e.seekTo).filter((v): v is number => typeof v === 'number');
 
   return {
     completionDistribution: computeCompletionDistribution(records),
-    totalSeeks: 0,
-    avgSeeksPerVideo: 0,
-    commonSeekRange: [0, 0] as [number, number],
+    totalSeeks: seekEvents.length,
+    avgSeeksPerVideo: records.length > 0 ? Math.round((seekEvents.length / records.length) * 10) / 10 : 0,
+    commonSeekRange: [averageNumber(seekFromValues), averageNumber(seekToValues)] as [number, number],
     sessionPattern: detectSessionPatterns(records),
-    avgDecisionTime: 0,
-    totalPauses: 0,
+    avgDecisionTime: computeAvgDecisionTime(records, events),
+    totalPauses: pauseEvents.length,
   };
+}
+
+function averageNumber(values: number[]): number {
+  if (values.length === 0) return 0;
+  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+}
+
+function computeAvgDecisionTime(records: WatchHistoryRecord[], events: PlayerEvent[]): number {
+  const values: number[] = [];
+
+  for (const r of records) {
+    const firstPlay = events
+      .filter(e => e.eventType === 'play' && e.bvid === r.bvid && e.cid === r.cid)
+      .sort((a, b) => a.timestamp - b.timestamp)[0];
+    if (!firstPlay) continue;
+
+    const seconds = Math.round(firstPlay.timestamp / 1000 - r.viewAt);
+    if (seconds >= 0 && seconds <= 600) {
+      values.push(seconds);
+    }
+  }
+
+  return averageNumber(values);
 }

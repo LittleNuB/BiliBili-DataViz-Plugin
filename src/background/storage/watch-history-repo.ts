@@ -31,8 +31,10 @@ export async function getRecordsByDateRange(
   startDate: string,
   endDate: string,
 ): Promise<WatchHistoryRecord[]> {
-  const startTs = new Date(startDate).getTime() / 1000;
-  const endTs = new Date(endDate + 'T23:59:59.999Z').getTime() / 1000;
+  const [startYear, startMonth, startDay] = startDate.split('-').map(Number);
+  const [endYear, endMonth, endDay] = endDate.split('-').map(Number);
+  const startTs = new Date(startYear, startMonth - 1, startDay, 0, 0, 0, 0).getTime() / 1000;
+  const endTs = new Date(endYear, endMonth - 1, endDay, 23, 59, 59, 999).getTime() / 1000;
   return db.watchHistory.where('viewAt').between(startTs, endTs, true, true).toArray();
 }
 

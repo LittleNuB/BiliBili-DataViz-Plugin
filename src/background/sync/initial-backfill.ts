@@ -4,12 +4,12 @@ import { filterNewItems } from './dedup';
 import { bulkInsert } from '../storage/watch-history-repo';
 import { setBackfillComplete, getBackfillComplete } from '../storage/config-store';
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
-import type { HistoryCursorItem } from '../../shared/types/video-info';
+import type { HistoryCursorItem, VideoInfo } from '../../shared/types/video-info';
 import { MAX_BACKFILL_PAGES } from '../../shared/constants';
 
-export async function runInitialBackfill(): Promise<number> {
+export async function runInitialBackfill(force = false): Promise<number> {
   const alreadyDone = await getBackfillComplete();
-  if (alreadyDone) {
+  if (alreadyDone && !force) {
     console.log('[BiliViz] Initial backfill already completed');
     return 0;
   }
@@ -22,29 +22,9 @@ export async function runInitialBackfill(): Promise<number> {
     if (newItems.length === 0) return;
 
     const bvids = [...new Set(newItems.map(i => i.bvid))];
-    await batchFetchVideoInfo(bvids);
+    const videoInfo = await batchFetchVideoInfo(bvids);
 
-    const records: WatchHistoryRecord[] = newItems.map((item) => ({
-      kid: item.kid,
-      avid: item.avid ?? 0,
-      bvid: item.bvid,
-      cid: item.cid ?? 0,
-      title: item.title,
-      authorName: item.author_name,
-      authorMid: item.author_mid,
-      tagName: item.tag_name ?? '',
-      tags: item.tags ? item.tags.split(',').map(t => t.trim()).filter(Boolean) : [],
-      cover: item.cover ?? '',
-      viewAt: item.view_at,
-      progress: item.progress,
-      duration: item.duration,
-      actualCompletion: item.duration > 0 ? item.progress / item.duration : 0,
-      deviceType: item.device ?? 3,
-      isFavorite: item.is_fav !== 0,
-      business: item.business,
-      dt: item.dt ?? 0,
-      syncedAt: Date.now(),
-    }));
+    const records: WatchHistoryRecord[] = newItems.map(item => toWatchHistoryRecord(item, videoInfo.get(item.bvid)));
 
     await bulkInsert(records);
     totalItems += records.length;
@@ -54,4 +34,31 @@ export async function runInitialBackfill(): Promise<number> {
   await setBackfillComplete();
   console.log(`[BiliViz] Backfill complete: ${totalItems} total items`);
   return totalItems;
+}
+
+function toWatchHistoryRecord(item: HistoryCursorItem, info?: VideoInfo): WatchHistoryRecord {
+  const duration = item.duration || info?.duration || 0;
+  const tags = item.tags ? item.tags.split(',').map(t => t.trim()).filter(Boolean) : [];
+
+  return {
+    kid: item.kid,
+    avid: item.avid ?? info?.avid ?? 0,
+    bvid: item.bvid,
+    cid: item.cid ?? 0,
+    title: item.title || info?.title || '',
+    authorName: item.author_name || info?.owner?.name || '',
+    authorMid: item.author_mid || info?.owner?.mid || 0,
+    tagName: item.tag_name || info?.tname || '',
+    tags: tags.length > 0 ? tags : Array.isArray(info?.tags) ? info.tags : [],
+    cover: item.cover || info?.pic || '',
+    viewAt: item.view_at,
+    progress: item.progress,
+    duration,
+    actualCompletion: duration > 0 ? Math.min(item.progress / duration, 1) : 0,
+    deviceType: item.device ?? 3,
+    isFavorite: item.is_fav !== 0,
+    business: item.business,
+    dt: item.dt ?? 0,
+    syncedAt: Date.now(),
+  };
 }

@@ -12,13 +12,13 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "baseUrl": ".",
     "paths": {
       "@shared/*": ["src/shared/*"],
       "@background/*": ["src/background/*"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "popup/**/*.ts", "popup/**/*.tsx", "dashboard/**/*.ts", "dashboard/**/*.tsx"],
   "exclude": ["node_modules", "dist"]
 }

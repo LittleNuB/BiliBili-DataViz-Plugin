@@ -1,6 +1,7 @@
 import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse, PlayerActionPayload, PlayerHeartbeatPayload } from '../../shared/types/messages';
 import { syncLatestHistory } from '../sync/history-sync';
-import { loadConfig, saveConfig, getLastSyncTime } from '../storage/config-store';
+import { runInitialBackfill } from '../sync/initial-backfill';
+import { loadConfig, saveConfig, getLastSyncTime, getBackfillComplete } from '../storage/config-store';
 import { db } from '../storage/db';
 import type { UserConfig } from '../../shared/types/config';
 import {
@@ -10,7 +11,7 @@ import {
   getCreatorData,
   getBehaviorData,
   getExperimentData,
-  computeDailyAggregate,
+  computeStoredHistoryAggregates,
 } from '../analytics/engine';
 import { getDeviceData } from '../analytics/device';
 
@@ -94,9 +95,16 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     case 'GET_DEVICE_DATA':
       return { success: true, data: await getDeviceData() as T };
     case 'SYNC_NOW':
-      await syncLatestHistory();
-      await computeDailyAggregate();
-      return { success: true, data: { synced: true } as T };
+      {
+        const backfillComplete = await getBackfillComplete();
+        const storedCount = await db.watchHistory.count();
+        const shouldBackfill = !backfillComplete || storedCount === 0;
+        const count = shouldBackfill
+          ? await runInitialBackfill(storedCount === 0)
+          : await syncLatestHistory();
+        await computeStoredHistoryAggregates();
+        return { success: true, data: { synced: true, count } as T };
+      }
     case 'UPDATE_CONFIG':
       await saveConfig(request.params as Partial<UserConfig>);
       return { success: true };

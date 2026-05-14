@@ -16,7 +16,7 @@ export function App() {
     error.value = null;
     try {
       if (forceSync) {
-        await requestSW('SYNC_NOW').catch(() => {});
+        await requestSW('SYNC_NOW');
       }
       const data = await requestSW<QuickStats>('GET_QUICK_STATS');
       quickStats.value = data;

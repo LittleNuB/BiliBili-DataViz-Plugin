@@ -1,11 +1,9 @@
 import type { WatchHistoryRecord, DailyAggregate } from '../../shared/types/watch-event';
 import type { DashboardOverview, QuickStats } from '../../shared/types/analytics';
-import { startOfDay, startOfWeek, startOfMonth, daysAgo, dateKey, daysBetween } from '../../shared/utils/time';
-import { percentChange, clamp } from '../../shared/utils/math';
-import { getAggregate, getAggregatesSince } from '../storage/aggregate-repo';
-import { getRecordsByDateRange, getRecordsSince } from '../storage/watch-history-repo';
+import { startOfWeek, startOfMonth, daysAgo, dateKey, daysBetween } from '../../shared/utils/time';
+import { percentChange } from '../../shared/utils/math';
+import { getAggregate, getAggregatesByDateRange } from '../storage/aggregate-repo';
 import { loadConfig } from '../storage/config-store';
-import { aggregateWindow } from './aggregator';
 
 export function computeCompletion(records: WatchHistoryRecord[]): number {
   if (records.length === 0) return 0;
@@ -64,7 +62,7 @@ export async function getQuickStats(): Promise<QuickStats> {
   const todayAgg = await getAggregate(todayKey);
 
   const weekStart = dateKey(startOfWeek());
-  const thisWeekAggs = await getAggregatesSince(weekStart);
+  const thisWeekAggs = await getAggregatesByDateRange(weekStart, todayKey);
 
   const weeklyWatch = thisWeekAggs.reduce((s, a) => s + a.totalWatchTime, 0);
 
@@ -80,18 +78,21 @@ export async function getQuickStats(): Promise<QuickStats> {
 
 export async function getDashboardOverview(): Promise<DashboardOverview> {
   const now = new Date();
-  const weekStart = dateKey(startOfWeek());
+  const todayKey = dateKey(now);
+  const weekStartDate = startOfWeek(now);
+  const weekStart = dateKey(weekStartDate);
   const lastWeekStart = dateKey(startOfWeek(daysAgo(7)));
-  const monthStart = dateKey(startOfMonth());
+  const lastWeekEndDate = new Date(weekStartDate);
+  lastWeekEndDate.setDate(lastWeekEndDate.getDate() - 1);
+  const lastWeekEnd = dateKey(lastWeekEndDate);
+  const monthStart = dateKey(startOfMonth(now));
 
-  const thisWeekAggs = await getAggregatesSince(weekStart);
-  const lastWeekAggs = await getAggregatesSince(lastWeekStart);
-  const thisMonthAggs = await getAggregatesSince(monthStart);
+  const thisWeekAggs = await getAggregatesByDateRange(weekStart, todayKey);
+  const lastWeekAggs = await getAggregatesByDateRange(lastWeekStart, lastWeekEnd);
+  const thisMonthAggs = await getAggregatesByDateRange(monthStart, todayKey);
 
   const weeklyWatch = thisWeekAggs.reduce((s, a) => s + a.totalWatchTime, 0);
-  const lastWeekWatch = lastWeekAggs
-    .filter(a => a.date < weekStart)
-    .reduce((s, a) => s + a.totalWatchTime, 0);
+  const lastWeekWatch = lastWeekAggs.reduce((s, a) => s + a.totalWatchTime, 0);
   const monthlyWatch = thisMonthAggs.reduce((s, a) => s + a.totalWatchTime, 0);
 
   const streak = computeStreak(thisWeekAggs);
@@ -115,12 +116,10 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
     ? thisWeekAggs.reduce((s, a) => s + a.efficiencyScore, 0) / thisWeekAggs.length
     : 0;
 
-  // For monthly change, compare with last month
   const lastMonthStart = dateKey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-  const lastMonthAggs = await getAggregatesSince(lastMonthStart);
-  const lastMonthWatch = lastMonthAggs
-    .filter(a => a.date < monthStart)
-    .reduce((s, a) => s + a.totalWatchTime, 0);
+  const lastMonthEnd = dateKey(new Date(now.getFullYear(), now.getMonth(), 0));
+  const lastMonthAggs = await getAggregatesByDateRange(lastMonthStart, lastMonthEnd);
+  const lastMonthWatch = lastMonthAggs.reduce((s, a) => s + a.totalWatchTime, 0);
 
   return {
     weeklyWatchTime: weeklyWatch,

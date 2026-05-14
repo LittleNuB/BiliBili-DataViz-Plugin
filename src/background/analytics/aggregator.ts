@@ -1,6 +1,8 @@
-import type { WatchHistoryRecord, DailyAggregate } from '../../shared/types/watch-event';
+import type { WatchHistoryRecord, PlayerEvent, DailyAggregate } from '../../shared/types/watch-event';
 import { DURATION_BUCKETS } from '../../shared/constants';
-import { dateKey, startOfWeek, startOfMonth } from '../../shared/utils/time';
+import { dateKey } from '../../shared/utils/time';
+import { clamp } from '../../shared/utils/math';
+import { db } from '../storage/db';
 import { getRecordsByDateRange } from '../storage/watch-history-repo';
 
 /** Group records by date key (YYYY-MM-DD) */
@@ -79,7 +81,7 @@ export function aggregateWindow(records: WatchHistoryRecord[]): {
       catMap[r.tagName] = (catMap[r.tagName] ?? 0) + watchTime;
     }
 
-    const completion = r.duration > 0 ? r.progress / r.duration : 0;
+    const completion = r.duration > 0 ? clamp(r.progress / r.duration, 0, 1) : 0;
     totalCompletion += completion;
 
     // Duration bucket
@@ -109,17 +111,55 @@ export function aggregateWindow(records: WatchHistoryRecord[]): {
 /** Compute a full DailyAggregate for a given date */
 export async function aggregateDay(date: string): Promise<DailyAggregate> {
   const records = await getRecordsByDateRange(date, date);
+  const [year, month, day] = date.split('-').map(Number);
+  const startMs = new Date(year, month - 1, day, 0, 0, 0, 0).getTime();
+  const endMs = new Date(year, month - 1, day, 23, 59, 59, 999).getTime();
+  const events = await db.playerEvents.where('timestamp').between(startMs, endMs, true, true).toArray();
   const windowed = aggregateWindow(records);
+  const totalSeeks = events.filter(e => e.eventType === 'seek').length;
+  const totalPauses = events.filter(e => e.eventType === 'pause').length;
 
   return {
     date,
     ...windowed,
-    sessions: 0,
-    totalSeeks: 0,
-    totalPauses: 0,
-    avgDecisionTime: 0,
+    sessions: countSessions(records),
+    totalSeeks,
+    totalPauses,
+    avgDecisionTime: computeAvgDecisionTime(records, events),
     efficiencyScore: 0,
   };
+}
+
+function countSessions(records: WatchHistoryRecord[]): number {
+  if (records.length === 0) return 0;
+
+  const sorted = [...records].sort((a, b) => a.viewAt - b.viewAt);
+  let sessions = 1;
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i].viewAt - sorted[i - 1].viewAt > 1800) {
+      sessions++;
+    }
+  }
+  return sessions;
+}
+
+function computeAvgDecisionTime(records: WatchHistoryRecord[], events: PlayerEvent[]): number {
+  const values: number[] = [];
+
+  for (const r of records) {
+    const firstPlay = events
+      .filter(e => e.eventType === 'play' && e.bvid === r.bvid && e.cid === r.cid)
+      .sort((a, b) => a.timestamp - b.timestamp)[0];
+    if (!firstPlay) continue;
+
+    const seconds = Math.round(firstPlay.timestamp / 1000 - r.viewAt);
+    if (seconds >= 0 && seconds <= 600) {
+      values.push(seconds);
+    }
+  }
+
+  if (values.length === 0) return 0;
+  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
 }
 
 /** Sum multiple DailyAggregates into one windowed aggregate */

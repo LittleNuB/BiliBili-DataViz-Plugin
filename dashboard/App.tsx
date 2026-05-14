@@ -39,10 +39,12 @@ export function App() {
       if (format === 'csv') {
         const header = 'bvid,title,authorName,tagName,viewAt,progress,duration,completion';
         const rows = records.map((r: WatchHistoryRecord) =>
-          [r.bvid, `"${r.title}"`, `"${r.authorName}"`, r.tagName, r.viewAt, r.progress, r.duration, Math.round(r.actualCompletion * 100)].join(',')
+          [r.bvid, r.title, r.authorName, r.tagName, r.viewAt, r.progress, r.duration, Math.round(r.actualCompletion * 100)]
+            .map(csvEscape)
+            .join(',')
         );
-        content = header + '\n' + rows.join('\n');
-        mime = 'text/csv';
+        content = '\uFEFF' + header + '\n' + rows.join('\n');
+        mime = 'text/csv;charset=utf-8';
         ext = 'csv';
       } else {
         content = JSON.stringify(records, null, 2);
@@ -110,4 +112,12 @@ export function App() {
       </ErrorBoundary>
     </div>
   );
+}
+
+function csvEscape(value: string | number | boolean | null | undefined): string {
+  let text = value == null ? '' : String(value);
+  if (/^[=+\-@]/.test(text)) {
+    text = `'${text}`;
+  }
+  return `"${text.replace(/"/g, '""')}"`;
 }

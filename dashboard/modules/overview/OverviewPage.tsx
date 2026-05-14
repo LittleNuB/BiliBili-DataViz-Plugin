@@ -9,6 +9,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
 import { formatTimeHHMM, formatPercent } from '../../../src/shared/utils/format';
 import { HOUR_LABELS, WEEKDAY_LABELS, BILI_PINK, CHART_COLORS } from '../../../src/shared/constants';
+import type { EChartsOption } from 'echarts';
 
 interface DeviceData {
   breakdown: { label: string; deviceType: number; watchTime: number; videoCount: number; avgCompletion: number; percentage: number }[];
@@ -42,14 +43,14 @@ export function OverviewPage() {
   if (!d) return <EmptyState />;
 
   const maxHeat = Math.max(...d.hourlyHeatmap.flat(), 1);
-  const heatmapOption = {
+  const heatmapOption: EChartsOption = {
     tooltip: { position: 'top' },
     grid: { top: 30, right: 20, bottom: 20, left: 50 },
     xAxis: { type: 'category', data: HOUR_LABELS, splitArea: { show: true } },
     yAxis: { type: 'category', data: WEEKDAY_LABELS, splitArea: { show: true } },
     visualMap: { min: 0, max: maxHeat, calculable: true, orient: 'horizontal', left: 'center', bottom: 0, inRange: { color: ['#1A1A2E', '#00A1D6', '#FB7299'] } },
     series: [{
-      type: 'heatmap',
+      type: 'heatmap' as const,
       data: d.hourlyHeatmap.flatMap((row, hour) => row.map((val, day) => [hour, day, val])),
       label: { show: false },
       emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.5)' } },

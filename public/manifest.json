@@ -17,8 +17,8 @@
     "tabs"
   ],
   "host_permissions": [
-    "*://api.bilibili.com/*",
-    "*://www.bilibili.com/*"
+    "*://*.bilibili.com/*",
+    "*://bilibili.com/*"
   ],
   "background": {
     "service_worker": "background.js",

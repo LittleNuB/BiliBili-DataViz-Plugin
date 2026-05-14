@@ -5,9 +5,19 @@ import { signWbi } from './wbi-sign';
 
 const WBI_REQUIRED_CODES = [-403, -400];
 
-async function getBilibiliCookies(): Promise<string> {
-  const cookies = await chrome.cookies.getAll({ domain: '.bilibili.com' });
-  return cookies.map(c => `${c.name}=${c.value}`).join('; ');
+const BILI_COOKIE_URLS = [
+  'https://www.bilibili.com/',
+  'https://api.bilibili.com/',
+  'https://passport.bilibili.com/',
+];
+
+async function hasBilibiliLoginCookie(): Promise<boolean> {
+  for (const url of BILI_COOKIE_URLS) {
+    const sessdata = await chrome.cookies.get({ url, name: 'SESSDATA' });
+    if (sessdata?.value) return true;
+  }
+
+  return false;
 }
 
 export async function biliGet<T>(
@@ -29,8 +39,7 @@ export async function biliGet<T>(
     await signWbi(url.searchParams);
   }
 
-  const cookie = await getBilibiliCookies();
-  if (!cookie.includes('SESSDATA')) {
+  if (!(await hasBilibiliLoginCookie())) {
     throw new Error('NOT_LOGGED_IN');
   }
 
@@ -40,10 +49,10 @@ export async function biliGet<T>(
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       const response = await fetch(url.toString(), {
+        credentials: 'include',
+        referrer: 'https://www.bilibili.com/',
         headers: {
-          Cookie: cookie,
-          Referer: 'https://www.bilibili.com/',
-          'User-Agent': navigator.userAgent,
+          Accept: 'application/json, text/plain, */*',
         },
       });
 

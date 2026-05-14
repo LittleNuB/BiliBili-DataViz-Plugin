@@ -20,5 +20,5 @@ export async function getAggregatesByDateRange(
 }
 
 export async function getAggregatesSince(date: string): Promise<DailyAggregate[]> {
-  return db.dailyAggregates.where('date').above(date).toArray();
+  return db.dailyAggregates.where('date').aboveOrEqual(date).toArray();
 }
