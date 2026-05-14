@@ -307,7 +307,49 @@ type ContentAction =
   | 'PAGE_NAVIGATION'      // 页面导航事件
 ```
 
-### 9.4 关键设计决策
+### 9.4 分析引擎架构
+
+```
+src/background/analytics/
+├── aggregator.ts     # 通用聚合：group-by by day, windowed aggregation
+├── metrics.ts        # 消费指标：watchTime, completion, streak
+├── category.ts       # 内容偏好：distribution, drift, buckets, tags
+├── creator.ts        # UP主关系：ranking, deepBond, newCreator, overDependency
+├── behavior.ts       # 行为诊断：sessions, completionDistribution
+├── scores.ts         # 效率评分：weighted composite 0-100
+├── suggestions.ts    # 建议生成：rule-based tips + blind box
+└── engine.ts         # 编排器：统一入口，协调各模块
+```
+
+**数据依赖关系**:
+```
+watchHistory (raw) ──► metrics.ts ──► dailyAggregates (computed)
+                    ├──► category.ts ──► DailyAggregate.categoryBreakdown
+                    ├──► creator.ts  ──► DailyAggregate.creatorBreakdown
+                    ├──► behavior.ts ──► DailyAggregate.{sessions,totalSeeks,...}
+                    └──► scores.ts   ──► DailyAggregate.efficiencyScore
+
+dailyAggregates ──► engine.ts ──► { QuickStats, DashboardOverview, ... }
+                             ──► suggestions.ts ──► { WeeklyTip[], BlindBoxItem[] }
+```
+
+**效率分公式**:
+```
+efficiencyScore = (
+  0.30 × normalizedCompletionRate +   // 完播率
+  0.25 × categoryDiversityIndex +     // 分区多样性 (uniqueCategories / total watched)
+  0.20 × streakContinuity +           // 连续观看天数 / 最大可能值
+  0.15 × goalAchievement +            // 实际时长 / 目标时长
+  0.10 × (1 - maxCreatorShare)        // 反过度依赖
+) × 100
+```
+
+**分析触发时机**:
+- `chrome.alarms` 每 60 分钟触发 `daily-aggregate` 任务
+- 首次安装后立即触发初始聚合
+- UI 请求时从 `dailyAggregates` 表读取预计算数据，按需做周/月汇总
+
+### 9.5 关键设计决策
 
 | 决策 | 说明 |
 |------|------|
@@ -447,24 +489,26 @@ efficiencyScore = (
 
 ## 12. 实现阶段
 
-### Phase 1: 基础骨架 + 数据采集（约 2 周）
+### Phase 1: 基础骨架 + 数据采集（约 2 周） ✅
 
-- [ ] Vite 多入口构建 + TypeScript 严格模式
-- [ ] Manifest V3 声明 + 所有权限
-- [ ] Dexie 数据库 Schema（3 张表 + 复合索引）
-- [ ] B站 API 客户端（cookie 透传 + Token bucket 限速器 + 重试）
-- [ ] 历史记录增量同步（cursor 分页 + kid 去重 + 持久化）
-- [ ] 首次安装全量回填（分页拉取所有可用历史）
-- [ ] chrome.alarms 调度器（每 5 分钟同步，每天聚合）
+- [x] Vite 多入口构建 + TypeScript 严格模式
+- [x] Manifest V3 声明 + 所有权限
+- [x] Dexie 数据库 Schema（3 张表 + 复合索引）
+- [x] B站 API 客户端（cookie 透传 + Token bucket 限速器 + 重试）
+- [x] 历史记录增量同步（cursor 分页 + kid 去重 + 持久化）
+- [x] 首次安装全量回填（分页拉取所有可用历史）
+- [x] chrome.alarms 调度器（每 5 分钟同步，每天聚合）
+- [x] 消息路由基础架构
 
-### Phase 2: 分析引擎（约 1 周）
+### Phase 2: 分析引擎（约 1 周） 🔄
 
-- [ ] 通用聚合框架（group-by + time-window）
-- [ ] 消费指标计算（watch time / completion / streak）
-- [ ] 内容偏好分析（category distribution / drift tracking）
-- [ ] UP 主关系分析（ranking / deep bond / over-dependency）
-- [ ] 行为模式诊断（session / seek / decision speed）
-- [ ] 效率评分 + 建议生成引擎
+- [ ] 通用聚合框架（aggregator.ts: group-by + time-window）
+- [ ] 消费指标计算（metrics.ts: watch time / completion / streak）
+- [ ] 内容偏好分析（category.ts: distribution / drift / buckets / tags）
+- [ ] UP 主关系分析（creator.ts: ranking / deep bond / new creator / over-dependency）
+- [ ] 行为模式诊断（behavior.ts: sessions / completion distribution）
+- [ ] 效率评分 + 建议生成（scores.ts + suggestions.ts）
+- [ ] 编排器 + 集成（engine.ts + wires into index.ts + handlers.ts）
 
 ### Phase 3: Content Scripts（约 1 周）
 

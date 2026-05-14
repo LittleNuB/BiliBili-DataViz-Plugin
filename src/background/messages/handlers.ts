@@ -2,6 +2,14 @@ import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse } from '../
 import { syncLatestHistory } from '../sync/history-sync';
 import { loadConfig, saveConfig } from '../storage/config-store';
 import type { UserConfig } from '../../shared/types/config';
+import {
+  getQuickStats,
+  getDashboardOverview,
+  getPreferenceData,
+  getCreatorData,
+  getBehaviorData,
+  getExperimentData,
+} from '../analytics/engine';
 
 export function setupMessageHandlers(): void {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -47,15 +55,15 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     case 'GET_QUICK_STATS':
       return { success: true, data: await getQuickStats() as T };
     case 'GET_DASHBOARD_DATA':
-      return { success: true, data: {} as T };
+      return { success: true, data: await getDashboardOverview() as T };
     case 'GET_PREFERENCE_DATA':
-      return { success: true, data: {} as T };
+      return { success: true, data: await getPreferenceData() as T };
     case 'GET_CREATOR_DATA':
-      return { success: true, data: {} as T };
+      return { success: true, data: await getCreatorData() as T };
     case 'GET_BEHAVIOR_DATA':
-      return { success: true, data: {} as T };
+      return { success: true, data: await getBehaviorData() as T };
     case 'GET_EXPERIMENT_DATA':
-      return { success: true, data: {} as T };
+      return { success: true, data: await getExperimentData() as T };
     case 'SYNC_NOW':
       await syncLatestHistory();
       return { success: true, data: { synced: true } as T };
@@ -65,16 +73,4 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     default:
       return { success: false, error: `Unknown action: ${request.action}` };
   }
-}
-
-async function getQuickStats() {
-  const config = await loadConfig();
-  return {
-    todayWatchTime: 0,
-    dailyGoal: config.dailyWatchGoal,
-    streakDays: 0,
-    avgCompletion: 0,
-    efficiencyScore: 0,
-    weeklyWatchTime: 0,
-  };
 }

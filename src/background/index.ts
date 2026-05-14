@@ -4,6 +4,7 @@ import { runInitialBackfill } from './sync/initial-backfill';
 import { setupMessageHandlers } from './messages/handlers';
 import { deleteOlderThan } from './storage/watch-history-repo';
 import { loadConfig } from './storage/config-store';
+import { computeDailyAggregate } from './analytics/engine';
 
 console.log('[BiliViz] Service Worker started');
 
@@ -22,8 +23,11 @@ onAlarm(async (name) => {
       break;
 
     case 'daily-aggregate':
-      console.log('[BiliViz] Daily aggregate alarm fired');
-      // Aggregate computation will be implemented in Phase 2
+      try {
+        await computeDailyAggregate();
+      } catch (e) {
+        console.error('[BiliViz] Aggregate computation failed:', e);
+      }
       break;
 
     case 'cleanup':
@@ -47,6 +51,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === 'install') {
     try {
       await runInitialBackfill();
+      await computeDailyAggregate();
     } catch (e) {
       console.error('[BiliViz] Initial backfill failed:', e);
     }

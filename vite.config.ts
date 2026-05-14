@@ -1,11 +1,18 @@
 import { defineConfig } from 'vite';
-import { resolve } from 'path';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const resolveRoot = (...segments: string[]) => path.resolve(__dirname, ...segments);
 
 export default defineConfig({
+  root: __dirname,
   resolve: {
     alias: {
-      '@shared': resolve(__dirname, 'src/shared'),
-      '@background': resolve(__dirname, 'src/background'),
+      '@shared': resolveRoot('src/shared'),
+      '@background': resolveRoot('src/background'),
     },
   },
   build: {
@@ -14,11 +21,11 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        background: resolve(__dirname, 'src/background/index.ts'),
-        'content/player-monitor': resolve(__dirname, 'src/content/player-monitor/index.ts'),
-        'content/sidebar-card': resolve(__dirname, 'src/content/sidebar-card/index.ts'),
-        popup: resolve(__dirname, 'popup/index.html'),
-        dashboard: resolve(__dirname, 'dashboard/index.html'),
+        background: 'src/background/index.ts',
+        'content/player-monitor': 'src/content/player-monitor/index.ts',
+        'content/sidebar-card': 'src/content/sidebar-card/index.ts',
+        popup: 'popup/index.html',
+        dashboard: 'dashboard/index.html',
       },
       output: {
         entryFileNames: '[name].js',
