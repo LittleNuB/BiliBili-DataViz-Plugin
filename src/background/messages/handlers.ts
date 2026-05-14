@@ -1,7 +1,14 @@
 import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse, PlayerActionPayload, PlayerHeartbeatPayload } from '../../shared/types/messages';
 import { syncLatestHistory } from '../sync/history-sync';
 import { runInitialBackfill } from '../sync/initial-backfill';
-import { loadConfig, saveConfig, getLastSyncTime, getBackfillComplete } from '../storage/config-store';
+import {
+  loadConfig,
+  saveConfig,
+  getLastSyncTime,
+  getBackfillComplete,
+  getDeviceTypeMigrationComplete,
+  setDeviceTypeMigrationComplete,
+} from '../storage/config-store';
 import { db } from '../storage/db';
 import type { UserConfig } from '../../shared/types/config';
 import {
@@ -97,11 +104,15 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     case 'SYNC_NOW':
       {
         const backfillComplete = await getBackfillComplete();
+        const deviceMigrationComplete = await getDeviceTypeMigrationComplete();
         const storedCount = await db.watchHistory.count();
-        const shouldBackfill = !backfillComplete || storedCount === 0;
+        const shouldBackfill = !backfillComplete || storedCount === 0 || !deviceMigrationComplete;
         const count = shouldBackfill
-          ? await runInitialBackfill(storedCount === 0)
+          ? await runInitialBackfill(storedCount === 0 || !deviceMigrationComplete)
           : await syncLatestHistory();
+        if (!deviceMigrationComplete) {
+          await setDeviceTypeMigrationComplete();
+        }
         await computeStoredHistoryAggregates();
         return { success: true, data: { synced: true, count } as T };
       }

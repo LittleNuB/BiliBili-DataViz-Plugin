@@ -44,9 +44,16 @@ export interface HistoryCursorItem {
   cover: string;
   tag_name: string;
   tags: string;
-  device: number;
+  device?: number;
   is_fav: number;
   dt: number;
+  history?: {
+    oid?: number;
+    bvid?: string;
+    cid?: number;
+    dt?: number;
+    business?: string;
+  };
 }
 
 export interface HistoryCursorData {

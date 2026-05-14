@@ -1,13 +1,24 @@
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
 import { getRecordsByDateRange } from '../storage/watch-history-repo';
 import { dateKey } from '../../shared/utils/time';
+import { clamp } from '../../shared/utils/math';
 
 const DEVICE_LABELS: Record<number, string> = {
+  0: '其他',
   1: '手机',
-  2: '平板',
-  3: 'PC',
-  4: 'TV',
+  2: 'PC',
+  3: '手机',
+  4: '平板',
+  5: '手机',
+  6: '平板',
+  7: '手机',
+  33: 'TV',
 };
+
+const MOBILE_DEVICE_TYPES = new Set([1, 3, 5, 7]);
+const PAD_DEVICE_TYPES = new Set([4, 6]);
+const PC_DEVICE_TYPES = new Set([2]);
+const TV_DEVICE_TYPES = new Set([33]);
 
 export interface DeviceBreakdown {
   label: string;
@@ -19,15 +30,15 @@ export interface DeviceBreakdown {
 }
 
 export interface DeviceHourlyData {
-  mobile: number[];  // 24 hours
-  pc: number[];      // 24 hours
+  mobile: number[];
+  pc: number[];
 }
 
 export function computeDeviceBreakdown(records: WatchHistoryRecord[]): DeviceBreakdown[] {
   const map = new Map<number, { watchTime: number; videoCount: number; totalCompletion: number }>();
 
   for (const r of records) {
-    const dt = r.deviceType || 3;
+    const dt = r.deviceType ?? 0;
     let entry = map.get(dt);
     if (!entry) {
       entry = { watchTime: 0, videoCount: 0, totalCompletion: 0 };
@@ -35,7 +46,7 @@ export function computeDeviceBreakdown(records: WatchHistoryRecord[]): DeviceBre
     }
     entry.watchTime += r.progress > 0 ? r.progress : 0;
     entry.videoCount++;
-    entry.totalCompletion += r.duration > 0 ? r.progress / r.duration : 0;
+    entry.totalCompletion += r.duration > 0 ? clamp(r.progress / r.duration, 0, 1) : 0;
   }
 
   const totalTime = Array.from(map.values()).reduce((s, e) => s + e.watchTime, 0);
@@ -59,9 +70,9 @@ export function computeDeviceHourly(records: WatchHistoryRecord[]): DeviceHourly
   for (const r of records) {
     const hour = new Date(r.viewAt * 1000).getHours();
     const watchTime = r.progress > 0 ? r.progress : 0;
-    if (r.deviceType === 1 || r.deviceType === 2) {
+    if (isMobileLikeDevice(r.deviceType)) {
       mobile[hour] += watchTime;
-    } else {
+    } else if (isPcLikeDevice(r.deviceType)) {
       pc[hour] += watchTime;
     }
   }
@@ -82,20 +93,28 @@ export async function getDeviceData(): Promise<{
   const breakdown = computeDeviceBreakdown(records);
   const hourly = computeDeviceHourly(records);
 
-  // Completion rate by device category
-  const mobileRecords = records.filter(r => r.deviceType === 1 || r.deviceType === 2);
-  const pcRecords = records.filter(r => r.deviceType === 3 || r.deviceType === 4 || !r.deviceType);
-
-  const mobileCompletion = mobileRecords.length > 0
-    ? mobileRecords.reduce((s, r) => s + (r.duration > 0 ? r.progress / r.duration : 0), 0) / mobileRecords.length
-    : 0;
-  const pcCompletion = pcRecords.length > 0
-    ? pcRecords.reduce((s, r) => s + (r.duration > 0 ? r.progress / r.duration : 0), 0) / pcRecords.length
-    : 0;
+  const mobileRecords = records.filter(r => isMobileLikeDevice(r.deviceType));
+  const pcRecords = records.filter(r => isPcLikeDevice(r.deviceType));
 
   return {
     breakdown,
     hourly,
-    deviceCompletion: { mobile: mobileCompletion, pc: pcCompletion },
+    deviceCompletion: {
+      mobile: computeAvgCompletion(mobileRecords),
+      pc: computeAvgCompletion(pcRecords),
+    },
   };
+}
+
+function isMobileLikeDevice(deviceType: number): boolean {
+  return MOBILE_DEVICE_TYPES.has(deviceType) || PAD_DEVICE_TYPES.has(deviceType);
+}
+
+function isPcLikeDevice(deviceType: number): boolean {
+  return PC_DEVICE_TYPES.has(deviceType) || TV_DEVICE_TYPES.has(deviceType) || deviceType === 0;
+}
+
+function computeAvgCompletion(records: WatchHistoryRecord[]): number {
+  if (records.length === 0) return 0;
+  return records.reduce((s, r) => s + (r.duration > 0 ? clamp(r.progress / r.duration, 0, 1) : 0), 0) / records.length;
 }

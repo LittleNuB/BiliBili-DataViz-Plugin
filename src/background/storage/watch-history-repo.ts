@@ -57,3 +57,25 @@ export async function getNewestRecord(): Promise<WatchHistoryRecord | undefined>
 export async function deleteOlderThan(timestamp: number): Promise<number> {
   return db.watchHistory.where('viewAt').below(timestamp).delete();
 }
+
+export async function updateDeviceTypesFromHistory(items: Array<{
+  kid?: number;
+  avid: number;
+  cid: number;
+  viewAt: number;
+  deviceType: number;
+}>): Promise<number> {
+  let updated = 0;
+
+  for (const item of items) {
+    const record = item.kid
+      ? await db.watchHistory.where({ kid: item.kid }).first()
+      : await db.watchHistory.where({ avid: item.avid, cid: item.cid, viewAt: item.viewAt }).first();
+    if (!record || record.deviceType === item.deviceType) continue;
+
+    await db.watchHistory.update(record.id!, { deviceType: item.deviceType });
+    updated++;
+  }
+
+  return updated;
+}

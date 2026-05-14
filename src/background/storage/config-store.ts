@@ -33,3 +33,12 @@ export async function getBackfillComplete(): Promise<boolean> {
 export async function setBackfillComplete(): Promise<void> {
   await chrome.storage.local.set({ backfillComplete: true });
 }
+
+export async function getDeviceTypeMigrationComplete(): Promise<boolean> {
+  const result = await chrome.storage.local.get('deviceTypeMigrationComplete');
+  return result.deviceTypeMigrationComplete ?? false;
+}
+
+export async function setDeviceTypeMigrationComplete(): Promise<void> {
+  await chrome.storage.local.set({ deviceTypeMigrationComplete: true });
+}
