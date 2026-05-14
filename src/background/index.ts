@@ -16,7 +16,10 @@ onAlarm(async (name) => {
   switch (name) {
     case 'history-sync':
       try {
-        await syncLatestHistory();
+        const count = await syncLatestHistory();
+        if (count > 0) {
+          await computeDailyAggregate();
+        }
       } catch (e) {
         console.error('[BiliViz] History sync failed:', e);
       }

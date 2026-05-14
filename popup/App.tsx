@@ -8,13 +8,16 @@ import { OpenDashboard } from './components/OpenDashboard';
 
 export function App() {
   useEffect(() => {
-    fetchStats();
+    fetchStats(false);
   }, []);
 
-  async function fetchStats() {
+  async function fetchStats(forceSync = true) {
     loading.value = true;
     error.value = null;
     try {
+      if (forceSync) {
+        await requestSW('SYNC_NOW').catch(() => {});
+      }
       const data = await requestSW<QuickStats>('GET_QUICK_STATS');
       quickStats.value = data;
     } catch (e) {
@@ -28,16 +31,33 @@ export function App() {
 
   return (
     <div style={{ padding: '12px 0' }}>
-      <h1 style={{
-        fontSize: '16px',
-        fontWeight: 700,
-        color: '#FB7299',
-        textAlign: 'center',
-        margin: '0 0 4px 0',
-        padding: '0 12px',
-      }}>
-        B站消费数据中心
-      </h1>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 12px', gap: '8px' }}>
+        <h1 style={{
+          fontSize: '16px',
+          fontWeight: 700,
+          color: '#FB7299',
+          textAlign: 'center',
+          margin: 0,
+        }}>
+          B站消费数据中心
+        </h1>
+        <button
+          onClick={() => fetchStats(true)}
+          disabled={loading.value}
+          title="同步并刷新数据"
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: '#A0A0B0',
+            cursor: 'pointer',
+            fontSize: '14px',
+            padding: '2px 4px',
+            opacity: loading.value ? 0.5 : 1,
+          }}
+        >
+          🔄
+        </button>
+      </div>
 
       {loading.value && (
         <div style={{ textAlign: 'center', padding: '40px', color: '#9090A0' }}>
@@ -72,7 +92,7 @@ export function App() {
         <div style={{ textAlign: 'center', padding: '20px', color: '#FF6B6B' }}>
           <p>{error.value}</p>
           <button
-            onClick={fetchStats}
+            onClick={() => fetchStats(true)}
             style={{
               marginTop: '8px',
               padding: '6px 16px',

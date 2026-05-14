@@ -10,6 +10,7 @@ import {
   getCreatorData,
   getBehaviorData,
   getExperimentData,
+  computeDailyAggregate,
 } from '../analytics/engine';
 import { getDeviceData } from '../analytics/device';
 
@@ -94,6 +95,7 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       return { success: true, data: await getDeviceData() as T };
     case 'SYNC_NOW':
       await syncLatestHistory();
+      await computeDailyAggregate();
       return { success: true, data: { synced: true } as T };
     case 'UPDATE_CONFIG':
       await saveConfig(request.params as Partial<UserConfig>);
