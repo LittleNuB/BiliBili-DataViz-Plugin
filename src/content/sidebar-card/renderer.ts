@@ -115,7 +115,6 @@ export function buildSidebarCard(data: QuickStats): HTMLElement {
   if (btn) {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
-      chrome.runtime.sendMessage({ action: 'OPEN_DASHBOARD' }).catch(() => {});
       const dashUrl = chrome.runtime.getURL('dashboard/index.html');
       window.open(dashUrl, '_blank');
     });
