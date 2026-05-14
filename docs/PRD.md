@@ -558,12 +558,22 @@ efficiencyScore = (
 - [x] 模块4 — 行为诊断（BehaviorPage: 直方图 + Session 卡片 + 高峰图）
 - [x] 模块5 — 实验建议（ExperimentsPage: 建议卡片 + 盲盒网格）
 
-### Phase 6: 打磨（约 1 周） 🔄
+### Phase 6: 打磨（约 1 周） ✅
 
-- [ ] 扩展图标生成（16/32/48/128px PNG）
-- [ ] 未登录状态检测与友好提示
-- [ ] API 错误降级（显示缓存数据 + 最后同步时间）
-- [ ] 数据导出功能（CSV/JSON 下载）
+- [x] 扩展图标生成（16/32/48/128px PNG）
+- [x] 未登录状态检测与友好提示
+- [x] API 错误降级（显示缓存数据 + 最后同步时间）
+- [x] 数据导出功能（CSV/JSON 下载）
+
+### Post-Phase 改进 ✅
+
+- [x] **自然周期分析**: 周/月统计改用日历边界（周一~周日、1日~月末），不再用滑动窗口
+- [x] **设备类型映射**: 从 B站 history payload 提取真实设备码（1=手机/2=平板/3=PC/4=TV），回填历史记录
+- [x] **sessionKey 去重**: DB v2 迁移新增 `sessionKey` 字段，兼容 kid 缺失的边界情况
+- [x] **API 客户端改进**: `credentials: 'include'` 替代手动 cookie 拼装；30s 请求超时
+- [x] **同步进度追踪**: 回填过程显示进度和锁机制，防止重复触发
+- [x] **MAX_BACKFILL_PAGES**: 30 → 300，覆盖更多历史数据
+- [x] **TS 配置修复**: `rootDir` 改为 `.`，include 覆盖 popup/dashboard 路径
 
 ## 13. 风险与缓解
 
