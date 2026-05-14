@@ -1,6 +1,7 @@
-import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse } from '../../shared/types/messages';
+import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse, PlayerActionPayload, PlayerHeartbeatPayload } from '../../shared/types/messages';
 import { syncLatestHistory } from '../sync/history-sync';
 import { loadConfig, saveConfig } from '../storage/config-store';
+import { db } from '../storage/db';
 import type { UserConfig } from '../../shared/types/config';
 import {
   getQuickStats,
@@ -39,13 +40,37 @@ export function setupMessageHandlers(): void {
 
 async function handleContentMessage(msg: BiliVizContentMessage): Promise<void> {
   switch (msg.action) {
-    case 'PLAYER_HEARTBEAT':
-    case 'PLAYER_ACTION':
-      console.log(`[BiliViz] Player event: ${msg.action}`, msg.payload);
-      // TODO: Store player events (Phase 3)
+    case 'PLAYER_HEARTBEAT': {
+      const p = msg.payload as PlayerHeartbeatPayload;
+      await db.playerEvents.add({
+        bvid: p.bvid,
+        cid: p.cid,
+        eventType: 'heartbeat',
+        timestamp: Date.now(),
+        currentTime: p.currentTime,
+        duration: p.duration,
+        playbackRate: p.playbackRate ?? 1,
+        tabId: 0,
+      });
       break;
+    }
+    case 'PLAYER_ACTION': {
+      const p = msg.payload as PlayerActionPayload;
+      await db.playerEvents.add({
+        bvid: p.bvid,
+        cid: p.cid,
+        eventType: p.action,
+        timestamp: Date.now(),
+        currentTime: p.currentTime,
+        duration: p.duration,
+        playbackRate: p.playbackRate ?? 1,
+        seekFrom: p.seekFrom,
+        seekTo: p.seekTo,
+        tabId: 0,
+      });
+      break;
+    }
     case 'PAGE_NAVIGATION':
-      console.log(`[BiliViz] Page navigation:`, msg.payload);
       break;
   }
 }
