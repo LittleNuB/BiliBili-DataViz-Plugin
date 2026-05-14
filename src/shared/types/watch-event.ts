@@ -1,5 +1,6 @@
 export interface WatchHistoryRecord {
   id?: number;
+  sessionKey: string;
   kid: number;
   avid: number;
   bvid: string;

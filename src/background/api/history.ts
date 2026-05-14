@@ -51,7 +51,7 @@ export async function fetchAllHistory(
     totalItems += list.length;
     pageCount++;
 
-    if (nextCursor.max === 0 || !nextCursor.has_more) break;
+    if (nextCursor.has_more === false || (nextCursor.max === 0 && nextCursor.view_at === 0)) break;
 
     cursor = {
       max: nextCursor.max,

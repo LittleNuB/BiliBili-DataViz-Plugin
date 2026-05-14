@@ -62,6 +62,40 @@ export interface BiliVizResponse<T = unknown> {
   error?: string;
 }
 
+export type HistorySyncMode = 'full' | 'incremental';
+
+export interface SyncNowResult {
+  synced: true;
+  mode: HistorySyncMode;
+  pageLimit: number;
+  currentTask: string;
+  fetchedPages: number;
+  fetchedCount: number;
+  insertedCount: number;
+  updatedCount: number;
+  stoppedReason: string;
+  reachedEnd: boolean;
+  oldestFetchedAt: number | null;
+  newestFetchedAt: number | null;
+}
+
+export interface SyncProgress {
+  syncing: boolean;
+  mode: HistorySyncMode | null;
+  pageLimit: number;
+  currentTask: string;
+  startedAt: number;
+  updatedAt: number;
+  fetchedPages: number;
+  fetchedCount: number;
+  insertedCount: number;
+  updatedCount: number;
+  stoppedReason: string;
+  reachedEnd: boolean;
+  oldestFetchedAt: number | null;
+  newestFetchedAt: number | null;
+}
+
 // Typed response data
 export type QuickStatsResponse = BiliVizResponse<QuickStats>;
 export type DashboardResponse = BiliVizResponse<DashboardOverview>;

@@ -1,8 +1,10 @@
-import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse, PlayerActionPayload, PlayerHeartbeatPayload } from '../../shared/types/messages';
+import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse, PlayerActionPayload, PlayerHeartbeatPayload, SyncNowResult } from '../../shared/types/messages';
 import { runInitialBackfill } from '../sync/initial-backfill';
 import {
   saveConfig,
   getLastSyncTime,
+  getHistorySyncing,
+  getHistorySyncProgress,
   setDeviceTypeMigrationComplete,
 } from '../storage/config-store';
 import { db } from '../storage/db';
@@ -99,10 +101,39 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       return { success: true, data: await getDeviceData() as T };
     case 'SYNC_NOW':
       {
-        const count = await runInitialBackfill(true);
-        await setDeviceTypeMigrationComplete();
-        await computeStoredHistoryAggregates();
-        return { success: true, data: { synced: true, count } as T };
+        const requestedMode = request.params?.mode === 'full' ? 'full' : request.params?.mode === 'incremental' ? 'incremental' : null;
+        const storedCount = await db.watchHistory.count();
+        const mode = requestedMode ?? (storedCount === 0 ? 'full' : 'incremental');
+        if (await getHistorySyncing()) {
+          throw new Error('HISTORY_SYNC_IN_PROGRESS');
+        }
+
+        void runInitialBackfill(mode, requestedMode === 'full')
+          .then(async () => {
+            await setDeviceTypeMigrationComplete();
+            await computeStoredHistoryAggregates();
+          })
+          .catch((err) => {
+            console.error('[BiliViz] Manual history sync failed:', err);
+          });
+
+        return {
+          success: true,
+          data: {
+            synced: true,
+            mode,
+            pageLimit: 0,
+            currentTask: 'sync_started',
+            fetchedPages: 0,
+            fetchedCount: 0,
+            insertedCount: 0,
+            updatedCount: 0,
+            stoppedReason: 'sync_started',
+            reachedEnd: false,
+            oldestFetchedAt: null,
+            newestFetchedAt: null,
+          } satisfies SyncNowResult as T,
+        };
       }
     case 'UPDATE_CONFIG':
       await saveConfig(request.params as Partial<UserConfig>);
@@ -115,7 +146,8 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     case 'GET_SYNC_STATUS': {
       const lastSync = await getLastSyncTime();
       const count = await db.watchHistory.count();
-      return { success: true, data: { lastSyncTime: lastSync, totalRecords: count } as T };
+      const syncProgress = await getHistorySyncProgress();
+      return { success: true, data: { lastSyncTime: lastSync, totalRecords: count, syncProgress } as T };
     }
     default:
       return { success: false, error: `Unknown action: ${request.action}` };

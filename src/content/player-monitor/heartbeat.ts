@@ -1,12 +1,13 @@
 import type { BiliVizContentMessage, PlayerHeartbeatPayload } from '../../shared/types/messages';
 import type { VideoContext } from './event-capture';
-import { HEARTBEAT_INTERVAL_MS } from '../../shared/constants';
+
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 5000;
 
 export function startHeartbeat(
   video: HTMLVideoElement,
   ctx: VideoContext,
   send: (msg: BiliVizContentMessage) => void,
-  interval = HEARTBEAT_INTERVAL_MS,
+  interval = DEFAULT_HEARTBEAT_INTERVAL_MS,
 ): () => void {
   const timer = setInterval(() => {
     if (!video.duration) return;

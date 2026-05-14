@@ -1,11 +1,47 @@
 import { detectVideo } from './video-detector';
 import { attachEventListeners, type VideoContext } from './event-capture';
 import { startHeartbeat } from './heartbeat';
-import { getVideoContext } from '../utils/dom-utils';
-import { isVideoPage } from '../utils/page-detector';
+
+interface BiliInitialState {
+  bvid?: string;
+  cid?: number;
+  videoData?: {
+    bvid?: string;
+    cid?: number;
+    title?: string;
+    duration?: number;
+    owner?: { mid?: number; name?: string };
+    pages?: Array<{ cid?: number; duration?: number }>;
+  };
+  upData?: { mid?: number; name?: string };
+}
 
 let cleanup: (() => void) | null = null;
 let lastBvid = '';
+
+function isVideoPage(): boolean {
+  return location.pathname.startsWith('/video/');
+}
+
+function getInitialState(): BiliInitialState | null {
+  try {
+    return (window as any).__INITIAL_STATE__ ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function getVideoContext() {
+  const state = getInitialState();
+  const bvid = state?.bvid ?? state?.videoData?.bvid ?? '';
+  const cid = state?.cid ?? state?.videoData?.cid ?? state?.videoData?.pages?.[0]?.cid ?? 0;
+  const title = state?.videoData?.title ?? document.title.replace('_哔哩哔哩_bilibili', '').trim();
+  const duration = state?.videoData?.duration ?? state?.videoData?.pages?.[0]?.duration ?? 0;
+  const authorMid = state?.videoData?.owner?.mid ?? state?.upData?.mid ?? 0;
+  const authorName = state?.videoData?.owner?.name ?? state?.upData?.name ?? '';
+
+  return { bvid, cid, title, duration, authorMid, authorName };
+}
 
 async function initializeMonitor(): Promise<void> {
   if (!isVideoPage()) return;

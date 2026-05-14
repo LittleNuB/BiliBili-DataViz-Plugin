@@ -1,6 +1,31 @@
-import { isHomePage } from '../utils/page-detector';
-import { waitForElement } from '../utils/dom-utils';
 import { buildSidebarCard } from './renderer';
+
+function isHomePage(): boolean {
+  return location.pathname === '/' || location.pathname === '/index.html';
+}
+
+function waitForElement<T extends Element = Element>(
+  selector: string,
+  timeout = 30_000,
+  interval = 500,
+): Promise<T> {
+  const existing = document.querySelector<T>(selector);
+  if (existing) return Promise.resolve(existing);
+
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const timer = setInterval(() => {
+      const el = document.querySelector<T>(selector);
+      if (el) {
+        clearInterval(timer);
+        resolve(el);
+      } else if (Date.now() - start > timeout) {
+        clearInterval(timer);
+        reject(new Error(`Timeout waiting for element: ${selector}`));
+      }
+    }, interval);
+  });
+}
 
 async function initializeSidebar(): Promise<void> {
   if (!isHomePage()) return;

@@ -1,6 +1,4 @@
 import type { QuickStats } from '../../shared/types/analytics';
-import { secondsToMinutes, secondsToHours } from '../../shared/utils/time';
-import { BILI_PINK } from '../../shared/constants';
 
 const STYLE_ID = 'bdc-sidebar-styles';
 
@@ -74,8 +72,8 @@ const CSS = `
 
 function formatWatchTime(seconds: number): string {
   if (seconds < 60) return `${seconds}秒`;
-  if (seconds < 3600) return `${secondsToMinutes(seconds)}分钟`;
-  return `${secondsToHours(seconds)}小时`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}分钟`;
+  return `${Math.round((seconds / 3600) * 10) / 10}小时`;
 }
 
 export function buildSidebarCard(data: QuickStats): HTMLElement {

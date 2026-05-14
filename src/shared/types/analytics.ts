@@ -5,6 +5,8 @@ export interface QuickStats {
   avgCompletion: number;
   efficiencyScore: number;
   weeklyWatchTime: number;
+  weeklyLocalPcWatchTime: number;
+  weeklyLocalPcDays: number;
 }
 
 export interface DashboardOverview {
@@ -17,6 +19,16 @@ export interface DashboardOverview {
   longestStreak: number;
   hourlyHeatmap: number[][];
   efficiencyScore: number;
+  weekStart: string;
+  weekEnd: string;
+  monthStart: string;
+  monthEnd: string;
+  weeklyRecordCount: number;
+  monthlyRecordCount: number;
+  weeklyLocalPcWatchTime: number;
+  weeklyLocalPcDays: number;
+  oldestRecordDate: string | null;
+  newestRecordDate: string | null;
 }
 
 export interface CategoryDistribution {

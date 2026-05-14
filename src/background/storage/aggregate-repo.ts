@@ -6,7 +6,11 @@ export async function getAggregate(date: string): Promise<DailyAggregate | undef
 }
 
 export async function upsertAggregate(aggregate: DailyAggregate): Promise<number> {
-  return db.dailyAggregates.put(aggregate);
+  const existing = await getAggregate(aggregate.date);
+  return db.dailyAggregates.put({
+    ...aggregate,
+    id: existing?.id,
+  });
 }
 
 export async function getAggregatesByDateRange(

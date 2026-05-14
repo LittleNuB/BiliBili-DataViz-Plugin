@@ -1,33 +1,76 @@
 import { useEffect } from 'preact/hooks';
-import { quickStats, loading, error } from './signals';
+import { quickStats, loading, error, lastSyncResult, syncInProgress, syncProgress } from './signals';
 import { requestSW } from './utils/messaging';
 import type { QuickStats } from '../src/shared/types/analytics';
+import type { SyncNowResult, SyncProgress } from '../src/shared/types/messages';
 import { ProgressRing } from './components/ProgressRing';
 import { QuickStats as QuickStatsPanel } from './components/QuickStats';
 import { OpenDashboard } from './components/OpenDashboard';
 
+interface SyncStatus {
+  lastSyncTime: number;
+  totalRecords: number;
+  syncProgress: SyncProgress | null;
+}
+
 export function App() {
   useEffect(() => {
     fetchStats(false);
+    const timer = window.setInterval(refreshSyncStatus, 1500);
+    return () => window.clearInterval(timer);
   }, []);
 
+  async function refreshSyncStatus() {
+    try {
+      const status = await requestSW<SyncStatus>('GET_SYNC_STATUS');
+      syncProgress.value = status.syncProgress;
+      syncInProgress.value = status.syncProgress?.syncing ?? false;
+
+      if (status.syncProgress?.syncing) {
+        const data = await requestSW<QuickStats>('GET_QUICK_STATS');
+        quickStats.value = data;
+      }
+    } catch {
+      // The floating window can outlive a restarting service worker.
+    }
+  }
+
   async function fetchStats(forceSync = true) {
-    loading.value = true;
+    loading.value = quickStats.value === null;
     error.value = null;
+    syncInProgress.value = false;
     try {
       if (forceSync) {
-        await requestSW('SYNC_NOW');
+        lastSyncResult.value = await requestSW<SyncNowResult>('SYNC_NOW', { mode: 'full' });
+        await refreshSyncStatus();
       }
       const data = await requestSW<QuickStats>('GET_QUICK_STATS');
       quickStats.value = data;
     } catch (e) {
-      error.value = (e as Error).message;
+      const message = (e as Error).message;
+      if (message.includes('HISTORY_SYNC_IN_PROGRESS')) {
+        await refreshSyncStatus();
+        syncInProgress.value = true;
+        const data = await requestSW<QuickStats>('GET_QUICK_STATS');
+        quickStats.value = data;
+        return;
+      }
+      error.value = message;
     } finally {
       loading.value = false;
     }
   }
 
   const isNotLoggedIn = error.value?.includes('NOT_LOGGED_IN') || error.value?.includes('-101');
+  const progress = syncProgress.value;
+  const progressPercent = progress
+    ? progress.reachedEnd
+      ? 100
+      : progress.fetchedPages > 0
+        ? Math.max(1, Math.min(99, Math.round((progress.fetchedPages / Math.max(progress.pageLimit, 1)) * 100)))
+        : 0
+    : 0;
+  const elapsedSeconds = progress?.startedAt ? Math.max(0, Math.round((Date.now() - progress.startedAt) / 1000)) : 0;
 
   return (
     <div style={{ padding: '12px 0' }}>
@@ -44,7 +87,7 @@ export function App() {
         <button
           onClick={() => fetchStats(true)}
           disabled={loading.value}
-          title="同步并刷新数据"
+          title="全量同步并刷新数据"
           style={{
             background: 'transparent',
             border: 'none',
@@ -122,6 +165,79 @@ export function App() {
             </p>
             <ProgressRing />
           </div>
+          {lastSyncResult.value && (
+            <p style={{
+              textAlign: 'center',
+              fontSize: '11px',
+              color: '#707080',
+              margin: '0 12px 8px',
+            }}>
+              {lastSyncResult.value.mode === 'full' ? '全量' : '增量'}同步：扫描 {lastSyncResult.value.fetchedPages} 页 / {lastSyncResult.value.fetchedCount} 条，新增 {lastSyncResult.value.insertedCount} 条，更新 {lastSyncResult.value.updatedCount} 条，停止原因：{lastSyncResult.value.stoppedReason}
+            </p>
+          )}
+          {syncInProgress.value && (
+            <div style={{
+              margin: '0 18px 12px',
+              padding: '10px 12px',
+              border: '1px solid rgba(255, 179, 71, 0.28)',
+              borderRadius: '8px',
+              background: 'rgba(255, 179, 71, 0.08)',
+            }}>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: '12px',
+                color: '#FFB347',
+                fontSize: '11px',
+                fontWeight: 700,
+                marginBottom: '8px',
+              }}>
+                <span>历史全量同步进行中</span>
+                <span>{progressPercent}%</span>
+              </div>
+              <div style={{
+                height: '6px',
+                background: 'rgba(255,255,255,0.12)',
+                borderRadius: '999px',
+                overflow: 'hidden',
+                marginBottom: '8px',
+              }}>
+                <div style={{
+                  width: `${progressPercent}%`,
+                  height: '100%',
+                  background: '#FFB347',
+                  borderRadius: '999px',
+                  transition: 'width 180ms ease',
+                }} />
+              </div>
+              <p style={{
+                color: '#A0A0B0',
+                fontSize: '10px',
+                lineHeight: 1.5,
+                margin: 0,
+              }}>
+                已扫描 {progress?.fetchedPages ?? 0} / {progress?.pageLimit ?? 0} 页，获取 {progress?.fetchedCount ?? 0} 条，新增 {progress?.insertedCount ?? 0} 条，更新 {progress?.updatedCount ?? 0} 条，已运行 {elapsedSeconds}s。当前显示本地已有数据。
+                <br />
+                {progress?.currentTask ?? '正在准备同步'}
+              </p>
+            </div>
+          )}
+          <p style={{
+            textAlign: 'center',
+            fontSize: '11px',
+            color: '#707080',
+            margin: '0 12px 4px',
+          }}>
+            本周已计入 PC {Math.round(quickStats.value.weeklyLocalPcWatchTime / 60)} 分钟，覆盖 {quickStats.value.weeklyLocalPcDays} 天
+          </p>
+          <p style={{
+            textAlign: 'center',
+            fontSize: '10px',
+            color: '#606070',
+            margin: '0 12px 8px',
+          }}>
+            B站历史进度为跨设备估算，本机 PC 播放为实测增强
+          </p>
           <QuickStatsPanel />
           <OpenDashboard />
         </>

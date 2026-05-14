@@ -4,21 +4,7 @@ import { apiRateLimiter } from './rate-limiter';
 import { signWbi } from './wbi-sign';
 
 const WBI_REQUIRED_CODES = [-403, -400];
-
-const BILI_COOKIE_URLS = [
-  'https://www.bilibili.com/',
-  'https://api.bilibili.com/',
-  'https://passport.bilibili.com/',
-];
-
-async function hasBilibiliLoginCookie(): Promise<boolean> {
-  for (const url of BILI_COOKIE_URLS) {
-    const sessdata = await chrome.cookies.get({ url, name: 'SESSDATA' });
-    if (sessdata?.value) return true;
-  }
-
-  return false;
-}
+const REQUEST_TIMEOUT_MS = 30_000;
 
 export async function biliGet<T>(
   path: string,
@@ -39,22 +25,12 @@ export async function biliGet<T>(
     await signWbi(url.searchParams);
   }
 
-  if (!(await hasBilibiliLoginCookie())) {
-    throw new Error('NOT_LOGGED_IN');
-  }
-
   await apiRateLimiter.acquire();
 
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
-      const response = await fetch(url.toString(), {
-        credentials: 'include',
-        referrer: 'https://www.bilibili.com/',
-        headers: {
-          Accept: 'application/json, text/plain, */*',
-        },
-      });
+      const response = await fetchWithTimeout(url.toString());
 
       if (response.status === 412) {
         lastError = new Error('RATE_LIMITED');
@@ -78,8 +54,8 @@ export async function biliGet<T>(
 
       return json.data;
     } catch (e) {
-      lastError = e as Error;
-      if ((e as Error).message === 'NOT_LOGGED_IN') throw e;
+      lastError = normalizeError(e);
+      if (lastError.message === 'NOT_LOGGED_IN') throw lastError;
       if (attempt < retries - 1) {
         await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
       }
@@ -87,4 +63,38 @@ export async function biliGet<T>(
   }
 
   throw lastError ?? new Error('API request failed');
+}
+
+function normalizeError(error: unknown): Error {
+  if (error instanceof Error) return error;
+  if (typeof error === 'string') return new Error(error);
+
+  try {
+    return new Error(JSON.stringify(error));
+  } catch {
+    return new Error(String(error));
+  }
+}
+
+async function fetchWithTimeout(url: string): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    return await fetch(url, {
+      credentials: 'include',
+      referrer: 'https://www.bilibili.com/',
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/json, text/plain, */*',
+      },
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('REQUEST_TIMEOUT');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }

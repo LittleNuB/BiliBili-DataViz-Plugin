@@ -4,7 +4,7 @@ export const VIDEO_INFO_ENDPOINT = '/x/web-interface/view';
 export const NAV_ENDPOINT = '/x/web-interface/nav';
 
 export const HISTORY_PAGE_SIZE = 30;
-export const MAX_BACKFILL_PAGES = 30;
+export const MAX_BACKFILL_PAGES = 300;
 export const SYNC_INTERVAL_MINUTES = 5;
 export const AGGREGATE_INTERVAL_MINUTES = 60;
 export const CLEANUP_INTERVAL_MINUTES = 1440;

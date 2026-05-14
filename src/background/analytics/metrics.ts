@@ -2,9 +2,10 @@ import type { WatchHistoryRecord, DailyAggregate } from '../../shared/types/watc
 import type { DashboardOverview, QuickStats } from '../../shared/types/analytics';
 import { startOfWeek, startOfMonth, daysAgo, dateKey, daysBetween } from '../../shared/utils/time';
 import { percentChange } from '../../shared/utils/math';
-import { getRecordsByDateRange } from '../storage/watch-history-repo';
+import { getNewestRecord, getOldestRecord, getRecordsByDateRange } from '../storage/watch-history-repo';
 import { loadConfig } from '../storage/config-store';
 import { aggregateWindow } from './aggregator';
+import { getEffectiveWatchDatesByDateRange, getEffectiveWatchRecordsByDateRange } from './effective-watch';
 
 export function computeCompletion(records: WatchHistoryRecord[]): number {
   if (records.length === 0) return 0;
@@ -69,22 +70,24 @@ function computeStreakFromDateSet(dates: Set<string>): { current: number; longes
 export async function getQuickStats(): Promise<QuickStats> {
   const config = await loadConfig();
   const todayKey = dateKey();
-  const todayRecords = await getRecordsByDateRange(todayKey, todayKey);
-  const todayAgg = aggregateWindow(todayRecords);
+  const todayEffective = await getEffectiveWatchRecordsByDateRange(todayKey, todayKey);
+  const todayAgg = aggregateWindow(todayEffective.records);
 
   const weekStart = dateKey(startOfWeek());
-  const thisWeekRecords = await getRecordsByDateRange(weekStart, todayKey);
+  const thisWeekEffective = await getEffectiveWatchRecordsByDateRange(weekStart, todayKey);
 
-  const weeklyWatch = thisWeekRecords.reduce((s, r) => s + Math.max(r.progress, 0), 0);
-  const recentRecords = await getRecordsByDateRange(dateKey(daysAgo(365)), todayKey);
+  const weeklyWatch = thisWeekEffective.records.reduce((s, r) => s + Math.max(r.progress, 0), 0);
+  const recentDates = await getEffectiveWatchDatesByDateRange(dateKey(daysAgo(365)), todayKey);
 
   return {
     todayWatchTime: todayAgg.totalWatchTime,
     dailyGoal: config.dailyWatchGoal * 60, // convert minutes to seconds
-    streakDays: computeStreakFromRecords(recentRecords).current,
+    streakDays: computeStreakFromDateSet(new Set(recentDates)).current,
     avgCompletion: todayAgg.avgCompletion,
-    efficiencyScore: computeRawEfficiency(todayRecords, config.dailyWatchGoal * 60),
+    efficiencyScore: computeRawEfficiency(todayEffective.records, config.dailyWatchGoal * 60),
     weeklyWatchTime: weeklyWatch,
+    weeklyLocalPcWatchTime: thisWeekEffective.localPcWatchTime,
+    weeklyLocalPcDays: thisWeekEffective.localPcDates.length,
   };
 }
 
@@ -99,17 +102,23 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
   const lastWeekEnd = dateKey(lastWeekEndDate);
   const monthStart = dateKey(startOfMonth(now));
 
-  const thisWeekRecords = await getRecordsByDateRange(weekStart, todayKey);
-  const lastWeekRecords = await getRecordsByDateRange(lastWeekStart, lastWeekEnd);
-  const thisMonthRecords = await getRecordsByDateRange(monthStart, todayKey);
-  const recentRecords = await getRecordsByDateRange(dateKey(daysAgo(365)), todayKey);
+  const thisWeekEffective = await getEffectiveWatchRecordsByDateRange(weekStart, todayKey);
+  const thisWeekRecords = thisWeekEffective.records;
+  const lastWeekRecords = (await getEffectiveWatchRecordsByDateRange(lastWeekStart, lastWeekEnd)).records;
+  const thisMonthEffective = await getEffectiveWatchRecordsByDateRange(monthStart, todayKey);
+  const thisMonthRecords = thisMonthEffective.records;
+  const recentDates = await getEffectiveWatchDatesByDateRange(dateKey(daysAgo(365)), todayKey);
+  const [oldestRecord, newestRecord] = await Promise.all([
+    getOldestRecord(),
+    getNewestRecord(),
+  ]);
   const thisWeekWindow = aggregateWindow(thisWeekRecords);
 
   const weeklyWatch = thisWeekWindow.totalWatchTime;
   const lastWeekWatch = aggregateWindow(lastWeekRecords).totalWatchTime;
   const monthlyWatch = aggregateWindow(thisMonthRecords).totalWatchTime;
 
-  const streak = computeStreakFromRecords(recentRecords);
+  const streak = computeStreakFromDateSet(new Set(recentDates));
 
   const heatmap = thisWeekWindow.hourlyHeatmap;
   const avgCompletion = thisWeekWindow.avgCompletion;
@@ -118,7 +127,7 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
 
   const lastMonthStart = dateKey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
   const lastMonthEnd = dateKey(new Date(now.getFullYear(), now.getMonth(), 0));
-  const lastMonthRecords = await getRecordsByDateRange(lastMonthStart, lastMonthEnd);
+  const lastMonthRecords = (await getEffectiveWatchRecordsByDateRange(lastMonthStart, lastMonthEnd)).records;
   const lastMonthWatch = aggregateWindow(lastMonthRecords).totalWatchTime;
 
   return {
@@ -131,6 +140,16 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
     longestStreak: streak.longest,
     hourlyHeatmap: heatmap,
     efficiencyScore: Math.round(avgEfficiency),
+    weekStart,
+    weekEnd: todayKey,
+    monthStart,
+    monthEnd: todayKey,
+    weeklyRecordCount: thisWeekRecords.length,
+    monthlyRecordCount: thisMonthRecords.length,
+    weeklyLocalPcWatchTime: thisWeekEffective.localPcWatchTime,
+    weeklyLocalPcDays: thisWeekEffective.localPcDates.length,
+    oldestRecordDate: oldestRecord ? dateKey(new Date(oldestRecord.viewAt * 1000)) : null,
+    newestRecordDate: newestRecord ? dateKey(new Date(newestRecord.viewAt * 1000)) : null,
   };
 }
 

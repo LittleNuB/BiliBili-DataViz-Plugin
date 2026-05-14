@@ -7,7 +7,7 @@ import { StatCard } from '../../components/StatCard';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
-import { formatTimeHHMM, formatPercent } from '../../../src/shared/utils/format';
+import { formatTimeHHMM, formatPercent, formatDate } from '../../../src/shared/utils/format';
 import { HOUR_LABELS, WEEKDAY_LABELS, BILI_PINK, CHART_COLORS } from '../../../src/shared/constants';
 import type { EChartsOption } from 'echarts';
 
@@ -101,6 +101,10 @@ export function OverviewPage() {
     ],
   } : null;
 
+  const recordRangeText = d.oldestRecordDate && d.newestRecordDate
+    ? `本地历史：${formatDate(d.oldestRecordDate)} - ${formatDate(d.newestRecordDate)}`
+    : '本地历史：暂无记录';
+
   return (
     <ErrorBoundary>
       <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -108,6 +112,26 @@ export function OverviewPage() {
           <StatCard label="本周观看" value={formatTimeHHMM(d.weeklyWatchTime)} change={d.weeklyChange} accent={BILI_PINK} />
           <StatCard label="本月观看" value={formatTimeHHMM(d.monthlyWatchTime)} change={d.monthlyChange} accent="#00A1D6" />
           <StatCard label="平均完播率" value={formatPercent(d.avgCompletion)} accent="#00D4AA" />
+        </div>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: '8px',
+          color: '#A0A0B0',
+          fontSize: '12px',
+        }}>
+          <div style={{ background: '#222244', borderRadius: '8px', padding: '10px 12px' }}>
+            本周范围：{formatDate(d.weekStart)} - {formatDate(d.weekEnd)}，命中 {d.weeklyRecordCount} 条
+          </div>
+          <div style={{ background: '#222244', borderRadius: '8px', padding: '10px 12px' }}>
+            本月范围：{formatDate(d.monthStart)} - {formatDate(d.monthEnd)}，命中 {d.monthlyRecordCount} 条
+          </div>
+        </div>
+        <div style={{ color: '#707080', fontSize: '11px', padding: '0 2px' }}>
+          {recordRangeText}；本周已计入 PC {formatTimeHHMM(d.weeklyLocalPcWatchTime)}，覆盖 {d.weeklyLocalPcDays} 天
+        </div>
+        <div style={{ color: '#606070', fontSize: '11px', padding: '0 2px' }}>
+          数据来源：B站历史记录用于跨设备估算；本机 PC 播放事件用于修正网页端实际观看。
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
           <StatCard label="连续天数" value={`${d.streakDays}天`} />
@@ -148,7 +172,7 @@ export function OverviewPage() {
             {deviceHourlyOption && (
               <div style={{ background: '#222244', borderRadius: '10px', padding: '12px' }}>
                 <h3 style={{ color: '#A0A0B0', fontSize: '13px', margin: '0 0 4px 12px' }}>
-                  设备 × 时段（近30天，单位：分钟）
+                  设备 × 时段（本月，单位：分钟）
                 </h3>
                 <ChartContainer option={deviceHourlyOption} height={240} />
               </div>

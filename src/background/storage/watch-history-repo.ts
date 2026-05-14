@@ -1,5 +1,6 @@
 import { db } from './db';
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
+import { buildWatchSessionKey } from '../../shared/utils/session-key';
 
 export async function findByKid(kid: number): Promise<WatchHistoryRecord | undefined> {
   return db.watchHistory.where({ kid }).first();
@@ -7,6 +8,11 @@ export async function findByKid(kid: number): Promise<WatchHistoryRecord | undef
 
 export async function existsByKid(kid: number): Promise<boolean> {
   const count = await db.watchHistory.where({ kid }).count();
+  return count > 0;
+}
+
+export async function existsBySessionKey(sessionKey: string): Promise<boolean> {
+  const count = await db.watchHistory.where({ sessionKey }).count();
   return count > 0;
 }
 
@@ -20,11 +26,11 @@ export async function existsByAvidCidViewAt(
 }
 
 export async function insertRecord(record: WatchHistoryRecord): Promise<number> {
-  return db.watchHistory.put(record);
+  return db.watchHistory.put(ensureSessionKey(record));
 }
 
 export async function bulkInsert(records: WatchHistoryRecord[]): Promise<number> {
-  return db.watchHistory.bulkPut(records);
+  return db.watchHistory.bulkPut(records.map(ensureSessionKey));
 }
 
 export async function getRecordsByDateRange(
@@ -68,9 +74,9 @@ export async function updateDeviceTypesFromHistory(items: Array<{
   let updated = 0;
 
   for (const item of items) {
-    const record = item.kid
-      ? await db.watchHistory.where({ kid: item.kid }).first()
-      : await db.watchHistory.where({ avid: item.avid, cid: item.cid, viewAt: item.viewAt }).first();
+    const sessionKey = buildWatchSessionKey(item.kid, item.viewAt);
+    const record = await db.watchHistory.where({ sessionKey }).first()
+      ?? await db.watchHistory.where({ avid: item.avid, cid: item.cid, viewAt: item.viewAt }).first();
     if (!record || record.deviceType === item.deviceType) continue;
 
     await db.watchHistory.update(record.id!, { deviceType: item.deviceType });
@@ -78,4 +84,11 @@ export async function updateDeviceTypesFromHistory(items: Array<{
   }
 
   return updated;
+}
+
+function ensureSessionKey(record: WatchHistoryRecord): WatchHistoryRecord {
+  return {
+    ...record,
+    sessionKey: record.sessionKey || buildWatchSessionKey(record.kid, record.viewAt, record.bvid, record.cid),
+  };
 }

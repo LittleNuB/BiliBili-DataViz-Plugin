@@ -1,5 +1,6 @@
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
 import type { HistoryCursorItem, VideoInfo } from '../../shared/types/video-info';
+import { buildWatchSessionKey } from '../../shared/utils/session-key';
 
 export function getHistoryAvid(item: HistoryCursorItem): number {
   return item.avid ?? item.history?.oid ?? 0;
@@ -26,6 +27,7 @@ export function toWatchHistoryRecord(item: HistoryCursorItem, info?: VideoInfo):
   const tags = item.tags ? item.tags.split(',').map(t => t.trim()).filter(Boolean) : [];
 
   return {
+    sessionKey: buildWatchSessionKey(item.kid, item.view_at, getHistoryBvid(item) || info?.bvid || '', getHistoryCid(item)),
     kid: item.kid,
     avid: getHistoryAvid(item) || info?.avid || 0,
     bvid: getHistoryBvid(item) || info?.bvid || '',

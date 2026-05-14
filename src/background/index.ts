@@ -3,11 +3,29 @@ import { syncLatestHistory } from './sync/history-sync';
 import { runInitialBackfill } from './sync/initial-backfill';
 import { setupMessageHandlers } from './messages/handlers';
 import { deleteOlderThan } from './storage/watch-history-repo';
-import { loadConfig, getBackfillComplete } from './storage/config-store';
+import { loadConfig } from './storage/config-store';
 import { db } from './storage/db';
 import { computeDailyAggregate, computeStoredHistoryAggregates } from './analytics/engine';
 
 console.log('[BiliViz] Service Worker started');
+
+const FLOATING_POPUP_WINDOW_KEY = 'floatingPopupWindowId';
+const FLOATING_POPUP_URL = chrome.runtime.getURL('popup/index.html');
+
+function isNotLoggedIn(error: unknown): boolean {
+  return error instanceof Error && error.message === 'NOT_LOGGED_IN';
+}
+
+function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
 
 // Register alarms for periodic tasks
 setupAlarms();
@@ -17,17 +35,23 @@ onAlarm(async (name) => {
   switch (name) {
     case 'history-sync':
       try {
-        const backfillComplete = await getBackfillComplete();
         const storedCount = await db.watchHistory.count();
-        const shouldBackfill = !backfillComplete || storedCount === 0;
-        const count = shouldBackfill
-          ? await runInitialBackfill(storedCount === 0)
+        const shouldBackfill = storedCount === 0;
+        const changed = shouldBackfill
+          ? await runInitialBackfill('full', storedCount === 0)
           : await syncLatestHistory();
-        if (count > 0) {
+        const changedCount = typeof changed === 'number'
+          ? changed
+          : changed.insertedCount + changed.updatedCount;
+        if (changedCount > 0) {
           await computeStoredHistoryAggregates();
         }
       } catch (e) {
-        console.error('[BiliViz] History sync failed:', e);
+        if (isNotLoggedIn(e)) {
+          console.info('[BiliViz] History sync skipped: user is not logged in');
+        } else {
+          console.error(`[BiliViz] History sync failed: ${describeError(e)}`);
+        }
       }
       break;
 
@@ -59,13 +83,50 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   console.log('[BiliViz] Extension installed/updated:', details.reason);
   if (details.reason === 'install') {
     try {
-      await runInitialBackfill();
+      await runInitialBackfill('full');
       await computeStoredHistoryAggregates();
     } catch (e) {
-      console.error('[BiliViz] Initial backfill failed:', e);
+      if (isNotLoggedIn(e)) {
+        console.info('[BiliViz] Initial backfill skipped: user is not logged in');
+      } else {
+        console.error(`[BiliViz] Initial backfill failed: ${describeError(e)}`);
+      }
     }
   }
 });
 
 // Set up message handlers for popup/dashboard/content-script
 setupMessageHandlers();
+
+chrome.action.onClicked.addListener(async () => {
+  const stored = await chrome.storage.local.get(FLOATING_POPUP_WINDOW_KEY);
+  const existingWindowId = Number(stored[FLOATING_POPUP_WINDOW_KEY] ?? 0);
+
+  if (existingWindowId > 0) {
+    try {
+      await chrome.windows.update(existingWindowId, { focused: true });
+      return;
+    } catch {
+      await chrome.storage.local.remove(FLOATING_POPUP_WINDOW_KEY);
+    }
+  }
+
+  const win = await chrome.windows.create({
+    url: FLOATING_POPUP_URL,
+    type: 'popup',
+    width: 560,
+    height: 760,
+    focused: true,
+  });
+
+  if (win.id !== undefined) {
+    await chrome.storage.local.set({ [FLOATING_POPUP_WINDOW_KEY]: win.id });
+  }
+});
+
+chrome.windows.onRemoved.addListener(async (windowId) => {
+  const stored = await chrome.storage.local.get(FLOATING_POPUP_WINDOW_KEY);
+  if (Number(stored[FLOATING_POPUP_WINDOW_KEY] ?? 0) === windowId) {
+    await chrome.storage.local.remove(FLOATING_POPUP_WINDOW_KEY);
+  }
+});

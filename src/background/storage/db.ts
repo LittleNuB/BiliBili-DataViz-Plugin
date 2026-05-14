@@ -16,6 +16,24 @@ export class BiliAnalyticsDB extends Dexie {
       dailyAggregates:
         '++id, &date',
     });
+
+    this.version(2).stores({
+      watchHistory:
+        '++id, kid, &sessionKey, avid, bvid, [avid+cid+viewAt], authorMid, tagName, viewAt, dt',
+      playerEvents:
+        '++id, [bvid+cid], eventType, timestamp, tabId',
+      dailyAggregates:
+        '++id, &date',
+    }).upgrade(async (tx) => {
+      const table = tx.table('watchHistory');
+      await table.toCollection().modify((record) => {
+        if (!record.sessionKey) {
+          record.sessionKey = record.kid
+            ? `${record.kid}:${record.viewAt}`
+            : `${record.bvid ?? ''}:${record.cid ?? 0}:${record.viewAt}`;
+        }
+      });
+    });
   }
 }
 
