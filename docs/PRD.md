@@ -500,43 +500,55 @@ efficiencyScore = (
 - [x] chrome.alarms 调度器（每 5 分钟同步，每天聚合）
 - [x] 消息路由基础架构
 
-### Phase 2: 分析引擎（约 1 周） 🔄
+### Phase 2: 分析引擎（约 1 周） ✅
 
-- [ ] 通用聚合框架（aggregator.ts: group-by + time-window）
-- [ ] 消费指标计算（metrics.ts: watch time / completion / streak）
-- [ ] 内容偏好分析（category.ts: distribution / drift / buckets / tags）
-- [ ] UP 主关系分析（creator.ts: ranking / deep bond / new creator / over-dependency）
-- [ ] 行为模式诊断（behavior.ts: sessions / completion distribution）
-- [ ] 效率评分 + 建议生成（scores.ts + suggestions.ts）
-- [ ] 编排器 + 集成（engine.ts + wires into index.ts + handlers.ts）
+- [x] 通用聚合框架（aggregator.ts: group-by + time-window）
+- [x] 消费指标计算（metrics.ts: watch time / completion / streak）
+- [x] 内容偏好分析（category.ts: distribution / drift / buckets / tags）
+- [x] UP 主关系分析（creator.ts: ranking / deep bond / new creator / over-dependency）
+- [x] 行为模式诊断（behavior.ts: sessions / completion distribution）
+- [x] 效率评分 + 建议生成（scores.ts + suggestions.ts）
+- [x] 编排器 + 集成（engine.ts + wires into index.ts + handlers.ts）
 
-### Phase 3: Content Scripts（约 1 周）
+### Phase 3: Content Scripts（约 1 周） ✅
 
-- [ ] 播放器事件监听（MutationObserver → video 元素 → media events）
-- [ ] 心跳上报（每 5 秒进度快照）
-- [ ] 首页侧边栏卡片注入
+- [x] DOM 工具函数（page-detector.ts + dom-utils.ts）
+- [x] 视频元素检测（video-detector.ts: MutationObserver + 轮询回退）
+- [x] 播放事件捕获（event-capture.ts: play/pause/seeked/ended/ratechange）
+- [x] 心跳上报（heartbeat.ts: 每5秒进度快照 → sendMessage）
+- [x] 播放器监控入口（player-monitor/index.ts 编排）
+- [x] 侧边栏卡片渲染（renderer.ts: DOM构建 + 样式注入）
+- [x] 侧边栏卡片入口（sidebar-card/index.ts: 首页检测 + 注入）
+- [x] 后台存储事件（handlers.ts: PLAYER_HEARTBEAT/ACTION → db.playerEvents）
 
-### Phase 4: Popup UI（约 1 周）
+### Phase 4: Popup UI（约 1 周） ✅
 
-- [ ] Preact + ECharts 集成
-- [ ] 进度环、连续天数、快速统计、打开面板按钮
-- [ ] B站深色主题 + 粉红强调色
+- [x] ECharts 共享模块（shared/echarts/register.ts + theme.ts + options.ts）
+- [x] Popup 消息工具（popup/utils/messaging.ts: 类型化 sendMessage 封装）
+- [x] Popup 信号存储（popup/signals.ts: quickStats / loading / error）
+- [x] App.tsx 根组件（布局编排 + 数据获取触发）
+- [x] ProgressRing 组件（ECharts Gauge: 今日观看 / 每日目标）
+- [x] QuickStats 组件（连续天数 / 本周时长 / 效率分）
+- [x] OpenDashboard 按钮组件
+- [x] main.ts 重写（Preact render 挂载）
+- [x] popup.css 扩展（组件样式）
 
-### Phase 5: Dashboard（约 3 周）
+### Phase 5: Dashboard（约 3 周） ✅
 
-- [ ] 模块 1：消费总览（Gauge 环 + 热力图 + 卡片）
-- [ ] 模块 2：内容偏好（树图 + 折线图 + 柱状图 + 词云）
-- [ ] 模块 3：UP主关系（排行柱图 + 徽章列表 + 预警提示）
-- [ ] 模块 4：行为诊断（直方图 + 跳片分析 + Session 模式）
-- [ ] 模块 5：实验建议（模拟器 + 建议卡片 + 盲盒）
-- [ ] ChartContainer 封装 + DateRangePicker + Loading/Empty/Error 状态
+- [x] 共享组件：ChartContainer / StatCard / LoadingSkeleton / EmptyState / ErrorBoundary / TabBar
+- [x] Dashboard 入口：main.tsx + App.tsx + signals + messaging
+- [x] 模块1 — 消费总览（OverviewPage: Gauge 环 + 热力图 + 统计卡片）
+- [x] 模块2 — 内容偏好（PreferencePage: 饼图 + 折线图 + 柱状图 + 词云）
+- [x] 模块3 — UP主关系（CreatorPage: 排行卡片 + 深度绑定 + 新发现 + 预警）
+- [x] 模块4 — 行为诊断（BehaviorPage: 直方图 + Session 卡片 + 高峰图）
+- [x] 模块5 — 实验建议（ExperimentsPage: 建议卡片 + 盲盒网格）
 
-### Phase 6: 打磨（约 1 周）
+### Phase 6: 打磨（约 1 周） 🔄
 
-- [ ] 未登录/无数据状态处理
-- [ ] API 错误降级 + 超时重试
-- [ ] 数据导出（CSV/JSON）
-- [ ] 类型检查零错误 + 基础单元测试
+- [ ] 扩展图标生成（16/32/48/128px PNG）
+- [ ] 未登录状态检测与友好提示
+- [ ] API 错误降级（显示缓存数据 + 最后同步时间）
+- [ ] 数据导出功能（CSV/JSON 下载）
 
 ## 13. 风险与缓解
 
