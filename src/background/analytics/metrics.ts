@@ -2,8 +2,9 @@ import type { WatchHistoryRecord, DailyAggregate } from '../../shared/types/watc
 import type { DashboardOverview, QuickStats } from '../../shared/types/analytics';
 import { startOfWeek, startOfMonth, daysAgo, dateKey, daysBetween } from '../../shared/utils/time';
 import { percentChange } from '../../shared/utils/math';
-import { getAggregate, getAggregatesByDateRange } from '../storage/aggregate-repo';
+import { getRecordsByDateRange } from '../storage/watch-history-repo';
 import { loadConfig } from '../storage/config-store';
+import { aggregateWindow } from './aggregator';
 
 export function computeCompletion(records: WatchHistoryRecord[]): number {
   if (records.length === 0) return 0;
@@ -15,6 +16,15 @@ export function computeCompletion(records: WatchHistoryRecord[]): number {
 
 export function computeStreak(dailyList: DailyAggregate[]): { current: number; longest: number } {
   const dates = new Set(dailyList.map(a => a.date));
+  return computeStreakFromDateSet(dates);
+}
+
+export function computeStreakFromRecords(records: WatchHistoryRecord[]): { current: number; longest: number } {
+  const dates = new Set(records.map(r => dateKey(new Date(r.viewAt * 1000))));
+  return computeStreakFromDateSet(dates);
+}
+
+function computeStreakFromDateSet(dates: Set<string>): { current: number; longest: number } {
   if (dates.size === 0) return { current: 0, longest: 0 };
 
   let current = 0;
@@ -39,7 +49,7 @@ export function computeStreak(dailyList: DailyAggregate[]): { current: number; l
 
   // Also check historical longest
   let historicalStreak = 0;
-  const sorted = dailyList.map(a => a.date).sort();
+  const sorted = Array.from(dates).sort();
   for (let i = 0; i < sorted.length; i++) {
     if (i === 0) { historicalStreak = 1; continue; }
     const prev = new Date(sorted[i - 1]);
@@ -59,19 +69,21 @@ export function computeStreak(dailyList: DailyAggregate[]): { current: number; l
 export async function getQuickStats(): Promise<QuickStats> {
   const config = await loadConfig();
   const todayKey = dateKey();
-  const todayAgg = await getAggregate(todayKey);
+  const todayRecords = await getRecordsByDateRange(todayKey, todayKey);
+  const todayAgg = aggregateWindow(todayRecords);
 
   const weekStart = dateKey(startOfWeek());
-  const thisWeekAggs = await getAggregatesByDateRange(weekStart, todayKey);
+  const thisWeekRecords = await getRecordsByDateRange(weekStart, todayKey);
 
-  const weeklyWatch = thisWeekAggs.reduce((s, a) => s + a.totalWatchTime, 0);
+  const weeklyWatch = thisWeekRecords.reduce((s, r) => s + Math.max(r.progress, 0), 0);
+  const recentRecords = await getRecordsByDateRange(dateKey(daysAgo(365)), todayKey);
 
   return {
-    todayWatchTime: todayAgg?.totalWatchTime ?? 0,
+    todayWatchTime: todayAgg.totalWatchTime,
     dailyGoal: config.dailyWatchGoal * 60, // convert minutes to seconds
-    streakDays: computeStreak(thisWeekAggs).current,
-    avgCompletion: todayAgg?.avgCompletion ?? 0,
-    efficiencyScore: todayAgg?.efficiencyScore ?? 0,
+    streakDays: computeStreakFromRecords(recentRecords).current,
+    avgCompletion: todayAgg.avgCompletion,
+    efficiencyScore: computeRawEfficiency(todayRecords, config.dailyWatchGoal * 60),
     weeklyWatchTime: weeklyWatch,
   };
 }
@@ -87,39 +99,27 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
   const lastWeekEnd = dateKey(lastWeekEndDate);
   const monthStart = dateKey(startOfMonth(now));
 
-  const thisWeekAggs = await getAggregatesByDateRange(weekStart, todayKey);
-  const lastWeekAggs = await getAggregatesByDateRange(lastWeekStart, lastWeekEnd);
-  const thisMonthAggs = await getAggregatesByDateRange(monthStart, todayKey);
+  const thisWeekRecords = await getRecordsByDateRange(weekStart, todayKey);
+  const lastWeekRecords = await getRecordsByDateRange(lastWeekStart, lastWeekEnd);
+  const thisMonthRecords = await getRecordsByDateRange(monthStart, todayKey);
+  const recentRecords = await getRecordsByDateRange(dateKey(daysAgo(365)), todayKey);
+  const thisWeekWindow = aggregateWindow(thisWeekRecords);
 
-  const weeklyWatch = thisWeekAggs.reduce((s, a) => s + a.totalWatchTime, 0);
-  const lastWeekWatch = lastWeekAggs.reduce((s, a) => s + a.totalWatchTime, 0);
-  const monthlyWatch = thisMonthAggs.reduce((s, a) => s + a.totalWatchTime, 0);
+  const weeklyWatch = thisWeekWindow.totalWatchTime;
+  const lastWeekWatch = aggregateWindow(lastWeekRecords).totalWatchTime;
+  const monthlyWatch = aggregateWindow(thisMonthRecords).totalWatchTime;
 
-  const streak = computeStreak(thisWeekAggs);
+  const streak = computeStreakFromRecords(recentRecords);
 
-  // Merged heatmap: prefer the last 7 days of aggregates
-  const heatmap: number[][] = Array.from({ length: 24 }, () => new Array(7).fill(0));
-  for (const a of thisWeekAggs) {
-    for (let h = 0; h < 24; h++) {
-      for (let d = 0; d < 7; d++) {
-        heatmap[h][d] += a.hourlyHeatmap[h]?.[d] ?? 0;
-      }
-    }
-  }
-
-  const avgCompletion = thisWeekAggs.length > 0
-    ? thisWeekAggs.reduce((s, a) => s + a.avgCompletion, 0) / thisWeekAggs.length
-    : 0;
-
-  // Efficiency over this week
-  const avgEfficiency = thisWeekAggs.length > 0
-    ? thisWeekAggs.reduce((s, a) => s + a.efficiencyScore, 0) / thisWeekAggs.length
-    : 0;
+  const heatmap = thisWeekWindow.hourlyHeatmap;
+  const avgCompletion = thisWeekWindow.avgCompletion;
+  const config = await loadConfig();
+  const avgEfficiency = computeRawEfficiency(thisWeekRecords, config.dailyWatchGoal * 60);
 
   const lastMonthStart = dateKey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
   const lastMonthEnd = dateKey(new Date(now.getFullYear(), now.getMonth(), 0));
-  const lastMonthAggs = await getAggregatesByDateRange(lastMonthStart, lastMonthEnd);
-  const lastMonthWatch = lastMonthAggs.reduce((s, a) => s + a.totalWatchTime, 0);
+  const lastMonthRecords = await getRecordsByDateRange(lastMonthStart, lastMonthEnd);
+  const lastMonthWatch = aggregateWindow(lastMonthRecords).totalWatchTime;
 
   return {
     weeklyWatchTime: weeklyWatch,
@@ -132,4 +132,20 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
     hourlyHeatmap: heatmap,
     efficiencyScore: Math.round(avgEfficiency),
   };
+}
+
+function computeRawEfficiency(records: WatchHistoryRecord[], dailyGoalSeconds: number): number {
+  if (records.length === 0) return 0;
+
+  const windowed = aggregateWindow(records);
+  const goalScore = dailyGoalSeconds > 0
+    ? Math.min(windowed.totalWatchTime / dailyGoalSeconds, 1)
+    : 0.5;
+  const diversityScore = Math.min(windowed.uniqueCategories / 20, 1);
+
+  return Math.round((
+    0.5 * windowed.avgCompletion +
+    0.3 * goalScore +
+    0.2 * diversityScore
+  ) * 100);
 }

@@ -1,7 +1,8 @@
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
 import { getRecordsByDateRange } from '../storage/watch-history-repo';
-import { dateKey } from '../../shared/utils/time';
+import { dateKey, startOfMonth } from '../../shared/utils/time';
 import { clamp } from '../../shared/utils/math';
+import { db } from '../storage/db';
 
 const DEVICE_LABELS: Record<number, string> = {
   0: '其他',
@@ -19,6 +20,8 @@ const MOBILE_DEVICE_TYPES = new Set([1, 3, 5, 7]);
 const PAD_DEVICE_TYPES = new Set([4, 6]);
 const PC_DEVICE_TYPES = new Set([2]);
 const TV_DEVICE_TYPES = new Set([33]);
+const LOCAL_PC_DEVICE_TYPE = 2;
+const LOCAL_PC_MATCH_WINDOW_MS = 12 * 60 * 60 * 1000;
 
 export interface DeviceBreakdown {
   label: string;
@@ -32,6 +35,15 @@ export interface DeviceBreakdown {
 export interface DeviceHourlyData {
   mobile: number[];
   pc: number[];
+}
+
+interface LocalPcSession {
+  bvid: string;
+  cid: number;
+  date: string;
+  firstTimestamp: number;
+  watchTime: number;
+  duration: number;
 }
 
 export function computeDeviceBreakdown(records: WatchHistoryRecord[]): DeviceBreakdown[] {
@@ -86,15 +98,17 @@ export async function getDeviceData(): Promise<{
   deviceCompletion: { mobile: number; pc: number };
 }> {
   const now = new Date();
-  const thirtyDaysAgo = new Date(now);
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-  const records = await getRecordsByDateRange(dateKey(thirtyDaysAgo), dateKey(now));
-  const breakdown = computeDeviceBreakdown(records);
-  const hourly = computeDeviceHourly(records);
+  const startDate = dateKey(startOfMonth(now));
+  const endDate = dateKey(now);
+  const records = await getRecordsByDateRange(startDate, endDate);
+  const recordsWithLocalPcEvidence = await applyLocalPcEvidence(records, startDate, endDate);
 
-  const mobileRecords = records.filter(r => isMobileLikeDevice(r.deviceType));
-  const pcRecords = records.filter(r => isPcLikeDevice(r.deviceType));
+  const breakdown = computeDeviceBreakdown(recordsWithLocalPcEvidence);
+  const hourly = computeDeviceHourly(recordsWithLocalPcEvidence);
+
+  const mobileRecords = recordsWithLocalPcEvidence.filter(r => isMobileLikeDevice(r.deviceType));
+  const pcRecords = recordsWithLocalPcEvidence.filter(r => isPcLikeDevice(r.deviceType));
 
   return {
     breakdown,
@@ -103,6 +117,106 @@ export async function getDeviceData(): Promise<{
       mobile: computeAvgCompletion(mobileRecords),
       pc: computeAvgCompletion(pcRecords),
     },
+  };
+}
+
+async function applyLocalPcEvidence(
+  records: WatchHistoryRecord[],
+  startDate: string,
+  endDate: string,
+): Promise<WatchHistoryRecord[]> {
+  const sessions = await getLocalPcSessions(startDate, endDate);
+  if (sessions.length === 0) return records;
+
+  const adjusted = records.map(r => ({ ...r }));
+
+  for (const session of sessions) {
+    const existingIndex = adjusted.findIndex(r => (
+      r.bvid === session.bvid &&
+      r.cid === session.cid &&
+      dateKey(new Date(r.viewAt * 1000)) === session.date &&
+      Math.abs(r.viewAt * 1000 - session.firstTimestamp) <= LOCAL_PC_MATCH_WINDOW_MS
+    ));
+
+    if (existingIndex >= 0) {
+      adjusted[existingIndex] = {
+        ...adjusted[existingIndex],
+        deviceType: LOCAL_PC_DEVICE_TYPE,
+      };
+      continue;
+    }
+
+    adjusted.push(createLocalPcRecord(session));
+  }
+
+  return adjusted;
+}
+
+async function getLocalPcSessions(startDate: string, endDate: string): Promise<LocalPcSession[]> {
+  const [startYear, startMonth, startDay] = startDate.split('-').map(Number);
+  const [endYear, endMonth, endDay] = endDate.split('-').map(Number);
+  const startMs = new Date(startYear, startMonth - 1, startDay, 0, 0, 0, 0).getTime();
+  const endMs = new Date(endYear, endMonth - 1, endDay, 23, 59, 59, 999).getTime();
+
+  const events = await db.playerEvents.where('timestamp').between(startMs, endMs, true, true).toArray();
+  const sessions = new Map<string, LocalPcSession>();
+
+  for (const event of events) {
+    if (!event.bvid || !event.cid || event.currentTime <= 0) continue;
+
+    const eventDate = dateKey(new Date(event.timestamp));
+    const key = `${event.bvid}:${event.cid}:${eventDate}`;
+    const watchTime = Math.max(0, event.seekTo ?? event.currentTime);
+    const duration = Math.max(0, event.duration);
+    const existing = sessions.get(key);
+
+    if (!existing) {
+      sessions.set(key, {
+        bvid: event.bvid,
+        cid: event.cid,
+        date: eventDate,
+        firstTimestamp: event.timestamp,
+        watchTime,
+        duration,
+      });
+      continue;
+    }
+
+    existing.firstTimestamp = Math.min(existing.firstTimestamp, event.timestamp);
+    existing.watchTime = Math.max(existing.watchTime, watchTime);
+    existing.duration = Math.max(existing.duration, duration);
+  }
+
+  return Array.from(sessions.values()).map(session => ({
+    ...session,
+    watchTime: session.duration > 0 ? Math.min(session.watchTime, session.duration) : session.watchTime,
+  }));
+}
+
+function createLocalPcRecord(session: LocalPcSession): WatchHistoryRecord {
+  const duration = session.duration || session.watchTime;
+  const progress = duration > 0 ? Math.min(session.watchTime, duration) : session.watchTime;
+
+  return {
+    kid: -session.firstTimestamp,
+    avid: 0,
+    bvid: session.bvid,
+    cid: session.cid,
+    title: '',
+    authorName: '',
+    authorMid: 0,
+    tagName: '',
+    tags: [],
+    cover: '',
+    viewAt: Math.floor(session.firstTimestamp / 1000),
+    progress,
+    duration,
+    actualCompletion: duration > 0 ? Math.min(progress / duration, 1) : 0,
+    deviceType: LOCAL_PC_DEVICE_TYPE,
+    isFavorite: false,
+    business: 'archive',
+    dt: 0,
+    syncedAt: session.firstTimestamp,
   };
 }
 
