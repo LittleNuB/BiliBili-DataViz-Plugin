@@ -8,6 +8,7 @@ export type RequestAction =
   | 'GET_CREATOR_DATA'
   | 'GET_BEHAVIOR_DATA'
   | 'GET_EXPERIMENT_DATA'
+  | 'GET_DEVICE_DATA'
   | 'SYNC_NOW'
   | 'UPDATE_CONFIG'
   | 'EXPORT_DATA'
@@ -80,4 +81,9 @@ export type BehaviorResponse = BiliVizResponse<BehaviorMetrics>;
 export type ExperimentResponse = BiliVizResponse<{
   tips: WeeklyTip[];
   blindBox: BlindBoxItem[];
+}>;
+export type DeviceResponse = BiliVizResponse<{
+  breakdown: { label: string; deviceType: number; watchTime: number; videoCount: number; avgCompletion: number; percentage: number }[];
+  hourly: { mobile: number[]; pc: number[] };
+  deviceCompletion: { mobile: number; pc: number };
 }>;

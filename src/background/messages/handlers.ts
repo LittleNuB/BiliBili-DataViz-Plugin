@@ -11,6 +11,7 @@ import {
   getBehaviorData,
   getExperimentData,
 } from '../analytics/engine';
+import { getDeviceData } from '../analytics/device';
 
 export function setupMessageHandlers(): void {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -89,6 +90,8 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       return { success: true, data: await getBehaviorData() as T };
     case 'GET_EXPERIMENT_DATA':
       return { success: true, data: await getExperimentData() as T };
+    case 'GET_DEVICE_DATA':
+      return { success: true, data: await getDeviceData() as T };
     case 'SYNC_NOW':
       await syncLatestHistory();
       return { success: true, data: { synced: true } as T };
