@@ -9,6 +9,10 @@ const resolveRoot = (...segments: string[]) => path.resolve(__dirname, ...segmen
 
 export default defineConfig({
   root: __dirname,
+  esbuild: {
+    jsx: 'automatic',
+    jsxImportSource: 'preact',
+  },
   resolve: {
     alias: {
       '@shared': resolveRoot('src/shared'),

@@ -1,0 +1,34 @@
+import * as echarts from 'echarts/core';
+import { BarChart, LineChart, PieChart, TreemapChart, HeatmapChart, GaugeChart } from 'echarts/charts';
+import {
+  TitleComponent,
+  TooltipComponent,
+  GridComponent,
+  LegendComponent,
+  VisualMapComponent,
+  DataZoomComponent,
+  CalendarComponent,
+  GraphicComponent,
+} from 'echarts/components';
+import { CanvasRenderer } from 'echarts/renderers';
+import 'echarts-wordcloud';
+
+echarts.use([
+  BarChart,
+  LineChart,
+  PieChart,
+  TreemapChart,
+  HeatmapChart,
+  GaugeChart,
+  TitleComponent,
+  TooltipComponent,
+  GridComponent,
+  LegendComponent,
+  VisualMapComponent,
+  DataZoomComponent,
+  CalendarComponent,
+  GraphicComponent,
+  CanvasRenderer,
+]);
+
+export default echarts;
