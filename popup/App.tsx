@@ -1,5 +1,5 @@
 import { useEffect } from 'preact/hooks';
-import { quickStats, loading, error, lastSyncResult, syncInProgress, syncProgress } from './signals';
+import { quickStats, loading, error, lastSyncResult, syncInProgress, syncProgress, syncPageLimit } from './signals';
 import { requestSW } from './utils/messaging';
 import type { QuickStats } from '../src/shared/types/analytics';
 import type { SyncNowResult, SyncProgress } from '../src/shared/types/messages';
@@ -41,7 +41,10 @@ export function App() {
     syncInProgress.value = false;
     try {
       if (forceSync) {
-        lastSyncResult.value = await requestSW<SyncNowResult>('SYNC_NOW', { mode: 'full' });
+        lastSyncResult.value = await requestSW<SyncNowResult>('SYNC_NOW', {
+          mode: 'full',
+          maxPages: syncPageLimit.value,
+        });
         await refreshSyncStatus();
       }
       const data = await requestSW<QuickStats>('GET_QUICK_STATS');
@@ -72,6 +75,17 @@ export function App() {
     : 0;
   const elapsedSeconds = progress?.startedAt ? Math.max(0, Math.round((Date.now() - progress.startedAt) / 1000)) : 0;
 
+  async function stopSync() {
+    if (syncProgress.value) {
+      syncProgress.value = {
+        ...syncProgress.value,
+        currentTask: '正在停止同步...',
+      };
+    }
+    await requestSW('CANCEL_SYNC');
+    await refreshSyncStatus();
+  }
+
   return (
     <div style={{ padding: '12px 0' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 12px', gap: '8px' }}>
@@ -100,6 +114,50 @@ export function App() {
         >
           🔄
         </button>
+      </div>
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: '8px',
+        marginTop: '8px',
+      }}>
+        <select
+          value={syncPageLimit.value}
+          onChange={(e) => {
+            syncPageLimit.value = Number((e.currentTarget as HTMLSelectElement).value);
+          }}
+          title={syncInProgress.value ? '当前同步不受影响，修改会应用到下一次同步' : '限制本次最多同步的历史页数，每页约 30 条'}
+          style={{
+            background: '#242448',
+            color: '#C8C8D8',
+            border: '1px solid rgba(255,255,255,0.14)',
+            borderRadius: '6px',
+            fontSize: '11px',
+            padding: '4px 6px',
+          }}
+        >
+          <option value={10}>最多 300 条</option>
+          <option value={50}>最多 1500 条</option>
+          <option value={100}>最多 3000 条</option>
+          <option value={300}>最多 9000 条</option>
+        </select>
+        {syncInProgress.value && (
+          <button
+            onClick={stopSync}
+            style={{
+              background: '#3A2A38',
+              color: '#FFB347',
+              border: '1px solid rgba(255, 179, 71, 0.35)',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '11px',
+              padding: '4px 8px',
+            }}
+          >
+            停止同步
+          </button>
+        )}
       </div>
 
       {loading.value && (
@@ -220,6 +278,22 @@ export function App() {
                 <br />
                 {progress?.currentTask ?? '正在准备同步'}
               </p>
+              <button
+                onClick={stopSync}
+                style={{
+                  marginTop: '8px',
+                  width: '100%',
+                  background: 'rgba(255, 179, 71, 0.12)',
+                  color: '#FFB347',
+                  border: '1px solid rgba(255, 179, 71, 0.32)',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                  padding: '6px 8px',
+                }}
+              >
+                停止本次同步
+              </button>
             </div>
           )}
           <p style={{

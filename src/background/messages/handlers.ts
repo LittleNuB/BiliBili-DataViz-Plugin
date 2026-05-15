@@ -5,6 +5,7 @@ import {
   getLastSyncTime,
   getHistorySyncing,
   getHistorySyncProgress,
+  requestHistorySyncCancel,
   setDeviceTypeMigrationComplete,
 } from '../storage/config-store';
 import { db } from '../storage/db';
@@ -19,6 +20,7 @@ import {
   computeStoredHistoryAggregates,
 } from '../analytics/engine';
 import { getDeviceData } from '../analytics/device';
+import { abortCurrentHistorySync } from '../sync/sync-control';
 
 export function setupMessageHandlers(): void {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -102,13 +104,15 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     case 'SYNC_NOW':
       {
         const requestedMode = request.params?.mode === 'full' ? 'full' : request.params?.mode === 'incremental' ? 'incremental' : null;
+        const requestedMaxPages = Number(request.params?.maxPages);
+        const maxPages = Number.isFinite(requestedMaxPages) ? requestedMaxPages : undefined;
         const storedCount = await db.watchHistory.count();
         const mode = requestedMode ?? (storedCount === 0 ? 'full' : 'incremental');
         if (await getHistorySyncing()) {
           throw new Error('HISTORY_SYNC_IN_PROGRESS');
         }
 
-        void runInitialBackfill(mode, requestedMode === 'full')
+        void runInitialBackfill(mode, requestedMode === 'full', { maxPages })
           .then(async () => {
             await setDeviceTypeMigrationComplete();
             await computeStoredHistoryAggregates();
@@ -122,7 +126,7 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
           data: {
             synced: true,
             mode,
-            pageLimit: 0,
+            pageLimit: maxPages ?? 0,
             currentTask: 'sync_started',
             fetchedPages: 0,
             fetchedCount: 0,
@@ -135,6 +139,10 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
           } satisfies SyncNowResult as T,
         };
       }
+    case 'CANCEL_SYNC':
+      await requestHistorySyncCancel();
+      abortCurrentHistorySync();
+      return { success: true };
     case 'UPDATE_CONFIG':
       await saveConfig(request.params as Partial<UserConfig>);
       return { success: true };

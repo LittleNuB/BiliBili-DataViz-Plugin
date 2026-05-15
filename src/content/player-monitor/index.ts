@@ -18,9 +18,15 @@ interface BiliInitialState {
 
 let cleanup: (() => void) | null = null;
 let lastBvid = '';
+let retryTimer: number | null = null;
 
 function isVideoPage(): boolean {
   return location.pathname.startsWith('/video/');
+}
+
+function extractBvidFromUrl(): string {
+  const match = location.pathname.match(/\/video\/(BV[A-Za-z0-9]+)/);
+  return match?.[1] ?? '';
 }
 
 function getInitialState(): BiliInitialState | null {
@@ -33,14 +39,31 @@ function getInitialState(): BiliInitialState | null {
 
 function getVideoContext() {
   const state = getInitialState();
-  const bvid = state?.bvid ?? state?.videoData?.bvid ?? '';
-  const cid = state?.cid ?? state?.videoData?.cid ?? state?.videoData?.pages?.[0]?.cid ?? 0;
-  const title = state?.videoData?.title ?? document.title.replace('_哔哩哔哩_bilibili', '').trim();
-  const duration = state?.videoData?.duration ?? state?.videoData?.pages?.[0]?.duration ?? 0;
-  const authorMid = state?.videoData?.owner?.mid ?? state?.upData?.mid ?? 0;
-  const authorName = state?.videoData?.owner?.name ?? state?.upData?.name ?? '';
+  const urlBvid = extractBvidFromUrl();
+  const stateBvid = state?.bvid ?? state?.videoData?.bvid ?? '';
+  const bvid = urlBvid || stateBvid;
+  const canTrustState = !urlBvid || !stateBvid || stateBvid === urlBvid;
+  const cid = canTrustState ? state?.cid ?? state?.videoData?.cid ?? state?.videoData?.pages?.[0]?.cid ?? 0 : 0;
+  const title = canTrustState && state?.videoData?.title
+    ? state.videoData.title
+    : document.title.replace('_哔哩哔哩_bilibili', '').trim();
+  const duration = canTrustState ? state?.videoData?.duration ?? state?.videoData?.pages?.[0]?.duration ?? 0 : 0;
+  const authorMid = canTrustState ? state?.videoData?.owner?.mid ?? state?.upData?.mid ?? 0 : 0;
+  const authorName = canTrustState ? state?.videoData?.owner?.name ?? state?.upData?.name ?? '' : '';
 
   return { bvid, cid, title, duration, authorMid, authorName };
+}
+
+function scheduleInitialize(delay = 0): void {
+  if (retryTimer !== null) {
+    window.clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+
+  retryTimer = window.setTimeout(() => {
+    retryTimer = null;
+    initializeMonitor();
+  }, delay);
 }
 
 async function initializeMonitor(): Promise<void> {
@@ -54,7 +77,6 @@ async function initializeMonitor(): Promise<void> {
 
   // Skip re-initialization for the same video
   if (ctx.bvid === lastBvid) return;
-  lastBvid = ctx.bvid;
 
   // Clean up previous listeners
   if (cleanup) {
@@ -64,6 +86,7 @@ async function initializeMonitor(): Promise<void> {
 
   try {
     const video = await detectVideo();
+    lastBvid = ctx.bvid;
     console.log(`[BiliViz] Monitoring: ${ctx.title} (${ctx.bvid})`);
 
     const videoCtx: VideoContext = {
@@ -77,7 +100,7 @@ async function initializeMonitor(): Promise<void> {
 
     const removeEvents = attachEventListeners(video, videoCtx, (msg) => {
       chrome.runtime.sendMessage(msg).catch(() => {
-        // SW may be inactive — that's OK, message will be dropped
+        // SW may be inactive; the next heartbeat/action can wake it again.
       });
     });
 
@@ -95,25 +118,27 @@ async function initializeMonitor(): Promise<void> {
 }
 
 // Initial run
-initializeMonitor();
+scheduleInitialize();
 
 // Handle B站 SPA navigation: monitor URL changes
-let lastPath = location.pathname;
+let lastUrl = location.href;
 const navObserver = new MutationObserver(() => {
-  if (location.pathname !== lastPath) {
-    lastPath = location.pathname;
+  if (location.href !== lastUrl) {
+    lastUrl = location.href;
     lastBvid = '';
-    initializeMonitor();
+    scheduleInitialize(800);
+    window.setTimeout(() => scheduleInitialize(2500), 2500);
   }
 });
 navObserver.observe(document.body, { childList: true, subtree: true });
 
 // Also check periodically as fallback
 setInterval(() => {
-  if (location.pathname !== lastPath) {
-    lastPath = location.pathname;
+  if (location.href !== lastUrl) {
+    lastUrl = location.href;
     lastBvid = '';
-    initializeMonitor();
+    scheduleInitialize(800);
+    window.setTimeout(() => scheduleInitialize(2500), 2500);
   }
 }, 2000);
 

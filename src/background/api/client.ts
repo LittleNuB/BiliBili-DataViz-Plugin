@@ -11,6 +11,7 @@ export async function biliGet<T>(
   params?: Record<string, string>,
   retries = 3,
   withWbi = false,
+  signal?: AbortSignal,
 ): Promise<T> {
   const url = new URL(path, API_BASE);
 
@@ -30,7 +31,7 @@ export async function biliGet<T>(
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
-      const response = await fetchWithTimeout(url.toString());
+      const response = await fetchWithTimeout(url.toString(), signal);
 
       if (response.status === 412) {
         lastError = new Error('RATE_LIMITED');
@@ -45,7 +46,7 @@ export async function biliGet<T>(
       }
 
       if (WBI_REQUIRED_CODES.includes(json.code) && !withWbi) {
-        return biliGet<T>(path, params, retries - attempt, true);
+        return biliGet<T>(path, params, retries - attempt, true, signal);
       }
 
       if (json.code !== 0) {
@@ -56,6 +57,7 @@ export async function biliGet<T>(
     } catch (e) {
       lastError = normalizeError(e);
       if (lastError.message === 'NOT_LOGGED_IN') throw lastError;
+      if (lastError.message === 'SYNC_CANCELLED') throw lastError;
       if (attempt < retries - 1) {
         await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
       }
@@ -76,9 +78,11 @@ function normalizeError(error: unknown): Error {
   }
 }
 
-async function fetchWithTimeout(url: string): Promise<Response> {
+async function fetchWithTimeout(url: string, externalSignal?: AbortSignal): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const abortFromExternal = () => controller.abort();
+  externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
 
   try {
     return await fetch(url, {
@@ -90,11 +94,15 @@ async function fetchWithTimeout(url: string): Promise<Response> {
       },
     });
   } catch (error) {
+    if (externalSignal?.aborted) {
+      throw new Error('SYNC_CANCELLED');
+    }
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error('REQUEST_TIMEOUT');
     }
     throw error;
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', abortFromExternal);
   }
 }

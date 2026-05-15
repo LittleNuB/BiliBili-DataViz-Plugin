@@ -3,6 +3,7 @@ import type { SyncProgress } from '../../shared/types/messages';
 
 const CONFIG_KEY = 'userConfig';
 const HISTORY_SYNC_PROGRESS_KEY = 'historySyncProgress';
+const HISTORY_SYNC_CANCEL_KEY = 'historySyncCancelRequested';
 const HISTORY_SYNC_LOCK_TIMEOUT_MS = 30 * 60 * 1000;
 
 export async function loadConfig(): Promise<UserConfig> {
@@ -72,6 +73,19 @@ export async function patchHistorySyncProgress(progress: Partial<SyncProgress>):
     ...progress,
     updatedAt: Date.now(),
   });
+}
+
+export async function requestHistorySyncCancel(): Promise<void> {
+  await chrome.storage.local.set({ [HISTORY_SYNC_CANCEL_KEY]: true });
+}
+
+export async function clearHistorySyncCancel(): Promise<void> {
+  await chrome.storage.local.remove(HISTORY_SYNC_CANCEL_KEY);
+}
+
+export async function getHistorySyncCancelRequested(): Promise<boolean> {
+  const result = await chrome.storage.local.get(HISTORY_SYNC_CANCEL_KEY);
+  return result[HISTORY_SYNC_CANCEL_KEY] === true;
 }
 
 export async function getBackfillComplete(): Promise<boolean> {

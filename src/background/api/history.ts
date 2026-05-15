@@ -9,7 +9,7 @@ export interface HistoryCursorParams {
   ps?: number;
 }
 
-export async function fetchHistoryPage(params: HistoryCursorParams = {}): Promise<{
+export async function fetchHistoryPage(params: HistoryCursorParams = {}, signal?: AbortSignal): Promise<{
   list: HistoryCursorItem[];
   cursor: HistoryCursorData['cursor'];
 }> {
@@ -27,7 +27,7 @@ export async function fetchHistoryPage(params: HistoryCursorParams = {}): Promis
     queryParams.business = params.business;
   }
 
-  const data = await biliGet<HistoryCursorData>(HISTORY_ENDPOINT, queryParams);
+  const data = await biliGet<HistoryCursorData>(HISTORY_ENDPOINT, queryParams, 3, false, signal);
   return {
     list: data.list ?? [],
     cursor: data.cursor,

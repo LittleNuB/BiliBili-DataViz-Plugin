@@ -8,6 +8,7 @@ export const error = signal<string | null>(null);
 export const lastSyncResult = signal<SyncNowResult | null>(null);
 export const syncInProgress = signal(false);
 export const syncProgress = signal<SyncProgress | null>(null);
+export const syncPageLimit = signal(50);
 
 export const completionPercent = computed(() => {
   const stats = quickStats.value;

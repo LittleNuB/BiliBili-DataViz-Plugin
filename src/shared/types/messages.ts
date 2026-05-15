@@ -10,6 +10,7 @@ export type RequestAction =
   | 'GET_EXPERIMENT_DATA'
   | 'GET_DEVICE_DATA'
   | 'SYNC_NOW'
+  | 'CANCEL_SYNC'
   | 'UPDATE_CONFIG'
   | 'EXPORT_DATA'
   | 'GET_SYNC_STATUS';

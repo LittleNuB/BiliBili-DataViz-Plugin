@@ -4,6 +4,8 @@ import { filterNewItems, isHistoryItemStored } from './dedup';
 import { bulkInsert, updateDeviceTypesFromHistory } from '../storage/watch-history-repo';
 import {
   getBackfillComplete,
+  clearHistorySyncCancel,
+  getHistorySyncCancelRequested,
   getHistorySyncing,
   setBackfillComplete,
   setHistorySyncing,
@@ -14,6 +16,7 @@ import type { HistoryCursorItem } from '../../shared/types/video-info';
 import { MAX_BACKFILL_PAGES } from '../../shared/constants';
 import { getHistoryBvid, getHistoryDeviceType, toWatchHistoryRecord } from './watch-history-mapper';
 import type { HistorySyncMode } from '../../shared/types/messages';
+import { beginHistorySyncAbortScope, endHistorySyncAbortScope } from './sync-control';
 
 export interface BackfillResult {
   mode: HistorySyncMode;
@@ -29,14 +32,24 @@ export interface BackfillResult {
   newestFetchedAt: number | null;
 }
 
-export async function runInitialBackfill(mode: HistorySyncMode = 'full', force = false): Promise<BackfillResult> {
+export interface HistorySyncOptions {
+  maxPages?: number;
+}
+
+export async function runInitialBackfill(
+  mode: HistorySyncMode = 'full',
+  force = false,
+  options: HistorySyncOptions = {},
+): Promise<BackfillResult> {
   if (await getHistorySyncing()) {
     throw new Error('HISTORY_SYNC_IN_PROGRESS');
   }
 
+  await clearHistorySyncCancel();
   await setHistorySyncing(true);
+  const signal = beginHistorySyncAbortScope();
   try {
-    return await runHistorySyncUnlocked(mode, force);
+    return await runHistorySyncUnlocked(mode, force, options, signal);
   } catch (error) {
     await setHistorySyncProgress({
       ...createResult(mode, error instanceof Error ? error.message : 'sync_failed'),
@@ -46,11 +59,18 @@ export async function runInitialBackfill(mode: HistorySyncMode = 'full', force =
     });
     throw error;
   } finally {
+    endHistorySyncAbortScope(signal);
+    await clearHistorySyncCancel();
     await setHistorySyncing(false);
   }
 }
 
-async function runHistorySyncUnlocked(mode: HistorySyncMode, force: boolean): Promise<BackfillResult> {
+async function runHistorySyncUnlocked(
+  mode: HistorySyncMode,
+  force: boolean,
+  options: HistorySyncOptions,
+  signal: AbortSignal,
+): Promise<BackfillResult> {
   const alreadyDone = await getBackfillComplete();
   if (mode === 'full' && alreadyDone && !force) {
     console.log('[BiliViz] Initial backfill already completed');
@@ -58,16 +78,34 @@ async function runHistorySyncUnlocked(mode: HistorySyncMode, force: boolean): Pr
   }
 
   console.log(`[BiliViz] Starting ${mode} history sync...`);
-  const result = createResult(mode, 'page_limit');
+  const pageLimit = normalizePageLimit(options.maxPages);
+  const result = createResult(mode, 'page_limit', pageLimit);
   const startedAt = Date.now();
   await writeProgress(result, startedAt, true);
   let cursor: HistoryCursorParams = {};
 
-  while (result.fetchedPages < MAX_BACKFILL_PAGES) {
+  while (result.fetchedPages < pageLimit) {
+    if (signal.aborted || await getHistorySyncCancelRequested()) {
+      result.stoppedReason = 'cancelled';
+      result.currentTask = '用户已停止同步';
+      break;
+    }
+
     result.currentTask = `正在请求第 ${result.fetchedPages + 1} 页历史记录`;
     await writeProgress(result, startedAt, true);
 
-    const { list, cursor: nextCursor } = await fetchHistoryPage(cursor);
+    let page;
+    try {
+      page = await fetchHistoryPage(cursor, signal);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'SYNC_CANCELLED') {
+        result.stoppedReason = 'cancelled';
+        result.currentTask = '用户已停止同步';
+        break;
+      }
+      throw error;
+    }
+    const { list, cursor: nextCursor } = page;
     if (list.length === 0) {
       result.stoppedReason = 'empty_page';
       result.currentTask = '接口返回空页，同步结束';
@@ -103,7 +141,17 @@ async function runHistorySyncUnlocked(mode: HistorySyncMode, force: boolean): Pr
       result.currentTask = `第 ${result.fetchedPages} 页：正在补全 ${newItems.length} 条视频信息`;
       await writeProgress(result, startedAt, true);
       const bvids = [...new Set(newItems.map(getHistoryBvid).filter(Boolean))];
-      const videoInfo = await batchFetchVideoInfo(bvids);
+      let videoInfo: Map<string, any>;
+      try {
+        videoInfo = await batchFetchVideoInfo(bvids, signal);
+      } catch (error) {
+        if (error instanceof Error && error.message === 'SYNC_CANCELLED') {
+          result.stoppedReason = 'cancelled';
+          result.currentTask = '用户已停止同步';
+          break;
+        }
+        throw error;
+      }
       result.currentTask = `第 ${result.fetchedPages} 页：正在写入本地历史`;
       await writeProgress(result, startedAt, true);
       const records = newItems.map(item => toWatchHistoryRecord(item, videoInfo.get(getHistoryBvid(item))));
@@ -151,17 +199,25 @@ async function runHistorySyncUnlocked(mode: HistorySyncMode, force: boolean): Pr
     await setBackfillComplete();
   }
   await setLastSyncTime(Date.now());
-  result.currentTask = '同步完成';
+  if (result.stoppedReason === 'cancelled') {
+    result.currentTask = '同步已停止';
+  } else {
+    result.currentTask = '同步完成';
+  }
   await writeProgress(result, startedAt, false);
 
   console.log(`[BiliViz] ${mode} history sync complete: ${result.insertedCount} inserted, ${result.updatedCount} updated`);
   return result;
 }
 
-function createResult(mode: HistorySyncMode, stoppedReason: string): BackfillResult {
+function createResult(
+  mode: HistorySyncMode,
+  stoppedReason: string,
+  pageLimit = MAX_BACKFILL_PAGES,
+): BackfillResult {
   return {
     mode,
-    pageLimit: MAX_BACKFILL_PAGES,
+    pageLimit,
     currentTask: stoppedReason,
     fetchedPages: 0,
     fetchedCount: 0,
@@ -172,6 +228,11 @@ function createResult(mode: HistorySyncMode, stoppedReason: string): BackfillRes
     oldestFetchedAt: null,
     newestFetchedAt: null,
   };
+}
+
+function normalizePageLimit(maxPages: number | undefined): number {
+  if (!Number.isFinite(maxPages)) return MAX_BACKFILL_PAGES;
+  return Math.max(1, Math.min(MAX_BACKFILL_PAGES, Math.floor(maxPages!)));
 }
 
 async function writeProgress(result: BackfillResult, startedAt: number, syncing: boolean): Promise<void> {
