@@ -42,14 +42,15 @@ export async function runInitialBackfill(
   force = false,
   options: HistorySyncOptions = {},
 ): Promise<BackfillResult> {
+  const startingAt = Date.now();
   if (await getHistorySyncing()) {
     throw new Error('HISTORY_SYNC_IN_PROGRESS');
   }
 
-  await clearHistorySyncCancel();
-  await setHistorySyncing(true);
   const signal = beginHistorySyncAbortScope();
   try {
+    await setHistorySyncing(true);
+    await clearHistorySyncCancel(startingAt);
     return await runHistorySyncUnlocked(mode, force, options, signal);
   } catch (error) {
     await setHistorySyncProgress({

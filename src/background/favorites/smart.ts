@@ -30,21 +30,35 @@ interface AiQueryRewriteResponse {
 
 const DEFAULT_INDEX_LIMIT = 200;
 
-export async function buildSmartFavoriteIndex(maxItems = DEFAULT_INDEX_LIMIT): Promise<SmartIndexResult> {
+export interface SmartFavoriteIndexOptions {
+  includeFailed?: boolean;
+  failedOnly?: boolean;
+}
+
+export async function buildSmartFavoriteIndex(
+  maxItems = DEFAULT_INDEX_LIMIT,
+  options: SmartFavoriteIndexOptions = {},
+): Promise<SmartIndexResult> {
   const config = await loadConfig();
   const items = await getFavoriteItems();
   const indexes = await getSmartFavoriteIndexMap();
   const result: SmartIndexResult = { processed: 0, indexed: 0, failed: 0, skipped: 0 };
+  const candidates = items
+    .map(item => {
+      const contentHash = hashText(buildFavoriteDocument(item));
+      const current = indexes.get(item.itemKey);
+      return { item, contentHash, current };
+    })
+    .filter(candidate => shouldProcessCandidate(candidate.current, candidate.contentHash, config.ai.chatModel, options))
+    .sort((a, b) => {
+      if (options.failedOnly) {
+        return (a.current?.indexedAt ?? 0) - (b.current?.indexedAt ?? 0);
+      }
+      return b.item.favTime - a.item.favTime;
+    });
 
-  for (const item of items) {
+  for (const { item, contentHash } of candidates) {
     if (result.processed >= maxItems) break;
-
-    const contentHash = hashText(buildFavoriteDocument(item));
-    const current = indexes.get(item.itemKey);
-    if (current?.contentHash === contentHash && current.status === 'indexed') {
-      result.skipped++;
-      continue;
-    }
 
     result.processed++;
     try {
@@ -81,6 +95,23 @@ export async function buildSmartFavoriteIndex(maxItems = DEFAULT_INDEX_LIMIT): P
   }
 
   return result;
+}
+
+function shouldProcessCandidate(
+  current: SmartFavoriteIndex | undefined,
+  contentHash: string,
+  model: string,
+  options: SmartFavoriteIndexOptions,
+): boolean {
+  if (!current) return !options.failedOnly;
+  const sameContent = current.contentHash === contentHash;
+  const sameModel = current.model === model;
+
+  if (current.status === 'indexed' && sameContent && sameModel) return false;
+  if (options.failedOnly) return current.status === 'failed' && sameContent;
+  if (current.status === 'failed' && sameContent && !options.includeFailed) return false;
+
+  return true;
 }
 
 export async function getSmartFavoriteOverview(): Promise<SmartFavoriteOverview> {

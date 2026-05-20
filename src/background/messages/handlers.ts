@@ -7,6 +7,7 @@ import {
   getHistorySyncProgress,
   loadConfig,
   requestHistorySyncCancel,
+  clearOrphanedHistorySyncLock,
   setDeviceTypeMigrationComplete,
 } from '../storage/config-store';
 import { db } from '../storage/db';
@@ -21,7 +22,7 @@ import {
   computeStoredHistoryAggregates,
 } from '../analytics/engine';
 import { getDeviceData } from '../analytics/device';
-import { abortCurrentHistorySync } from '../sync/sync-control';
+import { abortCurrentHistorySync, hasActiveHistorySyncAbortScope } from '../sync/sync-control';
 import { syncFavorites } from '../favorites/sync';
 import { buildSmartFavoriteIndex, getSmartFavoriteOverview, getSmartFavoritesByPath, searchSmartFavorites } from '../favorites/smart';
 
@@ -157,6 +158,9 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       return { success: true, data: { records: allRecords, format } as T };
     }
     case 'GET_SYNC_STATUS': {
+      if (await getHistorySyncing() && !hasActiveHistorySyncAbortScope()) {
+        await clearOrphanedHistorySyncLock();
+      }
       const lastSync = await getLastSyncTime();
       const count = await db.watchHistory.count();
       const syncProgress = await getHistorySyncProgress();
@@ -179,9 +183,14 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       return { success: true, data: await syncFavorites() as T };
     case 'BUILD_SMART_FAVORITE_INDEX': {
       const maxItems = Number(request.params?.maxItems);
+      const includeFailed = request.params?.includeFailed === true;
+      const failedOnly = request.params?.failedOnly === true;
       return {
         success: true,
-        data: await buildSmartFavoriteIndex(Number.isFinite(maxItems) ? maxItems : undefined) as T,
+        data: await buildSmartFavoriteIndex(
+          Number.isFinite(maxItems) ? maxItems : undefined,
+          { includeFailed, failedOnly },
+        ) as T,
       };
     }
     case 'SEARCH_SMART_FAVORITES': {

@@ -1,9 +1,10 @@
 import { setupAlarms, onAlarm } from './sync/scheduler';
 import { syncLatestHistory } from './sync/history-sync';
 import { runInitialBackfill } from './sync/initial-backfill';
+import { hasActiveHistorySyncAbortScope } from './sync/sync-control';
 import { setupMessageHandlers } from './messages/handlers';
 import { deleteOlderThan } from './storage/watch-history-repo';
-import { loadConfig } from './storage/config-store';
+import { clearOrphanedHistorySyncLock, loadConfig } from './storage/config-store';
 import { db } from './storage/db';
 import { computeDailyAggregate, computeStoredHistoryAggregates } from './analytics/engine';
 
@@ -54,6 +55,9 @@ onAlarm(async (name) => {
         if (isNotLoggedIn(e)) {
           console.info('[BiliViz] History sync skipped: user is not logged in');
         } else if (isHistorySyncInProgress(e)) {
+          if (!hasActiveHistorySyncAbortScope()) {
+            await clearOrphanedHistorySyncLock();
+          }
           console.info('[BiliViz] History sync skipped: another sync is already running');
         } else {
           console.error(`[BiliViz] History sync failed: ${describeError(e)}`);
@@ -95,6 +99,9 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       if (isNotLoggedIn(e)) {
         console.info('[BiliViz] Initial backfill skipped: user is not logged in');
       } else if (isHistorySyncInProgress(e)) {
+        if (!hasActiveHistorySyncAbortScope()) {
+          await clearOrphanedHistorySyncLock();
+        }
         console.info('[BiliViz] Initial backfill skipped: another sync is already running');
       } else {
         console.error(`[BiliViz] Initial backfill failed: ${describeError(e)}`);

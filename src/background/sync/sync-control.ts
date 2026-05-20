@@ -17,3 +17,7 @@ export function abortCurrentHistorySync(): boolean {
   return true;
 }
 
+export function hasActiveHistorySyncAbortScope(): boolean {
+  return activeHistorySyncController !== null;
+}
+

@@ -90,16 +90,28 @@ export async function patchHistorySyncProgress(progress: Partial<SyncProgress>):
 }
 
 export async function requestHistorySyncCancel(): Promise<void> {
-  await chrome.storage.local.set({ [HISTORY_SYNC_CANCEL_KEY]: true });
+  await chrome.storage.local.set({ [HISTORY_SYNC_CANCEL_KEY]: Date.now() });
 }
 
-export async function clearHistorySyncCancel(): Promise<void> {
+export async function clearHistorySyncCancel(clearRequestedBefore?: number): Promise<void> {
+  if (clearRequestedBefore !== undefined) {
+    const result = await chrome.storage.local.get(HISTORY_SYNC_CANCEL_KEY);
+    const requestedAt = Number(result[HISTORY_SYNC_CANCEL_KEY] ?? 0);
+    if (requestedAt > clearRequestedBefore) return;
+  }
   await chrome.storage.local.remove(HISTORY_SYNC_CANCEL_KEY);
 }
 
 export async function getHistorySyncCancelRequested(): Promise<boolean> {
   const result = await chrome.storage.local.get(HISTORY_SYNC_CANCEL_KEY);
-  return result[HISTORY_SYNC_CANCEL_KEY] === true;
+  return Boolean(result[HISTORY_SYNC_CANCEL_KEY]);
+}
+
+export async function clearOrphanedHistorySyncLock(): Promise<void> {
+  const result = await chrome.storage.local.get('historySyncing');
+  if (!result.historySyncing) return;
+  await setHistorySyncing(false);
+  await patchHistorySyncProgress({ syncing: false, stoppedReason: 'service_worker_restarted' });
 }
 
 export async function getBackfillComplete(): Promise<boolean> {

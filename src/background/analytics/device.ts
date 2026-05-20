@@ -7,11 +7,7 @@ const DEVICE_LABELS: Record<number, string> = {
   0: '其他',
   1: '手机',
   2: 'PC',
-  3: '手机',
   4: '平板',
-  5: '手机',
-  6: '平板',
-  7: '手机',
   33: 'TV',
 };
 
@@ -38,7 +34,7 @@ export function computeDeviceBreakdown(records: WatchHistoryRecord[]): DeviceBre
   const map = new Map<number, { watchTime: number; videoCount: number; totalCompletion: number }>();
 
   for (const r of records) {
-    const dt = r.deviceType ?? 0;
+    const dt = normalizeDeviceType(r.deviceType ?? 0);
     let entry = map.get(dt);
     if (!entry) {
       entry = { watchTime: 0, videoCount: 0, totalCompletion: 0 };
@@ -112,10 +108,18 @@ function isMobileLikeDevice(deviceType: number): boolean {
 }
 
 function isPcLikeDevice(deviceType: number): boolean {
-  return PC_DEVICE_TYPES.has(deviceType) || TV_DEVICE_TYPES.has(deviceType) || deviceType === 0;
+  return PC_DEVICE_TYPES.has(deviceType);
 }
 
 function computeAvgCompletion(records: WatchHistoryRecord[]): number {
   if (records.length === 0) return 0;
   return records.reduce((s, r) => s + (r.duration > 0 ? clamp(r.progress / r.duration, 0, 1) : 0), 0) / records.length;
+}
+
+function normalizeDeviceType(deviceType: number): number {
+  if (MOBILE_DEVICE_TYPES.has(deviceType)) return 1;
+  if (PAD_DEVICE_TYPES.has(deviceType)) return 4;
+  if (PC_DEVICE_TYPES.has(deviceType)) return 2;
+  if (TV_DEVICE_TYPES.has(deviceType)) return 33;
+  return 0;
 }

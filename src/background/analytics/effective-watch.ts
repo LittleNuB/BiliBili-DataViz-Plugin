@@ -51,17 +51,22 @@ export async function getEffectiveWatchRecordsByDateRange(
 
   for (const session of localSessions) {
     localPcWatchTime += session.watchTime;
-    const existingIndex = adjusted.findIndex(r => isSameVideoDate(r, session));
+    const matching = adjusted.filter(r => isSameVideoDate(r, session));
 
-    if (existingIndex >= 0) {
-      const existing = adjusted[existingIndex];
-      adjusted[existingIndex] = {
+    if (matching.length > 0) {
+      const existing = matching.sort((a, b) => b.viewAt - a.viewAt)[0];
+      for (let i = adjusted.length - 1; i >= 0; i--) {
+        if (isSameVideoDate(adjusted[i], session)) adjusted.splice(i, 1);
+      }
+      adjusted.push({
         ...existing,
         deviceType: LOCAL_PC_DEVICE_TYPE,
         progress: Math.max(session.watchTime, 0),
         duration: session.duration || existing.duration || session.watchTime,
         actualCompletion: computeCompletion(session.watchTime, session.duration || existing.duration),
-      };
+        viewAt: Math.floor(session.firstTimestamp / 1000),
+        syncedAt: session.lastTimestamp,
+      });
       continue;
     }
 

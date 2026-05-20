@@ -22,6 +22,11 @@
     "https://api.deepseek.com/*",
     "https://api.openai.com/*"
   ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"

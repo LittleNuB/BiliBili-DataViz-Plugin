@@ -60,6 +60,7 @@ export function SmartFavoritesPage() {
     setBusy('save');
     setError(null);
     try {
+      await ensureAiHostPermission(config.baseURL);
       await requestSW('UPDATE_CONFIG', { ai: config });
       setNotice('AI 配置已保存');
     } catch (e) {
@@ -87,7 +88,40 @@ export function SmartFavoritesPage() {
     setBusy('index');
     setError(null);
     try {
-      const result = await requestSW<SmartIndexResult>('BUILD_SMART_FAVORITE_INDEX', { maxItems: 200 });
+      const result: SmartIndexResult = { processed: 0, indexed: 0, failed: 0, skipped: 0 };
+      const initialOverview = overview ?? await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES');
+      let pending = initialOverview.pendingItems;
+      let guard = Math.ceil((initialOverview.totalItems + initialOverview.failedItems) / 8) + 4;
+
+      while (pending > 0 && guard-- > 0) {
+        const batch = await requestSW<SmartIndexResult>('BUILD_SMART_FAVORITE_INDEX', {
+          maxItems: 8,
+          includeFailed: false,
+        });
+        mergeIndexResult(result, batch);
+        const latest = await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES');
+        setOverview(latest);
+        pending = latest.pendingItems;
+        setNotice(`智能索引生成中：已处理 ${result.processed} 条，成功 ${result.indexed} 条，失败 ${result.failed} 条`);
+        if (batch.processed === 0) break;
+      }
+
+      let failedRetriesLeft = initialOverview.failedItems;
+      guard = Math.ceil(initialOverview.failedItems / 8) + 2;
+      while (failedRetriesLeft > 0 && guard-- > 0) {
+        const batch = await requestSW<SmartIndexResult>('BUILD_SMART_FAVORITE_INDEX', {
+          maxItems: Math.min(8, failedRetriesLeft),
+          includeFailed: true,
+          failedOnly: true,
+        });
+        mergeIndexResult(result, batch);
+        failedRetriesLeft -= batch.processed;
+        const latest = await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES');
+        setOverview(latest);
+        setNotice(`失败项重试中：已处理 ${result.processed} 条，成功 ${result.indexed} 条，失败 ${result.failed} 条`);
+        if (batch.processed === 0) break;
+      }
+
       setNotice(`智能索引完成：新增/更新 ${result.indexed} 条，失败 ${result.failed} 条，跳过 ${result.skipped} 条`);
       setOverview(await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES'));
     } catch (e) {
@@ -235,6 +269,13 @@ export function SmartFavoritesPage() {
       </div>
     </div>
   );
+}
+
+function mergeIndexResult(total: SmartIndexResult, batch: SmartIndexResult): void {
+  total.processed += batch.processed;
+  total.indexed += batch.indexed;
+  total.failed += batch.failed;
+  total.skipped += batch.skipped;
 }
 
 function ResultSection({
@@ -559,4 +600,32 @@ function collectExpandablePathKeys(nodes: SmartFavoriteTreeNode[]): string[] {
 
 function pathKey(path: string[]): string {
   return path.join('\u0001');
+}
+
+async function ensureAiHostPermission(baseURL: string): Promise<void> {
+  const pattern = getOriginPattern(baseURL);
+  const granted = await new Promise<boolean>(resolve => {
+    chrome.permissions.contains({ origins: [pattern] }, resolve);
+  });
+  if (granted) return;
+
+  const approved = await new Promise<boolean>(resolve => {
+    chrome.permissions.request({ origins: [pattern] }, resolve);
+  });
+  if (!approved) {
+    throw new Error(`缺少 AI 服务访问权限：${pattern}`);
+  }
+}
+
+function getOriginPattern(baseURL: string): string {
+  let url: URL;
+  try {
+    url = new URL(baseURL);
+  } catch {
+    throw new Error('AI Base URL 格式不正确');
+  }
+  if (!['https:', 'http:'].includes(url.protocol)) {
+    throw new Error('AI Base URL 只支持 http 或 https');
+  }
+  return `${url.protocol}//${url.host}/*`;
 }

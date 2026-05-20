@@ -4,6 +4,7 @@ import { biliGet } from './client';
 
 interface NavData {
   mid: number;
+  isLogin?: boolean;
 }
 
 interface FavoriteFolderApiItem {
@@ -53,6 +54,9 @@ interface FavoriteResourcesData {
 
 export async function fetchCurrentUserMid(signal?: AbortSignal): Promise<number> {
   const nav = await biliGet<NavData>(NAV_ENDPOINT, undefined, 3, false, signal);
+  if (nav.isLogin === false || !nav.mid) {
+    throw new Error('NOT_LOGGED_IN');
+  }
   return nav.mid;
 }
 
@@ -151,4 +155,3 @@ function toFavoriteItem(item: FavoriteResourceApiItem, folder: FavoriteFolder, s
     syncedAt,
   };
 }
-
