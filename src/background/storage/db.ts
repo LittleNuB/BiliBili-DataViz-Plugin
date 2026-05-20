@@ -1,10 +1,14 @@
 import Dexie, { type Table } from 'dexie';
 import type { WatchHistoryRecord, PlayerEvent, DailyAggregate } from '../../shared/types/watch-event';
+import type { FavoriteFolder, FavoriteItem, SmartFavoriteIndex } from '../../shared/types/favorite';
 
 export class BiliAnalyticsDB extends Dexie {
   watchHistory!: Table<WatchHistoryRecord, number>;
   playerEvents!: Table<PlayerEvent, number>;
   dailyAggregates!: Table<DailyAggregate, number>;
+  favoriteFolders!: Table<FavoriteFolder, number>;
+  favoriteItems!: Table<FavoriteItem, number>;
+  smartFavoriteIndex!: Table<SmartFavoriteIndex, number>;
 
   constructor() {
     super('BiliAnalyticsDB');
@@ -33,6 +37,21 @@ export class BiliAnalyticsDB extends Dexie {
             : `${record.bvid ?? ''}:${record.cid ?? 0}:${record.viewAt}`;
         }
       });
+    });
+
+    this.version(3).stores({
+      watchHistory:
+        '++id, kid, &sessionKey, avid, bvid, [avid+cid+viewAt], authorMid, tagName, viewAt, dt',
+      playerEvents:
+        '++id, [bvid+cid], eventType, timestamp, tabId',
+      dailyAggregates:
+        '++id, &date',
+      favoriteFolders:
+        '++id, &mediaId, title, syncedAt',
+      favoriteItems:
+        '++id, &itemKey, mediaId, avid, bvid, authorMid, tagName, favTime, syncedAt',
+      smartFavoriteIndex:
+        '++id, &itemKey, status, indexedAt, contentHash',
     });
   }
 }

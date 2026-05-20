@@ -8,9 +8,10 @@ import { PreferencePage } from './modules/preference/PreferencePage';
 import { CreatorPage } from './modules/creator/CreatorPage';
 import { BehaviorPage } from './modules/behavior/BehaviorPage';
 import { ExperimentsPage } from './modules/experiments/ExperimentsPage';
+import { SmartFavoritesPage } from './modules/favorites/SmartFavoritesPage';
 import type { WatchHistoryRecord } from '../src/shared/types/watch-event';
 
-const PAGES = [OverviewPage, PreferencePage, CreatorPage, BehaviorPage, ExperimentsPage];
+const PAGES = [OverviewPage, PreferencePage, CreatorPage, BehaviorPage, ExperimentsPage, SmartFavoritesPage];
 
 export function App() {
   const ActivePage = PAGES[activeTab.value];

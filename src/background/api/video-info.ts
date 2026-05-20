@@ -1,6 +1,7 @@
 import { biliGet } from './client';
 import { VIDEO_INFO_ENDPOINT } from '../../shared/constants';
 import type { VideoInfo } from '../../shared/types/video-info';
+import { abortableDelay } from '../utils/abortable-delay';
 
 interface VideoInfoCacheEntry {
   data: VideoInfo;
@@ -44,7 +45,7 @@ export async function batchFetchVideoInfo(
       if (signal?.aborted) throw new Error('SYNC_CANCELLED');
       const data = await fetchVideoInfo(bvid, signal);
       results.set(bvid, data);
-      await new Promise(r => setTimeout(r, BATCH_DELAY_MS));
+      await abortableDelay(BATCH_DELAY_MS, signal);
     } catch (e) {
       if (e instanceof Error && e.message === 'SYNC_CANCELLED') throw e;
       console.warn(`[BiliViz] Failed to fetch video info for ${bvid}:`, e);

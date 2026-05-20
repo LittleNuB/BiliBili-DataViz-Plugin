@@ -6,6 +6,13 @@ export interface UserConfig {
   retentionDays: number;
   showSidebar: boolean;
   theme: 'dark' | 'light';
+  ai: AiConfig;
+}
+
+export interface AiConfig {
+  baseURL: string;
+  apiKey: string;
+  chatModel: string;
 }
 
 export const DEFAULT_CONFIG: UserConfig = {
@@ -16,4 +23,9 @@ export const DEFAULT_CONFIG: UserConfig = {
   retentionDays: 90,
   showSidebar: true,
   theme: 'dark',
+  ai: {
+    baseURL: 'https://api.deepseek.com',
+    apiKey: '',
+    chatModel: 'deepseek-v4-flash',
+  },
 };

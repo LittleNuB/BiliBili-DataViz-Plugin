@@ -16,6 +16,10 @@ function isNotLoggedIn(error: unknown): boolean {
   return error instanceof Error && error.message === 'NOT_LOGGED_IN';
 }
 
+function isHistorySyncInProgress(error: unknown): boolean {
+  return error instanceof Error && error.message === 'HISTORY_SYNC_IN_PROGRESS';
+}
+
 function describeError(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
@@ -49,6 +53,8 @@ onAlarm(async (name) => {
       } catch (e) {
         if (isNotLoggedIn(e)) {
           console.info('[BiliViz] History sync skipped: user is not logged in');
+        } else if (isHistorySyncInProgress(e)) {
+          console.info('[BiliViz] History sync skipped: another sync is already running');
         } else {
           console.error(`[BiliViz] History sync failed: ${describeError(e)}`);
         }
@@ -88,6 +94,8 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     } catch (e) {
       if (isNotLoggedIn(e)) {
         console.info('[BiliViz] Initial backfill skipped: user is not logged in');
+      } else if (isHistorySyncInProgress(e)) {
+        console.info('[BiliViz] Initial backfill skipped: another sync is already running');
       } else {
         console.error(`[BiliViz] Initial backfill failed: ${describeError(e)}`);
       }

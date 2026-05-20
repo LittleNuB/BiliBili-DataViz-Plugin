@@ -9,14 +9,28 @@ const HISTORY_SYNC_LOCK_TIMEOUT_MS = 30 * 60 * 1000;
 export async function loadConfig(): Promise<UserConfig> {
   const result = await chrome.storage.local.get(CONFIG_KEY);
   if (result[CONFIG_KEY]) {
-    return { ...DEFAULT_CONFIG, ...result[CONFIG_KEY] };
+    return {
+      ...DEFAULT_CONFIG,
+      ...result[CONFIG_KEY],
+      ai: {
+        ...DEFAULT_CONFIG.ai,
+        ...(result[CONFIG_KEY].ai ?? {}),
+      },
+    };
   }
   return DEFAULT_CONFIG;
 }
 
 export async function saveConfig(config: Partial<UserConfig>): Promise<void> {
   const current = await loadConfig();
-  const updated = { ...current, ...config };
+  const updated = {
+    ...current,
+    ...config,
+    ai: {
+      ...current.ai,
+      ...(config.ai ?? {}),
+    },
+  };
   await chrome.storage.local.set({ [CONFIG_KEY]: updated });
 }
 

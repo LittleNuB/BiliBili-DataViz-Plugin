@@ -2,6 +2,7 @@ import { API_BASE } from '../../shared/constants';
 import type { BiliApiResponse } from '../../shared/types/video-info';
 import { apiRateLimiter } from './rate-limiter';
 import { signWbi } from './wbi-sign';
+import { abortableDelay } from '../utils/abortable-delay';
 
 const WBI_REQUIRED_CODES = [-403, -400];
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -26,16 +27,17 @@ export async function biliGet<T>(
     await signWbi(url.searchParams);
   }
 
-  await apiRateLimiter.acquire();
+  await apiRateLimiter.acquire(signal);
 
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < retries; attempt++) {
+    if (signal?.aborted) throw new Error('SYNC_CANCELLED');
     try {
       const response = await fetchWithTimeout(url.toString(), signal);
 
       if (response.status === 412) {
         lastError = new Error('RATE_LIMITED');
-        await new Promise(r => setTimeout(r, 60_000));
+        await abortableDelay(60_000, signal);
         continue;
       }
 
@@ -59,7 +61,7 @@ export async function biliGet<T>(
       if (lastError.message === 'NOT_LOGGED_IN') throw lastError;
       if (lastError.message === 'SYNC_CANCELLED') throw lastError;
       if (attempt < retries - 1) {
-        await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+        await abortableDelay(2000 * (attempt + 1), signal);
       }
     }
   }

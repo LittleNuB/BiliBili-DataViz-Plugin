@@ -5,6 +5,7 @@ import {
   getLastSyncTime,
   getHistorySyncing,
   getHistorySyncProgress,
+  loadConfig,
   requestHistorySyncCancel,
   setDeviceTypeMigrationComplete,
 } from '../storage/config-store';
@@ -21,6 +22,8 @@ import {
 } from '../analytics/engine';
 import { getDeviceData } from '../analytics/device';
 import { abortCurrentHistorySync } from '../sync/sync-control';
+import { syncFavorites } from '../favorites/sync';
+import { buildSmartFavoriteIndex, getSmartFavoriteOverview, getSmartFavoritesByPath, searchSmartFavorites } from '../favorites/smart';
 
 export function setupMessageHandlers(): void {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -143,6 +146,8 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       await requestHistorySyncCancel();
       abortCurrentHistorySync();
       return { success: true };
+    case 'GET_CONFIG':
+      return { success: true, data: await loadConfig() as T };
     case 'UPDATE_CONFIG':
       await saveConfig(request.params as Partial<UserConfig>);
       return { success: true };
@@ -156,6 +161,36 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       const count = await db.watchHistory.count();
       const syncProgress = await getHistorySyncProgress();
       return { success: true, data: { lastSyncTime: lastSync, totalRecords: count, syncProgress } as T };
+    }
+    case 'GET_SMART_FAVORITES':
+      return { success: true, data: await getSmartFavoriteOverview() as T };
+    case 'GET_SMART_FAVORITES_BY_PATH': {
+      const rawPath = request.params?.path;
+      const path = Array.isArray(rawPath)
+        ? rawPath.map(part => String(part))
+        : String(rawPath ?? '').split('/').map(part => part.trim()).filter(Boolean);
+      const limit = Number(request.params?.limit);
+      return {
+        success: true,
+        data: await getSmartFavoritesByPath(path, Number.isFinite(limit) ? limit : undefined) as T,
+      };
+    }
+    case 'SYNC_FAVORITES':
+      return { success: true, data: await syncFavorites() as T };
+    case 'BUILD_SMART_FAVORITE_INDEX': {
+      const maxItems = Number(request.params?.maxItems);
+      return {
+        success: true,
+        data: await buildSmartFavoriteIndex(Number.isFinite(maxItems) ? maxItems : undefined) as T,
+      };
+    }
+    case 'SEARCH_SMART_FAVORITES': {
+      const query = String(request.params?.query ?? '');
+      const limit = Number(request.params?.limit);
+      return {
+        success: true,
+        data: await searchSmartFavorites(query, Number.isFinite(limit) ? limit : undefined) as T,
+      };
     }
     default:
       return { success: false, error: `Unknown action: ${request.action}` };

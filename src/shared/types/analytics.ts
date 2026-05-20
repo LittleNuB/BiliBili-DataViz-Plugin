@@ -16,7 +16,11 @@ export interface DashboardOverview {
   monthlyChange: number;
   avgCompletion: number;
   streakDays: number;
+  streakStartDate: string | null;
+  streakEndDate: string | null;
   longestStreak: number;
+  longestStreakStartDate: string | null;
+  longestStreakEndDate: string | null;
   hourlyHeatmap: number[][];
   efficiencyScore: number;
   weekStart: string;

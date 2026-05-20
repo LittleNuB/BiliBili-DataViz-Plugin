@@ -133,8 +133,18 @@ export function OverviewPage() {
         <div style={{ color: '#606070', fontSize: '11px', padding: '0 2px' }}>
           数据来源：B站历史记录用于跨设备估算；本机 PC 播放事件用于修正网页端实际观看。
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-          <StatCard label="连续天数" value={`${d.streakDays}天`} />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px' }}>
+          <DetailStatCard
+            label="当前连续"
+            value={`${d.streakDays}天`}
+            detail={formatDateRange(d.streakStartDate, d.streakEndDate)}
+          />
+          <DetailStatCard
+            label="最长连续"
+            value={`${d.longestStreak}天`}
+            detail={formatDateRange(d.longestStreakStartDate, d.longestStreakEndDate)}
+            accent="#00A1D6"
+          />
           <StatCard label="效率评分" value={`${d.efficiencyScore}分`} />
         </div>
 
@@ -187,4 +197,47 @@ export function OverviewPage() {
       </div>
     </ErrorBoundary>
   );
+}
+
+function DetailStatCard({
+  label,
+  value,
+  detail,
+  accent = BILI_PINK,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  accent?: string;
+}) {
+  return (
+    <div style={{
+      background: '#222244',
+      borderRadius: '10px',
+      padding: '14px 16px',
+      textAlign: 'center',
+      borderLeft: `3px solid ${accent}`,
+    }}>
+      <div style={{
+        fontSize: '24px',
+        fontWeight: 700,
+        color: '#FFFFFF',
+        lineHeight: 1.3,
+      }}>
+        {value}
+      </div>
+      <div style={{ fontSize: '13px', color: '#A0A0B0', marginTop: '2px' }}>
+        {label}
+      </div>
+      <div style={{ fontSize: '11px', color: '#707080', marginTop: '6px', lineHeight: 1.4 }}>
+        {detail}
+      </div>
+    </div>
+  );
+}
+
+function formatDateRange(startDate: string | null, endDate: string | null): string {
+  if (!startDate || !endDate) return '暂无连续时间段';
+  if (startDate === endDate) return formatDate(startDate);
+  return `${formatDate(startDate)} - ${formatDate(endDate)}`;
 }

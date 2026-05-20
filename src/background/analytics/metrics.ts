@@ -7,6 +7,15 @@ import { loadConfig } from '../storage/config-store';
 import { aggregateWindow } from './aggregator';
 import { getEffectiveWatchDatesByDateRange, getEffectiveWatchRecordsByDateRange } from './effective-watch';
 
+interface StreakDetails {
+  current: number;
+  currentStartDate: string | null;
+  currentEndDate: string | null;
+  longest: number;
+  longestStartDate: string | null;
+  longestEndDate: string | null;
+}
+
 export function computeCompletion(records: WatchHistoryRecord[]): number {
   if (records.length === 0) return 0;
   const total = records.reduce((sum, r) => {
@@ -15,56 +24,67 @@ export function computeCompletion(records: WatchHistoryRecord[]): number {
   return total / records.length;
 }
 
-export function computeStreak(dailyList: DailyAggregate[]): { current: number; longest: number } {
+export function computeStreak(dailyList: DailyAggregate[]): StreakDetails {
   const dates = new Set(dailyList.map(a => a.date));
   return computeStreakFromDateSet(dates);
 }
 
-export function computeStreakFromRecords(records: WatchHistoryRecord[]): { current: number; longest: number } {
+export function computeStreakFromRecords(records: WatchHistoryRecord[]): StreakDetails {
   const dates = new Set(records.map(r => dateKey(new Date(r.viewAt * 1000))));
   return computeStreakFromDateSet(dates);
 }
 
-function computeStreakFromDateSet(dates: Set<string>): { current: number; longest: number } {
-  if (dates.size === 0) return { current: 0, longest: 0 };
-
-  let current = 0;
-  let longest = 0;
-  let streak = 0;
-
-  // Walk backwards from today to find current streak
-  for (let i = 0; i < 365; i++) {
-    const d = dateKey(daysAgo(i));
-    if (dates.has(d)) {
-      streak++;
-      longest = Math.max(longest, streak);
-    } else {
-      if (i === 0) {
-        // Today has no data yet, try yesterday
-        continue;
-      }
-      break;
-    }
+function computeStreakFromDateSet(dates: Set<string>): StreakDetails {
+  if (dates.size === 0) {
+    return {
+      current: 0,
+      currentStartDate: null,
+      currentEndDate: null,
+      longest: 0,
+      longestStartDate: null,
+      longestEndDate: null,
+    };
   }
-  current = streak;
 
-  // Also check historical longest
-  let historicalStreak = 0;
   const sorted = Array.from(dates).sort();
-  for (let i = 0; i < sorted.length; i++) {
-    if (i === 0) { historicalStreak = 1; continue; }
-    const prev = new Date(sorted[i - 1]);
-    const curr = new Date(sorted[i]);
-    if (daysBetween(prev, curr) === 1) {
-      historicalStreak++;
-    } else {
-      longest = Math.max(longest, historicalStreak);
-      historicalStreak = 1;
-    }
-  }
-  longest = Math.max(longest, historicalStreak);
+  const ranges: Array<{ startDate: string; endDate: string; days: number }> = [];
+  let startDate = sorted[0];
+  let endDate = sorted[0];
 
-  return { current, longest };
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = parseDateKey(sorted[i - 1]);
+    const curr = parseDateKey(sorted[i]);
+    if (daysBetween(prev, curr) === 1) {
+      endDate = sorted[i];
+      continue;
+    }
+
+    ranges.push({ startDate, endDate, days: countInclusiveDays(startDate, endDate) });
+    startDate = sorted[i];
+    endDate = sorted[i];
+  }
+  ranges.push({ startDate, endDate, days: countInclusiveDays(startDate, endDate) });
+
+  const today = dateKey();
+  const yesterday = dateKey(daysAgo(1));
+  const currentAnchor = dates.has(today) ? today : dates.has(yesterday) ? yesterday : null;
+  const currentRange = currentAnchor
+    ? ranges.find(range => range.startDate <= currentAnchor && range.endDate >= currentAnchor)
+    : null;
+  const longestRange = ranges.reduce((best, range) => {
+    if (!best || range.days > best.days) return range;
+    if (range.days === best.days && range.endDate > best.endDate) return range;
+    return best;
+  }, null as { startDate: string; endDate: string; days: number } | null);
+
+  return {
+    current: currentRange?.days ?? 0,
+    currentStartDate: currentRange?.startDate ?? null,
+    currentEndDate: currentRange?.endDate ?? null,
+    longest: longestRange?.days ?? 0,
+    longestStartDate: longestRange?.startDate ?? null,
+    longestEndDate: longestRange?.endDate ?? null,
+  };
 }
 
 export async function getQuickStats(): Promise<QuickStats> {
@@ -78,11 +98,12 @@ export async function getQuickStats(): Promise<QuickStats> {
 
   const weeklyWatch = thisWeekEffective.records.reduce((s, r) => s + Math.max(r.progress, 0), 0);
   const recentDates = await getEffectiveWatchDatesByDateRange(dateKey(daysAgo(365)), todayKey);
+  const streak = computeStreakFromDateSet(new Set(recentDates));
 
   return {
     todayWatchTime: todayAgg.totalWatchTime,
     dailyGoal: config.dailyWatchGoal * 60, // convert minutes to seconds
-    streakDays: computeStreakFromDateSet(new Set(recentDates)).current,
+    streakDays: streak.current,
     avgCompletion: todayAgg.avgCompletion,
     efficiencyScore: computeRawEfficiency(todayEffective.records, config.dailyWatchGoal * 60),
     weeklyWatchTime: weeklyWatch,
@@ -107,18 +128,19 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
   const lastWeekRecords = (await getEffectiveWatchRecordsByDateRange(lastWeekStart, lastWeekEnd)).records;
   const thisMonthEffective = await getEffectiveWatchRecordsByDateRange(monthStart, todayKey);
   const thisMonthRecords = thisMonthEffective.records;
-  const recentDates = await getEffectiveWatchDatesByDateRange(dateKey(daysAgo(365)), todayKey);
   const [oldestRecord, newestRecord] = await Promise.all([
     getOldestRecord(),
     getNewestRecord(),
   ]);
+  const oldestRecordDate = oldestRecord ? dateKey(new Date(oldestRecord.viewAt * 1000)) : dateKey(daysAgo(365));
+  const effectiveDates = await getEffectiveWatchDatesByDateRange(oldestRecordDate, todayKey);
   const thisWeekWindow = aggregateWindow(thisWeekRecords);
 
   const weeklyWatch = thisWeekWindow.totalWatchTime;
   const lastWeekWatch = aggregateWindow(lastWeekRecords).totalWatchTime;
   const monthlyWatch = aggregateWindow(thisMonthRecords).totalWatchTime;
 
-  const streak = computeStreakFromDateSet(new Set(recentDates));
+  const streak = computeStreakFromDateSet(new Set(effectiveDates));
 
   const heatmap = thisWeekWindow.hourlyHeatmap;
   const avgCompletion = thisWeekWindow.avgCompletion;
@@ -137,7 +159,11 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
     monthlyChange: percentChange(monthlyWatch, lastMonthWatch),
     avgCompletion,
     streakDays: streak.current,
+    streakStartDate: streak.currentStartDate,
+    streakEndDate: streak.currentEndDate,
     longestStreak: streak.longest,
+    longestStreakStartDate: streak.longestStartDate,
+    longestStreakEndDate: streak.longestEndDate,
     hourlyHeatmap: heatmap,
     efficiencyScore: Math.round(avgEfficiency),
     weekStart,
@@ -148,7 +174,7 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
     monthlyRecordCount: thisMonthRecords.length,
     weeklyLocalPcWatchTime: thisWeekEffective.localPcWatchTime,
     weeklyLocalPcDays: thisWeekEffective.localPcDates.length,
-    oldestRecordDate: oldestRecord ? dateKey(new Date(oldestRecord.viewAt * 1000)) : null,
+    oldestRecordDate: oldestRecord ? oldestRecordDate : null,
     newestRecordDate: newestRecord ? dateKey(new Date(newestRecord.viewAt * 1000)) : null,
   };
 }
@@ -167,4 +193,13 @@ function computeRawEfficiency(records: WatchHistoryRecord[], dailyGoalSeconds: n
     0.3 * goalScore +
     0.2 * diversityScore
   ) * 100);
+}
+
+function parseDateKey(key: string): Date {
+  const [year, month, day] = key.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function countInclusiveDays(startDate: string, endDate: string): number {
+  return daysBetween(parseDateKey(startDate), parseDateKey(endDate)) + 1;
 }

@@ -1,4 +1,5 @@
 import type { QuickStats, DashboardOverview, CategoryDistribution, InterestDrift, DurationBucket, CreatorRanking, NewCreator, BehaviorMetrics, WeeklyTip, BlindBoxItem } from './analytics';
+import type { FavoriteSyncResult, SmartFavoriteOverview, SmartFavoriteResult, SmartFavoriteSearchResponse, SmartIndexResult } from './favorite';
 
 // Popup / Dashboard → Service Worker
 export type RequestAction =
@@ -11,9 +12,15 @@ export type RequestAction =
   | 'GET_DEVICE_DATA'
   | 'SYNC_NOW'
   | 'CANCEL_SYNC'
+  | 'GET_CONFIG'
   | 'UPDATE_CONFIG'
   | 'EXPORT_DATA'
-  | 'GET_SYNC_STATUS';
+  | 'GET_SYNC_STATUS'
+  | 'GET_SMART_FAVORITES'
+  | 'GET_SMART_FAVORITES_BY_PATH'
+  | 'SYNC_FAVORITES'
+  | 'BUILD_SMART_FAVORITE_INDEX'
+  | 'SEARCH_SMART_FAVORITES';
 
 // Content Script → Service Worker
 export type ContentAction =
@@ -122,3 +129,8 @@ export type DeviceResponse = BiliVizResponse<{
   hourly: { mobile: number[]; pc: number[] };
   deviceCompletion: { mobile: number; pc: number };
 }>;
+export type SmartFavoritesResponse = BiliVizResponse<SmartFavoriteOverview>;
+export type FavoriteSyncResponse = BiliVizResponse<FavoriteSyncResult>;
+export type SmartFavoriteIndexResponse = BiliVizResponse<SmartIndexResult>;
+export type SmartFavoriteSearchMessageResponse = BiliVizResponse<SmartFavoriteSearchResponse>;
+export type SmartFavoritePathResponse = BiliVizResponse<SmartFavoriteResult[]>;

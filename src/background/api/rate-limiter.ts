@@ -1,4 +1,5 @@
 import { RATE_LIMIT_TOKENS_PER_SEC, RATE_LIMIT_MAX_BURST } from '../../shared/constants';
+import { abortableDelay } from '../utils/abortable-delay';
 
 export class RateLimiter {
   private tokens: number;
@@ -20,14 +21,14 @@ export class RateLimiter {
     this.lastRefill = now;
   }
 
-  async acquire(): Promise<void> {
+  async acquire(signal?: AbortSignal): Promise<void> {
     this.refill();
     if (this.tokens >= 1) {
       this.tokens -= 1;
       return;
     }
     const waitMs = ((1 - this.tokens) / this.refillRate) * 1000;
-    await new Promise(resolve => setTimeout(resolve, waitMs));
+    await abortableDelay(waitMs, signal);
     this.lastRefill = Date.now();
     this.tokens = 0;
   }

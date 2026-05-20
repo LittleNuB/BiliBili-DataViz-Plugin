@@ -17,6 +17,7 @@ import { MAX_BACKFILL_PAGES } from '../../shared/constants';
 import { getHistoryBvid, getHistoryDeviceType, toWatchHistoryRecord } from './watch-history-mapper';
 import type { HistorySyncMode } from '../../shared/types/messages';
 import { beginHistorySyncAbortScope, endHistorySyncAbortScope } from './sync-control';
+import { abortableDelay } from '../utils/abortable-delay';
 
 export interface BackfillResult {
   mode: HistorySyncMode;
@@ -143,6 +144,11 @@ async function runHistorySyncUnlocked(
       const bvids = [...new Set(newItems.map(getHistoryBvid).filter(Boolean))];
       let videoInfo: Map<string, any>;
       try {
+        if (signal.aborted || await getHistorySyncCancelRequested()) {
+          result.stoppedReason = 'cancelled';
+          result.currentTask = '用户已停止同步';
+          break;
+        }
         videoInfo = await batchFetchVideoInfo(bvids, signal);
       } catch (error) {
         if (error instanceof Error && error.message === 'SYNC_CANCELLED') {
@@ -151,6 +157,11 @@ async function runHistorySyncUnlocked(
           break;
         }
         throw error;
+      }
+      if (signal.aborted || await getHistorySyncCancelRequested()) {
+        result.stoppedReason = 'cancelled';
+        result.currentTask = '用户已停止同步';
+        break;
       }
       result.currentTask = `第 ${result.fetchedPages} 页：正在写入本地历史`;
       await writeProgress(result, startedAt, true);
@@ -192,7 +203,16 @@ async function runHistorySyncUnlocked(
       business: nextCursor.business,
     };
 
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+      await abortableDelay(1000, signal);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'SYNC_CANCELLED') {
+        result.stoppedReason = 'cancelled';
+        result.currentTask = '用户已停止同步';
+        break;
+      }
+      throw error;
+    }
   }
 
   if (mode === 'full' && result.reachedEnd) {
