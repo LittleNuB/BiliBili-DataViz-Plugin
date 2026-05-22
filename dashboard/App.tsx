@@ -12,6 +12,15 @@ import { SmartFavoritesPage } from './modules/favorites/SmartFavoritesPage';
 import type { WatchHistoryRecord } from '../src/shared/types/watch-event';
 
 const PAGES = [OverviewPage, PreferencePage, CreatorPage, BehaviorPage, ExperimentsPage, SmartFavoritesPage];
+const EXPORT_PAGE_SIZE = 500;
+
+interface ExportDataPage {
+  records: WatchHistoryRecord[];
+  total: number;
+  offset: number;
+  nextOffset: number;
+  hasMore: boolean;
+}
 
 export function App() {
   const ActivePage = PAGES[activeTab.value];
@@ -32,23 +41,37 @@ export function App() {
   async function handleExport(format: 'json' | 'csv') {
     setExporting(true);
     try {
-      const { records } = await requestSW<{ records: WatchHistoryRecord[]; format: string }>('EXPORT_DATA', { format });
       let content: string;
       let mime: string;
       let ext: string;
+      let offset = 0;
 
       if (format === 'csv') {
         const header = 'bvid,title,authorName,tagName,viewAt,progress,duration,completion';
-        const rows = records.map((r: WatchHistoryRecord) =>
-          [r.bvid, r.title, r.authorName, r.tagName, r.viewAt, r.progress, r.duration, Math.round(r.actualCompletion * 100)]
-            .map(csvEscape)
-            .join(',')
-        );
-        content = '\uFEFF' + header + '\n' + rows.join('\n');
+        const chunks: string[] = ['\uFEFF' + header];
+        while (true) {
+          const page = await requestSW<ExportDataPage>('EXPORT_DATA_PAGE', { offset, limit: EXPORT_PAGE_SIZE });
+          chunks.push(...page.records.map(recordToCsvRow));
+          offset = page.nextOffset;
+          if (!page.hasMore) break;
+        }
+        content = chunks.join('\n');
         mime = 'text/csv;charset=utf-8';
         ext = 'csv';
       } else {
-        content = JSON.stringify(records, null, 2);
+        const chunks: string[] = ['['];
+        let firstRecord = true;
+        while (true) {
+          const page = await requestSW<ExportDataPage>('EXPORT_DATA_PAGE', { offset, limit: EXPORT_PAGE_SIZE });
+          for (const record of page.records) {
+            chunks.push(`${firstRecord ? '' : ','}\n${JSON.stringify(record, null, 2)}`);
+            firstRecord = false;
+          }
+          offset = page.nextOffset;
+          if (!page.hasMore) break;
+        }
+        chunks.push(firstRecord ? ']' : '\n]');
+        content = chunks.join('');
         mime = 'application/json';
         ext = 'json';
       }
@@ -113,6 +136,12 @@ export function App() {
       </ErrorBoundary>
     </div>
   );
+}
+
+function recordToCsvRow(r: WatchHistoryRecord): string {
+  return [r.bvid, r.title, r.authorName, r.tagName, r.viewAt, r.progress, r.duration, Math.round(r.actualCompletion * 100)]
+    .map(csvEscape)
+    .join(',');
 }
 
 function csvEscape(value: string | number | boolean | null | undefined): string {

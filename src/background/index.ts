@@ -49,7 +49,7 @@ onAlarm(async (name) => {
           ? changed
           : changed.insertedCount + changed.updatedCount;
         if (changedCount > 0) {
-          await computeStoredHistoryAggregates();
+          await computeStoredHistoryAggregates(typeof changed === 'number' ? undefined : changed);
         }
       } catch (e) {
         if (isNotLoggedIn(e)) {
@@ -93,8 +93,8 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   console.log('[BiliViz] Extension installed/updated:', details.reason);
   if (details.reason === 'install') {
     try {
-      await runInitialBackfill('full');
-      await computeStoredHistoryAggregates();
+      const result = await runInitialBackfill('full');
+      await computeStoredHistoryAggregates(result);
     } catch (e) {
       if (isNotLoggedIn(e)) {
         console.info('[BiliViz] Initial backfill skipped: user is not logged in');

@@ -16,6 +16,12 @@ import {
   putSmartFavoriteIndex,
 } from '../storage/favorite-repo';
 import { chatJson } from '../ai/openai-compatible';
+import {
+  buildTaxonomyPromptSummary,
+  expandFavoriteSearchTerms,
+  normalizeFavoritePath,
+  UNCATEGORIZED_PATH,
+} from './taxonomy';
 
 interface AiFavoriteIndexResponse {
   path?: unknown;
@@ -63,13 +69,14 @@ export async function buildSmartFavoriteIndex(
     result.processed++;
     try {
       const ai = await createSmartIndex(item, config.ai);
+      const path = normalizeFavoritePath(ai.path, item);
       await putSmartFavoriteIndex({
         itemKey: item.itemKey,
-        path: normalizePath(ai.path, item),
+        path,
         summary: normalizeText(ai.summary, item.intro || item.title),
         keywords: normalizeTextArray(ai.keywords).slice(0, 12),
         aliases: normalizeTextArray(ai.aliases).slice(0, 8),
-        searchableText: buildSearchableText(item, ai),
+        searchableText: buildSearchableText(item, ai, path),
         contentHash,
         model: config.ai.chatModel,
         status: 'indexed',
@@ -79,11 +86,11 @@ export async function buildSmartFavoriteIndex(
     } catch (error) {
       await putSmartFavoriteIndex({
         itemKey: item.itemKey,
-        path: ['未分类'],
+        path: UNCATEGORIZED_PATH,
         summary: item.intro || item.title,
         keywords: [],
         aliases: [],
-        searchableText: buildSearchableText(item),
+        searchableText: buildSearchableText(item, undefined, UNCATEGORIZED_PATH),
         contentHash,
         model: config.ai.chatModel,
         status: 'failed',
@@ -142,7 +149,7 @@ export async function searchSmartFavorites(query: string, limit = 30): Promise<S
   const config = await loadConfig();
   const [items, indexMap] = await Promise.all([getFavoriteItems(), getSmartFavoriteIndexMap()]);
   const rewrittenTerms = await rewriteQuery(trimmed, config.ai.apiKey ? config.ai : null);
-  const terms = uniqueTerms([trimmed, ...rewrittenTerms]);
+  const terms = expandFavoriteSearchTerms(uniqueTerms([trimmed, ...rewrittenTerms]));
 
   const results = items
     .map(item => scoreItem(item, indexMap.get(item.itemKey), terms, trimmed))
@@ -161,7 +168,7 @@ export async function getSmartFavoritesByPath(path: string[], limit = 200): Prom
   return items
     .map(item => {
       const smart = indexMap.get(item.itemKey);
-      const itemPath = smart?.path?.length ? smart.path : ['未分类'];
+      const itemPath = smart?.path?.length ? smart.path : UNCATEGORIZED_PATH;
       if (!isPathPrefix(normalizedPath, itemPath)) return null;
 
       return {
@@ -182,9 +189,11 @@ async function createSmartIndex(item: FavoriteItem, config: Awaited<ReturnType<t
       role: 'system',
       content: [
         '你是一个 B站收藏夹整理助手。请只输出 JSON。',
-        '根据视频元数据生成语义索引，分类路径最多 4 层，颗粒度从高到低。',
+        'B站分区和标签是主要依据，原收藏夹名是辅助依据。',
+        '分类路径最多 4 层，颗粒度从高到低；优先使用下面的标准路径，不要随意创造新的一级类目。',
+        buildTaxonomyPromptSummary(),
         'JSON 字段：path: string[]，summary: string，keywords: string[]，aliases: string[]。',
-        'path 示例：["历史","二战","苏德战争","库尔斯克"]。',
+        'path 示例：["知识","历史","二战","库尔斯克"]。',
       ].join('\n'),
     },
     {
@@ -294,7 +303,7 @@ function buildTree(items: FavoriteItem[], indexMap: Map<string, SmartFavoriteInd
   const roots: SmartFavoriteTreeNode[] = [];
 
   for (const item of items) {
-    const path = indexMap.get(item.itemKey)?.path?.length ? indexMap.get(item.itemKey)!.path : ['未分类'];
+    const path = indexMap.get(item.itemKey)?.path?.length ? indexMap.get(item.itemKey)!.path : UNCATEGORIZED_PATH;
     let current = roots;
     const walked: string[] = [];
     for (const name of path.slice(0, 4)) {
@@ -324,27 +333,19 @@ function buildFavoriteDocument(item: FavoriteItem): string {
     `简介：${item.intro || '无'}`,
     `UP主：${item.authorName || '未知'}`,
     `原收藏夹：${item.folderTitle}`,
-    `分区：${item.tagName || '未知'}`,
-    `标签：${(item.tags ?? []).join('、') || '无'}`,
+    `B站分区：${item.tagName || '未知'}`,
+    `B站标签：${(item.tags ?? []).join('、') || '无'}`,
   ].join('\n');
 }
 
-function buildSearchableText(item: FavoriteItem, ai?: AiFavoriteIndexResponse): string {
+function buildSearchableText(item: FavoriteItem, ai?: AiFavoriteIndexResponse, path = normalizeFavoritePath(ai?.path, item)): string {
   return [
     buildFavoriteDocument(item),
-    normalizePath(ai?.path, item).join(' '),
+    path.join(' '),
     normalizeText(ai?.summary, ''),
     normalizeTextArray(ai?.keywords).join(' '),
     normalizeTextArray(ai?.aliases).join(' '),
   ].join('\n');
-}
-
-function normalizePath(value: unknown, item: FavoriteItem): string[] {
-  const arr = normalizeTextArray(value).slice(0, 4);
-  if (arr.length > 0) return arr;
-  if (item.tagName) return [item.tagName];
-  if (item.folderTitle) return [item.folderTitle];
-  return ['未分类'];
 }
 
 function normalizeText(value: unknown, fallback: string): string {

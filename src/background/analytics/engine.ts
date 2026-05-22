@@ -11,6 +11,11 @@ import { db } from '../storage/db';
 import { upsertAggregate } from '../storage/aggregate-repo';
 import { getRecordsByDateRange } from '../storage/watch-history-repo';
 
+interface AggregateComputeRange {
+  oldestFetchedAt?: number | null;
+  newestFetchedAt?: number | null;
+}
+
 export { getQuickStats, getDashboardOverview } from './metrics';
 export { getPreferenceData } from './category';
 export { getCreatorData } from './creator';
@@ -32,8 +37,13 @@ export async function computeDailyAggregate(forDate?: string): Promise<DailyAggr
   return aggregate;
 }
 
-export async function computeStoredHistoryAggregates(): Promise<void> {
-  const records = await db.watchHistory.toArray();
+export async function computeStoredHistoryAggregates(range?: AggregateComputeRange): Promise<void> {
+  const records = range?.oldestFetchedAt && range.newestFetchedAt
+    ? await getRecordsByDateRange(
+      dateKey(new Date(range.oldestFetchedAt * 1000)),
+      dateKey(new Date(range.newestFetchedAt * 1000)),
+    )
+    : await db.watchHistory.toArray();
   const dates = new Set(records.map(r => dateKey(new Date(r.viewAt * 1000))));
 
   if (dates.size === 0) {

@@ -26,6 +26,8 @@ import { abortCurrentHistorySync, hasActiveHistorySyncAbortScope } from '../sync
 import { syncFavorites } from '../favorites/sync';
 import { buildSmartFavoriteIndex, getSmartFavoriteOverview, getSmartFavoritesByPath, searchSmartFavorites } from '../favorites/smart';
 
+const EXPORT_PAGE_LIMIT_MAX = 1000;
+
 export function setupMessageHandlers(): void {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Handle content script messages
@@ -117,9 +119,9 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
         }
 
         void runInitialBackfill(mode, requestedMode === 'full', { maxPages })
-          .then(async () => {
+          .then(async (result) => {
             await setDeviceTypeMigrationComplete();
-            await computeStoredHistoryAggregates();
+            await computeStoredHistoryAggregates(result);
           })
           .catch((err) => {
             console.error('[BiliViz] Manual history sync failed:', err);
@@ -156,6 +158,25 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       const allRecords = await db.watchHistory.toArray();
       const format = (request.params?.format as string) ?? 'json';
       return { success: true, data: { records: allRecords, format } as T };
+    }
+    case 'EXPORT_DATA_PAGE': {
+      const offset = normalizeNonNegativeInteger(request.params?.offset, 0);
+      const limit = Math.max(1, Math.min(normalizeNonNegativeInteger(request.params?.limit, 500), EXPORT_PAGE_LIMIT_MAX));
+      const [records, total] = await Promise.all([
+        db.watchHistory.orderBy('viewAt').offset(offset).limit(limit).toArray(),
+        db.watchHistory.count(),
+      ]);
+      const nextOffset = offset + records.length;
+      return {
+        success: true,
+        data: {
+          records,
+          total,
+          offset,
+          nextOffset,
+          hasMore: nextOffset < total,
+        } as T,
+      };
     }
     case 'GET_SYNC_STATUS': {
       if (await getHistorySyncing() && !hasActiveHistorySyncAbortScope()) {
@@ -204,4 +225,10 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     default:
       return { success: false, error: `Unknown action: ${request.action}` };
   }
+}
+
+function normalizeNonNegativeInteger(value: unknown, fallback: number): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.floor(numeric));
 }
