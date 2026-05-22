@@ -2,15 +2,17 @@ import type { FavoriteFolder, FavoriteItem, SmartFavoriteIndex } from '../../sha
 import { db } from './db';
 
 export async function replaceFavoriteSnapshot(folders: FavoriteFolder[], items: FavoriteItem[]): Promise<number> {
-  const folderMediaIds = new Set(folders.map(folder => folder.mediaId));
-  const itemKeys = new Set(items.map(item => item.itemKey));
+  const normalizedFolders = dedupeBy(folders, folder => String(folder.mediaId));
+  const normalizedItems = dedupeBy(items, item => item.itemKey);
+  const folderMediaIds = new Set(normalizedFolders.map(folder => folder.mediaId));
+  const itemKeys = new Set(normalizedItems.map(item => item.itemKey));
 
   await db.transaction('rw', db.favoriteFolders, db.favoriteItems, db.smartFavoriteIndex, async () => {
-    if (folders.length > 0) {
-      await db.favoriteFolders.bulkPut(folders);
+    if (normalizedFolders.length > 0) {
+      await db.favoriteFolders.bulkPut(await withExistingFolderIds(normalizedFolders));
     }
-    if (items.length > 0) {
-      await db.favoriteItems.bulkPut(items);
+    if (normalizedItems.length > 0) {
+      await db.favoriteItems.bulkPut(await withExistingItemIds(normalizedItems));
     }
 
     await db.favoriteFolders
@@ -26,18 +28,19 @@ export async function replaceFavoriteSnapshot(folders: FavoriteFolder[], items: 
       .delete();
   });
 
-  return items.length;
+  return normalizedItems.length;
 }
 
 export async function upsertFavoriteFolders(folders: FavoriteFolder[]): Promise<void> {
   if (folders.length === 0) return;
-  await db.favoriteFolders.bulkPut(folders);
+  await db.favoriteFolders.bulkPut(await withExistingFolderIds(dedupeBy(folders, folder => String(folder.mediaId))));
 }
 
 export async function upsertFavoriteItems(items: FavoriteItem[]): Promise<number> {
   if (items.length === 0) return 0;
-  await db.favoriteItems.bulkPut(items);
-  return items.length;
+  const normalizedItems = dedupeBy(items, item => item.itemKey);
+  await db.favoriteItems.bulkPut(await withExistingItemIds(normalizedItems));
+  return normalizedItems.length;
 }
 
 export async function getFavoriteFolders(): Promise<FavoriteFolder[]> {
@@ -70,9 +73,35 @@ export async function getSmartFavoriteIndexMap(): Promise<Map<string, SmartFavor
 }
 
 export async function putSmartFavoriteIndex(index: SmartFavoriteIndex): Promise<void> {
-  await db.smartFavoriteIndex.put(index);
+  const existing = await db.smartFavoriteIndex.where('itemKey').equals(index.itemKey).first();
+  await db.smartFavoriteIndex.put({
+    ...index,
+    id: index.id ?? existing?.id,
+  });
 }
 
 export async function countIndexedFavorites(): Promise<number> {
   return db.smartFavoriteIndex.where({ status: 'indexed' }).count();
+}
+
+async function withExistingFolderIds(folders: FavoriteFolder[]): Promise<FavoriteFolder[]> {
+  const existing = await db.favoriteFolders
+    .where('mediaId')
+    .anyOf(folders.map(folder => folder.mediaId))
+    .toArray();
+  const existingIds = new Map(existing.map(folder => [folder.mediaId, folder.id]));
+  return folders.map(folder => ({ ...folder, id: folder.id ?? existingIds.get(folder.mediaId) }));
+}
+
+async function withExistingItemIds(items: FavoriteItem[]): Promise<FavoriteItem[]> {
+  const existing = await db.favoriteItems
+    .where('itemKey')
+    .anyOf(items.map(item => item.itemKey))
+    .toArray();
+  const existingIds = new Map(existing.map(item => [item.itemKey, item.id]));
+  return items.map(item => ({ ...item, id: item.id ?? existingIds.get(item.itemKey) }));
+}
+
+function dedupeBy<T>(items: T[], getKey: (item: T) => string): T[] {
+  return Array.from(new Map(items.map(item => [getKey(item), item])).values());
 }
