@@ -1,6 +1,7 @@
 import type { FavoriteItem } from '../../shared/types/favorite';
 
 export const UNCATEGORIZED_PATH = ['未分类'];
+export const SMART_FAVORITE_TAXONOMY_VERSION = 'taxonomy-v2';
 
 interface TaxonomyEntry {
   path: string[];
@@ -14,14 +15,15 @@ interface TaxonomyMatch {
 }
 
 const TAXONOMY: TaxonomyEntry[] = [
-  { path: ['知识', '编程'], terms: ['计算机技术', '编程', '代码', '开发', '程序员', '软件工程', '前端', '后端', '算法', 'Python', 'JavaScript', 'TypeScript'] },
+  { path: ['知识', '编程'], terms: ['计算机技术', '编程', '代码', '开发', '程序员', '软件工程', '前端', '后端', '算法', 'Python', 'JavaScript', 'TypeScript', 'AI编程', 'Vibe Coding', 'Codex', 'Cursor', 'Claude Code', 'Copilot', 'MCP', 'Agent'] },
   { path: ['知识', '科学'], terms: ['科学科普', '科普', '科学', '物理', '量子力学', '数学', '化学', '生物', '天文', '宇宙', '自然'] },
   { path: ['知识', '社科'], terms: ['社科·法律·心理', '社科', '法律', '心理', '心理学', '社会学', '经济', '经济学', '哲学', '人文'] },
   { path: ['知识', '历史'], terms: ['历史', '历史人文', '战争史', '世界史', '中国史', '近代史', '古代史'] },
   { path: ['知识', '历史', '二战'], terms: ['二战', '第二次世界大战', 'WW2', '苏德战争', '库尔斯克', '诺曼底'] },
-  { path: ['知识', '学习'], terms: ['校园学习', '学习', '教程', '公开课', '课程', '考试', '英语', '语言学习'] },
+  { path: ['知识', '军事'], terms: ['军事', '军武', '武器', '装备', '战术', '军队'] },
+  { path: ['知识', '学习'], terms: ['校园学习', '学习', '教程', '公开课', '课程', '考试', '考研', '英语', '语言学习', '知识库', 'NotebookLM', '插件', '浏览器插件', '字幕插件'] },
   { path: ['知识', '财经'], terms: ['财经商业', '财经', '商业', '投资', '理财', '金融', '股票', '基金'] },
-  { path: ['知识', '职场'], terms: ['职场', '职业', '效率', '办公', '生产力', '管理'] },
+  { path: ['知识', '职场'], terms: ['职场', '职业', '效率', '办公', '生产力', '管理', '求职', '面试', '求职面试'] },
   { path: ['娱乐', '游戏'], terms: ['游戏', '单机游戏', '网络游戏', '电子竞技', '手游', '游戏实况', '主机游戏', 'Steam', '独立游戏'] },
   { path: ['娱乐', '影视'], terms: ['影视', '电影', '电视剧', '影评', '影视剪辑', '纪录片', '动画电影'] },
   { path: ['娱乐', '动漫'], terms: ['动画', '动漫', '番剧', '国创', 'MAD', 'MMD', '二次元'] },
@@ -38,20 +40,36 @@ const TERM_INDEX = buildTermIndex(TAXONOMY);
 
 export function normalizeFavoritePath(aiPath: unknown, item: FavoriteItem): string[] {
   const aiParts = normalizeTextArray(aiPath).slice(0, 4);
-  const candidates = [
-    ...aiParts,
-    item.tagName,
-    ...(item.tags ?? []),
-    item.folderTitle,
-  ];
-  const match = findBestTaxonomyMatch(candidates);
+  const bilibiliTerms = [item.tagName, ...(item.tags ?? [])];
+  const contentTerms = [item.title];
+  const folderTerms = isGenericFolderTitle(item.folderTitle) ? [] : [item.folderTitle];
 
-  if (match) {
-    return appendSpecificTail(match, aiParts);
+  const bilibiliMatch = findBestTaxonomyMatch(bilibiliTerms, true);
+  if (bilibiliMatch) {
+    return appendCompatibleTail(bilibiliMatch.entry.path, aiParts);
   }
 
-  if (item.tagName.trim()) return [item.tagName.trim()].slice(0, 4);
-  if (item.folderTitle.trim()) return [item.folderTitle.trim()].slice(0, 4);
+  const contentMatch = findBestTaxonomyMatch(contentTerms, true);
+  if (contentMatch) {
+    return appendCompatibleTail(contentMatch.entry.path, aiParts);
+  }
+
+  const folderMatch = findBestTaxonomyMatch(folderTerms, true);
+  if (folderMatch) {
+    return appendCompatibleTail(folderMatch.entry.path, aiParts);
+  }
+
+  const aiMatch = findBestTaxonomyMatch(aiParts, false);
+  if (aiMatch && hasNonGenericAiTail(aiParts, aiMatch.entry.path)) {
+    return appendAiTailAfterMatch(aiMatch, aiParts);
+  }
+
+  const fallback = [
+    item.tagName,
+    isGenericFolderTitle(item.folderTitle) ? '' : item.folderTitle,
+    '未分类',
+  ].map(part => part.trim()).filter(Boolean);
+  if (fallback.length > 0) return fallback.slice(0, 4);
   return UNCATEGORIZED_PATH;
 }
 
@@ -75,7 +93,7 @@ export function buildTaxonomyPromptSummary(): string {
 function buildTermIndex(entries: TaxonomyEntry[]): Map<string, TaxonomyEntry[]> {
   const index = new Map<string, TaxonomyEntry[]>();
   for (const entry of entries) {
-    for (const term of [...entry.path, ...entry.terms]) {
+    for (const term of getMatchTerms(entry)) {
       const key = normalizeForTaxonomy(term);
       const bucket = index.get(key) ?? [];
       bucket.push(entry);
@@ -85,14 +103,27 @@ function buildTermIndex(entries: TaxonomyEntry[]): Map<string, TaxonomyEntry[]> 
   return index;
 }
 
-function findBestTaxonomyMatch(terms: string[]): TaxonomyMatch | null {
+function findBestTaxonomyMatch(terms: string[], allowContains: boolean): TaxonomyMatch | null {
   let best: TaxonomyMatch | null = null;
 
   terms.forEach((term, matchedIndex) => {
-    const entries = TERM_INDEX.get(normalizeForTaxonomy(term)) ?? [];
+    const normalizedTerm = normalizeForTaxonomy(term);
+    const entries = TERM_INDEX.get(normalizedTerm) ?? [];
     for (const entry of entries) {
       if (!best || entry.path.length > best.entry.path.length) {
         best = { entry, matchedTerm: term, matchedIndex };
+      }
+    }
+
+    if (!allowContains || entries.length > 0) return;
+    for (const entry of TAXONOMY) {
+      for (const candidate of getMatchTerms(entry)) {
+        const key = normalizeForTaxonomy(candidate);
+        if (!isUsefulContainsKey(key)) continue;
+        if (!normalizedTerm.includes(key)) continue;
+        if (!best || entry.path.length > best.entry.path.length) {
+          best = { entry, matchedTerm: candidate, matchedIndex };
+        }
       }
     }
   });
@@ -100,12 +131,13 @@ function findBestTaxonomyMatch(terms: string[]): TaxonomyMatch | null {
   return best;
 }
 
-function appendSpecificTail(match: TaxonomyMatch, aiParts: string[]): string[] {
-  const path = [...match.entry.path];
-  const matchedPartIndex = aiParts.findIndex(part => normalizeForTaxonomy(part) === normalizeForTaxonomy(match.matchedTerm));
-  const tailStart = matchedPartIndex >= 0 ? matchedPartIndex + 1 : match.matchedIndex + 1;
+function getMatchTerms(entry: TaxonomyEntry): string[] {
+  return [entry.path[entry.path.length - 1], ...entry.terms].filter(Boolean);
+}
 
-  for (const part of aiParts.slice(tailStart)) {
+function appendCompatibleTail(basePath: string[], aiParts: string[]): string[] {
+  const path = [...basePath];
+  for (const part of aiParts) {
     const trimmed = part.trim();
     if (!trimmed) continue;
     if (path.some(existing => normalizeForTaxonomy(existing) === normalizeForTaxonomy(trimmed))) continue;
@@ -115,6 +147,28 @@ function appendSpecificTail(match: TaxonomyMatch, aiParts: string[]): string[] {
   }
 
   return path.slice(0, 4);
+}
+
+function appendAiTailAfterMatch(match: TaxonomyMatch, aiParts: string[]): string[] {
+  const path = [...match.entry.path];
+  const matchedPartIndex = aiParts.findIndex(part => normalizeForTaxonomy(part) === normalizeForTaxonomy(match.matchedTerm));
+  for (const part of aiParts.slice(Math.max(0, matchedPartIndex + 1))) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    if (path.some(existing => normalizeForTaxonomy(existing) === normalizeForTaxonomy(trimmed))) continue;
+    if (TERM_INDEX.has(normalizeForTaxonomy(trimmed))) continue;
+    path.push(trimmed);
+    if (path.length >= 4) break;
+  }
+  return path.slice(0, 4);
+}
+
+function hasNonGenericAiTail(aiParts: string[], basePath: string[]): boolean {
+  const baseKeys = new Set(basePath.map(normalizeForTaxonomy));
+  return aiParts.some(part => {
+    const key = normalizeForTaxonomy(part);
+    return key.length > 0 && !baseKeys.has(key) && !TERM_INDEX.has(key);
+  });
 }
 
 function getRelatedTerms(term: string): string[] {
@@ -130,6 +184,16 @@ function getRelatedTerms(term: string): string[] {
       return value.includes(normalized) || normalized.includes(value);
     }))
     .flatMap(entry => [...entry.path, ...entry.terms]);
+}
+
+function isUsefulContainsKey(value: string): boolean {
+  if (value === 'ai' || value.length < 2) return false;
+  return value.length >= 3 || /[\u4e00-\u9fff]/.test(value);
+}
+
+function isGenericFolderTitle(value: string): boolean {
+  const normalized = normalizeForTaxonomy(value);
+  return !normalized || normalized === normalizeForTaxonomy('默认收藏夹') || normalized === normalizeForTaxonomy('收藏夹');
 }
 
 function normalizeTextArray(value: unknown): string[] {

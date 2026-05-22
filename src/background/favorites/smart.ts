@@ -20,6 +20,7 @@ import {
   buildTaxonomyPromptSummary,
   expandFavoriteSearchTerms,
   normalizeFavoritePath,
+  SMART_FAVORITE_TAXONOMY_VERSION,
   UNCATEGORIZED_PATH,
 } from './taxonomy';
 
@@ -51,7 +52,7 @@ export async function buildSmartFavoriteIndex(
   const result: SmartIndexResult = { processed: 0, indexed: 0, failed: 0, skipped: 0 };
   const candidates = items
     .map(item => {
-      const contentHash = hashText(buildFavoriteDocument(item));
+      const contentHash = hashText(`${SMART_FAVORITE_TAXONOMY_VERSION}\n${buildFavoriteDocument(item)}`);
       const current = indexes.get(item.itemKey);
       return { item, contentHash, current };
     })
@@ -191,9 +192,10 @@ async function createSmartIndex(item: FavoriteItem, config: Awaited<ReturnType<t
         '你是一个 B站收藏夹整理助手。请只输出 JSON。',
         'B站分区和标签是主要依据，原收藏夹名是辅助依据。',
         '分类路径最多 4 层，颗粒度从高到低；优先使用下面的标准路径，不要随意创造新的一级类目。',
+        '如果 B站分区、标签或标题已经指向编程、科学、游戏、影视等主题，不要因为示例或联想改到无关历史、战争等分类。',
         buildTaxonomyPromptSummary(),
         'JSON 字段：path: string[]，summary: string，keywords: string[]，aliases: string[]。',
-        'path 示例：["知识","历史","二战","库尔斯克"]。',
+        'path 示例使用抽象占位：["一级类目","二级类目","三级主题","具体主题"]。',
       ].join('\n'),
     },
     {
