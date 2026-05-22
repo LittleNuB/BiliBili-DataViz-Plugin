@@ -15,6 +15,7 @@ export type RequestAction =
   | 'GET_CONFIG'
   | 'UPDATE_CONFIG'
   | 'EXPORT_DATA'
+  | 'EXPORT_DATA_PAGE'
   | 'GET_SYNC_STATUS'
   | 'GET_SMART_FAVORITES'
   | 'GET_SMART_FAVORITES_BY_PATH'

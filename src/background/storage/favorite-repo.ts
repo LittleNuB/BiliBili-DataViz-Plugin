@@ -48,6 +48,14 @@ export async function getFavoriteItems(): Promise<FavoriteItem[]> {
   return db.favoriteItems.orderBy('favTime').reverse().toArray();
 }
 
+export async function countFavoriteFolders(): Promise<number> {
+  return db.favoriteFolders.count();
+}
+
+export async function countFavoriteItems(): Promise<number> {
+  return db.favoriteItems.count();
+}
+
 export async function getFavoriteItemByKey(itemKey: string): Promise<FavoriteItem | undefined> {
   return db.favoriteItems.where({ itemKey }).first();
 }

@@ -627,5 +627,15 @@ function getOriginPattern(baseURL: string): string {
   if (!['https:', 'http:'].includes(url.protocol)) {
     throw new Error('AI Base URL 只支持 http 或 https');
   }
-  return `${url.protocol}//${url.host}/*`;
+
+  const hostname = url.hostname.toLowerCase();
+  if (url.protocol === 'http:' && !isLocalHttpHost(hostname)) {
+    throw new Error('HTTP AI Base URL 只支持 localhost 或 127.0.0.1');
+  }
+
+  return `${url.protocol}//${hostname}/*`;
+}
+
+function isLocalHttpHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1';
 }

@@ -17,7 +17,7 @@ interface BiliInitialState {
 }
 
 let cleanup: (() => void) | null = null;
-let lastBvid = '';
+let lastContextKey = '';
 let retryTimer: number | null = null;
 
 function isVideoPage(): boolean {
@@ -27,6 +27,11 @@ function isVideoPage(): boolean {
 function extractBvidFromUrl(): string {
   const match = location.pathname.match(/\/video\/(BV[A-Za-z0-9]+)/);
   return match?.[1] ?? '';
+}
+
+function extractPageFromUrl(): number {
+  const page = Number(new URLSearchParams(location.search).get('p') ?? '1');
+  return Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
 }
 
 function getInitialState(): BiliInitialState | null {
@@ -40,18 +45,20 @@ function getInitialState(): BiliInitialState | null {
 function getVideoContext() {
   const state = getInitialState();
   const urlBvid = extractBvidFromUrl();
+  const pageIndex = extractPageFromUrl();
   const stateBvid = state?.bvid ?? state?.videoData?.bvid ?? '';
   const bvid = urlBvid || stateBvid;
   const canTrustState = !urlBvid || !stateBvid || stateBvid === urlBvid;
-  const cid = canTrustState ? state?.cid ?? state?.videoData?.cid ?? state?.videoData?.pages?.[0]?.cid ?? 0 : 0;
+  const currentPage = state?.videoData?.pages?.[pageIndex - 1];
+  const cid = canTrustState ? currentPage?.cid ?? state?.cid ?? state?.videoData?.cid ?? state?.videoData?.pages?.[0]?.cid ?? 0 : 0;
   const title = canTrustState && state?.videoData?.title
     ? state.videoData.title
     : document.title.replace('_哔哩哔哩_bilibili', '').trim();
-  const duration = canTrustState ? state?.videoData?.duration ?? state?.videoData?.pages?.[0]?.duration ?? 0 : 0;
+  const duration = canTrustState ? currentPage?.duration ?? state?.videoData?.duration ?? state?.videoData?.pages?.[0]?.duration ?? 0 : 0;
   const authorMid = canTrustState ? state?.videoData?.owner?.mid ?? state?.upData?.mid ?? 0 : 0;
   const authorName = canTrustState ? state?.videoData?.owner?.name ?? state?.upData?.name ?? '' : '';
 
-  return { bvid, cid, title, duration, authorMid, authorName };
+  return { bvid, cid, title, duration, authorMid, authorName, pageIndex };
 }
 
 function scheduleInitialize(delay = 0): void {
@@ -75,8 +82,8 @@ async function initializeMonitor(): Promise<void> {
     return;
   }
 
-  // Skip re-initialization for the same video
-  if (ctx.bvid === lastBvid) return;
+  const contextKey = `${ctx.bvid}:${ctx.cid || `p${ctx.pageIndex}`}`;
+  if (contextKey === lastContextKey) return;
 
   // Clean up previous listeners
   if (cleanup) {
@@ -86,8 +93,8 @@ async function initializeMonitor(): Promise<void> {
 
   try {
     const video = await detectVideo();
-    lastBvid = ctx.bvid;
-    console.log(`[BiliViz] Monitoring: ${ctx.title} (${ctx.bvid})`);
+    lastContextKey = contextKey;
+    console.log(`[BiliViz] Monitoring: ${ctx.title} (${ctx.bvid}, cid=${ctx.cid || 'unknown'}, p=${ctx.pageIndex})`);
 
     const videoCtx: VideoContext = {
       bvid: ctx.bvid,
@@ -125,7 +132,7 @@ let lastUrl = location.href;
 const navObserver = new MutationObserver(() => {
   if (location.href !== lastUrl) {
     lastUrl = location.href;
-    lastBvid = '';
+    lastContextKey = '';
     scheduleInitialize(800);
     window.setTimeout(() => scheduleInitialize(2500), 2500);
   }
@@ -136,7 +143,7 @@ navObserver.observe(document.body, { childList: true, subtree: true });
 setInterval(() => {
   if (location.href !== lastUrl) {
     lastUrl = location.href;
-    lastBvid = '';
+    lastContextKey = '';
     scheduleInitialize(800);
     window.setTimeout(() => scheduleInitialize(2500), 2500);
   }
