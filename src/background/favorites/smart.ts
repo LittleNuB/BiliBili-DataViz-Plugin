@@ -9,23 +9,27 @@ import type {
 } from '../../shared/types/favorite';
 import { loadConfig } from '../storage/config-store';
 import {
-  countIndexedFavorites,
   getFavoriteFolders,
   getFavoriteItems,
   getSmartFavoriteIndexMap,
   putSmartFavoriteIndex,
+  upsertFavoriteItems,
 } from '../storage/favorite-repo';
 import { chatJson } from '../ai/openai-compatible';
+import { batchFetchVideoTags } from '../api/video-info';
 import {
   buildTaxonomyPromptSummary,
   expandFavoriteSearchTerms,
   normalizeFavoritePath,
+  resolveBiliRegion,
+  resolveFavoriteBasePath,
   SMART_FAVORITE_TAXONOMY_VERSION,
   UNCATEGORIZED_PATH,
 } from './taxonomy';
 
 interface AiFavoriteIndexResponse {
   path?: unknown;
+  topicTail?: unknown;
   summary?: unknown;
   keywords?: unknown;
   aliases?: unknown;
@@ -35,28 +39,70 @@ interface AiQueryRewriteResponse {
   terms?: unknown;
 }
 
+interface AiEnhancementResult {
+  ai?: AiFavoriteIndexResponse;
+  status: NonNullable<SmartFavoriteIndex['aiStatus']>;
+  error?: string;
+}
+
 const DEFAULT_INDEX_LIMIT = 200;
+const TAG_RETRY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const SMART_INDEX_CANCELLED = 'SMART_INDEX_CANCELLED';
+
+let activeSmartIndexController: AbortController | null = null;
 
 export interface SmartFavoriteIndexOptions {
   includeFailed?: boolean;
   failedOnly?: boolean;
 }
 
+export function cancelSmartFavoriteIndex(): boolean {
+  if (!activeSmartIndexController) return false;
+  activeSmartIndexController.abort();
+  return true;
+}
+
 export async function buildSmartFavoriteIndex(
   maxItems = DEFAULT_INDEX_LIMIT,
   options: SmartFavoriteIndexOptions = {},
 ): Promise<SmartIndexResult> {
+  if (activeSmartIndexController) {
+    throw new Error('SMART_FAVORITE_INDEX_IN_PROGRESS');
+  }
+
+  const controller = new AbortController();
+  activeSmartIndexController = controller;
+  try {
+    return await buildSmartFavoriteIndexBatch(maxItems, options, controller.signal);
+  } finally {
+    if (activeSmartIndexController === controller) {
+      activeSmartIndexController = null;
+    }
+  }
+}
+
+async function buildSmartFavoriteIndexBatch(
+  maxItems: number,
+  options: SmartFavoriteIndexOptions,
+  signal: AbortSignal,
+): Promise<SmartIndexResult> {
   const config = await loadConfig();
   const items = await getFavoriteItems();
   const indexes = await getSmartFavoriteIndexMap();
-  const result: SmartIndexResult = { processed: 0, indexed: 0, failed: 0, skipped: 0 };
+  const now = Date.now();
+  const hasAiConfig = Boolean(config.ai.apiKey.trim());
+  const result: SmartIndexResult = { processed: 0, indexed: 0, degraded: 0, failed: 0, skipped: 0 };
   const candidates = items
     .map(item => {
       const contentHash = hashText(`${SMART_FAVORITE_TAXONOMY_VERSION}\n${buildFavoriteDocument(item)}`);
       const current = indexes.get(item.itemKey);
-      return { item, contentHash, current };
+      const needsTagRefresh = shouldRefreshTags(item, now);
+      return { item, contentHash, current, needsTagRefresh };
     })
-    .filter(candidate => shouldProcessCandidate(candidate.current, candidate.contentHash, config.ai.chatModel, options))
+    .filter(candidate => {
+      const shouldIndex = shouldProcessCandidate(candidate.current, candidate.contentHash, config.ai.chatModel, options, hasAiConfig);
+      return options.failedOnly ? shouldIndex : candidate.needsTagRefresh || shouldIndex;
+    })
     .sort((a, b) => {
       if (options.failedOnly) {
         return (a.current?.indexedAt ?? 0) - (b.current?.indexedAt ?? 0);
@@ -64,27 +110,55 @@ export async function buildSmartFavoriteIndex(
       return b.item.favTime - a.item.favTime;
     });
 
-  for (const { item, contentHash } of candidates) {
+  for (const candidate of candidates) {
     if (result.processed >= maxItems) break;
+    if (signal.aborted) {
+      return stopCancelled(result);
+    }
 
     result.processed++;
     try {
-      const ai = await createSmartIndex(item, config.ai);
-      const path = normalizeFavoritePath(ai.path, item);
+      const item = await enrichTagsForIndexing(candidate.item, signal);
+      const contentHash = hashText(`${SMART_FAVORITE_TAXONOMY_VERSION}\n${buildFavoriteDocument(item)}`);
+      const sameModel = candidate.current?.model === config.ai.chatModel;
+      const sameContent = candidate.current?.contentHash === contentHash;
+      if (candidate.needsTagRefresh && sameModel && sameContent && candidate.current?.status === 'indexed') {
+        result.skipped++;
+        continue;
+      }
+
+      const aiResult = await createSmartIndexEnhancement(item, config.ai, signal);
+      const ai = aiResult.ai;
+      const path = normalizeFavoritePath(ai, item);
+      const status: SmartFavoriteIndex['status'] = aiResult.status === 'enhanced' ? 'indexed' : 'degraded';
       await putSmartFavoriteIndex({
         itemKey: item.itemKey,
         path,
-        summary: normalizeText(ai.summary, item.intro || item.title),
-        keywords: normalizeTextArray(ai.keywords).slice(0, 12),
-        aliases: normalizeTextArray(ai.aliases).slice(0, 8),
+        summary: ai ? normalizeText(ai.summary, item.intro || item.title) : item.intro || item.title,
+        keywords: ai ? normalizeTextArray(ai.keywords).slice(0, 12) : [],
+        aliases: ai ? normalizeTextArray(ai.aliases).slice(0, 8) : [],
         searchableText: buildSearchableText(item, ai, path),
         contentHash,
         model: config.ai.chatModel,
-        status: 'indexed',
+        status,
+        taxonomyVersion: SMART_FAVORITE_TAXONOMY_VERSION,
+        ...buildPathMetadata(item, path),
+        tagsSnapshot: [...(item.tags ?? [])],
+        aiTopicTail: normalizeTextArray(ai?.topicTail).slice(0, 2),
+        aiStatus: aiResult.status,
+        aiError: aiResult.error,
         indexedAt: Date.now(),
       });
-      result.indexed++;
+      if (status === 'indexed') {
+        result.indexed++;
+      } else {
+        result.degraded = (result.degraded ?? 0) + 1;
+      }
     } catch (error) {
+      if (isSmartIndexCancelled(error, signal)) {
+        return stopCancelled(result);
+      }
+      const item = candidate.item;
       await putSmartFavoriteIndex({
         itemKey: item.itemKey,
         path: UNCATEGORIZED_PATH,
@@ -92,10 +166,16 @@ export async function buildSmartFavoriteIndex(
         keywords: [],
         aliases: [],
         searchableText: buildSearchableText(item, undefined, UNCATEGORIZED_PATH),
-        contentHash,
+        contentHash: candidate.contentHash,
         model: config.ai.chatModel,
         status: 'failed',
         error: error instanceof Error ? error.message : String(error),
+        taxonomyVersion: SMART_FAVORITE_TAXONOMY_VERSION,
+        ...buildPathMetadata(item, UNCATEGORIZED_PATH),
+        pathSource: 'uncategorized',
+        tagsSnapshot: [...(item.tags ?? [])],
+        aiStatus: 'degraded',
+        aiError: error instanceof Error ? error.message : String(error),
         indexedAt: Date.now(),
       });
       result.failed++;
@@ -105,42 +185,126 @@ export async function buildSmartFavoriteIndex(
   return result;
 }
 
+async function enrichTagsForIndexing(item: FavoriteItem, signal: AbortSignal): Promise<FavoriteItem> {
+  if (!shouldRefreshTags(item, Date.now())) return item;
+
+  const tagMap = await batchFetchVideoTags([item.bvid], signal);
+  const fetchedAt = Date.now();
+  if (!tagMap.has(item.bvid)) {
+    const updated = {
+      ...item,
+      tagsFetchFailedAt: fetchedAt,
+      tagsFetchError: 'VIDEO_TAGS_FETCH_FAILED',
+    };
+    await upsertFavoriteItems([updated]);
+    return updated;
+  }
+
+  const tags = tagMap.get(item.bvid) ?? [];
+  const updated = {
+    ...item,
+    tags,
+    tagsFetchedAt: fetchedAt,
+    tagsFetchFailedAt: undefined,
+    tagsFetchError: undefined,
+  };
+  await upsertFavoriteItems([updated]);
+  return updated;
+}
+
+function shouldRefreshTags(item: FavoriteItem, now: number): boolean {
+  if ((item.tags ?? []).length > 0 || !item.bvid) return false;
+  if (item.tagsFetchedAt) return false;
+  if (!item.tagsFetchFailedAt) return true;
+  return now - item.tagsFetchFailedAt >= TAG_RETRY_COOLDOWN_MS;
+}
+
 function shouldProcessCandidate(
   current: SmartFavoriteIndex | undefined,
   contentHash: string,
   model: string,
   options: SmartFavoriteIndexOptions,
+  hasAiConfig: boolean,
 ): boolean {
   if (!current) return !options.failedOnly;
   const sameContent = current.contentHash === contentHash;
   const sameModel = current.model === model;
 
   if (current.status === 'indexed' && sameContent && sameModel) return false;
+  if (current.status === 'degraded' && sameContent && sameModel && !hasAiConfig) return false;
   if (options.failedOnly) return current.status === 'failed' && sameContent;
   if (current.status === 'failed' && sameContent && !options.includeFailed) return false;
 
   return true;
 }
 
+function stopCancelled(result: SmartIndexResult): SmartIndexResult {
+  return {
+    ...result,
+    cancelled: true,
+    stoppedReason: 'cancelled',
+  };
+}
+
+function isSmartIndexCancelled(error: unknown, signal: AbortSignal): boolean {
+  if (signal.aborted) return true;
+  if (!(error instanceof Error)) return false;
+  return error.message === SMART_INDEX_CANCELLED || error.message === 'SYNC_CANCELLED';
+}
+
+function buildPathMetadata(item: FavoriteItem, path: string[]): Pick<SmartFavoriteIndex, 'pathSource' | 'regionSnapshot'> {
+  const region = resolveBiliRegion(item);
+  const base = resolveFavoriteBasePath(item);
+  const pathSource: SmartFavoriteIndex['pathSource'] = isPathPrefix(UNCATEGORIZED_PATH, path)
+    ? 'uncategorized'
+    : base.source;
+
+  return {
+    pathSource,
+    regionSnapshot: {
+      tid: region.tid,
+      tname: region.tname,
+      tidV2: region.tidV2,
+      tnameV2: region.tnameV2,
+      pidV2: region.pidV2,
+      pidNameV2: region.pidNameV2,
+    },
+  };
+}
+
 export async function getSmartFavoriteOverview(): Promise<SmartFavoriteOverview> {
-  const [folders, items, indexedItems, indexMap] = await Promise.all([
+  const [folders, items, indexMap] = await Promise.all([
     getFavoriteFolders(),
     getFavoriteItems(),
-    countIndexedFavorites(),
     getSmartFavoriteIndexMap(),
   ]);
-  const failedItems = Array.from(indexMap.values()).filter(index => index.status === 'failed').length;
-  const pendingItems = Math.max(0, items.length - indexedItems - failedItems);
+  const indexes = Array.from(indexMap.values());
+  const indexedItems = indexes.filter(index => index.status === 'indexed').length;
+  const degradedItems = indexes.filter(index => index.status === 'degraded').length;
+  const failedItems = indexes.filter(index => index.status === 'failed').length;
+  const pendingItems = Math.max(0, items.length - indexedItems - degradedItems - failedItems);
 
   return {
     folders,
     totalItems: items.length,
+    uniqueItems: countUniqueFavoriteVideos(items),
     indexedItems,
+    degradedItems,
     failedItems,
     pendingItems,
     lastSyncedAt: Math.max(0, ...folders.map(folder => folder.syncedAt), ...items.map(item => item.syncedAt)),
     tree: buildTree(items, indexMap),
   };
+}
+
+function countUniqueFavoriteVideos(items: FavoriteItem[]): number {
+  return new Set(items.map(getFavoriteVideoKey)).size;
+}
+
+function getFavoriteVideoKey(item: FavoriteItem): string {
+  if (item.bvid) return `bvid:${item.bvid}`;
+  if (item.avid) return `avid:${item.avid}`;
+  return item.itemKey;
 }
 
 export async function searchSmartFavorites(query: string, limit = 30): Promise<SmartFavoriteSearchResponse> {
@@ -184,25 +348,52 @@ export async function getSmartFavoritesByPath(path: string[], limit = 200): Prom
     .slice(0, limit);
 }
 
-async function createSmartIndex(item: FavoriteItem, config: Awaited<ReturnType<typeof loadConfig>>['ai']): Promise<AiFavoriteIndexResponse> {
+async function createSmartIndexEnhancement(
+  item: FavoriteItem,
+  config: Awaited<ReturnType<typeof loadConfig>>['ai'],
+  signal: AbortSignal,
+): Promise<AiEnhancementResult> {
+  if (!config.apiKey.trim()) {
+    return { status: 'skipped', error: 'AI_API_KEY_MISSING' };
+  }
+
+  try {
+    return {
+      ai: await createSmartIndex(item, config, signal),
+      status: 'enhanced',
+    };
+  } catch (error) {
+    if (isSmartIndexCancelled(error, signal)) throw error;
+    return {
+      status: 'degraded',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function createSmartIndex(
+  item: FavoriteItem,
+  config: Awaited<ReturnType<typeof loadConfig>>['ai'],
+  signal: AbortSignal,
+): Promise<AiFavoriteIndexResponse> {
   return chatJson<AiFavoriteIndexResponse>(config, [
     {
       role: 'system',
       content: [
         '你是一个 B站收藏夹整理助手。请只输出 JSON。',
-        'B站分区和标签是主要依据，原收藏夹名是辅助依据。',
-        '分类路径最多 4 层，颗粒度从高到低；优先使用下面的标准路径，不要随意创造新的一级类目。',
-        '如果 B站分区、标签或标题已经指向编程、科学、游戏、影视等主题，不要因为示例或联想改到无关历史、战争等分类。',
+        '本地程序会根据 B站分区 ID 决定分类根路径。你不要决定一级或二级分类。',
+        '你只需要概括视频内容，并在 topicTail 中给出 0-2 个末级主题词，用于追加到本地分类路径末尾。',
+        'topicTail 必须来自标题、简介、标签或非常明确的主题，不要联想无关历史、战争、影视等分类。',
         buildTaxonomyPromptSummary(),
-        'JSON 字段：path: string[]，summary: string，keywords: string[]，aliases: string[]。',
-        'path 示例使用抽象占位：["一级类目","二级类目","三级主题","具体主题"]。',
+        'JSON 字段：topicTail: string[]，summary: string，keywords: string[]，aliases: string[]。',
+        'topicTail 示例：["编程","Codex"]。如果没有明确末级主题，返回空数组。',
       ].join('\n'),
     },
     {
       role: 'user',
       content: buildFavoriteDocument(item),
     },
-  ]);
+  ], signal);
 }
 
 async function rewriteQuery(
@@ -245,6 +436,9 @@ function scoreItem(
     item.authorName,
     item.folderTitle,
     item.tagName,
+    item.tname ?? '',
+    item.pidNameV2 ?? '',
+    item.tnameV2 ?? '',
     ...(item.tags ?? []),
     ...(smart?.path ?? []),
     smart?.summary ?? '',
@@ -330,23 +524,26 @@ function sortTree(nodes: SmartFavoriteTreeNode[]): void {
 }
 
 function buildFavoriteDocument(item: FavoriteItem): string {
+  const region = resolveBiliRegion(item);
   return [
     `标题：${item.title}`,
     `简介：${item.intro || '无'}`,
     `UP主：${item.authorName || '未知'}`,
     `原收藏夹：${item.folderTitle}`,
-    `B站分区：${item.tagName || '未知'}`,
+    `B站新版分区：${region.v2Path.join(' / ') || '未知'}`,
+    `B站旧分区：${region.legacyPath.join(' / ') || item.tagName || '未知'}`,
     `B站标签：${(item.tags ?? []).join('、') || '无'}`,
   ].join('\n');
 }
 
-function buildSearchableText(item: FavoriteItem, ai?: AiFavoriteIndexResponse, path = normalizeFavoritePath(ai?.path, item)): string {
+function buildSearchableText(item: FavoriteItem, ai?: AiFavoriteIndexResponse, path = normalizeFavoritePath(ai, item)): string {
   return [
     buildFavoriteDocument(item),
     path.join(' '),
     normalizeText(ai?.summary, ''),
     normalizeTextArray(ai?.keywords).join(' '),
     normalizeTextArray(ai?.aliases).join(' '),
+    normalizeTextArray(ai?.topicTail).join(' '),
   ].join('\n');
 }
 

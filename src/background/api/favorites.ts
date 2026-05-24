@@ -109,7 +109,7 @@ export async function fetchFavoriteItems(
       if (item) result.push(item);
     }
 
-    if (data.has_more === false || medias.length < FAVORITE_PAGE_SIZE) break;
+    if (data.has_more === false) break;
   }
 
   return result;

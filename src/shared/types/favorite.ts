@@ -21,8 +21,17 @@ export interface FavoriteItem {
   intro: string;
   authorName: string;
   authorMid: number;
+  tid?: number;
+  tname?: string;
+  tidV2?: number;
+  tnameV2?: string;
+  pidV2?: number;
+  pidNameV2?: string;
   tagName: string;
   tags: string[];
+  tagsFetchedAt?: number;
+  tagsFetchFailedAt?: number;
+  tagsFetchError?: string;
   cover: string;
   duration: number;
   pubtime: number;
@@ -40,8 +49,22 @@ export interface SmartFavoriteIndex {
   searchableText: string;
   contentHash: string;
   model: string;
-  status: 'indexed' | 'failed';
+  status: 'indexed' | 'degraded' | 'failed';
   error?: string;
+  taxonomyVersion?: string;
+  pathSource?: 'bili_v2' | 'bili_legacy' | 'tag_override' | 'folder' | 'uncategorized';
+  regionSnapshot?: {
+    tid?: number;
+    tname?: string;
+    tidV2?: number;
+    tnameV2?: string;
+    pidV2?: number;
+    pidNameV2?: string;
+  };
+  tagsSnapshot?: string[];
+  aiTopicTail?: string[];
+  aiStatus?: 'enhanced' | 'degraded' | 'skipped';
+  aiError?: string;
   indexedAt: number;
 }
 
@@ -62,7 +85,9 @@ export interface SmartFavoriteResult {
 export interface SmartFavoriteOverview {
   folders: FavoriteFolder[];
   totalItems: number;
+  uniqueItems?: number;
   indexedItems: number;
+  degradedItems: number;
   failedItems: number;
   pendingItems: number;
   lastSyncedAt: number;
@@ -72,6 +97,7 @@ export interface SmartFavoriteOverview {
 export interface FavoriteSyncResult {
   folders: number;
   items: number;
+  uniqueItems?: number;
   insertedOrUpdated: number;
   syncedAt: number;
 }
@@ -79,8 +105,11 @@ export interface FavoriteSyncResult {
 export interface SmartIndexResult {
   processed: number;
   indexed: number;
+  degraded?: number;
   failed: number;
   skipped: number;
+  cancelled?: boolean;
+  stoppedReason?: string;
 }
 
 export interface SmartFavoriteSearchResponse {

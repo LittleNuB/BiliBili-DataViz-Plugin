@@ -18,6 +18,7 @@ const AI_REQUEST_TIMEOUT_MS = 60_000;
 export async function chatJson<T>(
   config: AiConfig,
   messages: ChatMessage[],
+  signal?: AbortSignal,
 ): Promise<T> {
   if (!config.apiKey.trim()) {
     throw new Error('AI_API_KEY_MISSING');
@@ -25,6 +26,11 @@ export async function chatJson<T>(
 
   const endpoint = `${config.baseURL.replace(/\/+$/, '')}/chat/completions`;
   const controller = new AbortController();
+  if (signal?.aborted) {
+    throw new Error('SMART_INDEX_CANCELLED');
+  }
+  const onAbort = () => controller.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
   let response: Response;
 
@@ -44,12 +50,16 @@ export async function chatJson<T>(
       signal: controller.signal,
     });
   } catch (error) {
+    if (signal?.aborted) {
+      throw new Error('SMART_INDEX_CANCELLED');
+    }
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new Error('AI_REQUEST_TIMEOUT');
     }
     throw error;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
   }
 
   if (!response.ok) {

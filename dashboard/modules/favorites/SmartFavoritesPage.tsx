@@ -29,6 +29,7 @@ export function SmartFavoritesPage() {
   const [expandedTree, setExpandedTree] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
+  const [cancelRequested, setCancelRequested] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
 
@@ -75,7 +76,8 @@ export function SmartFavoritesPage() {
     setError(null);
     try {
       const result = await requestSW<FavoriteSyncResult>('SYNC_FAVORITES');
-      setNotice(`已同步 ${result.folders} 个收藏夹，${result.items} 个视频`);
+      const uniqueText = typeof result.uniqueItems === 'number' ? `${result.uniqueItems} 个去重视频，` : '';
+      setNotice(`已同步 ${result.folders} 个收藏夹，${uniqueText}${result.items} 条收藏记录`);
       setOverview(await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES'));
     } catch (e) {
       setError((e as Error).message);
@@ -86,12 +88,13 @@ export function SmartFavoritesPage() {
 
   async function buildIndex() {
     setBusy('index');
+    setCancelRequested(false);
     setError(null);
     try {
-      const result: SmartIndexResult = { processed: 0, indexed: 0, failed: 0, skipped: 0 };
+      const result: SmartIndexResult = { processed: 0, indexed: 0, degraded: 0, failed: 0, skipped: 0 };
       const initialOverview = overview ?? await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES');
-      let pending = initialOverview.pendingItems;
-      let guard = Math.ceil((initialOverview.totalItems + initialOverview.failedItems) / 8) + 4;
+      let pending = initialOverview.pendingItems + initialOverview.degradedItems;
+      let guard = Math.ceil((initialOverview.totalItems + initialOverview.failedItems + initialOverview.degradedItems) / 8) + 4;
 
       while (pending > 0 && guard-- > 0) {
         const batch = await requestSW<SmartIndexResult>('BUILD_SMART_FAVORITE_INDEX', {
@@ -101,14 +104,14 @@ export function SmartFavoritesPage() {
         mergeIndexResult(result, batch);
         const latest = await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES');
         setOverview(latest);
-        pending = latest.pendingItems;
-        setNotice(`智能索引生成中：已处理 ${result.processed} 条，成功 ${result.indexed} 条，失败 ${result.failed} 条`);
-        if (batch.processed === 0) break;
+        pending = latest.pendingItems + latest.degradedItems;
+        setNotice(`智能索引生成中：已处理 ${result.processed} 条，成功 ${result.indexed} 条，AI降级 ${result.degraded ?? 0} 条，失败 ${result.failed} 条`);
+        if (batch.cancelled || batch.processed === 0) break;
       }
 
       let failedRetriesLeft = initialOverview.failedItems;
       guard = Math.ceil(initialOverview.failedItems / 8) + 2;
-      while (failedRetriesLeft > 0 && guard-- > 0) {
+      while (!result.cancelled && failedRetriesLeft > 0 && guard-- > 0) {
         const batch = await requestSW<SmartIndexResult>('BUILD_SMART_FAVORITE_INDEX', {
           maxItems: Math.min(8, failedRetriesLeft),
           includeFailed: true,
@@ -118,16 +121,29 @@ export function SmartFavoritesPage() {
         failedRetriesLeft -= batch.processed;
         const latest = await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES');
         setOverview(latest);
-        setNotice(`失败项重试中：已处理 ${result.processed} 条，成功 ${result.indexed} 条，失败 ${result.failed} 条`);
-        if (batch.processed === 0) break;
+        setNotice(`失败项重试中：已处理 ${result.processed} 条，成功 ${result.indexed} 条，AI降级 ${result.degraded ?? 0} 条，失败 ${result.failed} 条`);
+        if (batch.cancelled || batch.processed === 0) break;
       }
 
-      setNotice(`智能索引完成：新增/更新 ${result.indexed} 条，失败 ${result.failed} 条，跳过 ${result.skipped} 条`);
+      setNotice(result.cancelled
+        ? `智能索引已取消：已处理 ${result.processed} 条，成功 ${result.indexed} 条，AI降级 ${result.degraded ?? 0} 条`
+        : `智能索引完成：新增/更新 ${result.indexed} 条，AI降级 ${result.degraded ?? 0} 条，失败 ${result.failed} 条，跳过 ${result.skipped} 条`);
       setOverview(await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES'));
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy('');
+      setCancelRequested(false);
+    }
+  }
+
+  async function cancelIndex() {
+    setCancelRequested(true);
+    setNotice('正在取消智能索引...');
+    try {
+      await requestSW('CANCEL_SMART_FAVORITE_INDEX');
+    } catch (e) {
+      setError((e as Error).message);
     }
   }
 
@@ -192,14 +208,17 @@ export function SmartFavoritesPage() {
       <section style={CARD}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px', marginBottom: '12px' }}>
           <Metric label="收藏夹" value={overview?.folders.length ?? 0} />
-          <Metric label="收藏视频" value={overview?.totalItems ?? 0} />
+          <Metric label="去重视频" value={overview?.uniqueItems ?? overview?.totalItems ?? 0} />
+          <Metric label="收藏条目" value={overview?.totalItems ?? 0} />
           <Metric label="索引成功" value={overview?.indexedItems ?? 0} />
+          <Metric label="AI降级" value={overview?.degradedItems ?? 0} />
           <Metric label="索引失败" value={overview?.failedItems ?? 0} />
           <Metric label="待索引" value={overview?.pendingItems ?? 0} />
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           <ActionButton label={busy === 'sync' ? '同步中...' : '同步收藏夹'} onClick={syncFavorites} disabled={!!busy} />
           <ActionButton label={busy === 'index' ? '生成中...' : '生成智能索引'} onClick={buildIndex} disabled={!!busy || !overview?.totalItems} />
+          {busy === 'index' && <ActionButton label={cancelRequested ? '取消中...' : '取消'} onClick={cancelIndex} disabled={cancelRequested} variant="ghost" />}
           <ActionButton label="刷新" onClick={refreshAll} disabled={!!busy} variant="ghost" />
         </div>
       </section>
@@ -231,14 +250,14 @@ export function SmartFavoritesPage() {
       <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: '12px', alignItems: 'start' }}>
         <section style={CARD}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
-            <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600 }}>AI 分类树</div>
+            <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600 }}>智能分类树</div>
             <div style={{ display: 'flex', gap: '6px' }}>
               <TreeAction label="展开" onClick={expandAllTree} disabled={!overview?.tree.length} />
               <TreeAction label="收起" onClick={collapseAllTree} disabled={!overview?.tree.length} />
             </div>
           </div>
           <div style={{ color: '#666', fontSize: '11px', lineHeight: 1.5, marginBottom: '8px' }}>
-            未分类包含模型归入未分类、索引失败和待索引内容；失败项再次生成索引会重试。
+            分类根路径来自 B站分区；AI 只补摘要、关键词和末级主题。AI 不可用时会显示为降级索引。
           </div>
           {treeRows.length === 0 ? (
             <div style={{ color: '#666', fontSize: '12px', lineHeight: 1.6 }}>同步并生成智能索引后显示分类</div>
@@ -274,8 +293,13 @@ export function SmartFavoritesPage() {
 function mergeIndexResult(total: SmartIndexResult, batch: SmartIndexResult): void {
   total.processed += batch.processed;
   total.indexed += batch.indexed;
+  total.degraded = (total.degraded ?? 0) + (batch.degraded ?? 0);
   total.failed += batch.failed;
   total.skipped += batch.skipped;
+  if (batch.cancelled) {
+    total.cancelled = true;
+    total.stoppedReason = batch.stoppedReason;
+  }
 }
 
 function ResultSection({
@@ -523,6 +547,7 @@ function TreeRow({
 function ResultCard({ result }: { result: SmartFavoriteResult }) {
   const item = result.item;
   const videoUrl = getVideoUrl(item);
+  const badges = getSourceBadges(result.smart);
   return (
     <a
       href={videoUrl ?? undefined}
@@ -546,6 +571,25 @@ function ResultCard({ result }: { result: SmartFavoriteResult }) {
         <div style={{ color: BILI_BLUE, fontSize: '11px', marginBottom: '6px' }}>
           {(result.smart?.path ?? ['未分类']).join(' / ')}
         </div>
+        {badges.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '6px' }}>
+            {badges.map(badge => (
+              <span
+                key={badge.label}
+                style={{
+                  color: badge.color,
+                  border: `1px solid ${badge.color}`,
+                  borderRadius: '999px',
+                  padding: '1px 6px',
+                  fontSize: '10px',
+                  lineHeight: 1.5,
+                }}
+              >
+                {badge.label}
+              </span>
+            ))}
+          </div>
+        )}
         <div style={{ color: '#A0A0B0', fontSize: '12px', lineHeight: 1.5 }}>
           {result.smart?.summary || item.intro || '暂无摘要'}
         </div>
@@ -560,6 +604,34 @@ function ResultCard({ result }: { result: SmartFavoriteResult }) {
       </div>
     </a>
   );
+}
+
+function getSourceBadges(smart: SmartFavoriteResult['smart']): Array<{ label: string; color: string }> {
+  if (!smart) return [];
+  const badges: Array<{ label: string; color: string }> = [];
+  if (smart.status === 'failed') {
+    badges.push({ label: '索引失败', color: '#FF6B6B' });
+  }
+
+  const sourceLabels: Record<NonNullable<typeof smart.pathSource>, string> = {
+    bili_v2: 'B站新版分区',
+    bili_legacy: '旧分区',
+    tag_override: '标签纠偏',
+    folder: '原收藏夹',
+    uncategorized: '未分类',
+  };
+  if (smart.pathSource) {
+    badges.push({ label: sourceLabels[smart.pathSource], color: BILI_BLUE });
+  }
+  if ((smart.tagsSnapshot ?? []).length > 0) {
+    badges.push({ label: '标签补充', color: '#00D4AA' });
+  }
+  if (smart.aiStatus === 'enhanced') {
+    badges.push({ label: 'AI增强', color: BILI_PINK });
+  } else if (smart.aiStatus === 'degraded' || smart.aiStatus === 'skipped' || smart.status === 'degraded') {
+    badges.push({ label: 'AI降级', color: '#FFB347' });
+  }
+  return badges;
 }
 
 function getVideoUrl(item: SmartFavoriteResult['item']): string | null {

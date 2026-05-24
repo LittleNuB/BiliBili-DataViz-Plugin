@@ -21,6 +21,7 @@ export type RequestAction =
   | 'GET_SMART_FAVORITES_BY_PATH'
   | 'SYNC_FAVORITES'
   | 'BUILD_SMART_FAVORITE_INDEX'
+  | 'CANCEL_SMART_FAVORITE_INDEX'
   | 'SEARCH_SMART_FAVORITES';
 
 // Content Script → Service Worker

@@ -99,7 +99,18 @@ async function withExistingItemIds(items: FavoriteItem[]): Promise<FavoriteItem[
     .anyOf(items.map(item => item.itemKey))
     .toArray();
   const existingIds = new Map(existing.map(item => [item.itemKey, item.id]));
-  return items.map(item => ({ ...item, id: item.id ?? existingIds.get(item.itemKey) }));
+  const existingItems = new Map(existing.map(item => [item.itemKey, item]));
+  return items.map(item => {
+    const previous = existingItems.get(item.itemKey);
+    return {
+      ...item,
+      id: item.id ?? existingIds.get(item.itemKey),
+      tags: item.tags.length > 0 ? item.tags : (previous?.tags ?? item.tags),
+      tagsFetchedAt: item.tagsFetchedAt ?? previous?.tagsFetchedAt,
+      tagsFetchFailedAt: item.tagsFetchFailedAt ?? previous?.tagsFetchFailedAt,
+      tagsFetchError: item.tagsFetchError ?? previous?.tagsFetchError,
+    };
+  });
 }
 
 function dedupeBy<T>(items: T[], getKey: (item: T) => string): T[] {

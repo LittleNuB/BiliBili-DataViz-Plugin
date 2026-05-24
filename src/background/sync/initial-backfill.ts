@@ -12,7 +12,7 @@ import {
   setHistorySyncProgress,
   setLastSyncTime,
 } from '../storage/config-store';
-import type { HistoryCursorItem } from '../../shared/types/video-info';
+import type { HistoryCursorItem, VideoInfo } from '../../shared/types/video-info';
 import { MAX_BACKFILL_PAGES } from '../../shared/constants';
 import { getHistoryBvid, getHistoryDeviceType, toWatchHistoryRecord } from './watch-history-mapper';
 import type { HistorySyncMode } from '../../shared/types/messages';
@@ -143,7 +143,7 @@ async function runHistorySyncUnlocked(
       result.currentTask = `第 ${result.fetchedPages} 页：正在补全 ${newItems.length} 条视频信息`;
       await writeProgress(result, startedAt, true);
       const bvids = [...new Set(newItems.map(getHistoryBvid).filter(Boolean))];
-      let videoInfo: Map<string, any>;
+      let videoInfo: Map<string, VideoInfo>;
       try {
         if (signal.aborted || await getHistorySyncCancelRequested()) {
           result.stoppedReason = 'cancelled';

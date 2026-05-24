@@ -1,6 +1,7 @@
 export const API_BASE = 'https://api.bilibili.com';
 export const HISTORY_ENDPOINT = '/x/web-interface/history/cursor';
 export const VIDEO_INFO_ENDPOINT = '/x/web-interface/view';
+export const VIDEO_TAGS_ENDPOINT = '/x/tag/archive/tags';
 export const NAV_ENDPOINT = '/x/web-interface/nav';
 export const FAVORITE_FOLDERS_ENDPOINT = '/x/v3/fav/folder/created/list-all';
 export const FAVORITE_RESOURCES_ENDPOINT = '/x/v3/fav/resource/list';

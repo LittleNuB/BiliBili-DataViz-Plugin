@@ -24,7 +24,7 @@ import {
 import { getDeviceData } from '../analytics/device';
 import { abortCurrentHistorySync, hasActiveHistorySyncAbortScope } from '../sync/sync-control';
 import { syncFavorites } from '../favorites/sync';
-import { buildSmartFavoriteIndex, getSmartFavoriteOverview, getSmartFavoritesByPath, searchSmartFavorites } from '../favorites/smart';
+import { buildSmartFavoriteIndex, cancelSmartFavoriteIndex, getSmartFavoriteOverview, getSmartFavoritesByPath, searchSmartFavorites } from '../favorites/smart';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
 
@@ -214,6 +214,8 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
         ) as T,
       };
     }
+    case 'CANCEL_SMART_FAVORITE_INDEX':
+      return { success: true, data: { cancelled: cancelSmartFavoriteIndex() } as T };
     case 'SEARCH_SMART_FAVORITES': {
       const query = String(request.params?.query ?? '');
       const limit = Number(request.params?.limit);

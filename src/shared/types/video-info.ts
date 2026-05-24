@@ -8,7 +8,10 @@ export interface VideoInfo {
     name: string;
     face: string;
   };
+  tid?: number;
   tname: string;
+  tid_v2?: number;
+  tname_v2?: string;
   tags: string[];
   pic: string;
   stat: {

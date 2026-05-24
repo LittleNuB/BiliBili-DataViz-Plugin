@@ -67,7 +67,7 @@ export function PreferencePage() {
   const wordcloudOption = {
     tooltip: { show: true },
     series: [{
-      type: 'wordCloud' as any,
+      type: 'wordCloud',
       shape: 'circle',
       sizeRange: [12, 40],
       rotationRange: [-45, 45],
