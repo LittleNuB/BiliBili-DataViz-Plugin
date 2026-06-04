@@ -167,10 +167,12 @@ export async function generateVarietyBillItems(): Promise<DynamicBillGenerateRes
     columnItemCounts: {
       afk_update: 0,
       variety: storedItems.length,
+      buried_follow: 0,
     },
     columnEligibleCounts: {
       afk_update: 0,
       variety: candidates.length,
+      buried_follow: 0,
     },
     items: storedItems,
     thresholds,
