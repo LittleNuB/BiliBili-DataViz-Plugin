@@ -1,21 +1,24 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import type {
   DynamicBillColumn,
+  DynamicBillFilterPreference,
   DynamicBillGenerateResult,
   DynamicBillEvidence,
   DynamicBillItem,
   DynamicBillOverview,
   DynamicBillStatus,
+  DynamicBillStatusFilter,
   DynamicSyncResult,
   DynamicSyncStatus,
 } from "../../../src/shared/types/dynamic-bill";
 import { requestSW } from "../../utils/messaging";
 
 const STATUS_FILTERS: Array<{
-  key: DynamicBillStatus;
+  key: DynamicBillStatusFilter;
   label: string;
   detail: string;
 }> = [
+  { key: "active", label: "待查看", detail: "优先展示未打开和已打开，不包含已消费或已处理" },
   { key: "unopened", label: "未打开", detail: "尚未从动态账单打开新投稿" },
   { key: "opened", label: "已打开", detail: "打开过，但尚未确认有效观看" },
   { key: "consumed", label: "已消费", detail: "由观看历史或播放器事件确认" },
@@ -53,15 +56,16 @@ const BILL_COLUMNS = [
 type BillColumnKey = (typeof BILL_COLUMNS)[number]["key"];
 
 export function DynamicBillPage() {
-  const [status, setStatus] = useState<DynamicBillStatus>("unopened");
+  const [statusFilter, setStatusFilter] = useState<DynamicBillStatusFilter>("active");
   const [overview, setOverview] = useState<DynamicBillOverview | null>(null);
   const [items, setItems] = useState<DynamicBillItem[]>([]);
   const [selectedBillKey, setSelectedBillKey] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [processingBillKey, setProcessingBillKey] = useState("");
   const [notice, setNotice] = useState("");
   const activeStatus =
-    STATUS_FILTERS.find((item) => item.key === status) ?? STATUS_FILTERS[0];
+    STATUS_FILTERS.find((item) => item.key === statusFilter) ?? STATUS_FILTERS[0];
   const syncState = overview?.syncState;
   const isSyncing = syncing || syncState?.status === "syncing";
   const overviewNotice = overview
@@ -80,8 +84,8 @@ export function DynamicBillPage() {
     [items],
   );
   const visibleItems = useMemo(
-    () => items.filter((item) => item.status === status),
-    [items, status],
+    () => items.filter((item) => matchesStatusFilter(item, statusFilter)),
+    [items, statusFilter],
   );
   const selectedItem =
     visibleItems.find((item) => item.billKey === selectedBillKey) ??
@@ -90,6 +94,9 @@ export function DynamicBillPage() {
   const statusCounts = useMemo(() => countByStatus(items), [items]);
 
   useEffect(() => {
+    refreshFilterPreference().catch((error) => {
+      setNotice(`读取筛选偏好失败：${describeError(error)}`);
+    });
     refreshOverview().catch((error) => {
       setNotice(`读取动态账单状态失败：${describeError(error)}`);
     });
@@ -98,6 +105,12 @@ export function DynamicBillPage() {
     });
   }, []);
 
+  useEffect(() => {
+    setSelectedBillKey((current) =>
+      chooseSelectedBillKey(current, items, statusFilter),
+    );
+  }, [items, statusFilter]);
+
   async function refreshOverview() {
     const next = await requestSW<DynamicBillOverview>(
       "GET_DYNAMIC_BILL_OVERVIEW",
@@ -105,13 +118,18 @@ export function DynamicBillPage() {
     setOverview(next);
   }
 
+  async function refreshFilterPreference() {
+    const preference = await requestSW<DynamicBillFilterPreference>(
+      "GET_DYNAMIC_BILL_FILTER",
+    );
+    setStatusFilter(preference.status);
+  }
+
   async function refreshBillItems() {
     const next = await requestSW<DynamicBillItem[]>("GET_DYNAMIC_BILL_ITEMS");
     setItems(next);
     setSelectedBillKey((current) =>
-      current && next.some((item) => item.billKey === current)
-        ? current
-        : next[0]?.billKey ?? "",
+      chooseSelectedBillKey(current, next, statusFilter),
     );
   }
 
@@ -122,11 +140,55 @@ export function DynamicBillPage() {
     setOverview(result.overview);
     setItems(result.items);
     setSelectedBillKey((current) =>
-      current && result.items.some((item) => item.billKey === current)
-        ? current
-        : result.items[0]?.billKey ?? "",
+      chooseSelectedBillKey(current, result.items, statusFilter),
     );
     return result;
+  }
+
+  async function handleStatusFilterChange(nextStatus: DynamicBillStatusFilter) {
+    setStatusFilter(nextStatus);
+    setSelectedBillKey((current) =>
+      chooseSelectedBillKey(current, items, nextStatus),
+    );
+    try {
+      await requestSW<DynamicBillFilterPreference>("UPDATE_DYNAMIC_BILL_FILTER", {
+        status: nextStatus,
+      });
+    } catch (error) {
+      setNotice(`保存筛选偏好失败：${describeError(error)}`);
+    }
+  }
+
+  async function handleOpenVideo(item: DynamicBillItem) {
+    setProcessingBillKey(item.billKey);
+    setNotice("");
+    try {
+      await requestSW<DynamicBillItem>("OPEN_DYNAMIC_BILL_VIDEO", {
+        billKey: item.billKey,
+      });
+      await refreshBillItems();
+      setNotice(`已打开《${item.evidence.newVideo.title || item.evidence.newVideo.bvid}》，账单状态推进为已打开。`);
+    } catch (error) {
+      setNotice(`打开新视频失败：${describeError(error)}`);
+    } finally {
+      setProcessingBillKey("");
+    }
+  }
+
+  async function handleMarkProcessed(item: DynamicBillItem) {
+    setProcessingBillKey(item.billKey);
+    setNotice("");
+    try {
+      await requestSW<DynamicBillItem>("MARK_DYNAMIC_BILL_ITEM_PROCESSED", {
+        billKey: item.billKey,
+      });
+      await refreshBillItems();
+      setNotice(`已将「${item.creatorName}」标记为已处理；该动作不等同于已消费。`);
+    } catch (error) {
+      setNotice(`标记已处理失败：${describeError(error)}`);
+    } finally {
+      setProcessingBillKey("");
+    }
   }
 
   async function handleGenerate() {
@@ -240,7 +302,7 @@ export function DynamicBillPage() {
       >
         <strong>{notice || overviewNotice}</strong>
         <span>
-          本切片启用三类本地证据栏目；状态推进和筛选持久化留给 #8，负反馈累计、topic 降低和取关提示留给 #9 闭环。
+          本切片启用三类本地证据栏目；状态只会从未打开向已打开、已消费、已处理推进。负反馈累计、topic 降低和取关提示留给 #9 闭环。
         </span>
       </section>
 
@@ -249,8 +311,10 @@ export function DynamicBillPage() {
           <button
             key={item.key}
             type="button"
-            className={status === item.key ? "is-selected" : ""}
-            onClick={() => setStatus(item.key)}
+            className={statusFilter === item.key ? "is-selected" : ""}
+            aria-pressed={statusFilter === item.key}
+            data-testid={`dynamic-bill-filter-${item.key}`}
+            onClick={() => handleStatusFilterChange(item.key)}
           >
             <span>{item.label}</span>
             <strong>{statusCounts[item.key] ?? 0}</strong>
@@ -284,7 +348,12 @@ export function DynamicBillPage() {
                     <h3>{column.title}</h3>
                     <p>{column.detail}</p>
                   </div>
-                  <span>{columnCount}</span>
+                  <span
+                    title={`${activeStatus.label} ${columnItems.length} / 全部 ${columnCount}`}
+                    data-testid={`dynamic-bill-column-count-${column.key}`}
+                  >
+                    {columnItems.length}/{columnCount}
+                  </span>
                 </div>
                 {columnItems.length > 0 ? (
                   <div className="dynamic-bill-item-list">
@@ -297,6 +366,7 @@ export function DynamicBillPage() {
                             : ""
                         }`}
                         key={item.billKey}
+                        data-testid="dynamic-bill-item-card"
                         onClick={() => setSelectedBillKey(item.billKey)}
                       >
                         <span className="dynamic-bill-card-meta">
@@ -325,7 +395,12 @@ export function DynamicBillPage() {
 
         <aside className="dynamic-bill-detail" aria-label="账单项详情">
           {selectedItem ? (
-            <BillItemDetail item={selectedItem} />
+            <BillItemDetail
+              item={selectedItem}
+              busy={processingBillKey === selectedItem.billKey}
+              onMarkProcessed={handleMarkProcessed}
+              onOpenVideo={handleOpenVideo}
+            />
           ) : (
             <EmptyDetail status={activeStatus} />
           )}
@@ -335,9 +410,20 @@ export function DynamicBillPage() {
   );
 }
 
-function BillItemDetail({ item }: { item: DynamicBillItem }) {
+function BillItemDetail({
+  busy,
+  item,
+  onMarkProcessed,
+  onOpenVideo,
+}: {
+  busy: boolean;
+  item: DynamicBillItem;
+  onMarkProcessed: (item: DynamicBillItem) => void;
+  onOpenVideo: (item: DynamicBillItem) => void;
+}) {
   const evidence = item.evidence;
   const isBuriedFollow = evidence.kind === "buried_follow";
+  const isProcessed = item.status === "processed";
   return (
     <>
       <span className="dynamic-bill-kicker">
@@ -347,6 +433,10 @@ function BillItemDetail({ item }: { item: DynamicBillItem }) {
       <p>
         新投稿：{evidence.newVideo.title || evidence.newVideo.bvid}
       </p>
+      <div className="dynamic-bill-status-copy">
+        <strong>处理状态</strong>
+        <span>{statusFlowCopy(item)}</span>
+      </div>
       <div className="dynamic-bill-status-copy">
         <strong>关注关系证据</strong>
         <span>{followEvidenceCopy(evidence)}</span>
@@ -408,9 +498,23 @@ function BillItemDetail({ item }: { item: DynamicBillItem }) {
         </span>
       </div>
       <div className="dynamic-bill-action-grid">
-        <a href={videoUrl(evidence.newVideo.bvid)} target="_blank" rel="noreferrer">
+        <button
+          type="button"
+          className="is-primary"
+          disabled={busy}
+          data-testid="dynamic-bill-open-video"
+          onClick={() => onOpenVideo(item)}
+        >
           打开新视频
-        </a>
+        </button>
+        <button
+          type="button"
+          disabled={busy || isProcessed}
+          data-testid="dynamic-bill-mark-processed"
+          onClick={() => onMarkProcessed(item)}
+        >
+          {isProcessed ? "已处理" : "标记已处理"}
+        </button>
         <a href={spaceUrl(item.creatorMid)} target="_blank" rel="noreferrer">
           打开 UP 主页
         </a>
@@ -422,7 +526,7 @@ function BillItemDetail({ item }: { item: DynamicBillItem }) {
 function EmptyDetail({
   status,
 }: {
-  status: { key: DynamicBillStatus; label: string; detail: string };
+  status: { key: DynamicBillStatusFilter; label: string; detail: string };
 }) {
   return (
     <>
@@ -631,10 +735,31 @@ function interestKindLabel(kind: "category" | "tag"): string {
   return kind === "category" ? "分区" : "标签";
 }
 
-function countByStatus(items: DynamicBillItem[]): Record<DynamicBillStatus, number> {
+function matchesStatusFilter(item: DynamicBillItem, statusFilter: DynamicBillStatusFilter): boolean {
+  if (statusFilter === "active") {
+    return item.status === "unopened" || item.status === "opened";
+  }
+  return item.status === statusFilter;
+}
+
+function chooseSelectedBillKey(
+  current: string,
+  items: DynamicBillItem[],
+  statusFilter: DynamicBillStatusFilter,
+): string {
+  const visible = items.filter((item) => matchesStatusFilter(item, statusFilter));
+  return current && visible.some((item) => item.billKey === current)
+    ? current
+    : visible[0]?.billKey ?? "";
+}
+
+function countByStatus(items: DynamicBillItem[]): Record<DynamicBillStatusFilter, number> {
+  const unopened = items.filter((item) => item.status === "unopened").length;
+  const opened = items.filter((item) => item.status === "opened").length;
   return {
-    unopened: items.filter((item) => item.status === "unopened").length,
-    opened: items.filter((item) => item.status === "opened").length,
+    active: unopened + opened,
+    unopened,
+    opened,
     consumed: items.filter((item) => item.status === "consumed").length,
     processed: items.filter((item) => item.status === "processed").length,
   };
@@ -661,8 +786,13 @@ function statusLabel(status: DynamicBillStatus): string {
   return STATUS_FILTERS.find((item) => item.key === status)?.label ?? "未打开";
 }
 
-function videoUrl(bvid: string): string {
-  return `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`;
+function statusFlowCopy(item: DynamicBillItem): string {
+  const events = [
+    item.openedAt ? `打开于 ${formatTime(item.openedAt)}` : "尚未从动态账单打开",
+    item.consumedAt ? `消费确认于 ${formatTime(item.consumedAt)}` : "尚未确认有效观看",
+    item.processedAt ? `处理于 ${formatTime(item.processedAt)}` : "尚未手动处理",
+  ];
+  return `${statusLabel(item.status)}：${events.join("；")}。`;
 }
 
 function spaceUrl(mid: number): string {
