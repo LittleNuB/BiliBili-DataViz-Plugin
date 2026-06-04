@@ -18,4 +18,4 @@ if (root) {
   render(<App />, root);
 }
 
-console.log('[BiliViz] Dashboard loaded');
+console.log('[Bili-Bill] Dashboard loaded');

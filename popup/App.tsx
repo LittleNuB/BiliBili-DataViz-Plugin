@@ -89,15 +89,19 @@ export function App() {
   return (
     <div style={{ padding: '12px 0' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 12px', gap: '8px' }}>
-        <h1 style={{
-          fontSize: '16px',
-          fontWeight: 700,
-          color: '#FB7299',
-          textAlign: 'center',
-          margin: 0,
-        }}>
-          B站消费数据中心
-        </h1>
+        <div style={{ textAlign: 'center' }}>
+          <h1 style={{
+            fontSize: '16px',
+            fontWeight: 700,
+            color: '#FB7299',
+            margin: 0,
+          }}>
+            Bili-Bill
+          </h1>
+          <p style={{ margin: '2px 0 0', color: '#9090A0', fontSize: '10px' }}>
+            个人内容账单
+          </p>
+        </div>
         <button
           onClick={() => fetchStats(true)}
           disabled={loading.value}
@@ -159,6 +163,7 @@ export function App() {
           </button>
         )}
       </div>
+      <OpenDashboard />
 
       {loading.value && (
         <div style={{ textAlign: 'center', padding: '40px', color: '#9090A0' }}>
@@ -313,7 +318,6 @@ export function App() {
             B站历史进度为跨设备估算，本机 PC 播放为实测增强
           </p>
           <QuickStatsPanel />
-          <OpenDashboard />
         </>
       )}
 
