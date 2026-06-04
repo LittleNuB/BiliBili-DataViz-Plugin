@@ -1,16 +1,21 @@
 import { DYNAMIC_UPDATE_WINDOW_DAYS } from '../../shared/constants';
 import type {
+  DynamicBillFilterPreference,
   DynamicBillColumn,
   DynamicBillItem,
   DynamicBillOverview,
   DynamicBillStatus,
+  DynamicBillStatusFilter,
   DynamicSyncState,
   FollowedCreator,
   FollowedVideoUpdate,
 } from '../../shared/types/dynamic-bill';
+import type { WatchHistoryRecord } from '../../shared/types/watch-event';
+import { DYNAMIC_BILL_STRATEGY } from '../dynamic-bill/strategy';
 import { db } from './db';
 
 const DYNAMIC_SYNC_STATE_KEY = 'dynamicBillSyncState';
+const DYNAMIC_BILL_FILTER_KEY = 'dynamicBillFilterPreference';
 const DYNAMIC_SYNC_STALE_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_SYNC_STATE: DynamicSyncState = {
   status: 'idle',
@@ -18,6 +23,10 @@ const DEFAULT_SYNC_STATE: DynamicSyncState = {
   lastStartedAt: 0,
   lastFinishedAt: 0,
   lastSuccessAt: 0,
+};
+const DEFAULT_FILTER_PREFERENCE: DynamicBillFilterPreference = {
+  status: 'active',
+  updatedAt: 0,
 };
 
 export async function replaceFollowedCreatorSnapshot(creators: FollowedCreator[], syncedAt: number): Promise<number> {
@@ -125,6 +134,75 @@ export async function getDynamicBillItems(options: {
   });
 }
 
+export async function getDynamicBillFilterPreference(): Promise<DynamicBillFilterPreference> {
+  const result = await chrome.storage.local.get(DYNAMIC_BILL_FILTER_KEY);
+  const stored = result[DYNAMIC_BILL_FILTER_KEY] as Partial<DynamicBillFilterPreference> | undefined;
+  if (!stored || !isDynamicBillStatusFilter(stored.status)) {
+    return DEFAULT_FILTER_PREFERENCE;
+  }
+
+  return {
+    status: stored.status,
+    updatedAt: normalizeTimestamp(stored.updatedAt),
+  };
+}
+
+export async function setDynamicBillFilterPreference(
+  status: DynamicBillStatusFilter,
+): Promise<DynamicBillFilterPreference> {
+  const preference: DynamicBillFilterPreference = {
+    status,
+    updatedAt: Date.now(),
+  };
+  await chrome.storage.local.set({ [DYNAMIC_BILL_FILTER_KEY]: preference });
+  return preference;
+}
+
+export async function markDynamicBillItemOpened(billKey: string, openedAt = Date.now()): Promise<DynamicBillItem | null> {
+  const item = await db.dynamicBillItems.where('billKey').equals(billKey).first();
+  if (!item) return null;
+
+  await advanceDynamicBillItemsByBvid(item.evidence.newVideo.bvid, 'opened', openedAt);
+  return (await db.dynamicBillItems.where('billKey').equals(billKey).first()) ?? item;
+}
+
+export async function markDynamicBillItemProcessed(billKey: string, processedAt = Date.now()): Promise<DynamicBillItem | null> {
+  const item = await db.dynamicBillItems.where('billKey').equals(billKey).first();
+  if (!item) return null;
+
+  const patch = buildStatusPatch(item, 'processed', processedAt);
+  if (!patch || item.id === undefined) return item;
+
+  await db.dynamicBillItems.update(item.id, patch);
+  return {
+    ...item,
+    ...patch,
+  };
+}
+
+export async function markDynamicBillItemsConsumedByBvid(bvid: string, consumedAt = Date.now()): Promise<number> {
+  return advanceDynamicBillItemsByBvid(bvid, 'consumed', consumedAt);
+}
+
+export async function markDynamicBillItemsConsumedByHistoryRecords(
+  records: WatchHistoryRecord[],
+  consumedAt = Date.now(),
+): Promise<number> {
+  const bvids = new Set(
+    records
+      .filter(isEffectiveHistoryRecord)
+      .map(record => record.bvid)
+      .filter(Boolean),
+  );
+  if (bvids.size === 0) return 0;
+
+  let updated = 0;
+  for (const bvid of bvids) {
+    updated += await markDynamicBillItemsConsumedByBvid(bvid, consumedAt);
+  }
+  return updated;
+}
+
 export async function getDynamicBillOverview(windowDays = DYNAMIC_UPDATE_WINDOW_DAYS): Promise<DynamicBillOverview> {
   const [syncState, creators, recentUpdates] = await Promise.all([
     getDynamicSyncState(),
@@ -189,6 +267,78 @@ function mergeExistingDynamicBillState(
     consumedAt: existing.consumedAt,
     processedAt: existing.processedAt,
   };
+}
+
+async function advanceDynamicBillItemsByBvid(
+  bvid: string,
+  status: DynamicBillStatus,
+  timestamp: number,
+): Promise<number> {
+  if (!bvid) return 0;
+
+  let updated = 0;
+  await db.transaction('rw', db.dynamicBillItems, async () => {
+    const items = await db.dynamicBillItems.toArray();
+    const nextItems: DynamicBillItem[] = [];
+
+    for (const item of items) {
+      if (item.evidence.newVideo.bvid !== bvid) continue;
+      const patch = buildStatusPatch(item, status, timestamp);
+      if (!patch) continue;
+      nextItems.push({ ...item, ...patch });
+      updated++;
+    }
+
+    if (nextItems.length > 0) {
+      await db.dynamicBillItems.bulkPut(nextItems);
+    }
+  });
+
+  return updated;
+}
+
+function buildStatusPatch(
+  item: DynamicBillItem,
+  targetStatus: DynamicBillStatus,
+  timestamp: number,
+): Partial<DynamicBillItem> | null {
+  if (statusOrder(item.status) > statusOrder(targetStatus)) return null;
+
+  const patch: Partial<DynamicBillItem> = {};
+  if (statusOrder(item.status) < statusOrder(targetStatus)) {
+    patch.status = targetStatus;
+  }
+
+  if (targetStatus === 'opened' && !item.openedAt) {
+    patch.openedAt = timestamp;
+  }
+  if (targetStatus === 'consumed' && !item.consumedAt) {
+    patch.consumedAt = timestamp;
+  }
+  if (targetStatus === 'processed' && !item.processedAt) {
+    patch.processedAt = timestamp;
+  }
+
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
+function isEffectiveHistoryRecord(record: WatchHistoryRecord): boolean {
+  return record.isFavorite
+    || record.actualCompletion >= DYNAMIC_BILL_STRATEGY.positiveCompletionRate
+    || record.progress >= DYNAMIC_BILL_STRATEGY.minPositiveWatchSeconds;
+}
+
+function isDynamicBillStatusFilter(status: unknown): status is DynamicBillStatusFilter {
+  return status === 'active'
+    || status === 'unopened'
+    || status === 'opened'
+    || status === 'consumed'
+    || status === 'processed';
+}
+
+function normalizeTimestamp(value: unknown): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
 }
 
 function statusOrder(status: DynamicBillStatus): number {

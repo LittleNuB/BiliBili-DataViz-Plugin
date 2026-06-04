@@ -36,6 +36,7 @@ export interface FollowedVideoUpdate {
 
 export type DynamicBillColumn = 'afk_update' | 'variety' | 'buried_follow';
 export type DynamicBillStatus = 'unopened' | 'opened' | 'consumed' | 'processed';
+export type DynamicBillStatusFilter = 'active' | DynamicBillStatus;
 export type DynamicBillInterestKind = 'category' | 'tag';
 export type DynamicBillFollowMemorySignal = 'long_follow' | 'special_follow' | 'weak_watch';
 
@@ -60,6 +61,11 @@ export interface DynamicBillOverview {
   recentVideoUpdateCount: number;
   lastVideoDynamicTime: number;
   updateWindowDays: number;
+}
+
+export interface DynamicBillFilterPreference {
+  status: DynamicBillStatusFilter;
+  updatedAt: number;
 }
 
 export interface DynamicSyncResult {

@@ -18,6 +18,7 @@ import { getHistoryBvid, getHistoryDeviceType, toWatchHistoryRecord } from './wa
 import type { HistorySyncMode } from '../../shared/types/messages';
 import { beginHistorySyncAbortScope, endHistorySyncAbortScope } from './sync-control';
 import { abortableDelay } from '../utils/abortable-delay';
+import { markDynamicBillItemsConsumedByHistoryRecords } from '../storage/dynamic-bill-repo';
 
 export interface BackfillResult {
   mode: HistorySyncMode;
@@ -168,6 +169,7 @@ async function runHistorySyncUnlocked(
       await writeProgress(result, startedAt, true);
       const records = newItems.map(item => toWatchHistoryRecord(item, videoInfo.get(getHistoryBvid(item))));
       await bulkInsert(records);
+      await markDynamicBillItemsConsumedByHistoryRecords(records);
       result.insertedCount += records.length;
     }
 

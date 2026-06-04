@@ -715,6 +715,17 @@ button {
   background: rgba(0, 161, 214, 0.16);
 }
 
+.dynamic-bill-action-grid button.is-primary {
+  color: #FFFFFF;
+  border-color: rgba(0, 161, 214, 0.42);
+  background: rgba(0, 161, 214, 0.16);
+}
+
+.dynamic-bill-action-grid button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .dynamic-bill-fact-list {
   display: grid;
   gap: 7px;
