@@ -1,12 +1,13 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import type {
+  DynamicBillGenerateResult,
+  DynamicBillItem,
   DynamicBillOverview,
+  DynamicBillStatus,
   DynamicSyncResult,
   DynamicSyncStatus,
 } from "../../../src/shared/types/dynamic-bill";
 import { requestSW } from "../../utils/messaging";
-
-type DynamicBillStatus = "unopened" | "opened" | "consumed" | "processed";
 
 const STATUS_FILTERS: Array<{
   key: DynamicBillStatus;
@@ -25,26 +26,35 @@ const STATUS_FILTERS: Array<{
 
 const BILL_COLUMNS = [
   {
+    key: "afk_update",
     title: "久违更新",
-    detail: "过去有正反馈、近期冷却的已关注 UP 新投稿。",
+    detail: "长期窗口有正反馈、近期冷却、最近 7 天有新投稿的已关注 UP。",
     accent: "pink",
+    enabled: true,
   },
   {
+    key: "variety",
     title: "换换口味",
-    detail: "长期兴趣中近期占比下降的分区或标签新投稿。",
+    detail: "后续切片接入；本 PR 不生成该栏目。",
     accent: "blue",
+    enabled: false,
   },
   {
+    key: "buried_follow",
     title: "被淹没的关注",
-    detail: "关注关系稳定、近期几乎没有消费的 UP 新投稿。",
+    detail: "后续切片接入；本 PR 不生成该栏目。",
     accent: "mint",
+    enabled: false,
   },
 ] as const;
 
 export function DynamicBillPage() {
   const [status, setStatus] = useState<DynamicBillStatus>("unopened");
   const [overview, setOverview] = useState<DynamicBillOverview | null>(null);
+  const [items, setItems] = useState<DynamicBillItem[]>([]);
+  const [selectedBillKey, setSelectedBillKey] = useState("");
   const [syncing, setSyncing] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [notice, setNotice] = useState("");
   const activeStatus =
     STATUS_FILTERS.find((item) => item.key === status) ?? STATUS_FILTERS[0];
@@ -53,11 +63,26 @@ export function DynamicBillPage() {
   const overviewNotice = overview
     ? describeOverview(overview)
     : "正在读取动态账单同步状态。";
-  const emptyCopy = getEmptyCopy(overview, activeStatus.label);
+  const afkItems = useMemo(
+    () => items.filter((item) => item.column === "afk_update"),
+    [items],
+  );
+  const visibleAfkItems = useMemo(
+    () => afkItems.filter((item) => item.status === status),
+    [afkItems, status],
+  );
+  const selectedItem =
+    visibleAfkItems.find((item) => item.billKey === selectedBillKey) ??
+    visibleAfkItems[0] ??
+    null;
+  const statusCounts = useMemo(() => countByStatus(afkItems), [afkItems]);
 
   useEffect(() => {
     refreshOverview().catch((error) => {
       setNotice(`读取动态账单状态失败：${describeError(error)}`);
+    });
+    refreshBillItems().catch((error) => {
+      setNotice(`读取久违更新账单失败：${describeError(error)}`);
     });
   }, []);
 
@@ -68,17 +93,69 @@ export function DynamicBillPage() {
     setOverview(next);
   }
 
+  async function refreshBillItems() {
+    const next = await requestSW<DynamicBillItem[]>("GET_DYNAMIC_BILL_ITEMS");
+    setItems(next);
+    setSelectedBillKey((current) =>
+      current && next.some((item) => item.billKey === current)
+        ? current
+        : next[0]?.billKey ?? "",
+    );
+  }
+
+  async function generateLocalBill(): Promise<DynamicBillGenerateResult> {
+    const result = await requestSW<DynamicBillGenerateResult>(
+      "GENERATE_DYNAMIC_BILL",
+    );
+    setOverview(result.overview);
+    setItems(result.items);
+    setSelectedBillKey((current) =>
+      current && result.items.some((item) => item.billKey === current)
+        ? current
+        : result.items[0]?.billKey ?? "",
+    );
+    return result;
+  }
+
+  async function handleGenerate() {
+    setGenerating(true);
+    setNotice("");
+    try {
+      const result = await generateLocalBill();
+      setNotice(describeGenerateResult(result));
+    } catch (error) {
+      setNotice(`生成久违更新账单失败：${describeError(error)}`);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
   async function handleSync() {
     setSyncing(true);
     setNotice("");
     try {
       const result = await requestSW<DynamicSyncResult>("SYNC_DYNAMIC_UPDATES");
       setOverview(result.overview);
-      setNotice(describeSyncResult(result));
+      let nextNotice = describeSyncResult(result);
+      if (result.status === "success") {
+        try {
+          setGenerating(true);
+          const generated = await generateLocalBill();
+          nextNotice = `${nextNotice} ${describeGenerateResult(generated)}`;
+        } catch (generateError) {
+          await refreshBillItems().catch(() => {});
+          nextNotice = `${nextNotice} 但生成久违更新账单失败：${describeError(generateError)}`;
+        }
+      } else {
+        await refreshBillItems().catch(() => {});
+      }
+      setNotice(nextNotice);
     } catch (error) {
       setNotice(`动态同步请求失败：${describeError(error)}`);
       await refreshOverview().catch(() => {});
+      await refreshBillItems().catch(() => {});
     } finally {
+      setGenerating(false);
       setSyncing(false);
     }
   }
@@ -90,23 +167,32 @@ export function DynamicBillPage() {
           <span className="dynamic-bill-kicker">消费前 / 已关注视频投稿</span>
           <h2>动态账单</h2>
           <p>
-            这里将作为 Bili-Bill
-            的一级入口，用本地规则和必要解释帮助用户看见被近期口味覆盖的长期关注。
+            久违更新用本地观看历史、关注快照和最近投稿池生成，不接 AI，也不上传完整历史或完整关注列表。
           </p>
         </div>
         <div className="dynamic-bill-scope">
-          <strong>同步范围</strong>
+          <strong>本地证据范围</strong>
           <span>
-            只同步已关注 UP 最近 7 天的视频投稿动态；非视频动态不会进入账单池。
+            同步已关注 UP 最近 7 天视频投稿；生成时要求长期正反馈、近期冷却，并排除近期已看过的同一新视频。
           </span>
-          <button
-            type="button"
-            className="dynamic-bill-sync-button"
-            disabled={isSyncing}
-            onClick={handleSync}
-          >
-            {isSyncing ? "同步中..." : "同步关注动态"}
-          </button>
+          <div className="dynamic-bill-scope-actions">
+            <button
+              type="button"
+              className="dynamic-bill-sync-button"
+              disabled={isSyncing || generating}
+              onClick={handleSync}
+            >
+              {isSyncing ? "同步中..." : "同步并刷新"}
+            </button>
+            <button
+              type="button"
+              className="dynamic-bill-sync-button is-secondary"
+              disabled={isSyncing || generating}
+              onClick={handleGenerate}
+            >
+              {generating ? "生成中..." : "生成本地账单"}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -122,7 +208,7 @@ export function DynamicBillPage() {
         <StatusMetric
           label="已关注 UP"
           value={String(overview?.activeFollowedCreatorCount ?? 0)}
-          detail="关注快照写入本地仓库"
+          detail={`关注时间已知 ${overview?.followAgeKnownCount ?? 0} / 未知 ${overview?.followAgeUnknownCount ?? 0}`}
         />
         <StatusMetric
           label="最近投稿"
@@ -130,9 +216,9 @@ export function DynamicBillPage() {
           detail={`最近 ${overview?.updateWindowDays ?? 7} 天视频投稿池`}
         />
         <StatusMetric
-          label="关注时间"
-          value={`${overview?.followAgeKnownCount ?? 0} / ${overview?.followAgeUnknownCount ?? 0}`}
-          detail="已知 / 未知；未知时不展示虚假时长"
+          label="久违更新"
+          value={String(afkItems.length)}
+          detail="本地规则生成的可展示账单项"
         />
       </section>
 
@@ -142,7 +228,7 @@ export function DynamicBillPage() {
       >
         <strong>{notice || overviewNotice}</strong>
         <span>
-          本任务只同步数据池，不生成久违更新、换换口味或被淹没的关注规则账单。
+          本切片只启用久违更新栏目；换换口味、被淹没的关注、状态推进、反馈和取关提示均未接入。
         </span>
       </section>
 
@@ -155,64 +241,159 @@ export function DynamicBillPage() {
             onClick={() => setStatus(item.key)}
           >
             <span>{item.label}</span>
-            <strong>0</strong>
+            <strong>{statusCounts[item.key] ?? 0}</strong>
           </button>
         ))}
       </section>
 
       <section className="dynamic-bill-layout">
         <div className="dynamic-bill-board" aria-label="动态账单栏目">
-          {BILL_COLUMNS.map((column) => (
-            <article
-              className={`dynamic-bill-column tone-${column.accent}`}
-              key={column.title}
-            >
-              <div className="dynamic-bill-column-head">
-                <div>
-                  <h3>{column.title}</h3>
-                  <p>{column.detail}</p>
+          {BILL_COLUMNS.map((column) => {
+            const columnItems =
+              column.key === "afk_update" ? visibleAfkItems : [];
+            const columnCount = column.key === "afk_update" ? afkItems.length : 0;
+            const emptyCopy = getColumnEmptyCopy(
+              column.enabled,
+              overview,
+              activeStatus.label,
+              afkItems.length,
+            );
+
+            return (
+              <article
+                className={`dynamic-bill-column tone-${column.accent}`}
+                key={column.key}
+              >
+                <div className="dynamic-bill-column-head">
+                  <div>
+                    <h3>{column.title}</h3>
+                    <p>{column.detail}</p>
+                  </div>
+                  <span>{columnCount}</span>
                 </div>
-                <span>0</span>
-              </div>
-              <div className="dynamic-bill-empty">
-                <strong>{emptyCopy.title}</strong>
-                <p>{emptyCopy.detail}</p>
-              </div>
-            </article>
-          ))}
+                {columnItems.length > 0 ? (
+                  <div className="dynamic-bill-item-list">
+                    {columnItems.map((item) => (
+                      <button
+                        type="button"
+                        className={`dynamic-bill-item-card ${
+                          selectedItem?.billKey === item.billKey
+                            ? "is-selected"
+                            : ""
+                        }`}
+                        key={item.billKey}
+                        onClick={() => setSelectedBillKey(item.billKey)}
+                      >
+                        <span className="dynamic-bill-card-meta">
+                          #{item.localRank} · {statusLabel(item.status)}
+                        </span>
+                        <strong>{item.creatorName}</strong>
+                        <span className="dynamic-bill-card-title">
+                          {item.evidence.newVideo.title || item.evidence.newVideo.bvid}
+                        </span>
+                        <span className="dynamic-bill-card-fact">
+                          长期正反馈 {item.evidence.longWindow.positiveWatchCount} 次 · 近期正反馈 {item.evidence.recentWindow.positiveWatchCount} 次
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="dynamic-bill-empty">
+                    <strong>{emptyCopy.title}</strong>
+                    <p>{emptyCopy.detail}</p>
+                  </div>
+                )}
+              </article>
+            );
+          })}
         </div>
 
-        <aside className="dynamic-bill-detail" aria-label="账单项详情占位">
-          <span className="dynamic-bill-kicker">选中账单项</span>
-          <h3>详情结构占位</h3>
-          <p>
-            真实账单项接入后，这里会展示 UP 主、新投稿、本地证据事实、AI
-            解释、本地历史代表视频与操作入口。
-          </p>
-          <div className="dynamic-bill-status-copy">
-            <strong>当前筛选：{activeStatus.label}</strong>
-            <span>{activeStatus.detail}</span>
-          </div>
-          <div className="dynamic-bill-action-grid">
-            <button type="button" disabled>
-              打开新视频
-            </button>
-            <button type="button" disabled>
-              打开 UP 主页
-            </button>
-            <button type="button" disabled>
-              标记已处理
-            </button>
-            <button type="button" disabled>
-              少提醒这个 UP
-            </button>
-            <button type="button" disabled>
-              少提醒这个主题
-            </button>
-          </div>
+        <aside className="dynamic-bill-detail" aria-label="账单项详情">
+          {selectedItem ? (
+            <BillItemDetail item={selectedItem} />
+          ) : (
+            <EmptyDetail status={activeStatus} />
+          )}
         </aside>
       </section>
     </div>
+  );
+}
+
+function BillItemDetail({ item }: { item: DynamicBillItem }) {
+  const evidence = item.evidence;
+  return (
+    <>
+      <span className="dynamic-bill-kicker">
+        久违更新 / {statusLabel(item.status)}
+      </span>
+      <h3>{item.creatorName}</h3>
+      <p>
+        新投稿：{evidence.newVideo.title || evidence.newVideo.bvid}
+      </p>
+      <div className="dynamic-bill-evidence-grid">
+        <EvidenceStat
+          label={`长期 ${evidence.longWindow.windowDays} 天`}
+          value={`${evidence.longWindow.positiveWatchCount} 次正反馈`}
+          detail={`${evidence.longWindow.watchedCount} 次观看 · 平均完成度 ${formatPercent(evidence.longWindow.avgCompletion)}`}
+        />
+        <EvidenceStat
+          label={`近期 ${evidence.recentWindow.windowDays} 天`}
+          value={`${evidence.recentWindow.positiveWatchCount} 次正反馈`}
+          detail={`${evidence.recentWindow.watchedCount} 次观看 · 冷却比 ${formatPercent(evidence.cooldownRatio)}`}
+        />
+      </div>
+      <div className="dynamic-bill-status-copy">
+        <strong>规则阈值</strong>
+        <span>
+          长期正反馈不少于 {evidence.thresholds.minCreatorPositiveViews} 次；
+          正反馈为完成度 ≥ {formatPercent(evidence.thresholds.positiveCompletionRate)}
+          、观看 ≥ {formatDuration(evidence.thresholds.minPositiveWatchSeconds)}
+          或已收藏；近期同一新视频排除窗口为 {evidence.thresholds.recentSameVideoWindowDays} 天。
+        </span>
+      </div>
+      <ul className="dynamic-bill-fact-list">
+        {evidence.facts.map((fact) => (
+          <li key={fact}>{fact}</li>
+        ))}
+      </ul>
+      <div className="dynamic-bill-status-copy">
+        <strong>本地历史代表视频</strong>
+        <span>
+          {item.historyBvids.length > 0
+            ? item.historyBvids.join("、")
+            : "长期窗口中没有可展示的近期以前代表 bvid。"}
+        </span>
+      </div>
+      <div className="dynamic-bill-action-grid">
+        <a href={videoUrl(evidence.newVideo.bvid)} target="_blank" rel="noreferrer">
+          打开新视频
+        </a>
+        <a href={spaceUrl(item.creatorMid)} target="_blank" rel="noreferrer">
+          打开 UP 主页
+        </a>
+      </div>
+    </>
+  );
+}
+
+function EmptyDetail({
+  status,
+}: {
+  status: { key: DynamicBillStatus; label: string; detail: string };
+}) {
+  return (
+    <>
+      <span className="dynamic-bill-kicker">选中账单项</span>
+      <h3>暂无{status.label}项</h3>
+      <p>
+        生成本地账单后，选择久违更新卡片即可查看长期窗口、近期窗口、新投稿和排除同视频观看的证据事实。
+      </p>
+      <div className="dynamic-bill-status-copy">
+        <strong>当前筛选：{status.label}</strong>
+        <span>{status.detail}</span>
+      </div>
+    </>
   );
 }
 
@@ -245,10 +426,10 @@ function lastSyncDetail(overview: DynamicBillOverview | null): string {
 function describeOverview(overview: DynamicBillOverview): string {
   const state = overview.syncState;
   if (state.status === "not_logged_in") {
-    return "需要先登录 B 站账号，Bili-Bill 才能同步你的关注关系和关注动态。";
+    return "需要先登录 B 站账号，Bili-Bill 才能同步你的关注关系和关注动态；已存在的本地证据仍可读取。";
   }
   if (state.status === "failed") {
-    return `动态同步失败：${state.lastError ?? "未知错误"}。已保留本地已有动态数据。`;
+    return `动态同步失败：${state.lastError ?? "未知错误"}。已保留本地已有动态数据和账单项。`;
   }
   if (state.status === "success") {
     return `已同步 ${overview.activeFollowedCreatorCount} 个关注 UP，最近 ${overview.updateWindowDays} 天视频投稿 ${overview.recentVideoUpdateCount} 条。`;
@@ -269,27 +450,38 @@ function describeSyncResult(result: DynamicSyncResult): string {
   return `同步完成：关注 UP ${result.followedCreatorsStored} 个，最近视频投稿 ${result.videoUpdatesStored} 条，过滤非视频动态 ${result.filteredNonVideoCount} 条。`;
 }
 
-function getEmptyCopy(
+function describeGenerateResult(result: DynamicBillGenerateResult): string {
+  return `久违更新生成 ${result.itemCount} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除近期已看同视频 ${result.excludedRecentSameVideoCount} 条，长期证据不足 ${result.excludedNoLongSignalCount} 个 UP，近期仍活跃 ${result.excludedRecentActiveCount} 个 UP。`;
+}
+
+function getColumnEmptyCopy(
+  enabled: boolean,
   overview: DynamicBillOverview | null,
   statusLabel: string,
+  afkItemCount: number,
 ): { title: string; detail: string } {
+  if (!enabled) {
+    return {
+      title: "后续切片未启用",
+      detail: "为保持 #5 范围干净，本 PR 不生成该栏目账单项。",
+    };
+  }
   if (!overview) {
     return {
       title: "正在读取账单数据",
-      detail: "同步状态加载后会显示关注快照和最近视频投稿池数量。",
+      detail: "同步状态加载后会显示关注快照、最近视频投稿池和本地账单项数量。",
     };
   }
-  if (overview.syncState.status === "not_logged_in") {
+  if (overview.syncState.status === "not_logged_in" && afkItemCount === 0) {
     return {
       title: "需要登录 B 站后同步",
-      detail: "未登录时页面不会崩溃，也不会尝试生成虚假的账单项。",
+      detail: "未登录时不会生成虚假账单；若本地已有证据，仍可直接展示。",
     };
   }
   if (overview.activeFollowedCreatorCount === 0) {
     return {
       title: "还没有关注快照",
-      detail:
-        "完成同步后，这里会基于已关注 UP 的视频投稿池等待后续规则引擎生成账单项。",
+      detail: "完成同步后，会从已关注 UP 的视频投稿池中寻找久违更新候选。",
     };
   }
   if (overview.recentVideoUpdateCount === 0) {
@@ -299,9 +491,17 @@ function getEmptyCopy(
     };
   }
   return {
-    title: `${statusLabel}账单项将在后续任务生成`,
-    detail:
-      "当前任务只准备已关注视频投稿池；三栏兴趣再平衡规则由后续 issue 接入。",
+    title: `暂无${statusLabel}久违更新`,
+    detail: "可能是长期正反馈不足、近期仍在观看，或同一新视频已在近期观看历史中出现。",
+  };
+}
+
+function countByStatus(items: DynamicBillItem[]): Record<DynamicBillStatus, number> {
+  return {
+    unopened: items.filter((item) => item.status === "unopened").length,
+    opened: items.filter((item) => item.status === "opened").length,
+    consumed: items.filter((item) => item.status === "consumed").length,
+    processed: items.filter((item) => item.status === "processed").length,
   };
 }
 
@@ -322,8 +522,29 @@ function stageLabel(stage: string): string {
   }
 }
 
+function statusLabel(status: DynamicBillStatus): string {
+  return STATUS_FILTERS.find((item) => item.key === status)?.label ?? "未打开";
+}
+
+function videoUrl(bvid: string): string {
+  return `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`;
+}
+
+function spaceUrl(mid: number): string {
+  return `https://space.bilibili.com/${mid}`;
+}
+
 function formatTime(timestamp: number): string {
   return new Date(timestamp).toLocaleString("zh-CN");
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds} 秒`;
+  return `${Math.round(seconds / 60)} 分钟`;
 }
 
 function describeError(error: unknown): string {
@@ -347,6 +568,24 @@ function StatusMetric({
 }) {
   return (
     <div className="dynamic-bill-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </div>
+  );
+}
+
+function EvidenceStat({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="dynamic-bill-evidence-stat">
       <span>{label}</span>
       <strong>{value}</strong>
       <small>{detail}</small>

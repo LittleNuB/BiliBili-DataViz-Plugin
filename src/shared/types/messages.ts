@@ -1,5 +1,5 @@
 import type { QuickStats, DashboardOverview, CategoryDistribution, InterestDrift, DurationBucket, CreatorRanking, NewCreator, BehaviorMetrics, WeeklyTip, BlindBoxItem } from './analytics';
-import type { DynamicBillOverview, DynamicSyncResult } from './dynamic-bill';
+import type { DynamicBillGenerateResult, DynamicBillItem, DynamicBillOverview, DynamicSyncResult } from './dynamic-bill';
 import type { FavoriteSyncResult, SmartFavoriteOverview, SmartFavoriteResult, SmartFavoriteSearchResponse, SmartIndexResult } from './favorite';
 
 // Popup / Dashboard → Service Worker
@@ -24,7 +24,9 @@ export type RequestAction =
   | 'BUILD_SMART_FAVORITE_INDEX'
   | 'SEARCH_SMART_FAVORITES'
   | 'GET_DYNAMIC_BILL_OVERVIEW'
-  | 'SYNC_DYNAMIC_UPDATES';
+  | 'SYNC_DYNAMIC_UPDATES'
+  | 'GENERATE_DYNAMIC_BILL'
+  | 'GET_DYNAMIC_BILL_ITEMS';
 
 // Content Script → Service Worker
 export type ContentAction =
@@ -140,3 +142,5 @@ export type SmartFavoriteSearchMessageResponse = BiliVizResponse<SmartFavoriteSe
 export type SmartFavoritePathResponse = BiliVizResponse<SmartFavoriteResult[]>;
 export type DynamicBillOverviewResponse = BiliVizResponse<DynamicBillOverview>;
 export type DynamicSyncResponse = BiliVizResponse<DynamicSyncResult>;
+export type DynamicBillGenerateResponse = BiliVizResponse<DynamicBillGenerateResult>;
+export type DynamicBillItemsResponse = BiliVizResponse<DynamicBillItem[]>;

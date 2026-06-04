@@ -338,6 +338,22 @@ button {
   font-weight: 800;
 }
 
+.dynamic-bill-scope-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 4px;
+}
+
+.dynamic-bill-scope-actions .dynamic-bill-sync-button {
+  margin-top: 0;
+}
+
+.dynamic-bill-sync-button.is-secondary {
+  border-color: rgba(0, 161, 214, 0.44);
+  background: rgba(0, 161, 214, 0.18);
+}
+
 .dynamic-bill-sync-button:disabled {
   cursor: wait;
   opacity: 0.62;
@@ -528,6 +544,75 @@ button {
   line-height: 1.6;
 }
 
+.dynamic-bill-item-list {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+}
+
+.dynamic-bill-item-card {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  min-height: 126px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #D8DCE6;
+  background: rgba(26, 26, 46, 0.48);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.dynamic-bill-item-card:hover,
+.dynamic-bill-item-card.is-selected {
+  border-color: rgba(251, 114, 153, 0.52);
+  background: rgba(251, 114, 153, 0.11);
+}
+
+.dynamic-bill-item-card:hover {
+  transform: translateY(-1px);
+}
+
+.dynamic-bill-card-meta,
+.dynamic-bill-card-title,
+.dynamic-bill-card-fact {
+  display: block;
+  min-width: 0;
+}
+
+.dynamic-bill-card-meta {
+  color: #8FDDF6;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.dynamic-bill-item-card strong {
+  overflow: hidden;
+  color: #FFFFFF;
+  font-size: 14px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dynamic-bill-card-title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #B8C0CE;
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.dynamic-bill-card-fact {
+  color: #8995A8;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .dynamic-bill-detail {
   position: sticky;
   top: 18px;
@@ -546,6 +631,40 @@ button {
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.7;
+}
+
+.dynamic-bill-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dynamic-bill-evidence-stat {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.dynamic-bill-evidence-stat span {
+  color: #8FDDF6;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.dynamic-bill-evidence-stat strong {
+  color: #FFFFFF;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.dynamic-bill-evidence-stat small {
+  color: #8995A8;
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .dynamic-bill-status-copy {
@@ -574,14 +693,36 @@ button {
   gap: 7px;
 }
 
-.dynamic-bill-action-grid button {
+.dynamic-bill-action-grid button,
+.dynamic-bill-action-grid a {
+  display: grid;
+  align-items: center;
   min-height: 34px;
+  padding: 0 10px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 7px;
   color: #9DA8B8;
   background: rgba(255, 255, 255, 0.04);
   font-size: 12px;
   font-weight: 750;
+  text-align: center;
+  text-decoration: none;
+}
+
+.dynamic-bill-action-grid a {
+  color: #FFFFFF;
+  border-color: rgba(0, 161, 214, 0.42);
+  background: rgba(0, 161, 214, 0.16);
+}
+
+.dynamic-bill-fact-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  color: #B8C0CE;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 @media (max-width: 1180px) {
@@ -694,6 +835,11 @@ button {
 
   .dynamic-bill-scope {
     min-width: 0;
+  }
+
+  .dynamic-bill-scope-actions,
+  .dynamic-bill-evidence-grid {
+    grid-template-columns: 1fr;
   }
 
   .dynamic-bill-status-grid,
