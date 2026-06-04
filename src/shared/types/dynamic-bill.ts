@@ -34,8 +34,9 @@ export interface FollowedVideoUpdate {
   syncedAt: number;
 }
 
-export type DynamicBillColumn = 'afk_update';
+export type DynamicBillColumn = 'afk_update' | 'variety';
 export type DynamicBillStatus = 'unopened' | 'opened' | 'consumed' | 'processed';
+export type DynamicBillInterestKind = 'category' | 'tag';
 
 export type DynamicSyncStatus = 'idle' | 'syncing' | 'success' | 'not_logged_in' | 'failed';
 export type DynamicSyncStage = 'idle' | 'following' | 'dynamic-feed' | 'video-detail' | 'storage' | 'complete';
@@ -119,9 +120,22 @@ export interface DynamicBillThresholdEvidence {
   updateWindowDays: number;
   recentSameVideoWindowDays: number;
   minCreatorPositiveViews: number;
+  minInterestPositiveViews: number;
+  minInterestLongPositiveShare: number;
+  maxInterestRecentPositiveRatio: number;
   positiveCompletionRate: number;
   minPositiveWatchSeconds: number;
   recentCooldownRatio: number;
+}
+
+export interface DynamicBillInterestEvidence {
+  key: string;
+  kind: DynamicBillInterestKind;
+  label: string;
+  longPositiveShare: number;
+  recentPositiveShare: number;
+  positiveDropRatio: number;
+  matchedNewVideoLabels: string[];
 }
 
 export interface DynamicBillEvidence {
@@ -130,6 +144,7 @@ export interface DynamicBillEvidence {
   recentWindow: DynamicBillWindowEvidence;
   newVideo: DynamicBillNewVideoEvidence;
   follow: DynamicBillFollowEvidence;
+  interest?: DynamicBillInterestEvidence;
   cooldownRatio: number;
   daysSinceLastWatch: number | null;
   facts: string[];
@@ -163,6 +178,8 @@ export interface DynamicBillGenerateResult {
   excludedNoLongSignalCount: number;
   excludedRecentActiveCount: number;
   excludedRecentSameVideoCount: number;
+  columnItemCounts: Record<DynamicBillColumn, number>;
+  columnEligibleCounts: Record<DynamicBillColumn, number>;
   items: DynamicBillItem[];
   thresholds: DynamicBillThresholdEvidence;
   overview: DynamicBillOverview;
