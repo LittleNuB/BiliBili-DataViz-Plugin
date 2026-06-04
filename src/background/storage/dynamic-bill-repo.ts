@@ -1,6 +1,9 @@
 import { DYNAMIC_UPDATE_WINDOW_DAYS } from '../../shared/constants';
 import type {
+  DynamicBillColumn,
+  DynamicBillItem,
   DynamicBillOverview,
+  DynamicBillStatus,
   DynamicSyncState,
   FollowedCreator,
   FollowedVideoUpdate,
@@ -78,6 +81,50 @@ export async function getRecentFollowedVideoUpdates(windowDays = DYNAMIC_UPDATE_
     .sortBy('dynamicTime');
 }
 
+export async function getActiveFollowedCreators(): Promise<FollowedCreator[]> {
+  const creators = await db.followedCreators.toArray();
+  return creators.filter(creator => creator.isActive !== false);
+}
+
+export async function replaceDynamicBillItemsForColumn(
+  column: DynamicBillColumn,
+  items: DynamicBillItem[],
+): Promise<DynamicBillItem[]> {
+  const storedItems: DynamicBillItem[] = [];
+
+  await db.transaction('rw', db.dynamicBillItems, async () => {
+    const existing = await db.dynamicBillItems.where('column').equals(column).toArray();
+    const existingByKey = new Map(existing.map(item => [item.billKey, item]));
+    await db.dynamicBillItems.where('column').equals(column).delete();
+
+    const nextItems = items.map(item => mergeExistingDynamicBillState(item, existingByKey.get(item.billKey)));
+    if (nextItems.length > 0) {
+      await db.dynamicBillItems.bulkPut(nextItems);
+      storedItems.push(...nextItems);
+    }
+  });
+
+  return storedItems.sort((a, b) => a.localRank - b.localRank);
+}
+
+export async function getDynamicBillItems(options: {
+  column?: DynamicBillColumn;
+  status?: DynamicBillStatus;
+} = {}): Promise<DynamicBillItem[]> {
+  let items = options.column
+    ? await db.dynamicBillItems.where('column').equals(options.column).toArray()
+    : await db.dynamicBillItems.toArray();
+
+  if (options.status) {
+    items = items.filter(item => item.status === options.status);
+  }
+
+  return items.sort((a, b) => {
+    if (a.status !== b.status) return statusOrder(a.status) - statusOrder(b.status);
+    return a.localRank - b.localRank;
+  });
+}
+
 export async function getDynamicBillOverview(windowDays = DYNAMIC_UPDATE_WINDOW_DAYS): Promise<DynamicBillOverview> {
   const [syncState, creators, recentUpdates] = await Promise.all([
     getDynamicSyncState(),
@@ -127,4 +174,34 @@ function isStaleSyncState(state: DynamicSyncState): boolean {
   return state.status === 'syncing'
     && state.lastStartedAt > 0
     && Date.now() - state.lastStartedAt > DYNAMIC_SYNC_STALE_TIMEOUT_MS;
+}
+
+function mergeExistingDynamicBillState(
+  item: DynamicBillItem,
+  existing?: DynamicBillItem,
+): DynamicBillItem {
+  if (!existing) return item;
+  return {
+    ...item,
+    id: existing.id,
+    status: existing.status,
+    openedAt: existing.openedAt,
+    consumedAt: existing.consumedAt,
+    processedAt: existing.processedAt,
+  };
+}
+
+function statusOrder(status: DynamicBillStatus): number {
+  switch (status) {
+    case 'unopened':
+      return 0;
+    case 'opened':
+      return 1;
+    case 'consumed':
+      return 2;
+    case 'processed':
+      return 3;
+    default:
+      return 4;
+  }
 }

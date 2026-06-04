@@ -34,6 +34,9 @@ export interface FollowedVideoUpdate {
   syncedAt: number;
 }
 
+export type DynamicBillColumn = 'afk_update';
+export type DynamicBillStatus = 'unopened' | 'opened' | 'consumed' | 'processed';
+
 export type DynamicSyncStatus = 'idle' | 'syncing' | 'success' | 'not_logged_in' | 'failed';
 export type DynamicSyncStage = 'idle' | 'following' | 'dynamic-feed' | 'video-detail' | 'storage' | 'complete';
 
@@ -76,5 +79,91 @@ export interface DynamicSyncResult {
   filteredOutsideWindowCount: number;
   detailEnrichedCount: number;
   error?: string;
+  overview: DynamicBillOverview;
+}
+
+export interface DynamicBillWindowEvidence {
+  windowDays: number;
+  startedAt: number;
+  endedAt: number;
+  watchedCount: number;
+  positiveWatchCount: number;
+  totalWatchTimeSeconds: number;
+  avgCompletion: number;
+  lastWatchedAt: number;
+}
+
+export interface DynamicBillNewVideoEvidence {
+  updateKey: string;
+  dynamicId: string;
+  bvid: string;
+  avid: number;
+  title: string;
+  cover: string;
+  duration: number;
+  pubtime: number;
+  dynamicTime: number;
+  tagName: string;
+  tags: string[];
+}
+
+export interface DynamicBillFollowEvidence {
+  followedAt?: number;
+  followAgeKnown: boolean;
+  followAgeDays?: number;
+}
+
+export interface DynamicBillThresholdEvidence {
+  longWindowDays: number;
+  recentWindowDays: number;
+  updateWindowDays: number;
+  recentSameVideoWindowDays: number;
+  minCreatorPositiveViews: number;
+  positiveCompletionRate: number;
+  minPositiveWatchSeconds: number;
+  recentCooldownRatio: number;
+}
+
+export interface DynamicBillEvidence {
+  kind: DynamicBillColumn;
+  longWindow: DynamicBillWindowEvidence;
+  recentWindow: DynamicBillWindowEvidence;
+  newVideo: DynamicBillNewVideoEvidence;
+  follow: DynamicBillFollowEvidence;
+  cooldownRatio: number;
+  daysSinceLastWatch: number | null;
+  facts: string[];
+  thresholds: DynamicBillThresholdEvidence;
+}
+
+export interface DynamicBillItem {
+  id?: number;
+  billKey: string;
+  column: DynamicBillColumn;
+  status: DynamicBillStatus;
+  updateKey: string;
+  creatorMid: number;
+  creatorName: string;
+  creatorFace: string;
+  historyBvids: string[];
+  evidence: DynamicBillEvidence;
+  localRank: number;
+  score: number;
+  openedAt?: number;
+  consumedAt?: number;
+  processedAt?: number;
+  generatedAt: number;
+}
+
+export interface DynamicBillGenerateResult {
+  generatedAt: number;
+  itemCount: number;
+  candidatesScanned: number;
+  eligibleCreatorCount: number;
+  excludedNoLongSignalCount: number;
+  excludedRecentActiveCount: number;
+  excludedRecentSameVideoCount: number;
+  items: DynamicBillItem[];
+  thresholds: DynamicBillThresholdEvidence;
   overview: DynamicBillOverview;
 }
