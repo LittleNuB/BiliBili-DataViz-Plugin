@@ -25,6 +25,7 @@ import { getDeviceData } from '../analytics/device';
 import { abortCurrentHistorySync, hasActiveHistorySyncAbortScope } from '../sync/sync-control';
 import { syncFavorites } from '../favorites/sync';
 import { buildSmartFavoriteIndex, getSmartFavoriteOverview, getSmartFavoritesByPath, searchSmartFavorites } from '../favorites/smart';
+import { getDynamicOverview, syncDynamicBillUpdates } from '../dynamic-bill/sync';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
 
@@ -222,6 +223,10 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
         data: await searchSmartFavorites(query, Number.isFinite(limit) ? limit : undefined) as T,
       };
     }
+    case 'GET_DYNAMIC_BILL_OVERVIEW':
+      return { success: true, data: await getDynamicOverview() as T };
+    case 'SYNC_DYNAMIC_UPDATES':
+      return { success: true, data: await syncDynamicBillUpdates() as T };
     default:
       return { success: false, error: `Unknown action: ${request.action}` };
   }
