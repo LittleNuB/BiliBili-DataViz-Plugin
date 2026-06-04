@@ -34,9 +34,10 @@ export interface FollowedVideoUpdate {
   syncedAt: number;
 }
 
-export type DynamicBillColumn = 'afk_update' | 'variety';
+export type DynamicBillColumn = 'afk_update' | 'variety' | 'buried_follow';
 export type DynamicBillStatus = 'unopened' | 'opened' | 'consumed' | 'processed';
 export type DynamicBillInterestKind = 'category' | 'tag';
+export type DynamicBillFollowMemorySignal = 'long_follow' | 'special_follow' | 'weak_watch';
 
 export type DynamicSyncStatus = 'idle' | 'syncing' | 'success' | 'not_logged_in' | 'failed';
 export type DynamicSyncStage = 'idle' | 'following' | 'dynamic-feed' | 'video-detail' | 'storage' | 'complete';
@@ -112,6 +113,8 @@ export interface DynamicBillFollowEvidence {
   followedAt?: number;
   followAgeKnown: boolean;
   followAgeDays?: number;
+  special?: boolean;
+  memorySignals?: DynamicBillFollowMemorySignal[];
 }
 
 export interface DynamicBillThresholdEvidence {
@@ -126,6 +129,10 @@ export interface DynamicBillThresholdEvidence {
   positiveCompletionRate: number;
   minPositiveWatchSeconds: number;
   recentCooldownRatio: number;
+  minBuriedFollowAgeDays: number;
+  minBuriedWeakWatchCount: number;
+  maxBuriedRecentWatchCount: number;
+  maxBuriedRecentPositiveWatchCount: number;
 }
 
 export interface DynamicBillInterestEvidence {
