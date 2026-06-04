@@ -25,7 +25,7 @@ import { getDeviceData } from '../analytics/device';
 import { abortCurrentHistorySync, hasActiveHistorySyncAbortScope } from '../sync/sync-control';
 import { syncFavorites } from '../favorites/sync';
 import { buildSmartFavoriteIndex, getSmartFavoriteOverview, getSmartFavoritesByPath, searchSmartFavorites } from '../favorites/smart';
-import { generateAfkUpdateBillItems } from '../dynamic-bill/rules';
+import { generateDynamicBillItems } from '../dynamic-bill/generator';
 import { getDynamicOverview, syncDynamicBillUpdates } from '../dynamic-bill/sync';
 import { getDynamicBillItems } from '../storage/dynamic-bill-repo';
 
@@ -230,7 +230,7 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     case 'SYNC_DYNAMIC_UPDATES':
       return { success: true, data: await syncDynamicBillUpdates() as T };
     case 'GENERATE_DYNAMIC_BILL':
-      return { success: true, data: await generateAfkUpdateBillItems() as T };
+      return { success: true, data: await generateDynamicBillItems() as T };
     case 'GET_DYNAMIC_BILL_ITEMS':
       return { success: true, data: await getDynamicBillItems() as T };
     default:
