@@ -1,4 +1,5 @@
 import type {
+  DynamicBillFollowMemorySignal,
   DynamicBillGenerateResult,
   DynamicBillItem,
   DynamicBillWindowEvidence,
@@ -16,7 +17,7 @@ import {
 import { DYNAMIC_BILL_STRATEGY, getDynamicBillThresholdEvidence } from './strategy';
 
 const SECONDS_PER_DAY = 86_400;
-const AFK_UPDATE_COLUMN = 'afk_update';
+const BURIED_FOLLOW_COLUMN = 'buried_follow';
 
 interface CreatorWindowStats extends DynamicBillWindowEvidence {
   records: WatchHistoryRecord[];
@@ -29,11 +30,14 @@ interface Candidate {
   recentStats: CreatorWindowStats;
   cooldownRatio: number;
   daysSinceLastWatch: number | null;
-  score: number;
+  followAgeDays?: number;
+  memorySignals: DynamicBillFollowMemorySignal[];
+  historicalWeakWatchCount: number;
   historyBvids: string[];
+  score: number;
 }
 
-export async function generateAfkUpdateBillItems(): Promise<DynamicBillGenerateResult> {
+export async function generateBuriedFollowBillItems(): Promise<DynamicBillGenerateResult> {
   const generatedAt = Date.now();
   const nowSeconds = Math.floor(generatedAt / 1000);
   const thresholds = getDynamicBillThresholdEvidence();
@@ -86,50 +90,53 @@ export async function generateAfkUpdateBillItems(): Promise<DynamicBillGenerateR
       longCutoff,
       nowSeconds,
     );
-    if (longStats.positiveWatchCount < DYNAMIC_BILL_STRATEGY.minCreatorPositiveViews) {
-      excludedNoLongSignalCount++;
-      continue;
-    }
-
     const recentStats = buildWindowStats(
       creatorRecords.filter(record => record.viewAt >= recentCutoff),
       DYNAMIC_BILL_STRATEGY.recentWindowDays,
       recentCutoff,
       nowSeconds,
     );
-    const expectedRecentPositive = longStats.positiveWatchCount
-      * (DYNAMIC_BILL_STRATEGY.recentWindowDays / DYNAMIC_BILL_STRATEGY.longWindowDays);
-    const recentPositiveLimit = Math.floor(expectedRecentPositive * DYNAMIC_BILL_STRATEGY.recentCooldownRatio);
-    if (recentStats.positiveWatchCount > recentPositiveLimit) {
+
+    if (
+      recentStats.watchedCount > DYNAMIC_BILL_STRATEGY.maxBuriedRecentWatchCount
+      || recentStats.positiveWatchCount > DYNAMIC_BILL_STRATEGY.maxBuriedRecentPositiveWatchCount
+    ) {
       excludedRecentActiveCount++;
+      continue;
+    }
+
+    const followAgeDays = getFollowAgeDays(creator, nowSeconds);
+    const historicalWeakWatchCount = creatorRecords.filter(record => record.viewAt < recentCutoff).length;
+    const memorySignals = buildMemorySignals(creator, followAgeDays, historicalWeakWatchCount);
+    if (memorySignals.length === 0) {
+      excludedNoLongSignalCount++;
       continue;
     }
 
     const daysSinceLastWatch = longStats.lastWatchedAt > 0
       ? Math.floor((nowSeconds - longStats.lastWatchedAt) / SECONDS_PER_DAY)
       : null;
-    const cooldownRatio = expectedRecentPositive > 0
-      ? recentStats.positiveWatchCount / expectedRecentPositive
+    const cooldownRatio = DYNAMIC_BILL_STRATEGY.maxBuriedRecentWatchCount > 0
+      ? recentStats.watchedCount / DYNAMIC_BILL_STRATEGY.maxBuriedRecentWatchCount
       : 0;
     const historyBvids = selectHistoryHighlights(creatorRecords, update.bvid, recentCutoff);
 
-    candidates.push({
+    const candidate: Omit<Candidate, 'score'> = {
       creator,
       update,
       longStats,
       recentStats,
       cooldownRatio,
       daysSinceLastWatch,
+      followAgeDays,
+      memorySignals,
+      historicalWeakWatchCount,
       historyBvids,
-      score: scoreCandidate({
-        creator,
-        update,
-        longStats,
-        recentStats,
-        cooldownRatio,
-        daysSinceLastWatch,
-        historyBvids,
-      }, nowSeconds),
+    };
+
+    candidates.push({
+      ...candidate,
+      score: scoreCandidate(candidate, nowSeconds),
     });
   }
 
@@ -138,7 +145,7 @@ export async function generateAfkUpdateBillItems(): Promise<DynamicBillGenerateR
     .slice(0, DYNAMIC_BILL_STRATEGY.maxItemsPerColumn)
     .map((candidate, index) => toBillItem(candidate, index + 1, generatedAt));
 
-  const storedItems = await replaceDynamicBillItemsForColumn(AFK_UPDATE_COLUMN, items);
+  const storedItems = await replaceDynamicBillItemsForColumn(BURIED_FOLLOW_COLUMN, items);
   const overview = await getDynamicBillOverview(DYNAMIC_BILL_STRATEGY.updateWindowDays);
 
   return {
@@ -150,14 +157,14 @@ export async function generateAfkUpdateBillItems(): Promise<DynamicBillGenerateR
     excludedRecentActiveCount,
     excludedRecentSameVideoCount,
     columnItemCounts: {
-      afk_update: storedItems.length,
+      afk_update: 0,
       variety: 0,
-      buried_follow: 0,
+      buried_follow: storedItems.length,
     },
     columnEligibleCounts: {
-      afk_update: candidates.length,
+      afk_update: 0,
       variety: 0,
-      buried_follow: 0,
+      buried_follow: candidates.length,
     },
     items: storedItems,
     thresholds,
@@ -201,6 +208,24 @@ function buildWindowStats(
     lastWatchedAt,
     records,
   };
+}
+
+function buildMemorySignals(
+  creator: FollowedCreator,
+  followAgeDays: number | undefined,
+  historicalWeakWatchCount: number,
+): DynamicBillFollowMemorySignal[] {
+  const signals: DynamicBillFollowMemorySignal[] = [];
+  if (followAgeDays !== undefined && followAgeDays >= DYNAMIC_BILL_STRATEGY.minBuriedFollowAgeDays) {
+    signals.push('long_follow');
+  }
+  if (creator.special) {
+    signals.push('special_follow');
+  }
+  if (historicalWeakWatchCount >= DYNAMIC_BILL_STRATEGY.minBuriedWeakWatchCount) {
+    signals.push('weak_watch');
+  }
+  return signals;
 }
 
 function isPositiveWatch(record: WatchHistoryRecord): boolean {
@@ -247,30 +272,28 @@ function selectHistoryHighlights(
 }
 
 function scoreCandidate(candidate: Omit<Candidate, 'score'>, nowSeconds: number): number {
-  const followAgeDays = getFollowAgeDays(candidate.creator, nowSeconds) ?? 0;
   const updateAgeDays = Math.max(0, (nowSeconds - candidate.update.dynamicTime) / SECONDS_PER_DAY);
-  const watchStrength = candidate.longStats.positiveWatchCount * 10
-    + Math.min(candidate.longStats.totalWatchTimeSeconds / 3600, 12)
-    + candidate.longStats.avgCompletion * 8;
-  const cooldownStrength = (1 - Math.min(candidate.cooldownRatio, 1)) * 18
-    + Math.min(candidate.daysSinceLastWatch ?? DYNAMIC_BILL_STRATEGY.longWindowDays, 90) / 6;
-  const followAgeBoost = Math.min(followAgeDays / 365, 1) * 4;
+  const followAgeStrength = candidate.followAgeDays !== undefined
+    ? Math.min(candidate.followAgeDays / 365, 4) * 5
+    : 0;
+  const specialBoost = candidate.creator.special ? 10 : 0;
+  const weakHistoryBoost = Math.min(candidate.historicalWeakWatchCount, 3) * 3
+    + Math.min(candidate.longStats.totalWatchTimeSeconds / 3600, 3);
+  const absenceBoost = candidate.recentStats.watchedCount === 0 ? 8 : 3;
   const freshnessBoost = Math.max(0, DYNAMIC_BILL_STRATEGY.updateWindowDays - updateAgeDays)
     / DYNAMIC_BILL_STRATEGY.updateWindowDays
-    * 3;
+    * 5;
 
-  return Math.round((watchStrength + cooldownStrength + followAgeBoost + freshnessBoost) * 100) / 100;
+  return Math.round((followAgeStrength + specialBoost + weakHistoryBoost + absenceBoost + freshnessBoost) * 100) / 100;
 }
 
 function toBillItem(candidate: Candidate, localRank: number, generatedAt: number): DynamicBillItem {
-  const nowSeconds = Math.floor(generatedAt / 1000);
-  const followAgeDays = getFollowAgeDays(candidate.creator, nowSeconds);
   const thresholds = getDynamicBillThresholdEvidence();
-  const facts = buildFacts(candidate, followAgeDays);
+  const facts = buildFacts(candidate);
 
   return {
-    billKey: `${AFK_UPDATE_COLUMN}:${candidate.update.updateKey}`,
-    column: AFK_UPDATE_COLUMN,
+    billKey: `${BURIED_FOLLOW_COLUMN}:${candidate.update.updateKey}`,
+    column: BURIED_FOLLOW_COLUMN,
     status: 'unopened',
     updateKey: candidate.update.updateKey,
     creatorMid: candidate.creator.mid,
@@ -281,7 +304,7 @@ function toBillItem(candidate: Candidate, localRank: number, generatedAt: number
     score: candidate.score,
     generatedAt,
     evidence: {
-      kind: AFK_UPDATE_COLUMN,
+      kind: BURIED_FOLLOW_COLUMN,
       longWindow: stripRecords(candidate.longStats),
       recentWindow: stripRecords(candidate.recentStats),
       newVideo: {
@@ -300,9 +323,11 @@ function toBillItem(candidate: Candidate, localRank: number, generatedAt: number
       follow: {
         followedAt: candidate.creator.followedAt,
         followAgeKnown: candidate.creator.followAgeKnown,
-        followAgeDays,
+        followAgeDays: candidate.followAgeDays,
+        special: candidate.creator.special,
+        memorySignals: candidate.memorySignals,
       },
-      cooldownRatio: Math.round(candidate.cooldownRatio * 100) / 100,
+      cooldownRatio: roundRatio(candidate.cooldownRatio),
       daysSinceLastWatch: candidate.daysSinceLastWatch,
       facts,
       thresholds,
@@ -310,26 +335,42 @@ function toBillItem(candidate: Candidate, localRank: number, generatedAt: number
   };
 }
 
-function buildFacts(candidate: Candidate, followAgeDays?: number): string[] {
-  const long = candidate.longStats;
+function buildFacts(candidate: Candidate): string[] {
   const recent = candidate.recentStats;
+  const followFact = candidate.followAgeDays !== undefined
+    ? `关注关系证据：已关注约 ${candidate.followAgeDays} 天${candidate.creator.special ? '，且为特别关注' : ''}。`
+    : `关注关系证据：已关注，关注时长未知${candidate.creator.special ? '，且为特别关注' : ''}。`;
   const facts = [
-    `长期 ${long.windowDays} 天内观看 ${long.watchedCount} 次，正反馈 ${long.positiveWatchCount} 次，平均完成度 ${formatPercent(long.avgCompletion)}。`,
-    `近期 ${recent.windowDays} 天内观看 ${recent.watchedCount} 次，正反馈 ${recent.positiveWatchCount} 次，冷却比 ${formatPercent(candidate.cooldownRatio)}。`,
-    `最近 ${DYNAMIC_BILL_STRATEGY.updateWindowDays} 天有新投稿《${candidate.update.title || candidate.update.bvid}》。`,
+    followFact,
+    `关注记忆信号：${formatMemorySignals(candidate.memorySignals)}；入选至少需要长期关注、特别关注或近期窗口以前 ${DYNAMIC_BILL_STRATEGY.minBuriedWeakWatchCount} 次弱观看之一。`,
+    `近期缺席证据：最近 ${recent.windowDays} 天观看 ${recent.watchedCount} 次、正反馈 ${recent.positiveWatchCount} 次；规则要求观看不超过 ${DYNAMIC_BILL_STRATEGY.maxBuriedRecentWatchCount} 次且正反馈为 ${DYNAMIC_BILL_STRATEGY.maxBuriedRecentPositiveWatchCount} 次。`,
+    `新投稿证据：最近 ${DYNAMIC_BILL_STRATEGY.updateWindowDays} 天，已关注 UP「${candidate.creator.name || candidate.update.authorName}」发布《${candidate.update.title || candidate.update.bvid}》。`,
     `本地最近 ${DYNAMIC_BILL_STRATEGY.recentSameVideoWindowDays} 天未发现同一新视频 ${candidate.update.bvid} 的观看记录。`,
+    '入选只使用本地关注快照、观看历史聚合和最近投稿元数据，不接 AI，也不上传完整历史或完整关注列表。',
   ];
 
   if (candidate.daysSinceLastWatch !== null) {
-    facts.push(`距上次观看该 UP 已约 ${candidate.daysSinceLastWatch} 天。`);
-  }
-  if (followAgeDays !== undefined) {
-    facts.push(`已关注约 ${followAgeDays} 天；该信息只参与排序加权，不单独决定入选。`);
+    facts.push(`距上次观看该 UP 已约 ${candidate.daysSinceLastWatch} 天；本栏目不要求达到久违更新的强历史正反馈阈值。`);
   } else {
-    facts.push('关注时间未知；入选不依赖关注时长。');
+    facts.push('本地长期窗口未发现该 UP 的观看记录；本项由关注关系记忆信号支撑，而不是强历史观看正反馈。');
   }
 
   return facts;
+}
+
+function formatMemorySignals(signals: DynamicBillFollowMemorySignal[]): string {
+  return signals.map(signal => {
+    switch (signal) {
+      case 'long_follow':
+        return `已关注不少于 ${DYNAMIC_BILL_STRATEGY.minBuriedFollowAgeDays} 天`;
+      case 'special_follow':
+        return '特别关注';
+      case 'weak_watch':
+        return '近期窗口以前有本地弱观看';
+      default:
+        return signal;
+    }
+  }).join('、');
 }
 
 function stripRecords(stats: CreatorWindowStats): DynamicBillWindowEvidence {
@@ -342,8 +383,8 @@ function getFollowAgeDays(creator: FollowedCreator, nowSeconds: number): number 
   return Math.max(0, Math.floor((nowSeconds - creator.followedAt) / SECONDS_PER_DAY));
 }
 
-function formatPercent(value: number): string {
-  return `${Math.round(value * 100)}%`;
+function roundRatio(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 function clamp01(value: number): number {

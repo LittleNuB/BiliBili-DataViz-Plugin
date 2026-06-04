@@ -13,6 +13,10 @@ export const DYNAMIC_BILL_STRATEGY = {
   positiveCompletionRate: 0.5,
   minPositiveWatchSeconds: 180,
   recentCooldownRatio: 0.5,
+  minBuriedFollowAgeDays: 180,
+  minBuriedWeakWatchCount: 1,
+  maxBuriedRecentWatchCount: 1,
+  maxBuriedRecentPositiveWatchCount: 0,
   maxHighlightsPerItem: 3,
   maxItemsPerColumn: 20,
 } as const;
@@ -30,5 +34,9 @@ export function getDynamicBillThresholdEvidence(): DynamicBillThresholdEvidence 
     positiveCompletionRate: DYNAMIC_BILL_STRATEGY.positiveCompletionRate,
     minPositiveWatchSeconds: DYNAMIC_BILL_STRATEGY.minPositiveWatchSeconds,
     recentCooldownRatio: DYNAMIC_BILL_STRATEGY.recentCooldownRatio,
+    minBuriedFollowAgeDays: DYNAMIC_BILL_STRATEGY.minBuriedFollowAgeDays,
+    minBuriedWeakWatchCount: DYNAMIC_BILL_STRATEGY.minBuriedWeakWatchCount,
+    maxBuriedRecentWatchCount: DYNAMIC_BILL_STRATEGY.maxBuriedRecentWatchCount,
+    maxBuriedRecentPositiveWatchCount: DYNAMIC_BILL_STRATEGY.maxBuriedRecentPositiveWatchCount,
   };
 }

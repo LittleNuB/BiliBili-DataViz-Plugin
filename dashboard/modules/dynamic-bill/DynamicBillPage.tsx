@@ -44,9 +44,9 @@ const BILL_COLUMNS = [
   {
     key: "buried_follow",
     title: "被淹没的关注",
-    detail: "后续切片接入；本 PR 不生成该栏目。",
+    detail: "有关注关系、近期观看缺席或近乎缺席，最近 7 天有新投稿的 UP。",
     accent: "mint",
-    enabled: false,
+    enabled: true,
   },
 ] as const;
 
@@ -73,6 +73,10 @@ export function DynamicBillPage() {
   );
   const varietyItems = useMemo(
     () => items.filter((item) => item.column === "variety"),
+    [items],
+  );
+  const buriedFollowItems = useMemo(
+    () => items.filter((item) => item.column === "buried_follow"),
     [items],
   );
   const visibleItems = useMemo(
@@ -175,13 +179,13 @@ export function DynamicBillPage() {
           <span className="dynamic-bill-kicker">消费前 / 已关注视频投稿</span>
           <h2>动态账单</h2>
           <p>
-            久违更新和换换口味用本地观看历史、关注快照和最近投稿池生成，不接 AI，也不上传完整历史或完整关注列表。
+            久违更新、换换口味和被淹没的关注用本地观看历史、关注快照和最近投稿池生成，不接 AI，也不上传完整历史或完整关注列表。
           </p>
         </div>
         <div className="dynamic-bill-scope">
           <strong>本地证据范围</strong>
           <span>
-            同步已关注 UP 最近 7 天视频投稿；生成时要求长期正反馈或长期兴趣、近期冷却或下降，并排除近期已看过的同一新视频。
+            同步已关注 UP 最近 7 天视频投稿；生成时按长期正反馈、长期兴趣落差或关注记忆信号分别入栏，并排除近期已看过的同一新视频。
           </span>
           <div className="dynamic-bill-scope-actions">
             <button
@@ -226,7 +230,7 @@ export function DynamicBillPage() {
         <StatusMetric
           label="本地账单"
           value={String(items.length)}
-          detail={`久违更新 ${afkItems.length} / 换换口味 ${varietyItems.length}`}
+          detail={`久违更新 ${afkItems.length} / 换换口味 ${varietyItems.length} / 被淹没的关注 ${buriedFollowItems.length}`}
         />
       </section>
 
@@ -236,7 +240,7 @@ export function DynamicBillPage() {
       >
         <strong>{notice || overviewNotice}</strong>
         <span>
-          本切片启用久违更新和换换口味；被淹没的关注、状态推进、反馈和取关提示均未接入。topic 降低或屏蔽留给 #9 闭环。
+          本切片启用三类本地证据栏目；状态推进和筛选持久化留给 #8，负反馈累计、topic 降低和取关提示留给 #9 闭环。
         </span>
       </section>
 
@@ -333,6 +337,7 @@ export function DynamicBillPage() {
 
 function BillItemDetail({ item }: { item: DynamicBillItem }) {
   const evidence = item.evidence;
+  const isBuriedFollow = evidence.kind === "buried_follow";
   return (
     <>
       <span className="dynamic-bill-kicker">
@@ -342,6 +347,17 @@ function BillItemDetail({ item }: { item: DynamicBillItem }) {
       <p>
         新投稿：{evidence.newVideo.title || evidence.newVideo.bvid}
       </p>
+      <div className="dynamic-bill-status-copy">
+        <strong>关注关系证据</strong>
+        <span>{followEvidenceCopy(evidence)}</span>
+      </div>
+      <div className="dynamic-bill-status-copy">
+        <strong>新投稿证据</strong>
+        <span>
+          最近 {evidence.thresholds.updateWindowDays} 天投稿《{evidence.newVideo.title || evidence.newVideo.bvid}》，
+          bvid {evidence.newVideo.bvid}；同一新视频排除窗口为 {evidence.thresholds.recentSameVideoWindowDays} 天。
+        </span>
+      </div>
       {evidence.interest ? (
         <div className="dynamic-bill-status-copy">
           <strong>
@@ -356,14 +372,22 @@ function BillItemDetail({ item }: { item: DynamicBillItem }) {
       ) : null}
       <div className="dynamic-bill-evidence-grid">
         <EvidenceStat
-          label={`${evidence.interest ? "长期兴趣" : "长期"} ${evidence.longWindow.windowDays} 天`}
-          value={`${evidence.longWindow.positiveWatchCount} 次正反馈`}
-          detail={`${evidence.longWindow.watchedCount} 次观看 · 平均完成度 ${formatPercent(evidence.longWindow.avgCompletion)}`}
+          label={`${longWindowLabel(evidence)} ${evidence.longWindow.windowDays} 天`}
+          value={isBuriedFollow
+            ? `${evidence.longWindow.watchedCount} 次本地观看`
+            : `${evidence.longWindow.positiveWatchCount} 次正反馈`}
+          detail={isBuriedFollow
+            ? `${evidence.longWindow.positiveWatchCount} 次正反馈 · 平均完成度 ${formatPercent(evidence.longWindow.avgCompletion)}`
+            : `${evidence.longWindow.watchedCount} 次观看 · 平均完成度 ${formatPercent(evidence.longWindow.avgCompletion)}`}
         />
         <EvidenceStat
-          label={`${evidence.interest ? "近期兴趣" : "近期"} ${evidence.recentWindow.windowDays} 天`}
-          value={`${evidence.recentWindow.positiveWatchCount} 次正反馈`}
-          detail={`${evidence.recentWindow.watchedCount} 次观看 · 冷却比 ${formatPercent(evidence.cooldownRatio)}`}
+          label={`${recentWindowLabel(evidence)} ${evidence.recentWindow.windowDays} 天`}
+          value={isBuriedFollow
+            ? `${evidence.recentWindow.watchedCount} 次观看`
+            : `${evidence.recentWindow.positiveWatchCount} 次正反馈`}
+          detail={isBuriedFollow
+            ? `${evidence.recentWindow.positiveWatchCount} 次正反馈 · 缺席或近乎缺席`
+            : `${evidence.recentWindow.watchedCount} 次观看 · 冷却比 ${formatPercent(evidence.cooldownRatio)}`}
         />
       </div>
       <div className="dynamic-bill-status-copy">
@@ -469,7 +493,7 @@ function describeSyncResult(result: DynamicSyncResult): string {
 }
 
 function describeGenerateResult(result: DynamicBillGenerateResult): string {
-  return `本地账单生成 ${result.itemCount} 项：久违更新 ${result.columnItemCounts.afk_update} 项，换换口味 ${result.columnItemCounts.variety} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除近期已看同视频 ${result.excludedRecentSameVideoCount} 条，长期证据不足 ${result.excludedNoLongSignalCount} 个，近期仍活跃 ${result.excludedRecentActiveCount} 个。`;
+  return `本地账单生成 ${result.itemCount} 项：久违更新 ${result.columnItemCounts.afk_update} 项，换换口味 ${result.columnItemCounts.variety} 项，被淹没的关注 ${result.columnItemCounts.buried_follow} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除近期已看同视频 ${result.excludedRecentSameVideoCount} 条，长期/关注记忆证据不足 ${result.excludedNoLongSignalCount} 个，近期仍活跃 ${result.excludedRecentActiveCount} 个。`;
 }
 
 function getColumnEmptyCopy(
@@ -518,6 +542,12 @@ function getColumnEmptyCopy(
       detail: "可能是长期分区/标签强度不足、近期没有明显下降，或最近新投稿没有命中下降兴趣。",
     };
   }
+  if (column.key === "buried_follow") {
+    return {
+      title: `暂无${statusLabel}被淹没的关注`,
+      detail: "可能是缺少长期关注、特别关注或近期窗口以前弱观看等关注记忆信号，或该 UP 最近 30 天仍在观看。",
+    };
+  }
   return {
     title: `暂无${statusLabel}久违更新`,
     detail: "可能是长期正反馈不足、近期仍在观看，或同一新视频已在近期观看历史中出现。",
@@ -525,7 +555,7 @@ function getColumnEmptyCopy(
 }
 
 function isDynamicBillColumn(key: BillColumnKey): key is DynamicBillColumn {
-  return key === "afk_update" || key === "variety";
+  return key === "afk_update" || key === "variety" || key === "buried_follow";
 }
 
 function columnTitle(column: DynamicBillColumn): string {
@@ -533,6 +563,9 @@ function columnTitle(column: DynamicBillColumn): string {
 }
 
 function cardFact(item: DynamicBillItem): string {
+  if (item.column === "buried_follow") {
+    return `${followShortCopy(item.evidence)} · 近期观看 ${item.evidence.recentWindow.watchedCount} 次`;
+  }
   const interest = item.evidence.interest;
   if (interest) {
     return `${interestKindLabel(interest.kind)}「${interest.label}」 · 长期占比 ${formatPercent(interest.longPositiveShare)} · 下降 ${formatPercent(interest.positiveDropRatio)}`;
@@ -547,8 +580,51 @@ function thresholdCopy(evidence: DynamicBillEvidence): string {
   if (evidence.kind === "variety") {
     return `长期兴趣正反馈不少于 ${evidence.thresholds.minInterestPositiveViews} 次，长期正反馈占比 ≥ ${formatPercent(evidence.thresholds.minInterestLongPositiveShare)}；近期正反馈不高于长期节奏的 ${formatPercent(evidence.thresholds.maxInterestRecentPositiveRatio)}；最近 ${evidence.thresholds.updateWindowDays} 天新投稿必须命中该分区/标签；${positiveRule}；${sameVideoRule}。`;
   }
+  if (evidence.kind === "buried_follow") {
+    return `基础入选必须是已关注 UP、最近 ${evidence.thresholds.updateWindowDays} 天有新视频投稿、近期 ${evidence.thresholds.recentWindowDays} 天观看不超过 ${evidence.thresholds.maxBuriedRecentWatchCount} 次且正反馈不超过 ${evidence.thresholds.maxBuriedRecentPositiveWatchCount} 次；关注记忆信号至少满足：已关注不少于 ${evidence.thresholds.minBuriedFollowAgeDays} 天、特别关注、或近期窗口以前弱观看不少于 ${evidence.thresholds.minBuriedWeakWatchCount} 次之一；${positiveRule}；${sameVideoRule}。`;
+  }
 
   return `长期 UP 正反馈不少于 ${evidence.thresholds.minCreatorPositiveViews} 次；近期正反馈不高于长期节奏的 ${formatPercent(evidence.thresholds.recentCooldownRatio)}；${positiveRule}；${sameVideoRule}。`;
+}
+
+function longWindowLabel(evidence: DynamicBillEvidence): string {
+  if (evidence.kind === "buried_follow") return "长期观看";
+  return evidence.interest ? "长期兴趣" : "长期";
+}
+
+function recentWindowLabel(evidence: DynamicBillEvidence): string {
+  if (evidence.kind === "buried_follow") return "近期缺席";
+  return evidence.interest ? "近期兴趣" : "近期";
+}
+
+function followEvidenceCopy(evidence: DynamicBillEvidence): string {
+  const special = evidence.follow.special ? "；特别关注" : "";
+  const memorySignals = evidence.follow.memorySignals?.length
+    ? `；关注记忆信号：${followMemorySignalsCopy(evidence.follow.memorySignals)}`
+    : "";
+  return `${followShortCopy(evidence)}${special}${memorySignals}。`;
+}
+
+function followShortCopy(evidence: DynamicBillEvidence): string {
+  if (evidence.follow.followAgeDays !== undefined) {
+    return `已关注约 ${evidence.follow.followAgeDays} 天`;
+  }
+  return "已关注，关注时长未知";
+}
+
+function followMemorySignalsCopy(signals: NonNullable<DynamicBillEvidence["follow"]["memorySignals"]>): string {
+  return signals.map((signal) => {
+    switch (signal) {
+      case "long_follow":
+        return "长期关注";
+      case "special_follow":
+        return "特别关注";
+      case "weak_watch":
+        return "历史弱观看";
+      default:
+        return signal;
+    }
+  }).join("、");
 }
 
 function interestKindLabel(kind: "category" | "tag"): string {
