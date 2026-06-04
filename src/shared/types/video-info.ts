@@ -2,7 +2,10 @@ export interface VideoInfo {
   avid: number;
   bvid: string;
   title: string;
+  desc?: string;
   duration: number;
+  pubdate?: number;
+  ctime?: number;
   owner: {
     mid: number;
     name: string;

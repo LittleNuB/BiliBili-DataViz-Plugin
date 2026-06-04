@@ -4,11 +4,17 @@ export const VIDEO_INFO_ENDPOINT = '/x/web-interface/view';
 export const NAV_ENDPOINT = '/x/web-interface/nav';
 export const FAVORITE_FOLDERS_ENDPOINT = '/x/v3/fav/folder/created/list-all';
 export const FAVORITE_RESOURCES_ENDPOINT = '/x/v3/fav/resource/list';
+export const DYNAMIC_FEED_ENDPOINT = '/x/polymer/web-dynamic/v1/feed/all';
+export const FOLLOWINGS_ENDPOINT = '/x/relation/followings';
 
 export const HISTORY_PAGE_SIZE = 30;
 export const MAX_BACKFILL_PAGES = 300;
 export const FAVORITE_PAGE_SIZE = 20;
 export const MAX_FAVORITE_SYNC_PAGES = 500;
+export const DYNAMIC_UPDATE_WINDOW_DAYS = 7;
+export const DYNAMIC_FEED_MAX_PAGES = 80;
+export const FOLLOWING_PAGE_SIZE = 50;
+export const MAX_FOLLOWING_SYNC_PAGES = 200;
 export const SYNC_INTERVAL_MINUTES = 5;
 export const AGGREGATE_INTERVAL_MINUTES = 60;
 export const CLEANUP_INTERVAL_MINUTES = 1440;
