@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import type {
+  DynamicBillColumn,
   DynamicBillGenerateResult,
+  DynamicBillEvidence,
   DynamicBillItem,
   DynamicBillOverview,
   DynamicBillStatus,
@@ -35,9 +37,9 @@ const BILL_COLUMNS = [
   {
     key: "variety",
     title: "换换口味",
-    detail: "后续切片接入；本 PR 不生成该栏目。",
+    detail: "长期分区/标签强、近期明显下降，最近 7 天有已关注 UP 新投稿。",
     accent: "blue",
-    enabled: false,
+    enabled: true,
   },
   {
     key: "buried_follow",
@@ -47,6 +49,8 @@ const BILL_COLUMNS = [
     enabled: false,
   },
 ] as const;
+
+type BillColumnKey = (typeof BILL_COLUMNS)[number]["key"];
 
 export function DynamicBillPage() {
   const [status, setStatus] = useState<DynamicBillStatus>("unopened");
@@ -67,22 +71,26 @@ export function DynamicBillPage() {
     () => items.filter((item) => item.column === "afk_update"),
     [items],
   );
-  const visibleAfkItems = useMemo(
-    () => afkItems.filter((item) => item.status === status),
-    [afkItems, status],
+  const varietyItems = useMemo(
+    () => items.filter((item) => item.column === "variety"),
+    [items],
+  );
+  const visibleItems = useMemo(
+    () => items.filter((item) => item.status === status),
+    [items, status],
   );
   const selectedItem =
-    visibleAfkItems.find((item) => item.billKey === selectedBillKey) ??
-    visibleAfkItems[0] ??
+    visibleItems.find((item) => item.billKey === selectedBillKey) ??
+    visibleItems[0] ??
     null;
-  const statusCounts = useMemo(() => countByStatus(afkItems), [afkItems]);
+  const statusCounts = useMemo(() => countByStatus(items), [items]);
 
   useEffect(() => {
     refreshOverview().catch((error) => {
       setNotice(`读取动态账单状态失败：${describeError(error)}`);
     });
     refreshBillItems().catch((error) => {
-      setNotice(`读取久违更新账单失败：${describeError(error)}`);
+      setNotice(`读取动态账单失败：${describeError(error)}`);
     });
   }, []);
 
@@ -124,7 +132,7 @@ export function DynamicBillPage() {
       const result = await generateLocalBill();
       setNotice(describeGenerateResult(result));
     } catch (error) {
-      setNotice(`生成久违更新账单失败：${describeError(error)}`);
+      setNotice(`生成本地账单失败：${describeError(error)}`);
     } finally {
       setGenerating(false);
     }
@@ -144,7 +152,7 @@ export function DynamicBillPage() {
           nextNotice = `${nextNotice} ${describeGenerateResult(generated)}`;
         } catch (generateError) {
           await refreshBillItems().catch(() => {});
-          nextNotice = `${nextNotice} 但生成久违更新账单失败：${describeError(generateError)}`;
+          nextNotice = `${nextNotice} 但生成本地账单失败：${describeError(generateError)}`;
         }
       } else {
         await refreshBillItems().catch(() => {});
@@ -167,13 +175,13 @@ export function DynamicBillPage() {
           <span className="dynamic-bill-kicker">消费前 / 已关注视频投稿</span>
           <h2>动态账单</h2>
           <p>
-            久违更新用本地观看历史、关注快照和最近投稿池生成，不接 AI，也不上传完整历史或完整关注列表。
+            久违更新和换换口味用本地观看历史、关注快照和最近投稿池生成，不接 AI，也不上传完整历史或完整关注列表。
           </p>
         </div>
         <div className="dynamic-bill-scope">
           <strong>本地证据范围</strong>
           <span>
-            同步已关注 UP 最近 7 天视频投稿；生成时要求长期正反馈、近期冷却，并排除近期已看过的同一新视频。
+            同步已关注 UP 最近 7 天视频投稿；生成时要求长期正反馈或长期兴趣、近期冷却或下降，并排除近期已看过的同一新视频。
           </span>
           <div className="dynamic-bill-scope-actions">
             <button
@@ -216,9 +224,9 @@ export function DynamicBillPage() {
           detail={`最近 ${overview?.updateWindowDays ?? 7} 天视频投稿池`}
         />
         <StatusMetric
-          label="久违更新"
-          value={String(afkItems.length)}
-          detail="本地规则生成的可展示账单项"
+          label="本地账单"
+          value={String(items.length)}
+          detail={`久违更新 ${afkItems.length} / 换换口味 ${varietyItems.length}`}
         />
       </section>
 
@@ -228,7 +236,7 @@ export function DynamicBillPage() {
       >
         <strong>{notice || overviewNotice}</strong>
         <span>
-          本切片只启用久违更新栏目；换换口味、被淹没的关注、状态推进、反馈和取关提示均未接入。
+          本切片启用久违更新和换换口味；被淹没的关注、状态推进、反馈和取关提示均未接入。topic 降低或屏蔽留给 #9 闭环。
         </span>
       </section>
 
@@ -249,14 +257,17 @@ export function DynamicBillPage() {
       <section className="dynamic-bill-layout">
         <div className="dynamic-bill-board" aria-label="动态账单栏目">
           {BILL_COLUMNS.map((column) => {
-            const columnItems =
-              column.key === "afk_update" ? visibleAfkItems : [];
-            const columnCount = column.key === "afk_update" ? afkItems.length : 0;
+            const columnItems = isDynamicBillColumn(column.key)
+              ? visibleItems.filter((item) => item.column === column.key)
+              : [];
+            const columnCount = isDynamicBillColumn(column.key)
+              ? items.filter((item) => item.column === column.key).length
+              : 0;
             const emptyCopy = getColumnEmptyCopy(
-              column.enabled,
+              column,
               overview,
               activeStatus.label,
-              afkItems.length,
+              columnCount,
             );
 
             return (
@@ -292,7 +303,7 @@ export function DynamicBillPage() {
                           {item.evidence.newVideo.title || item.evidence.newVideo.bvid}
                         </span>
                         <span className="dynamic-bill-card-fact">
-                          长期正反馈 {item.evidence.longWindow.positiveWatchCount} 次 · 近期正反馈 {item.evidence.recentWindow.positiveWatchCount} 次
+                          {cardFact(item)}
                         </span>
                       </button>
                     ))}
@@ -325,32 +336,39 @@ function BillItemDetail({ item }: { item: DynamicBillItem }) {
   return (
     <>
       <span className="dynamic-bill-kicker">
-        久违更新 / {statusLabel(item.status)}
+        {columnTitle(item.column)} / {statusLabel(item.status)}
       </span>
       <h3>{item.creatorName}</h3>
       <p>
         新投稿：{evidence.newVideo.title || evidence.newVideo.bvid}
       </p>
+      {evidence.interest ? (
+        <div className="dynamic-bill-status-copy">
+          <strong>
+            {interestKindLabel(evidence.interest.kind)}：{evidence.interest.label}
+          </strong>
+          <span>
+            长期正反馈占比 {formatPercent(evidence.interest.longPositiveShare)}；
+            近期正反馈占比 {formatPercent(evidence.interest.recentPositiveShare)}；
+            下降 {formatPercent(evidence.interest.positiveDropRatio)}。
+          </span>
+        </div>
+      ) : null}
       <div className="dynamic-bill-evidence-grid">
         <EvidenceStat
-          label={`长期 ${evidence.longWindow.windowDays} 天`}
+          label={`${evidence.interest ? "长期兴趣" : "长期"} ${evidence.longWindow.windowDays} 天`}
           value={`${evidence.longWindow.positiveWatchCount} 次正反馈`}
           detail={`${evidence.longWindow.watchedCount} 次观看 · 平均完成度 ${formatPercent(evidence.longWindow.avgCompletion)}`}
         />
         <EvidenceStat
-          label={`近期 ${evidence.recentWindow.windowDays} 天`}
+          label={`${evidence.interest ? "近期兴趣" : "近期"} ${evidence.recentWindow.windowDays} 天`}
           value={`${evidence.recentWindow.positiveWatchCount} 次正反馈`}
           detail={`${evidence.recentWindow.watchedCount} 次观看 · 冷却比 ${formatPercent(evidence.cooldownRatio)}`}
         />
       </div>
       <div className="dynamic-bill-status-copy">
         <strong>规则阈值</strong>
-        <span>
-          长期正反馈不少于 {evidence.thresholds.minCreatorPositiveViews} 次；
-          正反馈为完成度 ≥ {formatPercent(evidence.thresholds.positiveCompletionRate)}
-          、观看 ≥ {formatDuration(evidence.thresholds.minPositiveWatchSeconds)}
-          或已收藏；近期同一新视频排除窗口为 {evidence.thresholds.recentSameVideoWindowDays} 天。
-        </span>
+        <span>{thresholdCopy(evidence)}</span>
       </div>
       <ul className="dynamic-bill-fact-list">
         {evidence.facts.map((fact) => (
@@ -358,7 +376,7 @@ function BillItemDetail({ item }: { item: DynamicBillItem }) {
         ))}
       </ul>
       <div className="dynamic-bill-status-copy">
-        <strong>本地历史代表视频</strong>
+        <strong>{evidence.interest ? "本地兴趣代表视频" : "本地历史代表视频"}</strong>
         <span>
           {item.historyBvids.length > 0
             ? item.historyBvids.join("、")
@@ -387,7 +405,7 @@ function EmptyDetail({
       <span className="dynamic-bill-kicker">选中账单项</span>
       <h3>暂无{status.label}项</h3>
       <p>
-        生成本地账单后，选择久违更新卡片即可查看长期窗口、近期窗口、新投稿和排除同视频观看的证据事实。
+        生成本地账单后，选择卡片即可查看长期窗口、近期窗口、新投稿和排除同视频观看的证据事实。
       </p>
       <div className="dynamic-bill-status-copy">
         <strong>当前筛选：{status.label}</strong>
@@ -451,19 +469,23 @@ function describeSyncResult(result: DynamicSyncResult): string {
 }
 
 function describeGenerateResult(result: DynamicBillGenerateResult): string {
-  return `久违更新生成 ${result.itemCount} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除近期已看同视频 ${result.excludedRecentSameVideoCount} 条，长期证据不足 ${result.excludedNoLongSignalCount} 个 UP，近期仍活跃 ${result.excludedRecentActiveCount} 个 UP。`;
+  return `本地账单生成 ${result.itemCount} 项：久违更新 ${result.columnItemCounts.afk_update} 项，换换口味 ${result.columnItemCounts.variety} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除近期已看同视频 ${result.excludedRecentSameVideoCount} 条，长期证据不足 ${result.excludedNoLongSignalCount} 个，近期仍活跃 ${result.excludedRecentActiveCount} 个。`;
 }
 
 function getColumnEmptyCopy(
-  enabled: boolean,
+  column: {
+    key: BillColumnKey;
+    title: string;
+    enabled: boolean;
+  },
   overview: DynamicBillOverview | null,
   statusLabel: string,
-  afkItemCount: number,
+  columnItemCount: number,
 ): { title: string; detail: string } {
-  if (!enabled) {
+  if (!column.enabled) {
     return {
       title: "后续切片未启用",
-      detail: "为保持 #5 范围干净，本 PR 不生成该栏目账单项。",
+      detail: "本 PR 不生成该栏目账单项，避免偷跑后续 issue 范围。",
     };
   }
   if (!overview) {
@@ -472,7 +494,7 @@ function getColumnEmptyCopy(
       detail: "同步状态加载后会显示关注快照、最近视频投稿池和本地账单项数量。",
     };
   }
-  if (overview.syncState.status === "not_logged_in" && afkItemCount === 0) {
+  if (overview.syncState.status === "not_logged_in" && columnItemCount === 0) {
     return {
       title: "需要登录 B 站后同步",
       detail: "未登录时不会生成虚假账单；若本地已有证据，仍可直接展示。",
@@ -481,7 +503,7 @@ function getColumnEmptyCopy(
   if (overview.activeFollowedCreatorCount === 0) {
     return {
       title: "还没有关注快照",
-      detail: "完成同步后，会从已关注 UP 的视频投稿池中寻找久违更新候选。",
+      detail: "完成同步后，会从已关注 UP 的视频投稿池中寻找本地账单候选。",
     };
   }
   if (overview.recentVideoUpdateCount === 0) {
@@ -490,10 +512,47 @@ function getColumnEmptyCopy(
       detail: "非视频动态已被过滤，不会进入动态账单候选池。",
     };
   }
+  if (column.key === "variety") {
+    return {
+      title: `暂无${statusLabel}换换口味`,
+      detail: "可能是长期分区/标签强度不足、近期没有明显下降，或最近新投稿没有命中下降兴趣。",
+    };
+  }
   return {
     title: `暂无${statusLabel}久违更新`,
     detail: "可能是长期正反馈不足、近期仍在观看，或同一新视频已在近期观看历史中出现。",
   };
+}
+
+function isDynamicBillColumn(key: BillColumnKey): key is DynamicBillColumn {
+  return key === "afk_update" || key === "variety";
+}
+
+function columnTitle(column: DynamicBillColumn): string {
+  return BILL_COLUMNS.find((item) => item.key === column)?.title ?? column;
+}
+
+function cardFact(item: DynamicBillItem): string {
+  const interest = item.evidence.interest;
+  if (interest) {
+    return `${interestKindLabel(interest.kind)}「${interest.label}」 · 长期占比 ${formatPercent(interest.longPositiveShare)} · 下降 ${formatPercent(interest.positiveDropRatio)}`;
+  }
+  return `长期正反馈 ${item.evidence.longWindow.positiveWatchCount} 次 · 近期正反馈 ${item.evidence.recentWindow.positiveWatchCount} 次`;
+}
+
+function thresholdCopy(evidence: DynamicBillEvidence): string {
+  const positiveRule = `正反馈为完成度 ≥ ${formatPercent(evidence.thresholds.positiveCompletionRate)}、观看 ≥ ${formatDuration(evidence.thresholds.minPositiveWatchSeconds)} 或已收藏`;
+  const sameVideoRule = `近期同一新视频排除窗口为 ${evidence.thresholds.recentSameVideoWindowDays} 天`;
+
+  if (evidence.kind === "variety") {
+    return `长期兴趣正反馈不少于 ${evidence.thresholds.minInterestPositiveViews} 次，长期正反馈占比 ≥ ${formatPercent(evidence.thresholds.minInterestLongPositiveShare)}；近期正反馈不高于长期节奏的 ${formatPercent(evidence.thresholds.maxInterestRecentPositiveRatio)}；最近 ${evidence.thresholds.updateWindowDays} 天新投稿必须命中该分区/标签；${positiveRule}；${sameVideoRule}。`;
+  }
+
+  return `长期 UP 正反馈不少于 ${evidence.thresholds.minCreatorPositiveViews} 次；近期正反馈不高于长期节奏的 ${formatPercent(evidence.thresholds.recentCooldownRatio)}；${positiveRule}；${sameVideoRule}。`;
+}
+
+function interestKindLabel(kind: "category" | "tag"): string {
+  return kind === "category" ? "分区" : "标签";
 }
 
 function countByStatus(items: DynamicBillItem[]): Record<DynamicBillStatus, number> {

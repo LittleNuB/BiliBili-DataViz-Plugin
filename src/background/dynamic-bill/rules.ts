@@ -149,6 +149,14 @@ export async function generateAfkUpdateBillItems(): Promise<DynamicBillGenerateR
     excludedNoLongSignalCount,
     excludedRecentActiveCount,
     excludedRecentSameVideoCount,
+    columnItemCounts: {
+      afk_update: storedItems.length,
+      variety: 0,
+    },
+    columnEligibleCounts: {
+      afk_update: candidates.length,
+      variety: 0,
+    },
     items: storedItems,
     thresholds,
     overview,
