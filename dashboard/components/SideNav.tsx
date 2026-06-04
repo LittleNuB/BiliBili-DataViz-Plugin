@@ -1,0 +1,49 @@
+export interface SideNavItem {
+  id: string;
+  label: string;
+  caption: string;
+  shortLabel: string;
+}
+
+interface Props {
+  items: SideNavItem[];
+  activeIndex: number;
+  onChange: (index: number) => void;
+}
+
+export function SideNav({ items, activeIndex, onChange }: Props) {
+  return (
+    <aside className="bb-sidebar" aria-label="Bili-Bill Dashboard 导航">
+      <div className="bb-brand">
+        <div className="bb-brand-mark" aria-hidden="true">BB</div>
+        <div className="bb-brand-text">
+          <strong>Bili-Bill</strong>
+          <span>个人内容账单</span>
+        </div>
+      </div>
+
+      <nav className="bb-nav-list">
+        {items.map((item, index) => (
+          <button
+            key={item.id}
+            className={`bb-nav-item ${activeIndex === index ? 'is-active' : ''}`}
+            type="button"
+            onClick={() => onChange(index)}
+            title={item.label}
+            aria-current={activeIndex === index ? 'page' : undefined}
+          >
+            <span className="bb-nav-mark" aria-hidden="true">{item.shortLabel}</span>
+            <span className="bb-nav-copy">
+              <strong>{item.label}</strong>
+              <small>{item.caption}</small>
+            </span>
+          </button>
+        ))}
+      </nav>
+
+      <div className="bb-sidebar-note">
+        动态账单 v1 只覆盖已关注 UP 的视频投稿动态。
+      </div>
+    </aside>
+  );
+}

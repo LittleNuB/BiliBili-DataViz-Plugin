@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'preact/hooks';
 import { activeTab } from './signals';
 import { requestSW } from './utils/messaging';
-import { TabBar } from './components/TabBar';
+import { AppShell } from './components/AppShell';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { OverviewPage } from './modules/overview/OverviewPage';
+import { DynamicBillPage } from './modules/dynamic-bill/DynamicBillPage';
 import { PreferencePage } from './modules/preference/PreferencePage';
 import { CreatorPage } from './modules/creator/CreatorPage';
 import { BehaviorPage } from './modules/behavior/BehaviorPage';
@@ -11,7 +12,26 @@ import { ExperimentsPage } from './modules/experiments/ExperimentsPage';
 import { SmartFavoritesPage } from './modules/favorites/SmartFavoritesPage';
 import type { WatchHistoryRecord } from '../src/shared/types/watch-event';
 
-const PAGES = [OverviewPage, PreferencePage, CreatorPage, BehaviorPage, ExperimentsPage, SmartFavoritesPage];
+const NAV_ITEMS = [
+  { id: 'overview', label: '总览', caption: '观看历史概览', shortLabel: '览' },
+  { id: 'dynamic-bill', label: '动态账单', caption: '关注更新入口', shortLabel: '账' },
+  { id: 'preference', label: '偏好', caption: '分区与标签', shortLabel: '偏' },
+  { id: 'creator', label: 'UP主', caption: '创作者关系', shortLabel: 'UP' },
+  { id: 'behavior', label: '行为', caption: '节奏与时段', shortLabel: '行' },
+  { id: 'experiments', label: '实验', caption: '建议与盲盒', shortLabel: '验' },
+  { id: 'smart-favorites', label: '智能收藏', caption: '收藏夹整理', shortLabel: '藏' },
+];
+
+const PAGES = [
+  OverviewPage,
+  DynamicBillPage,
+  PreferencePage,
+  CreatorPage,
+  BehaviorPage,
+  ExperimentsPage,
+  SmartFavoritesPage,
+];
+
 const EXPORT_PAGE_SIZE = 500;
 
 interface ExportDataPage {
@@ -23,7 +43,8 @@ interface ExportDataPage {
 }
 
 export function App() {
-  const ActivePage = PAGES[activeTab.value];
+  const activeIndex = PAGES[activeTab.value] ? activeTab.value : 0;
+  const ActivePage = PAGES[activeIndex];
   const [synced, setSynced] = useState('');
   const [exporting, setExporting] = useState(false);
 
@@ -36,6 +57,19 @@ export function App() {
         setSynced('等待首次同步...');
       }
     }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    function applyHashRoute() {
+      const pageId = window.location.hash.replace(/^#/, '');
+      if (!pageId) return;
+      const index = NAV_ITEMS.findIndex(item => item.id === pageId);
+      if (index >= 0) activeTab.value = index;
+    }
+
+    applyHashRoute();
+    window.addEventListener('hashchange', applyHashRoute);
+    return () => window.removeEventListener('hashchange', applyHashRoute);
   }, []);
 
   async function handleExport(format: 'json' | 'csv') {
@@ -90,51 +124,26 @@ export function App() {
     }
   }
 
+  function handleNavigate(index: number) {
+    activeTab.value = index;
+    const pageId = NAV_ITEMS[index]?.id ?? NAV_ITEMS[0].id;
+    const nextPath = `${window.location.pathname}${window.location.search}${pageId === 'overview' ? '' : `#${pageId}`}`;
+    window.history.replaceState(null, '', nextPath);
+  }
+
   return (
-    <div style={{ maxWidth: '800px', margin: '0 auto', minHeight: '100vh' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px 16px 8px', gap: '10px' }}>
-        <h1 style={{ fontSize: '18px', fontWeight: 700, color: '#FB7299', margin: 0 }}>
-          B站消费数据中心
-        </h1>
-      </div>
-      {synced && <div style={{ textAlign: 'center', fontSize: '11px', color: '#666', marginBottom: '4px' }}>{synced}</div>}
-      <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', padding: '0 16px 8px' }}>
-        <button
-          onClick={() => handleExport('json')}
-          disabled={exporting}
-          style={{
-            padding: '4px 12px',
-            background: 'transparent',
-            color: '#A0A0B0',
-            border: '1px solid #333355',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '11px',
-          }}
-        >
-          {exporting ? '导出中...' : '导出 JSON'}
-        </button>
-        <button
-          onClick={() => handleExport('csv')}
-          disabled={exporting}
-          style={{
-            padding: '4px 12px',
-            background: 'transparent',
-            color: '#A0A0B0',
-            border: '1px solid #333355',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '11px',
-          }}
-        >
-          导出 CSV
-        </button>
-      </div>
-      <TabBar activeTab={activeTab.value} onChange={(i) => { activeTab.value = i; }} />
+    <AppShell
+      navItems={NAV_ITEMS}
+      activeIndex={activeIndex}
+      synced={synced}
+      exporting={exporting}
+      onNavigate={handleNavigate}
+      onExport={handleExport}
+    >
       <ErrorBoundary>
         <ActivePage />
       </ErrorBoundary>
-    </div>
+    </AppShell>
   );
 }
 
