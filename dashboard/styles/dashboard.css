@@ -340,7 +340,7 @@ button {
 
 .dynamic-bill-scope-actions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
   gap: 7px;
   margin-top: 4px;
 }
@@ -352,6 +352,11 @@ button {
 .dynamic-bill-sync-button.is-secondary {
   border-color: rgba(0, 161, 214, 0.44);
   background: rgba(0, 161, 214, 0.18);
+}
+
+.dynamic-bill-sync-button.is-ghost {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .dynamic-bill-sync-button:disabled {
@@ -685,6 +690,102 @@ button {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.dynamic-bill-ai-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.dynamic-bill-ai-panel.is-ai {
+  border-color: rgba(0, 161, 214, 0.38);
+  background: rgba(0, 161, 214, 0.08);
+}
+
+.dynamic-bill-ai-panel.is-fallback {
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.dynamic-bill-ai-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dynamic-bill-ai-head div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dynamic-bill-ai-head strong {
+  color: #FFFFFF;
+  font-size: 13px;
+}
+
+.dynamic-bill-ai-head span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.dynamic-bill-ai-head em {
+  flex: none;
+  min-height: 22px;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #8FDDF6;
+  background: rgba(0, 161, 214, 0.16);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.dynamic-bill-ai-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.dynamic-bill-ai-grid section {
+  display: grid;
+  gap: 3px;
+}
+
+.dynamic-bill-ai-grid span {
+  color: #8FDDF6;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.dynamic-bill-ai-grid p {
+  margin: 0;
+  color: #D5DCE8;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.dynamic-bill-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dynamic-bill-keywords span {
+  min-height: 22px;
+  padding: 4px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  color: #A8B4C6;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 11px;
+  font-weight: 750;
 }
 
 .dynamic-bill-creator-review {

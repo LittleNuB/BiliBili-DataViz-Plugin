@@ -1,5 +1,6 @@
 import { DYNAMIC_UPDATE_WINDOW_DAYS } from '../../shared/constants';
 import type {
+  DynamicBillExplanation,
   DynamicBillFeedbackRecord,
   DynamicBillFeedbackResult,
   DynamicBillFeedbackScope,
@@ -138,10 +139,43 @@ export async function getDynamicBillItems(options: {
     items = items.filter(item => item.status === options.status);
   }
 
-  return items.sort((a, b) => {
+  const explanations = await getDynamicBillExplanationMap(items.map(item => item.billKey));
+
+  return items.map(item => ({
+    ...item,
+    explanation: explanations.get(item.billKey),
+  })).sort((a, b) => {
     if (a.status !== b.status) return statusOrder(a.status) - statusOrder(b.status);
     return a.localRank - b.localRank;
   });
+}
+
+export async function getDynamicBillExplanationMap(
+  billKeys: string[],
+): Promise<Map<string, DynamicBillExplanation>> {
+  const uniqueKeys = Array.from(new Set(billKeys.filter(Boolean)));
+  if (uniqueKeys.length === 0) return new Map();
+
+  const explanations = await db.dynamicBillExplanations
+    .where('billKey')
+    .anyOf(uniqueKeys)
+    .toArray();
+  return new Map(explanations.map(explanation => [explanation.billKey, explanation]));
+}
+
+export async function putDynamicBillExplanation(
+  explanation: DynamicBillExplanation,
+): Promise<DynamicBillExplanation> {
+  const existing = await db.dynamicBillExplanations
+    .where('billKey')
+    .equals(explanation.billKey)
+    .first();
+  const next: DynamicBillExplanation = {
+    ...explanation,
+    id: existing?.id,
+  };
+  await db.dynamicBillExplanations.put(next);
+  return next;
 }
 
 export async function getDynamicBillFilterPreference(): Promise<DynamicBillFilterPreference> {

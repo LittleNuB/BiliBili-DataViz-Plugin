@@ -26,6 +26,7 @@ import { getDeviceData } from '../analytics/device';
 import { abortCurrentHistorySync, hasActiveHistorySyncAbortScope } from '../sync/sync-control';
 import { syncFavorites } from '../favorites/sync';
 import { buildSmartFavoriteIndex, getSmartFavoriteOverview, getSmartFavoritesByPath, searchSmartFavorites } from '../favorites/smart';
+import { buildDynamicBillExplanations } from '../dynamic-bill/ai';
 import { generateDynamicBillItems } from '../dynamic-bill/generator';
 import { DYNAMIC_BILL_STRATEGY } from '../dynamic-bill/strategy';
 import { getDynamicOverview, syncDynamicBillUpdates } from '../dynamic-bill/sync';
@@ -243,6 +244,14 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       return { success: true, data: await syncDynamicBillUpdates() as T };
     case 'GENERATE_DYNAMIC_BILL':
       return { success: true, data: await generateDynamicBillItems() as T };
+    case 'BUILD_DYNAMIC_BILL_EXPLANATIONS': {
+      const maxItems = normalizePositiveInteger(request.params?.maxItems, 6);
+      const includeFailed = request.params?.includeFailed !== false;
+      return {
+        success: true,
+        data: await buildDynamicBillExplanations({ maxItems, includeFailed }) as T,
+      };
+    }
     case 'GET_DYNAMIC_BILL_ITEMS':
       return { success: true, data: await getDynamicBillItems() as T };
     case 'GET_DYNAMIC_BILL_FILTER':
@@ -322,4 +331,10 @@ function normalizeNonNegativeInteger(value: unknown, fallback: number): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(0, Math.floor(numeric));
+}
+
+function normalizePositiveInteger(value: unknown, fallback: number): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(1, Math.floor(numeric));
 }
