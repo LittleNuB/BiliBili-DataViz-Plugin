@@ -40,6 +40,10 @@ export async function generateDynamicBillItems(): Promise<DynamicBillGenerateRes
       afkResult.excludedRecentSameVideoCount
       + varietyResult.excludedRecentSameVideoCount
       + buriedFollowResult.excludedRecentSameVideoCount,
+    excludedByFeedbackCount:
+      afkResult.excludedByFeedbackCount
+      + varietyResult.excludedByFeedbackCount
+      + buriedFollowResult.excludedByFeedbackCount,
     columnItemCounts: {
       afk_update: afkResult.columnItemCounts.afk_update,
       variety: varietyResult.columnItemCounts.variety,

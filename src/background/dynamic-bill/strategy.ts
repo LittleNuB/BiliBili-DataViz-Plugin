@@ -17,6 +17,11 @@ export const DYNAMIC_BILL_STRATEGY = {
   minBuriedWeakWatchCount: 1,
   maxBuriedRecentWatchCount: 1,
   maxBuriedRecentPositiveWatchCount: 0,
+  feedbackDampenCount: 1,
+  feedbackCreatorBlockCount: 3,
+  feedbackTopicBlockCount: 2,
+  feedbackCreatorReviewPromptCount: 2,
+  feedbackScoreMultiplier: 0.35,
   maxHighlightsPerItem: 3,
   maxItemsPerColumn: 20,
 } as const;
@@ -38,5 +43,10 @@ export function getDynamicBillThresholdEvidence(): DynamicBillThresholdEvidence 
     minBuriedWeakWatchCount: DYNAMIC_BILL_STRATEGY.minBuriedWeakWatchCount,
     maxBuriedRecentWatchCount: DYNAMIC_BILL_STRATEGY.maxBuriedRecentWatchCount,
     maxBuriedRecentPositiveWatchCount: DYNAMIC_BILL_STRATEGY.maxBuriedRecentPositiveWatchCount,
+    feedbackDampenCount: DYNAMIC_BILL_STRATEGY.feedbackDampenCount,
+    feedbackCreatorBlockCount: DYNAMIC_BILL_STRATEGY.feedbackCreatorBlockCount,
+    feedbackTopicBlockCount: DYNAMIC_BILL_STRATEGY.feedbackTopicBlockCount,
+    feedbackCreatorReviewPromptCount: DYNAMIC_BILL_STRATEGY.feedbackCreatorReviewPromptCount,
+    feedbackScoreMultiplier: DYNAMIC_BILL_STRATEGY.feedbackScoreMultiplier,
   };
 }

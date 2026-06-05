@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import type {
   DynamicBillColumn,
+  DynamicBillFeedbackResult,
+  DynamicBillFeedbackScope,
   DynamicBillFilterPreference,
   DynamicBillGenerateResult,
   DynamicBillEvidence,
@@ -55,6 +57,12 @@ const BILL_COLUMNS = [
 
 type BillColumnKey = (typeof BILL_COLUMNS)[number]["key"];
 
+interface CreatorReviewPrompt {
+  creatorMid: number;
+  creatorName: string;
+  feedbackCount: number;
+}
+
 export function DynamicBillPage() {
   const [statusFilter, setStatusFilter] = useState<DynamicBillStatusFilter>("active");
   const [overview, setOverview] = useState<DynamicBillOverview | null>(null);
@@ -63,6 +71,8 @@ export function DynamicBillPage() {
   const [syncing, setSyncing] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [processingBillKey, setProcessingBillKey] = useState("");
+  const [creatorReviewPrompt, setCreatorReviewPrompt] =
+    useState<CreatorReviewPrompt | null>(null);
   const [notice, setNotice] = useState("");
   const activeStatus =
     STATUS_FILTERS.find((item) => item.key === statusFilter) ?? STATUS_FILTERS[0];
@@ -191,6 +201,36 @@ export function DynamicBillPage() {
     }
   }
 
+  async function handleAddFeedback(
+    item: DynamicBillItem,
+    scope: DynamicBillFeedbackScope,
+  ) {
+    setProcessingBillKey(item.billKey);
+    setNotice("");
+    try {
+      const result = await requestSW<DynamicBillFeedbackResult>(
+        "ADD_DYNAMIC_BILL_FEEDBACK",
+        {
+          billKey: item.billKey,
+          scope,
+        },
+      );
+      await refreshBillItems();
+      setNotice(describeFeedbackResult(result));
+      if (result.summary.shouldShowCreatorReviewPrompt) {
+        setCreatorReviewPrompt({
+          creatorMid: result.item.creatorMid,
+          creatorName: result.item.creatorName,
+          feedbackCount: result.summary.count,
+        });
+      }
+    } catch (error) {
+      setNotice(`保存少提醒反馈失败：${describeError(error)}`);
+    } finally {
+      setProcessingBillKey("");
+    }
+  }
+
   async function handleGenerate() {
     setGenerating(true);
     setNotice("");
@@ -302,7 +342,7 @@ export function DynamicBillPage() {
       >
         <strong>{notice || overviewNotice}</strong>
         <span>
-          本切片启用三类本地证据栏目；状态只会从未打开向已打开、已消费、已处理推进。负反馈累计、topic 降低和取关提示留给 #9 闭环。
+          本切片启用三类本地证据栏目；状态只会从未打开向已打开、已消费、已处理推进。少提醒反馈只写入本地，后续生成会按 UP 或主题降权，达到阈值后不再写入候选。
         </span>
       </section>
 
@@ -398,6 +438,13 @@ export function DynamicBillPage() {
             <BillItemDetail
               item={selectedItem}
               busy={processingBillKey === selectedItem.billKey}
+              creatorReviewPrompt={
+                creatorReviewPrompt?.creatorMid === selectedItem.creatorMid
+                  ? creatorReviewPrompt
+                  : null
+              }
+              onAddFeedback={handleAddFeedback}
+              onDismissCreatorReviewPrompt={() => setCreatorReviewPrompt(null)}
               onMarkProcessed={handleMarkProcessed}
               onOpenVideo={handleOpenVideo}
             />
@@ -412,12 +459,18 @@ export function DynamicBillPage() {
 
 function BillItemDetail({
   busy,
+  creatorReviewPrompt,
   item,
+  onAddFeedback,
+  onDismissCreatorReviewPrompt,
   onMarkProcessed,
   onOpenVideo,
 }: {
   busy: boolean;
+  creatorReviewPrompt: CreatorReviewPrompt | null;
   item: DynamicBillItem;
+  onAddFeedback: (item: DynamicBillItem, scope: DynamicBillFeedbackScope) => void;
+  onDismissCreatorReviewPrompt: () => void;
   onMarkProcessed: (item: DynamicBillItem) => void;
   onOpenVideo: (item: DynamicBillItem) => void;
 }) {
@@ -497,6 +550,35 @@ function BillItemDetail({
             : "长期窗口中没有可展示的近期以前代表 bvid。"}
         </span>
       </div>
+      {creatorReviewPrompt ? (
+        <div
+          className="dynamic-bill-creator-review"
+          data-testid="dynamic-bill-creator-review-prompt"
+        >
+          <strong>是否考虑取关这个 UP？</strong>
+          <span>
+            你已经 {creatorReviewPrompt.feedbackCount} 次选择少提醒「{creatorReviewPrompt.creatorName}」。
+            可以打开 UP 主页自行检查；Bili-Bill 不会修改你的关注关系，也不会提供插件内取关。
+          </span>
+          <div className="dynamic-bill-feedback-actions">
+            <a
+              href={spaceUrl(creatorReviewPrompt.creatorMid)}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="dynamic-bill-review-open-creator"
+            >
+              打开 UP 主页
+            </a>
+            <button
+              type="button"
+              data-testid="dynamic-bill-review-dismiss"
+              onClick={onDismissCreatorReviewPrompt}
+            >
+              暂不处理
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="dynamic-bill-action-grid">
         <button
           type="button"
@@ -515,6 +597,24 @@ function BillItemDetail({
         >
           {isProcessed ? "已处理" : "标记已处理"}
         </button>
+        <button
+          type="button"
+          disabled={busy}
+          data-testid="dynamic-bill-less-creator"
+          onClick={() => onAddFeedback(item, "creator")}
+        >
+          少提醒这个 UP
+        </button>
+        {evidence.interest ? (
+          <button
+            type="button"
+            disabled={busy}
+            data-testid="dynamic-bill-less-topic"
+            onClick={() => onAddFeedback(item, "topic")}
+          >
+            少提醒这个主题
+          </button>
+        ) : null}
         <a href={spaceUrl(item.creatorMid)} target="_blank" rel="noreferrer">
           打开 UP 主页
         </a>
@@ -597,7 +697,22 @@ function describeSyncResult(result: DynamicSyncResult): string {
 }
 
 function describeGenerateResult(result: DynamicBillGenerateResult): string {
-  return `本地账单生成 ${result.itemCount} 项：久违更新 ${result.columnItemCounts.afk_update} 项，换换口味 ${result.columnItemCounts.variety} 项，被淹没的关注 ${result.columnItemCounts.buried_follow} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除近期已看同视频 ${result.excludedRecentSameVideoCount} 条，长期/关注记忆证据不足 ${result.excludedNoLongSignalCount} 个，近期仍活跃 ${result.excludedRecentActiveCount} 个。`;
+  return `本地账单生成 ${result.itemCount} 项：久违更新 ${result.columnItemCounts.afk_update} 项，换换口味 ${result.columnItemCounts.variety} 项，被淹没的关注 ${result.columnItemCounts.buried_follow} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除近期已看同视频 ${result.excludedRecentSameVideoCount} 条，长期/关注记忆证据不足 ${result.excludedNoLongSignalCount} 个，近期仍活跃 ${result.excludedRecentActiveCount} 个，本地少提醒阈值排除 ${result.excludedByFeedbackCount} 个。`;
+}
+
+function describeFeedbackResult(result: DynamicBillFeedbackResult): string {
+  const target = result.summary.scope === "creator" ? "UP" : "主题";
+  const threshold = result.summary.scope === "creator"
+    ? result.summary.thresholds.creatorBlockCount
+    : result.summary.thresholds.topicBlockCount;
+  const nextRule = result.summary.isBlocked
+    ? `已达到 ${threshold} 次阈值，下次生成不会再写入这个${target}的相关候选`
+    : `下次生成会降低这个${target}的排序权重；累计 ${threshold} 次后不再写入候选`;
+  const reviewCopy = result.summary.shouldShowCreatorReviewPrompt
+    ? "；已展示取关思考提示，但不会修改 B 站关注关系"
+    : "";
+
+  return `已在本地记录「${result.summary.label}」少提醒 ${result.summary.count} 次，${nextRule}。这不会把当前账单项标记为已处理${reviewCopy}。`;
 }
 
 function getColumnEmptyCopy(
@@ -680,15 +795,16 @@ function cardFact(item: DynamicBillItem): string {
 function thresholdCopy(evidence: DynamicBillEvidence): string {
   const positiveRule = `正反馈为完成度 ≥ ${formatPercent(evidence.thresholds.positiveCompletionRate)}、观看 ≥ ${formatDuration(evidence.thresholds.minPositiveWatchSeconds)} 或已收藏`;
   const sameVideoRule = `近期同一新视频排除窗口为 ${evidence.thresholds.recentSameVideoWindowDays} 天`;
+  const feedbackRule = `本地少提醒第 ${evidence.thresholds.feedbackDampenCount} 次开始降权，UP 累计 ${evidence.thresholds.feedbackCreatorBlockCount} 次或主题累计 ${evidence.thresholds.feedbackTopicBlockCount} 次后不再写入候选`;
 
   if (evidence.kind === "variety") {
-    return `长期兴趣正反馈不少于 ${evidence.thresholds.minInterestPositiveViews} 次，长期正反馈占比 ≥ ${formatPercent(evidence.thresholds.minInterestLongPositiveShare)}；近期正反馈不高于长期节奏的 ${formatPercent(evidence.thresholds.maxInterestRecentPositiveRatio)}；最近 ${evidence.thresholds.updateWindowDays} 天新投稿必须命中该分区/标签；${positiveRule}；${sameVideoRule}。`;
+    return `长期兴趣正反馈不少于 ${evidence.thresholds.minInterestPositiveViews} 次，长期正反馈占比 ≥ ${formatPercent(evidence.thresholds.minInterestLongPositiveShare)}；近期正反馈不高于长期节奏的 ${formatPercent(evidence.thresholds.maxInterestRecentPositiveRatio)}；最近 ${evidence.thresholds.updateWindowDays} 天新投稿必须命中该分区/标签；${positiveRule}；${sameVideoRule}；${feedbackRule}。`;
   }
   if (evidence.kind === "buried_follow") {
-    return `基础入选必须是已关注 UP、最近 ${evidence.thresholds.updateWindowDays} 天有新视频投稿、近期 ${evidence.thresholds.recentWindowDays} 天观看不超过 ${evidence.thresholds.maxBuriedRecentWatchCount} 次且正反馈不超过 ${evidence.thresholds.maxBuriedRecentPositiveWatchCount} 次；关注记忆信号至少满足：已关注不少于 ${evidence.thresholds.minBuriedFollowAgeDays} 天、特别关注、或近期窗口以前弱观看不少于 ${evidence.thresholds.minBuriedWeakWatchCount} 次之一；${positiveRule}；${sameVideoRule}。`;
+    return `基础入选必须是已关注 UP、最近 ${evidence.thresholds.updateWindowDays} 天有新视频投稿、近期 ${evidence.thresholds.recentWindowDays} 天观看不超过 ${evidence.thresholds.maxBuriedRecentWatchCount} 次且正反馈不超过 ${evidence.thresholds.maxBuriedRecentPositiveWatchCount} 次；关注记忆信号至少满足：已关注不少于 ${evidence.thresholds.minBuriedFollowAgeDays} 天、特别关注、或近期窗口以前弱观看不少于 ${evidence.thresholds.minBuriedWeakWatchCount} 次之一；${positiveRule}；${sameVideoRule}；${feedbackRule}。`;
   }
 
-  return `长期 UP 正反馈不少于 ${evidence.thresholds.minCreatorPositiveViews} 次；近期正反馈不高于长期节奏的 ${formatPercent(evidence.thresholds.recentCooldownRatio)}；${positiveRule}；${sameVideoRule}。`;
+  return `长期 UP 正反馈不少于 ${evidence.thresholds.minCreatorPositiveViews} 次；近期正反馈不高于长期节奏的 ${formatPercent(evidence.thresholds.recentCooldownRatio)}；${positiveRule}；${sameVideoRule}；${feedbackRule}。`;
 }
 
 function longWindowLabel(evidence: DynamicBillEvidence): string {
