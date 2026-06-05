@@ -1,5 +1,10 @@
 import { DYNAMIC_UPDATE_WINDOW_DAYS } from '../../shared/constants';
 import type {
+  DynamicBillFeedbackRecord,
+  DynamicBillFeedbackResult,
+  DynamicBillFeedbackScope,
+  DynamicBillFeedbackSummary,
+  DynamicBillFeedbackThresholds,
   DynamicBillFilterPreference,
   DynamicBillColumn,
   DynamicBillItem,
@@ -28,6 +33,11 @@ const DEFAULT_FILTER_PREFERENCE: DynamicBillFilterPreference = {
   status: 'active',
   updatedAt: 0,
 };
+
+export interface DynamicBillFeedbackProfile {
+  creatorCountsByMid: Map<number, number>;
+  topicCountsByKey: Map<string, number>;
+}
 
 export async function replaceFollowedCreatorSnapshot(creators: FollowedCreator[], syncedAt: number): Promise<number> {
   const activeMids = new Set(creators.map(creator => creator.mid));
@@ -156,6 +166,52 @@ export async function setDynamicBillFilterPreference(
   };
   await chrome.storage.local.set({ [DYNAMIC_BILL_FILTER_KEY]: preference });
   return preference;
+}
+
+export async function addDynamicBillFeedback(
+  billKey: string,
+  scope: DynamicBillFeedbackScope,
+  createdAt = Date.now(),
+): Promise<DynamicBillFeedbackResult> {
+  const item = await db.dynamicBillItems.where('billKey').equals(billKey).first();
+  if (!item) throw new Error('DYNAMIC_BILL_ITEM_NOT_FOUND');
+
+  const feedback = buildDynamicBillFeedbackRecord(item, scope, createdAt);
+  const id = await db.dynamicBillFeedback.add(feedback);
+  const count = await db.dynamicBillFeedback
+    .where('[scope+key]')
+    .equals([feedback.scope, feedback.key])
+    .count();
+
+  return {
+    feedback: { ...feedback, id },
+    summary: buildDynamicBillFeedbackSummary(
+      feedback.scope,
+      feedback.key,
+      feedback.label,
+      count,
+    ),
+    item,
+  };
+}
+
+export async function getDynamicBillFeedbackProfile(): Promise<DynamicBillFeedbackProfile> {
+  const records = await db.dynamicBillFeedback.toArray();
+  const creatorCountsByMid = new Map<number, number>();
+  const topicCountsByKey = new Map<string, number>();
+
+  for (const record of records) {
+    if (record.scope === 'creator') {
+      const creatorMid = normalizeCreatorMid(record.creatorMid, record.key);
+      if (creatorMid === null) continue;
+      creatorCountsByMid.set(creatorMid, (creatorCountsByMid.get(creatorMid) ?? 0) + 1);
+    }
+    if (record.scope === 'topic' && record.key) {
+      topicCountsByKey.set(record.key, (topicCountsByKey.get(record.key) ?? 0) + 1);
+    }
+  }
+
+  return { creatorCountsByMid, topicCountsByKey };
 }
 
 export async function markDynamicBillItemOpened(billKey: string, openedAt = Date.now()): Promise<DynamicBillItem | null> {
@@ -326,6 +382,87 @@ function isEffectiveHistoryRecord(record: WatchHistoryRecord): boolean {
   return record.isFavorite
     || record.actualCompletion >= DYNAMIC_BILL_STRATEGY.positiveCompletionRate
     || record.progress >= DYNAMIC_BILL_STRATEGY.minPositiveWatchSeconds;
+}
+
+function buildDynamicBillFeedbackRecord(
+  item: DynamicBillItem,
+  scope: DynamicBillFeedbackScope,
+  createdAt: number,
+): DynamicBillFeedbackRecord {
+  if (scope === 'creator') {
+    return {
+      scope,
+      key: String(item.creatorMid),
+      label: item.creatorName || String(item.creatorMid),
+      billKey: item.billKey,
+      column: item.column,
+      creatorMid: item.creatorMid,
+      creatorName: item.creatorName,
+      createdAt,
+    };
+  }
+
+  if (scope === 'topic') {
+    const interest = item.evidence.interest;
+    if (!interest) throw new Error('DYNAMIC_BILL_TOPIC_FEEDBACK_UNAVAILABLE');
+    return {
+      scope,
+      key: interest.key,
+      label: `${interestKindLabel(interest.kind)}：${interest.label}`,
+      billKey: item.billKey,
+      column: item.column,
+      creatorMid: item.creatorMid,
+      creatorName: item.creatorName,
+      topicKind: interest.kind,
+      topicLabel: interest.label,
+      createdAt,
+    };
+  }
+
+  throw new Error('INVALID_DYNAMIC_BILL_FEEDBACK_SCOPE');
+}
+
+function buildDynamicBillFeedbackSummary(
+  scope: DynamicBillFeedbackScope,
+  key: string,
+  label: string,
+  count: number,
+): DynamicBillFeedbackSummary {
+  const thresholds = getDynamicBillFeedbackThresholds();
+  const blockCount = scope === 'creator'
+    ? thresholds.creatorBlockCount
+    : thresholds.topicBlockCount;
+
+  return {
+    scope,
+    key,
+    label,
+    count,
+    isDampened: count >= thresholds.dampenCount,
+    isBlocked: count >= blockCount,
+    shouldShowCreatorReviewPrompt:
+      scope === 'creator' && count >= thresholds.creatorReviewPromptCount,
+    thresholds,
+  };
+}
+
+function getDynamicBillFeedbackThresholds(): DynamicBillFeedbackThresholds {
+  return {
+    dampenCount: DYNAMIC_BILL_STRATEGY.feedbackDampenCount,
+    creatorBlockCount: DYNAMIC_BILL_STRATEGY.feedbackCreatorBlockCount,
+    topicBlockCount: DYNAMIC_BILL_STRATEGY.feedbackTopicBlockCount,
+    creatorReviewPromptCount: DYNAMIC_BILL_STRATEGY.feedbackCreatorReviewPromptCount,
+    scoreMultiplier: DYNAMIC_BILL_STRATEGY.feedbackScoreMultiplier,
+  };
+}
+
+function normalizeCreatorMid(creatorMid: unknown, key: string): number | null {
+  const raw = Number.isFinite(Number(creatorMid)) ? Number(creatorMid) : Number(key);
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+function interestKindLabel(kind: string): string {
+  return kind === 'category' ? '分区' : '标签';
 }
 
 function isDynamicBillStatusFilter(status: unknown): status is DynamicBillStatusFilter {

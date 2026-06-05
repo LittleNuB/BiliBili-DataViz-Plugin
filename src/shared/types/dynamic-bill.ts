@@ -39,6 +39,7 @@ export type DynamicBillStatus = 'unopened' | 'opened' | 'consumed' | 'processed'
 export type DynamicBillStatusFilter = 'active' | DynamicBillStatus;
 export type DynamicBillInterestKind = 'category' | 'tag';
 export type DynamicBillFollowMemorySignal = 'long_follow' | 'special_follow' | 'weak_watch';
+export type DynamicBillFeedbackScope = 'creator' | 'topic';
 
 export type DynamicSyncStatus = 'idle' | 'syncing' | 'success' | 'not_logged_in' | 'failed';
 export type DynamicSyncStage = 'idle' | 'following' | 'dynamic-feed' | 'video-detail' | 'storage' | 'complete';
@@ -66,6 +67,45 @@ export interface DynamicBillOverview {
 export interface DynamicBillFilterPreference {
   status: DynamicBillStatusFilter;
   updatedAt: number;
+}
+
+export interface DynamicBillFeedbackRecord {
+  id?: number;
+  scope: DynamicBillFeedbackScope;
+  key: string;
+  label: string;
+  billKey: string;
+  column: DynamicBillColumn;
+  creatorMid: number;
+  creatorName: string;
+  topicKind?: DynamicBillInterestKind;
+  topicLabel?: string;
+  createdAt: number;
+}
+
+export interface DynamicBillFeedbackThresholds {
+  dampenCount: number;
+  creatorBlockCount: number;
+  topicBlockCount: number;
+  creatorReviewPromptCount: number;
+  scoreMultiplier: number;
+}
+
+export interface DynamicBillFeedbackSummary {
+  scope: DynamicBillFeedbackScope;
+  key: string;
+  label: string;
+  count: number;
+  isDampened: boolean;
+  isBlocked: boolean;
+  shouldShowCreatorReviewPrompt: boolean;
+  thresholds: DynamicBillFeedbackThresholds;
+}
+
+export interface DynamicBillFeedbackResult {
+  feedback: DynamicBillFeedbackRecord;
+  summary: DynamicBillFeedbackSummary;
+  item: DynamicBillItem;
 }
 
 export interface DynamicSyncResult {
@@ -139,6 +179,11 @@ export interface DynamicBillThresholdEvidence {
   minBuriedWeakWatchCount: number;
   maxBuriedRecentWatchCount: number;
   maxBuriedRecentPositiveWatchCount: number;
+  feedbackDampenCount: number;
+  feedbackCreatorBlockCount: number;
+  feedbackTopicBlockCount: number;
+  feedbackCreatorReviewPromptCount: number;
+  feedbackScoreMultiplier: number;
 }
 
 export interface DynamicBillInterestEvidence {
@@ -191,6 +236,7 @@ export interface DynamicBillGenerateResult {
   excludedNoLongSignalCount: number;
   excludedRecentActiveCount: number;
   excludedRecentSameVideoCount: number;
+  excludedByFeedbackCount: number;
   columnItemCounts: Record<DynamicBillColumn, number>;
   columnEligibleCounts: Record<DynamicBillColumn, number>;
   items: DynamicBillItem[];

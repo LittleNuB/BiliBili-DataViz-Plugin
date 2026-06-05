@@ -10,10 +10,12 @@ import type { WatchHistoryRecord } from '../../shared/types/watch-event';
 import { getRecordsSince } from '../storage/watch-history-repo';
 import {
   getActiveFollowedCreators,
+  getDynamicBillFeedbackProfile,
   getDynamicBillOverview,
   getRecentFollowedVideoUpdates,
   replaceDynamicBillItemsForColumn,
 } from '../storage/dynamic-bill-repo';
+import { applyDynamicBillFeedbackScore, evaluateDynamicBillFeedback } from './feedback';
 import { DYNAMIC_BILL_STRATEGY, getDynamicBillThresholdEvidence } from './strategy';
 
 const SECONDS_PER_DAY = 86_400;
@@ -57,7 +59,10 @@ interface VarietyCandidate {
   daysSinceLastWatch: number | null;
   historyBvids: string[];
   score: number;
+  feedbackFacts: string[];
 }
+
+type VarietyCandidateInput = Omit<VarietyCandidate, 'score' | 'feedbackFacts'>;
 
 export async function generateVarietyBillItems(): Promise<DynamicBillGenerateResult> {
   const generatedAt = Date.now();
@@ -67,10 +72,11 @@ export async function generateVarietyBillItems(): Promise<DynamicBillGenerateRes
   const recentCutoff = nowSeconds - DYNAMIC_BILL_STRATEGY.recentWindowDays * SECONDS_PER_DAY;
   const recentSameVideoCutoff = nowSeconds - DYNAMIC_BILL_STRATEGY.recentSameVideoWindowDays * SECONDS_PER_DAY;
 
-  const [creators, updates, longRecords] = await Promise.all([
+  const [creators, updates, longRecords, feedbackProfile] = await Promise.all([
     getActiveFollowedCreators(),
     getRecentFollowedVideoUpdates(DYNAMIC_BILL_STRATEGY.updateWindowDays),
     getRecordsSince(longCutoff),
+    getDynamicBillFeedbackProfile(),
   ]);
 
   const activeCreatorsByMid = new Map(creators.map(creator => [creator.mid, creator]));
@@ -108,6 +114,7 @@ export async function generateVarietyBillItems(): Promise<DynamicBillGenerateRes
 
   const candidates: VarietyCandidate[] = [];
   let excludedNoMatchingInterestUpdateCount = 0;
+  let excludedByFeedbackCount = 0;
 
   for (const update of unwatchedUpdates) {
     const creator = activeCreatorsByMid.get(update.authorMid);
@@ -131,8 +138,7 @@ export async function generateVarietyBillItems(): Promise<DynamicBillGenerateRes
       .filter(signal => signal.key === interest.key)
       .map(signal => signal.label);
     const historyBvids = selectHistoryHighlights(interest.longStats.records, update.bvid, recentCutoff);
-
-    const candidate: Omit<VarietyCandidate, 'score'> = {
+    const candidateInput: VarietyCandidateInput = {
       creator,
       update,
       interest,
@@ -140,10 +146,23 @@ export async function generateVarietyBillItems(): Promise<DynamicBillGenerateRes
       daysSinceLastWatch,
       historyBvids,
     };
+    const feedback = evaluateDynamicBillFeedback(feedbackProfile, {
+      creatorMid: creator.mid,
+      topicKey: interest.key,
+      topicLabel: `${formatInterestKind(interest.kind)}「${interest.label}」`,
+    });
+    if (feedback.blocked) {
+      excludedByFeedbackCount++;
+      continue;
+    }
 
     candidates.push({
-      ...candidate,
-      score: scoreVarietyCandidate(candidate, nowSeconds),
+      ...candidateInput,
+      feedbackFacts: feedback.facts,
+      score: applyDynamicBillFeedbackScore(
+        scoreVarietyCandidate(candidateInput, nowSeconds),
+        feedback,
+      ),
     });
   }
 
@@ -164,6 +183,7 @@ export async function generateVarietyBillItems(): Promise<DynamicBillGenerateRes
       interestSelection.excludedNoLongSignalCount + excludedNoMatchingInterestUpdateCount,
     excludedRecentActiveCount: interestSelection.excludedRecentActiveCount,
     excludedRecentSameVideoCount,
+    excludedByFeedbackCount,
     columnItemCounts: {
       afk_update: 0,
       variety: storedItems.length,
@@ -362,7 +382,7 @@ function scoreInterest(interest: EligibleInterest): number {
 }
 
 function scoreVarietyCandidate(
-  candidate: Omit<VarietyCandidate, 'score'>,
+  candidate: VarietyCandidateInput,
   nowSeconds: number,
 ): number {
   const followAgeDays = getFollowAgeDays(candidate.creator, nowSeconds) ?? 0;
@@ -459,6 +479,8 @@ function buildFacts(candidate: VarietyCandidate, followAgeDays?: number): string
   } else {
     facts.push('关注时间未知；入选不依赖关注时长。');
   }
+
+  facts.push(...candidate.feedbackFacts);
 
   return facts;
 }

@@ -1,5 +1,5 @@
 import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse, PlayerActionPayload, PlayerHeartbeatPayload, SyncNowResult } from '../../shared/types/messages';
-import type { DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
+import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import { runInitialBackfill } from '../sync/initial-backfill';
 import {
   saveConfig,
@@ -32,6 +32,7 @@ import { getDynamicOverview, syncDynamicBillUpdates } from '../dynamic-bill/sync
 import {
   getDynamicBillFilterPreference,
   getDynamicBillItems,
+  addDynamicBillFeedback,
   markDynamicBillItemOpened,
   markDynamicBillItemProcessed,
   markDynamicBillItemsConsumedByBvid,
@@ -250,6 +251,11 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       const status = normalizeDynamicBillStatusFilter(request.params?.status);
       return { success: true, data: await setDynamicBillFilterPreference(status) as T };
     }
+    case 'ADD_DYNAMIC_BILL_FEEDBACK': {
+      const billKey = requireStringParam(request.params?.billKey, 'billKey');
+      const scope = normalizeDynamicBillFeedbackScope(request.params?.scope);
+      return { success: true, data: await addDynamicBillFeedback(billKey, scope) as T };
+    }
     case 'OPEN_DYNAMIC_BILL_VIDEO': {
       const billKey = requireStringParam(request.params?.billKey, 'billKey');
       const item = await markDynamicBillItemOpened(billKey);
@@ -296,6 +302,11 @@ function normalizeDynamicBillStatusFilter(value: unknown): DynamicBillStatusFilt
     return value;
   }
   throw new Error('INVALID_DYNAMIC_BILL_STATUS_FILTER');
+}
+
+function normalizeDynamicBillFeedbackScope(value: unknown): DynamicBillFeedbackScope {
+  if (value === 'creator' || value === 'topic') return value;
+  throw new Error('INVALID_DYNAMIC_BILL_FEEDBACK_SCOPE');
 }
 
 function requireStringParam(value: unknown, name: string): string {

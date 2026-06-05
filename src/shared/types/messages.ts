@@ -1,5 +1,5 @@
 import type { QuickStats, DashboardOverview, CategoryDistribution, InterestDrift, DurationBucket, CreatorRanking, NewCreator, BehaviorMetrics, WeeklyTip, BlindBoxItem } from './analytics';
-import type { DynamicBillFilterPreference, DynamicBillGenerateResult, DynamicBillItem, DynamicBillOverview, DynamicSyncResult } from './dynamic-bill';
+import type { DynamicBillFeedbackResult, DynamicBillFilterPreference, DynamicBillGenerateResult, DynamicBillItem, DynamicBillOverview, DynamicSyncResult } from './dynamic-bill';
 import type { FavoriteSyncResult, SmartFavoriteOverview, SmartFavoriteResult, SmartFavoriteSearchResponse, SmartIndexResult } from './favorite';
 
 // Popup / Dashboard → Service Worker
@@ -29,6 +29,7 @@ export type RequestAction =
   | 'GET_DYNAMIC_BILL_ITEMS'
   | 'GET_DYNAMIC_BILL_FILTER'
   | 'UPDATE_DYNAMIC_BILL_FILTER'
+  | 'ADD_DYNAMIC_BILL_FEEDBACK'
   | 'OPEN_DYNAMIC_BILL_VIDEO'
   | 'MARK_DYNAMIC_BILL_ITEM_PROCESSED';
 
@@ -150,3 +151,4 @@ export type DynamicBillGenerateResponse = BiliVizResponse<DynamicBillGenerateRes
 export type DynamicBillItemsResponse = BiliVizResponse<DynamicBillItem[]>;
 export type DynamicBillItemResponse = BiliVizResponse<DynamicBillItem | null>;
 export type DynamicBillFilterResponse = BiliVizResponse<DynamicBillFilterPreference>;
+export type DynamicBillFeedbackResponse = BiliVizResponse<DynamicBillFeedbackResult>;

@@ -10,10 +10,12 @@ import type { WatchHistoryRecord } from '../../shared/types/watch-event';
 import { getRecordsSince } from '../storage/watch-history-repo';
 import {
   getActiveFollowedCreators,
+  getDynamicBillFeedbackProfile,
   getDynamicBillOverview,
   getRecentFollowedVideoUpdates,
   replaceDynamicBillItemsForColumn,
 } from '../storage/dynamic-bill-repo';
+import { applyDynamicBillFeedbackScore, evaluateDynamicBillFeedback } from './feedback';
 import { DYNAMIC_BILL_STRATEGY, getDynamicBillThresholdEvidence } from './strategy';
 
 const SECONDS_PER_DAY = 86_400;
@@ -35,7 +37,10 @@ interface Candidate {
   historicalWeakWatchCount: number;
   historyBvids: string[];
   score: number;
+  feedbackFacts: string[];
 }
+
+type CandidateInput = Omit<Candidate, 'score' | 'feedbackFacts'>;
 
 export async function generateBuriedFollowBillItems(): Promise<DynamicBillGenerateResult> {
   const generatedAt = Date.now();
@@ -45,10 +50,11 @@ export async function generateBuriedFollowBillItems(): Promise<DynamicBillGenera
   const recentCutoff = nowSeconds - DYNAMIC_BILL_STRATEGY.recentWindowDays * SECONDS_PER_DAY;
   const recentSameVideoCutoff = nowSeconds - DYNAMIC_BILL_STRATEGY.recentSameVideoWindowDays * SECONDS_PER_DAY;
 
-  const [creators, updates, longRecords] = await Promise.all([
+  const [creators, updates, longRecords, feedbackProfile] = await Promise.all([
     getActiveFollowedCreators(),
     getRecentFollowedVideoUpdates(DYNAMIC_BILL_STRATEGY.updateWindowDays),
     getRecordsSince(longCutoff),
+    getDynamicBillFeedbackProfile(),
   ]);
 
   const activeCreatorsByMid = new Map(creators.map(creator => [creator.mid, creator]));
@@ -78,6 +84,7 @@ export async function generateBuriedFollowBillItems(): Promise<DynamicBillGenera
   const candidates: Candidate[] = [];
   let excludedNoLongSignalCount = 0;
   let excludedRecentActiveCount = 0;
+  let excludedByFeedbackCount = 0;
 
   for (const [creatorMid, update] of newestUnwatchedUpdateByCreator) {
     const creator = activeCreatorsByMid.get(creatorMid);
@@ -120,8 +127,7 @@ export async function generateBuriedFollowBillItems(): Promise<DynamicBillGenera
       ? recentStats.watchedCount / DYNAMIC_BILL_STRATEGY.maxBuriedRecentWatchCount
       : 0;
     const historyBvids = selectHistoryHighlights(creatorRecords, update.bvid, recentCutoff);
-
-    const candidate: Omit<Candidate, 'score'> = {
+    const candidateInput: CandidateInput = {
       creator,
       update,
       longStats,
@@ -133,10 +139,21 @@ export async function generateBuriedFollowBillItems(): Promise<DynamicBillGenera
       historicalWeakWatchCount,
       historyBvids,
     };
+    const feedback = evaluateDynamicBillFeedback(feedbackProfile, {
+      creatorMid,
+    });
+    if (feedback.blocked) {
+      excludedByFeedbackCount++;
+      continue;
+    }
 
     candidates.push({
-      ...candidate,
-      score: scoreCandidate(candidate, nowSeconds),
+      ...candidateInput,
+      feedbackFacts: feedback.facts,
+      score: applyDynamicBillFeedbackScore(
+        scoreCandidate(candidateInput, nowSeconds),
+        feedback,
+      ),
     });
   }
 
@@ -156,6 +173,7 @@ export async function generateBuriedFollowBillItems(): Promise<DynamicBillGenera
     excludedNoLongSignalCount,
     excludedRecentActiveCount,
     excludedRecentSameVideoCount,
+    excludedByFeedbackCount,
     columnItemCounts: {
       afk_update: 0,
       variety: 0,
@@ -271,7 +289,7 @@ function selectHistoryHighlights(
     .slice(0, DYNAMIC_BILL_STRATEGY.maxHighlightsPerItem);
 }
 
-function scoreCandidate(candidate: Omit<Candidate, 'score'>, nowSeconds: number): number {
+function scoreCandidate(candidate: CandidateInput, nowSeconds: number): number {
   const updateAgeDays = Math.max(0, (nowSeconds - candidate.update.dynamicTime) / SECONDS_PER_DAY);
   const followAgeStrength = candidate.followAgeDays !== undefined
     ? Math.min(candidate.followAgeDays / 365, 4) * 5
@@ -354,6 +372,8 @@ function buildFacts(candidate: Candidate): string[] {
   } else {
     facts.push('本地长期窗口未发现该 UP 的观看记录；本项由关注关系记忆信号支撑，而不是强历史观看正反馈。');
   }
+
+  facts.push(...candidate.feedbackFacts);
 
   return facts;
 }
