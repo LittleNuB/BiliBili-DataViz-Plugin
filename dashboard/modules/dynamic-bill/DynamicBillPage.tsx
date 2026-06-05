@@ -371,7 +371,7 @@ export function DynamicBillPage() {
           <span className="dynamic-bill-kicker">消费前 / 已关注视频投稿</span>
           <h2>动态账单</h2>
           <p>
-            久违更新、换换口味和被淹没的关注由本地规则入选和排序；AI 只生成解释展示，未启用、未配置或失败时继续显示本地证据 fallback。
+            面向兴趣再平衡，久违更新、换换口味和被淹没的关注由本地规则入选和排序；AI 只生成解释展示，未启用、未配置或失败时继续显示本地证据 fallback。
           </p>
         </div>
         <div className="dynamic-bill-scope">

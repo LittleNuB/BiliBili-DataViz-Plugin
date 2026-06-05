@@ -71,6 +71,17 @@ interface DynamicBillExplanationPayload {
 const DEFAULT_EXPLANATION_BATCH_SIZE = 6;
 const MAX_EXPLANATION_BATCH_SIZE = 12;
 const MAX_FACTS_IN_PROMPT = 7;
+const AI_FACT_EXCLUDED_TERMS = [
+  '少提醒',
+  '反馈',
+  '完整历史',
+  '完整关注列表',
+  '关注列表',
+  'Cookie',
+  '用户 mid',
+  '个人资料',
+  '反馈记录',
+];
 
 export async function buildDynamicBillExplanations(
   options: BuildDynamicBillExplanationOptions = {},
@@ -384,7 +395,7 @@ function cardReason(item: DynamicBillItem): string {
 
 function compactFacts(facts: string[]): string[] {
   return facts
-    .filter(fact => !fact.includes('少提醒') && !fact.includes('反馈'))
+    .filter(fact => !AI_FACT_EXCLUDED_TERMS.some(term => fact.includes(term)))
     .map(fact => limitText(fact, 180))
     .slice(0, MAX_FACTS_IN_PROMPT);
 }

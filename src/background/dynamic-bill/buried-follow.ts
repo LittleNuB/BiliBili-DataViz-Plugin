@@ -364,7 +364,7 @@ function buildFacts(candidate: Candidate): string[] {
     `近期缺席证据：最近 ${recent.windowDays} 天观看 ${recent.watchedCount} 次、正反馈 ${recent.positiveWatchCount} 次；规则要求观看不超过 ${DYNAMIC_BILL_STRATEGY.maxBuriedRecentWatchCount} 次且正反馈为 ${DYNAMIC_BILL_STRATEGY.maxBuriedRecentPositiveWatchCount} 次。`,
     `新投稿证据：最近 ${DYNAMIC_BILL_STRATEGY.updateWindowDays} 天，已关注 UP「${candidate.creator.name || candidate.update.authorName}」发布《${candidate.update.title || candidate.update.bvid}》。`,
     `本地最近 ${DYNAMIC_BILL_STRATEGY.recentSameVideoWindowDays} 天未发现同一新视频 ${candidate.update.bvid} 的观看记录。`,
-    '入选只使用本地关注快照、观看历史聚合和最近投稿元数据；AI 不参与入选，也不上传完整历史或完整关注列表。',
+    '入选只使用本地聚合证据和最近投稿元数据；AI 不参与入选。',
   ];
 
   if (candidate.daysSinceLastWatch !== null) {
