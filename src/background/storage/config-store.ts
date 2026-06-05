@@ -16,6 +16,10 @@ export async function loadConfig(): Promise<UserConfig> {
         ...DEFAULT_CONFIG.ai,
         ...(result[CONFIG_KEY].ai ?? {}),
       },
+      dynamicBill: {
+        ...DEFAULT_CONFIG.dynamicBill,
+        ...(result[CONFIG_KEY].dynamicBill ?? {}),
+      },
     };
   }
   return DEFAULT_CONFIG;
@@ -29,6 +33,10 @@ export async function saveConfig(config: Partial<UserConfig>): Promise<void> {
     ai: {
       ...current.ai,
       ...(config.ai ?? {}),
+    },
+    dynamicBill: {
+      ...current.dynamicBill,
+      ...(config.dynamicBill ?? {}),
     },
   };
   await chrome.storage.local.set({ [CONFIG_KEY]: updated });

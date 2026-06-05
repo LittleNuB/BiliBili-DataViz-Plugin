@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import type {
   DynamicBillColumn,
+  DynamicBillExplanation,
+  DynamicBillExplanationResult,
   DynamicBillFeedbackResult,
   DynamicBillFeedbackScope,
   DynamicBillFilterPreference,
@@ -13,6 +15,7 @@ import type {
   DynamicSyncResult,
   DynamicSyncStatus,
 } from "../../../src/shared/types/dynamic-bill";
+import type { UserConfig } from "../../../src/shared/types/config";
 import { requestSW } from "../../utils/messaging";
 
 const STATUS_FILTERS: Array<{
@@ -67,9 +70,11 @@ export function DynamicBillPage() {
   const [statusFilter, setStatusFilter] = useState<DynamicBillStatusFilter>("active");
   const [overview, setOverview] = useState<DynamicBillOverview | null>(null);
   const [items, setItems] = useState<DynamicBillItem[]>([]);
+  const [userConfig, setUserConfig] = useState<UserConfig | null>(null);
   const [selectedBillKey, setSelectedBillKey] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [explaining, setExplaining] = useState(false);
   const [processingBillKey, setProcessingBillKey] = useState("");
   const [creatorReviewPrompt, setCreatorReviewPrompt] =
     useState<CreatorReviewPrompt | null>(null);
@@ -78,6 +83,13 @@ export function DynamicBillPage() {
     STATUS_FILTERS.find((item) => item.key === statusFilter) ?? STATUS_FILTERS[0];
   const syncState = overview?.syncState;
   const isSyncing = syncing || syncState?.status === "syncing";
+  const isAiEnabled = userConfig?.dynamicBill.aiExplanationsEnabled === true;
+  const isAiConfigured = Boolean(userConfig?.ai.apiKey.trim());
+  const aiAvailability = {
+    enabled: isAiEnabled,
+    configured: isAiConfigured,
+    model: userConfig?.ai.chatModel ?? "",
+  };
   const overviewNotice = overview
     ? describeOverview(overview)
     : "正在读取动态账单同步状态。";
@@ -104,6 +116,9 @@ export function DynamicBillPage() {
   const statusCounts = useMemo(() => countByStatus(items), [items]);
 
   useEffect(() => {
+    refreshConfig().catch((error) => {
+      setNotice(`读取 AI 配置失败：${describeError(error)}`);
+    });
     refreshFilterPreference().catch((error) => {
       setNotice(`读取筛选偏好失败：${describeError(error)}`);
     });
@@ -126,6 +141,10 @@ export function DynamicBillPage() {
       "GET_DYNAMIC_BILL_OVERVIEW",
     );
     setOverview(next);
+  }
+
+  async function refreshConfig() {
+    setUserConfig(await requestSW<UserConfig>("GET_CONFIG"));
   }
 
   async function refreshFilterPreference() {
@@ -244,6 +263,77 @@ export function DynamicBillPage() {
     }
   }
 
+  async function handleToggleAiExplanations() {
+    const current = userConfig ?? await requestSW<UserConfig>("GET_CONFIG");
+    const nextEnabled = !current.dynamicBill.aiExplanationsEnabled;
+    setNotice("");
+    try {
+      await requestSW("UPDATE_CONFIG", {
+        dynamicBill: {
+          aiExplanationsEnabled: nextEnabled,
+        },
+      });
+      await refreshConfig();
+      setNotice(nextEnabled
+        ? "已启用动态账单 AI 解释；生成时只会发送已入选账单项的必要视频元数据和紧凑证据事实。"
+        : "已关闭动态账单 AI 解释；页面继续显示本地证据 fallback。");
+    } catch (error) {
+      setNotice(`更新 AI 解释开关失败：${describeError(error)}`);
+    }
+  }
+
+  async function handleBuildExplanations() {
+    setExplaining(true);
+    setNotice("");
+    try {
+      const total: DynamicBillExplanationResult = {
+        status: "idle",
+        processed: 0,
+        generated: 0,
+        failed: 0,
+        skipped: 0,
+        fallback: 0,
+        pending: 0,
+        items,
+      };
+      let guard = Math.ceil(Math.max(items.length, 1) / 6) + 2;
+      let includeFailedInNextBatch = true;
+      do {
+        const batch = await requestSW<DynamicBillExplanationResult>(
+          "BUILD_DYNAMIC_BILL_EXPLANATIONS",
+          {
+            maxItems: 6,
+            includeFailed: includeFailedInNextBatch,
+          },
+        );
+        includeFailedInNextBatch = false;
+        total.status = batch.status;
+        total.processed += batch.processed;
+        total.generated += batch.generated;
+        total.failed += batch.failed;
+        total.skipped += batch.skipped;
+        total.fallback += batch.fallback;
+        total.pending = batch.pending;
+        total.items = batch.items;
+        setItems(batch.items);
+        setNotice(describeExplanationResult(total));
+        if (
+          batch.status === "disabled"
+          || batch.status === "not_configured"
+          || batch.processed === 0
+        ) {
+          break;
+        }
+      } while (total.pending > 0 && guard-- > 0);
+      await refreshBillItems();
+    } catch (error) {
+      setNotice(`生成 AI 解释失败：${describeError(error)}。页面仍展示本地证据 fallback。`);
+      await refreshBillItems().catch(() => {});
+    } finally {
+      setExplaining(false);
+    }
+  }
+
   async function handleSync() {
     setSyncing(true);
     setNotice("");
@@ -281,19 +371,19 @@ export function DynamicBillPage() {
           <span className="dynamic-bill-kicker">消费前 / 已关注视频投稿</span>
           <h2>动态账单</h2>
           <p>
-            久违更新、换换口味和被淹没的关注用本地观看历史、关注快照和最近投稿池生成，不接 AI，也不上传完整历史或完整关注列表。
+            久违更新、换换口味和被淹没的关注由本地规则入选和排序；AI 只生成解释展示，未启用、未配置或失败时继续显示本地证据 fallback。
           </p>
         </div>
         <div className="dynamic-bill-scope">
-          <strong>本地证据范围</strong>
+          <strong>解释数据范围</strong>
           <span>
-            同步已关注 UP 最近 7 天视频投稿；生成时按长期正反馈、长期兴趣落差或关注记忆信号分别入栏，并排除近期已看过的同一新视频。
+            AI 只接收已入选账单项的新视频标题/简介、UP 名、分区/标签、发布时间、时长和紧凑证据事实；不发送完整历史、完整关注列表、Cookie、用户 mid、个人资料或反馈记录。
           </span>
           <div className="dynamic-bill-scope-actions">
             <button
               type="button"
               className="dynamic-bill-sync-button"
-              disabled={isSyncing || generating}
+              disabled={isSyncing || generating || explaining}
               onClick={handleSync}
             >
               {isSyncing ? "同步中..." : "同步并刷新"}
@@ -301,10 +391,26 @@ export function DynamicBillPage() {
             <button
               type="button"
               className="dynamic-bill-sync-button is-secondary"
-              disabled={isSyncing || generating}
+              disabled={isSyncing || generating || explaining}
               onClick={handleGenerate}
             >
               {generating ? "生成中..." : "生成本地账单"}
+            </button>
+            <button
+              type="button"
+              className="dynamic-bill-sync-button is-secondary"
+              disabled={isSyncing || generating || explaining || items.length === 0}
+              onClick={handleBuildExplanations}
+            >
+              {explaining ? "解释生成中..." : "生成 AI 解释"}
+            </button>
+            <button
+              type="button"
+              className="dynamic-bill-sync-button is-ghost"
+              disabled={isSyncing || generating || explaining}
+              onClick={handleToggleAiExplanations}
+            >
+              {isAiEnabled ? "关闭 AI 解释" : "启用 AI 解释"}
             </button>
           </div>
         </div>
@@ -342,7 +448,7 @@ export function DynamicBillPage() {
       >
         <strong>{notice || overviewNotice}</strong>
         <span>
-          本切片启用三类本地证据栏目；状态只会从未打开向已打开、已消费、已处理推进。少提醒反馈只写入本地，后续生成会按 UP 或主题降权，达到阈值后不再写入候选。
+          本切片启用三类本地证据栏目；状态只会从未打开向已打开、已消费、已处理推进。AI 置信度仅展示，不参与入选、排序、状态推进或少提醒规则。
         </span>
       </section>
 
@@ -447,6 +553,7 @@ export function DynamicBillPage() {
               onDismissCreatorReviewPrompt={() => setCreatorReviewPrompt(null)}
               onMarkProcessed={handleMarkProcessed}
               onOpenVideo={handleOpenVideo}
+              aiAvailability={aiAvailability}
             />
           ) : (
             <EmptyDetail status={activeStatus} />
@@ -458,6 +565,7 @@ export function DynamicBillPage() {
 }
 
 function BillItemDetail({
+  aiAvailability,
   busy,
   creatorReviewPrompt,
   item,
@@ -466,6 +574,11 @@ function BillItemDetail({
   onMarkProcessed,
   onOpenVideo,
 }: {
+  aiAvailability: {
+    enabled: boolean;
+    configured: boolean;
+    model: string;
+  };
   busy: boolean;
   creatorReviewPrompt: CreatorReviewPrompt | null;
   item: DynamicBillItem;
@@ -486,6 +599,7 @@ function BillItemDetail({
       <p>
         新投稿：{evidence.newVideo.title || evidence.newVideo.bvid}
       </p>
+      <ExplanationPanel item={item} aiAvailability={aiAvailability} />
       <div className="dynamic-bill-status-copy">
         <strong>处理状态</strong>
         <span>{statusFlowCopy(item)}</span>
@@ -623,6 +737,73 @@ function BillItemDetail({
   );
 }
 
+function ExplanationPanel({
+  aiAvailability,
+  item,
+}: {
+  aiAvailability: {
+    enabled: boolean;
+    configured: boolean;
+    model: string;
+  };
+  item: DynamicBillItem;
+}) {
+  const explanation = item.explanation;
+  const hasAiExplanation = explanation?.status === "generated";
+  const summary = hasAiExplanation
+    ? explanation.summary
+    : localFallbackSummary(item);
+  const reason = hasAiExplanation
+    ? explanation.reason
+    : localFallbackReason(item);
+  const viewingAngle = hasAiExplanation
+    ? explanation.viewingAngle
+    : localFallbackViewingAngle(item);
+  const keywords = hasAiExplanation
+    ? explanation.keywords
+    : localFallbackKeywords(item);
+
+  return (
+    <div
+      className={`dynamic-bill-ai-panel ${hasAiExplanation ? "is-ai" : "is-fallback"}`}
+      data-testid={`dynamic-bill-explanation-${hasAiExplanation ? "ai" : "fallback"}`}
+    >
+      <div className="dynamic-bill-ai-head">
+        <div>
+          <strong>{hasAiExplanation ? "AI 解释" : "本地证据 fallback"}</strong>
+          <span>{explanationStateCopy(explanation, aiAvailability)}</span>
+        </div>
+        {hasAiExplanation ? (
+          <em title="confidence 只展示，不参与入选、排序或后续规则">
+            置信度 {Math.round(explanation.confidence * 100)}%
+          </em>
+        ) : null}
+      </div>
+      <div className="dynamic-bill-ai-grid">
+        <section>
+          <span>摘要</span>
+          <p>{summary}</p>
+        </section>
+        <section>
+          <span>为什么出现</span>
+          <p>{reason}</p>
+        </section>
+        <section>
+          <span>观看角度</span>
+          <p>{viewingAngle}</p>
+        </section>
+      </div>
+      {keywords.length > 0 ? (
+        <div className="dynamic-bill-keywords" aria-label="解释关键词">
+          {keywords.map((keyword) => (
+            <span key={keyword}>{keyword}</span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function EmptyDetail({
   status,
 }: {
@@ -698,6 +879,17 @@ function describeSyncResult(result: DynamicSyncResult): string {
 
 function describeGenerateResult(result: DynamicBillGenerateResult): string {
   return `本地账单生成 ${result.itemCount} 项：久违更新 ${result.columnItemCounts.afk_update} 项，换换口味 ${result.columnItemCounts.variety} 项，被淹没的关注 ${result.columnItemCounts.buried_follow} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除近期已看同视频 ${result.excludedRecentSameVideoCount} 条，长期/关注记忆证据不足 ${result.excludedNoLongSignalCount} 个，近期仍活跃 ${result.excludedRecentActiveCount} 个，本地少提醒阈值排除 ${result.excludedByFeedbackCount} 个。`;
+}
+
+function describeExplanationResult(result: DynamicBillExplanationResult): string {
+  if (result.status === "disabled") {
+    return `AI 解释未启用，已为 ${result.fallback} 个账单项展示本地证据 fallback。`;
+  }
+  if (result.status === "not_configured") {
+    return `AI 未配置 API Key，已为 ${result.fallback} 个账单项展示本地证据 fallback。`;
+  }
+  const pending = result.pending > 0 ? `，剩余 ${result.pending} 个待处理` : "";
+  return `AI 解释处理 ${result.processed} 项：成功 ${result.generated} 项，失败 ${result.failed} 项，跳过 ${result.skipped} 项${pending}；失败项仍展示本地证据 fallback。`;
 }
 
 function describeFeedbackResult(result: DynamicBillFeedbackResult): string {
@@ -790,6 +982,73 @@ function cardFact(item: DynamicBillItem): string {
     return `${interestKindLabel(interest.kind)}「${interest.label}」 · 长期占比 ${formatPercent(interest.longPositiveShare)} · 下降 ${formatPercent(interest.positiveDropRatio)}`;
   }
   return `长期正反馈 ${item.evidence.longWindow.positiveWatchCount} 次 · 近期正反馈 ${item.evidence.recentWindow.positiveWatchCount} 次`;
+}
+
+function explanationStateCopy(
+  explanation: DynamicBillExplanation | undefined,
+  aiAvailability: {
+    enabled: boolean;
+    configured: boolean;
+    model: string;
+  },
+): string {
+  if (explanation?.status === "generated") {
+    return `由 ${explanation.model || aiAvailability.model || "AI"} 生成；只用于展示解释，不参与入选、排序或后续规则。`;
+  }
+  if (explanation?.status === "failed") {
+    return `AI 生成失败：${explanation.error ?? "未知错误"}；以下使用本地规则事实解释。`;
+  }
+  if (explanation?.status === "not_configured" || (aiAvailability.enabled && !aiAvailability.configured)) {
+    return "AI 未配置 API Key；以下使用本地规则事实解释。";
+  }
+  if (explanation?.status === "disabled" || !aiAvailability.enabled) {
+    return "AI 解释未启用；以下使用本地规则事实解释。";
+  }
+  return "尚未生成 AI 解释；以下使用本地规则事实解释。";
+}
+
+function localFallbackSummary(item: DynamicBillItem): string {
+  return `来自已关注 UP「${item.creatorName}」的新投稿《${item.evidence.newVideo.title || item.evidence.newVideo.bvid}》。`;
+}
+
+function localFallbackReason(item: DynamicBillItem): string {
+  const facts = localExplanationFacts(item).slice(0, 2).join(" ");
+  return `这个视频出现是因为它已由「${columnTitle(item.column)}」本地规则入选：${facts || localColumnReason(item)}。`;
+}
+
+function localFallbackViewingAngle(item: DynamicBillItem): string {
+  if (item.column === "variety" && item.evidence.interest) {
+    return `把它当作回到「${item.evidence.interest.label}」这个长期兴趣的一次口味切换。`;
+  }
+  if (item.column === "buried_follow") {
+    return "把它当作一次低压力回访，判断这个长期关注是否仍值得保留注意力。";
+  }
+  return "先看它是否能补回一条近期冷却的历史兴趣线。";
+}
+
+function localFallbackKeywords(item: DynamicBillItem): string[] {
+  return Array.from(new Set([
+    columnTitle(item.column),
+    item.evidence.newVideo.tagName,
+    ...(item.evidence.interest ? [item.evidence.interest.label] : []),
+    ...item.evidence.newVideo.tags,
+  ].map((keyword) => keyword.trim()).filter(Boolean))).slice(0, 8);
+}
+
+function localExplanationFacts(item: DynamicBillItem): string[] {
+  return item.evidence.facts
+    .filter((fact) => !fact.includes("少提醒") && !fact.includes("反馈"))
+    .slice(0, 3);
+}
+
+function localColumnReason(item: DynamicBillItem): string {
+  if (item.column === "variety" && item.evidence.interest) {
+    return `长期兴趣「${item.evidence.interest.label}」近期下降，但最近有已关注 UP 新投稿命中。`;
+  }
+  if (item.column === "buried_follow") {
+    return "关注关系仍在，本地近期观看缺席或近乎缺席，且最近有新投稿。";
+  }
+  return "长期窗口有正反馈、近期冷却，且最近有新投稿。";
 }
 
 function thresholdCopy(evidence: DynamicBillEvidence): string {

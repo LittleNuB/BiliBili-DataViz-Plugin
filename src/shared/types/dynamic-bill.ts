@@ -40,6 +40,8 @@ export type DynamicBillStatusFilter = 'active' | DynamicBillStatus;
 export type DynamicBillInterestKind = 'category' | 'tag';
 export type DynamicBillFollowMemorySignal = 'long_follow' | 'special_follow' | 'weak_watch';
 export type DynamicBillFeedbackScope = 'creator' | 'topic';
+export type DynamicBillExplanationStatus = 'generated' | 'failed' | 'not_configured' | 'disabled';
+export type DynamicBillExplanationRunStatus = 'idle' | DynamicBillExplanationStatus;
 
 export type DynamicSyncStatus = 'idle' | 'syncing' | 'success' | 'not_logged_in' | 'failed';
 export type DynamicSyncStage = 'idle' | 'following' | 'dynamic-feed' | 'video-detail' | 'storage' | 'complete';
@@ -106,6 +108,32 @@ export interface DynamicBillFeedbackResult {
   feedback: DynamicBillFeedbackRecord;
   summary: DynamicBillFeedbackSummary;
   item: DynamicBillItem;
+}
+
+export interface DynamicBillExplanation {
+  id?: number;
+  billKey: string;
+  status: DynamicBillExplanationStatus;
+  summary: string;
+  reason: string;
+  viewingAngle: string;
+  keywords: string[];
+  confidence: number;
+  model: string;
+  generatedAt: number;
+  contentHash: string;
+  error?: string;
+}
+
+export interface DynamicBillExplanationResult {
+  status: DynamicBillExplanationRunStatus;
+  processed: number;
+  generated: number;
+  failed: number;
+  skipped: number;
+  fallback: number;
+  pending: number;
+  items: DynamicBillItem[];
 }
 
 export interface DynamicSyncResult {
@@ -226,6 +254,7 @@ export interface DynamicBillItem {
   consumedAt?: number;
   processedAt?: number;
   generatedAt: number;
+  explanation?: DynamicBillExplanation;
 }
 
 export interface DynamicBillGenerateResult {
