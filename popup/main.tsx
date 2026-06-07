@@ -6,4 +6,4 @@ if (root) {
   render(<App />, root);
 }
 
-console.log('[BiliViz] Popup loaded');
+console.log('[Bili-Bill] Popup loaded');

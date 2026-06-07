@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "B站消费数据中心",
+  "name": "Bili-Bill",
   "version": "1.0.0",
-  "description": "分析你的B站观看习惯，提供个性化消费洞察",
+  "description": "Bili-Bill：归档并分析你的B站内容消费，管理观看历史、收藏和动态账单",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -44,7 +44,7 @@
     }
   ],
   "action": {
-    "default_title": "B站消费数据",
+    "default_title": "Bili-Bill",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png"

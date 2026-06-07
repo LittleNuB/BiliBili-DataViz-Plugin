@@ -1,4 +1,5 @@
 import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse, PlayerActionPayload, PlayerHeartbeatPayload, SyncNowResult } from '../../shared/types/messages';
+import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import { runInitialBackfill } from '../sync/initial-backfill';
 import {
   saveConfig,
@@ -25,6 +26,19 @@ import { getDeviceData } from '../analytics/device';
 import { abortCurrentHistorySync, hasActiveHistorySyncAbortScope } from '../sync/sync-control';
 import { syncFavorites } from '../favorites/sync';
 import { buildSmartFavoriteIndex, getSmartFavoriteOverview, getSmartFavoritesByPath, searchSmartFavorites } from '../favorites/smart';
+import { buildDynamicBillExplanations } from '../dynamic-bill/ai';
+import { generateDynamicBillItems } from '../dynamic-bill/generator';
+import { DYNAMIC_BILL_STRATEGY } from '../dynamic-bill/strategy';
+import { getDynamicOverview, syncDynamicBillUpdates } from '../dynamic-bill/sync';
+import {
+  getDynamicBillFilterPreference,
+  getDynamicBillItems,
+  addDynamicBillFeedback,
+  markDynamicBillItemOpened,
+  markDynamicBillItemProcessed,
+  markDynamicBillItemsConsumedByBvid,
+  setDynamicBillFilterPreference,
+} from '../storage/dynamic-bill-repo';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
 
@@ -68,6 +82,7 @@ async function handleContentMessage(msg: BiliVizContentMessage): Promise<void> {
         playbackRate: p.playbackRate ?? 1,
         tabId: 0,
       });
+      await markConsumedFromPlayerEvent(p);
       break;
     }
     case 'PLAYER_ACTION': {
@@ -84,6 +99,7 @@ async function handleContentMessage(msg: BiliVizContentMessage): Promise<void> {
         seekTo: p.seekTo,
         tabId: 0,
       });
+      await markConsumedFromPlayerEvent(p);
       break;
     }
     case 'PAGE_NAVIGATION':
@@ -222,13 +238,103 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
         data: await searchSmartFavorites(query, Number.isFinite(limit) ? limit : undefined) as T,
       };
     }
+    case 'GET_DYNAMIC_BILL_OVERVIEW':
+      return { success: true, data: await getDynamicOverview() as T };
+    case 'SYNC_DYNAMIC_UPDATES':
+      return { success: true, data: await syncDynamicBillUpdates() as T };
+    case 'GENERATE_DYNAMIC_BILL':
+      return { success: true, data: await generateDynamicBillItems() as T };
+    case 'BUILD_DYNAMIC_BILL_EXPLANATIONS': {
+      const maxItems = normalizePositiveInteger(request.params?.maxItems, 6);
+      const includeFailed = request.params?.includeFailed !== false;
+      return {
+        success: true,
+        data: await buildDynamicBillExplanations({ maxItems, includeFailed }) as T,
+      };
+    }
+    case 'GET_DYNAMIC_BILL_ITEMS':
+      return { success: true, data: await getDynamicBillItems() as T };
+    case 'GET_DYNAMIC_BILL_FILTER':
+      return { success: true, data: await getDynamicBillFilterPreference() as T };
+    case 'UPDATE_DYNAMIC_BILL_FILTER': {
+      const status = normalizeDynamicBillStatusFilter(request.params?.status);
+      return { success: true, data: await setDynamicBillFilterPreference(status) as T };
+    }
+    case 'ADD_DYNAMIC_BILL_FEEDBACK': {
+      const billKey = requireStringParam(request.params?.billKey, 'billKey');
+      const scope = normalizeDynamicBillFeedbackScope(request.params?.scope);
+      return { success: true, data: await addDynamicBillFeedback(billKey, scope) as T };
+    }
+    case 'OPEN_DYNAMIC_BILL_VIDEO': {
+      const billKey = requireStringParam(request.params?.billKey, 'billKey');
+      const item = await markDynamicBillItemOpened(billKey);
+      if (!item) throw new Error('DYNAMIC_BILL_ITEM_NOT_FOUND');
+      await chrome.tabs.create({ url: videoUrl(item.evidence.newVideo.bvid) });
+      return { success: true, data: item as T };
+    }
+    case 'MARK_DYNAMIC_BILL_ITEM_PROCESSED': {
+      const billKey = requireStringParam(request.params?.billKey, 'billKey');
+      const item = await markDynamicBillItemProcessed(billKey);
+      if (!item) throw new Error('DYNAMIC_BILL_ITEM_NOT_FOUND');
+      return { success: true, data: item as T };
+    }
     default:
       return { success: false, error: `Unknown action: ${request.action}` };
   }
+}
+
+async function markConsumedFromPlayerEvent(
+  payload: PlayerHeartbeatPayload | PlayerActionPayload,
+): Promise<void> {
+  if (!payload.bvid || !isEffectivePlayerWatch(payload)) return;
+  await markDynamicBillItemsConsumedByBvid(payload.bvid, Date.now());
+}
+
+function isEffectivePlayerWatch(payload: PlayerHeartbeatPayload | PlayerActionPayload): boolean {
+  if ('action' in payload) return payload.action === 'complete';
+  const duration = Math.max(0, payload.duration);
+  const currentTime = Math.max(0, payload.currentTime);
+  const completion = duration > 0 ? Math.min(currentTime / duration, 1) : 0;
+
+  return completion >= DYNAMIC_BILL_STRATEGY.positiveCompletionRate
+    || currentTime >= DYNAMIC_BILL_STRATEGY.minPositiveWatchSeconds;
+}
+
+function normalizeDynamicBillStatusFilter(value: unknown): DynamicBillStatusFilter {
+  if (
+    value === 'active'
+    || value === 'unopened'
+    || value === 'opened'
+    || value === 'consumed'
+    || value === 'processed'
+  ) {
+    return value;
+  }
+  throw new Error('INVALID_DYNAMIC_BILL_STATUS_FILTER');
+}
+
+function normalizeDynamicBillFeedbackScope(value: unknown): DynamicBillFeedbackScope {
+  if (value === 'creator' || value === 'topic') return value;
+  throw new Error('INVALID_DYNAMIC_BILL_FEEDBACK_SCOPE');
+}
+
+function requireStringParam(value: unknown, name: string): string {
+  if (typeof value === 'string' && value.trim()) return value;
+  throw new Error(`MISSING_${name.toUpperCase()}`);
+}
+
+function videoUrl(bvid: string): string {
+  return `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`;
 }
 
 function normalizeNonNegativeInteger(value: unknown, fallback: number): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(0, Math.floor(numeric));
+}
+
+function normalizePositiveInteger(value: unknown, fallback: number): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(1, Math.floor(numeric));
 }

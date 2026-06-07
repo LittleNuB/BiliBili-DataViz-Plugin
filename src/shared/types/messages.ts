@@ -1,4 +1,13 @@
 import type { QuickStats, DashboardOverview, CategoryDistribution, InterestDrift, DurationBucket, CreatorRanking, NewCreator, BehaviorMetrics, WeeklyTip, BlindBoxItem } from './analytics';
+import type {
+  DynamicBillExplanationResult,
+  DynamicBillFeedbackResult,
+  DynamicBillFilterPreference,
+  DynamicBillGenerateResult,
+  DynamicBillItem,
+  DynamicBillOverview,
+  DynamicSyncResult,
+} from './dynamic-bill';
 import type { FavoriteSyncResult, SmartFavoriteOverview, SmartFavoriteResult, SmartFavoriteSearchResponse, SmartIndexResult } from './favorite';
 
 // Popup / Dashboard → Service Worker
@@ -21,7 +30,17 @@ export type RequestAction =
   | 'GET_SMART_FAVORITES_BY_PATH'
   | 'SYNC_FAVORITES'
   | 'BUILD_SMART_FAVORITE_INDEX'
-  | 'SEARCH_SMART_FAVORITES';
+  | 'SEARCH_SMART_FAVORITES'
+  | 'GET_DYNAMIC_BILL_OVERVIEW'
+  | 'SYNC_DYNAMIC_UPDATES'
+  | 'GENERATE_DYNAMIC_BILL'
+  | 'BUILD_DYNAMIC_BILL_EXPLANATIONS'
+  | 'GET_DYNAMIC_BILL_ITEMS'
+  | 'GET_DYNAMIC_BILL_FILTER'
+  | 'UPDATE_DYNAMIC_BILL_FILTER'
+  | 'ADD_DYNAMIC_BILL_FEEDBACK'
+  | 'OPEN_DYNAMIC_BILL_VIDEO'
+  | 'MARK_DYNAMIC_BILL_ITEM_PROCESSED';
 
 // Content Script → Service Worker
 export type ContentAction =
@@ -135,3 +154,11 @@ export type FavoriteSyncResponse = BiliVizResponse<FavoriteSyncResult>;
 export type SmartFavoriteIndexResponse = BiliVizResponse<SmartIndexResult>;
 export type SmartFavoriteSearchMessageResponse = BiliVizResponse<SmartFavoriteSearchResponse>;
 export type SmartFavoritePathResponse = BiliVizResponse<SmartFavoriteResult[]>;
+export type DynamicBillOverviewResponse = BiliVizResponse<DynamicBillOverview>;
+export type DynamicSyncResponse = BiliVizResponse<DynamicSyncResult>;
+export type DynamicBillGenerateResponse = BiliVizResponse<DynamicBillGenerateResult>;
+export type DynamicBillExplanationResponse = BiliVizResponse<DynamicBillExplanationResult>;
+export type DynamicBillItemsResponse = BiliVizResponse<DynamicBillItem[]>;
+export type DynamicBillItemResponse = BiliVizResponse<DynamicBillItem | null>;
+export type DynamicBillFilterResponse = BiliVizResponse<DynamicBillFilterPreference>;
+export type DynamicBillFeedbackResponse = BiliVizResponse<DynamicBillFeedbackResult>;
