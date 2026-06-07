@@ -7,9 +7,11 @@ import {
   countFavoriteFolders,
   countFavoriteItems,
   replaceFavoriteSnapshot,
+  upsertFavoriteItems,
   updateFavoriteFolderSyncDiagnostics,
 } from '../storage/favorite-repo';
-import { assessFavoriteSyncCompleteness, attachFavoriteSyncDiagnostics } from './sync-audit';
+import { assessFavoriteSyncCompleteness } from './sync-audit';
+import { persistFavoriteSyncData } from './sync-persistence';
 
 export async function syncFavorites(): Promise<FavoriteSyncResult> {
   const [previousFolderCount, previousItemCount] = await Promise.all([
@@ -36,14 +38,18 @@ export async function syncFavorites(): Promise<FavoriteSyncResult> {
     throw new Error('FAVORITE_SYNC_EMPTY_ITEMS_SNAPSHOT');
   }
 
+  const enrichedItems = await enrichFavoriteItems(allItems);
   const assessment = assessFavoriteSyncCompleteness(diagnostics);
   if (!assessment.complete) {
-    await updateFavoriteFolderSyncDiagnostics(folders, diagnostics);
+    const persistence = await persistFavoriteSyncData(
+      { complete: false, folders, items: enrichedItems, diagnostics },
+      { replaceFavoriteSnapshot, updateFavoriteFolderSyncDiagnostics, upsertFavoriteItems },
+    );
     return {
       status: 'blocked',
       folders: folders.length,
-      items: allItems.length,
-      insertedOrUpdated: 0,
+      items: enrichedItems.length,
+      insertedOrUpdated: persistence.insertedOrUpdated,
       reportedItems: reportedItemCount,
       filteredItems: diagnostics.reduce((sum, diagnostic) => sum + diagnostic.filteredItems, 0),
       blockedReason: assessment.reason,
@@ -52,17 +58,16 @@ export async function syncFavorites(): Promise<FavoriteSyncResult> {
     };
   }
 
-  const enrichedItems = await enrichFavoriteItems(allItems);
-  const insertedOrUpdated = await replaceFavoriteSnapshot(
-    attachFavoriteSyncDiagnostics(folders, diagnostics),
-    enrichedItems,
+  const persistence = await persistFavoriteSyncData(
+    { complete: true, folders, items: enrichedItems, diagnostics },
+    { replaceFavoriteSnapshot, updateFavoriteFolderSyncDiagnostics, upsertFavoriteItems },
   );
 
   return {
     status: 'complete',
     folders: folders.length,
     items: enrichedItems.length,
-    insertedOrUpdated,
+    insertedOrUpdated: persistence.insertedOrUpdated,
     reportedItems: reportedItemCount,
     filteredItems: diagnostics.reduce((sum, diagnostic) => sum + diagnostic.filteredItems, 0),
     diagnostics,

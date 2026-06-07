@@ -77,8 +77,8 @@ export function SmartFavoritesPage() {
     try {
       const result = await requestSW<FavoriteSyncResult>('SYNC_FAVORITES');
       if (result.status === 'blocked') {
-        setError(result.blockedReason ?? 'Favorite sync incomplete; previous snapshot was kept.');
-        setNotice(`Sync blocked: reported ${result.reportedItems}, fetched ${result.items}, filtered ${result.filteredItems}. Previous video snapshot kept.`);
+        setError(result.blockedReason ?? 'Favorite sync incomplete; available data was kept.');
+        setNotice(`Sync incomplete: kept/updated ${result.insertedOrUpdated} usable videos, deleted nothing. Reported ${result.reportedItems}, fetched ${result.items}, filtered ${result.filteredItems}; see audit below.`);
       } else {
         setNotice(`Sync complete: ${result.folders} folders, ${result.items} videos, ${result.filteredItems} filtered resources.`);
       }
