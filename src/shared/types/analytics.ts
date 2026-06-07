@@ -61,6 +61,7 @@ export interface CreatorRanking {
   totalWatchTime: number;
   avgCompletion: number;
   isDeepBond: boolean;
+  followStatus?: CreatorFollowStatus;
 }
 
 export interface NewCreator {
@@ -70,6 +71,30 @@ export interface NewCreator {
   firstWatchDate: string;
   subsequentViews: number;
   retained: boolean;
+  followStatus?: CreatorFollowStatus;
+}
+
+export type CreatorFollowStatus = 'followed' | 'not_followed' | 'unknown';
+
+export type CreatorFollowDataCoverageReason =
+  | 'snapshot_available'
+  | 'not_synced'
+  | 'syncing'
+  | 'not_logged_in'
+  | 'sync_failed';
+
+export interface CreatorFollowDataCoverage {
+  hasSnapshot: boolean;
+  reason: CreatorFollowDataCoverageReason;
+  activeFollowedCreatorCount: number;
+  snapshotSyncedAt: number | null;
+  lastError?: string;
+}
+
+export interface CreatorFollowStatusGroup {
+  status: CreatorFollowStatus;
+  creators: CreatorRanking[];
+  count: number;
 }
 
 export interface SessionPattern {

@@ -1,4 +1,17 @@
-import type { QuickStats, DashboardOverview, CategoryDistribution, InterestDrift, DurationBucket, CreatorRanking, NewCreator, BehaviorMetrics, WeeklyTip, BlindBoxItem } from './analytics';
+import type {
+  QuickStats,
+  DashboardOverview,
+  CategoryDistribution,
+  InterestDrift,
+  DurationBucket,
+  CreatorFollowDataCoverage,
+  CreatorFollowStatusGroup,
+  CreatorRanking,
+  NewCreator,
+  BehaviorMetrics,
+  WeeklyTip,
+  BlindBoxItem,
+} from './analytics';
 import type {
   DynamicBillExplanationResult,
   DynamicBillFeedbackResult,
@@ -137,6 +150,8 @@ export type CreatorResponse = BiliVizResponse<{
   topCreators: CreatorRanking[];
   deepBondCreators: CreatorRanking[];
   newCreators: NewCreator[];
+  followGroups: CreatorFollowStatusGroup[];
+  followDataCoverage: CreatorFollowDataCoverage;
   overDependency: { creator: CreatorRanking; percentage: number } | null;
 }>;
 export type BehaviorResponse = BiliVizResponse<BehaviorMetrics>;

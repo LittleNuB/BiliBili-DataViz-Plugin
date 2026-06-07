@@ -1,8 +1,17 @@
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
-import type { CreatorRanking, NewCreator } from '../../shared/types/analytics';
+import type {
+  CreatorFollowDataCoverage,
+  CreatorFollowDataCoverageReason,
+  CreatorFollowStatus,
+  CreatorFollowStatusGroup,
+  CreatorRanking,
+  NewCreator,
+} from '../../shared/types/analytics';
+import type { FollowedCreator } from '../../shared/types/dynamic-bill';
 import { getRecordsByDateRange } from '../storage/watch-history-repo';
 import { dateKey, startOfMonth } from '../../shared/utils/time';
 import { loadConfig } from '../storage/config-store';
+import { getDynamicSyncState, getFollowedCreatorSnapshot } from '../storage/dynamic-bill-repo';
 
 interface CreatorStats {
   mid: number;
@@ -143,6 +152,8 @@ export async function getCreatorData(): Promise<{
   topCreators: CreatorRanking[];
   deepBondCreators: CreatorRanking[];
   newCreators: NewCreator[];
+  followGroups: CreatorFollowStatusGroup[];
+  followDataCoverage: CreatorFollowDataCoverage;
   overDependency: { creator: CreatorRanking; percentage: number } | null;
 }> {
   const now = new Date();
@@ -150,15 +161,117 @@ export async function getCreatorData(): Promise<{
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
   const records = await getRecordsByDateRange(dateKey(thirtyDaysAgo), dateKey(now));
-  const ranking = computeCreatorRanking(records);
-  const deepBond = detectDeepBond(records);
-  const newCreators = await computeNewCreators(records);
+  const [followedSnapshot, syncState] = await Promise.all([
+    getFollowedCreatorSnapshot(),
+    getDynamicSyncState(),
+  ]);
+  const followDataCoverage = buildFollowDataCoverage(followedSnapshot, syncState);
+  const activeFollowedMids = new Set(
+    followedSnapshot
+      .filter(creator => creator.isActive !== false)
+      .map(creator => creator.mid),
+  );
+  const ranking = applyFollowStatus(computeCreatorRanking(records), activeFollowedMids, followDataCoverage);
+  const deepBond = applyFollowStatus(detectDeepBond(records), activeFollowedMids, followDataCoverage);
+  const newCreators = applyNewCreatorFollowStatus(await computeNewCreators(records), activeFollowedMids, followDataCoverage);
   const overDep = await detectOverDependency(ranking);
 
   return {
     topCreators: ranking.slice(0, 10),
     deepBondCreators: deepBond,
     newCreators,
+    followGroups: buildFollowGroups(ranking),
+    followDataCoverage,
     overDependency: overDep,
   };
+}
+
+function applyFollowStatus(
+  creators: CreatorRanking[],
+  activeFollowedMids: Set<number>,
+  coverage: CreatorFollowDataCoverage,
+): CreatorRanking[] {
+  return creators.map(creator => ({
+    ...creator,
+    followStatus: getCreatorFollowStatus(creator.mid, activeFollowedMids, coverage),
+  }));
+}
+
+function applyNewCreatorFollowStatus(
+  creators: NewCreator[],
+  activeFollowedMids: Set<number>,
+  coverage: CreatorFollowDataCoverage,
+): NewCreator[] {
+  return creators.map(creator => ({
+    ...creator,
+    followStatus: getCreatorFollowStatus(creator.mid, activeFollowedMids, coverage),
+  }));
+}
+
+function getCreatorFollowStatus(
+  mid: number,
+  activeFollowedMids: Set<number>,
+  coverage: CreatorFollowDataCoverage,
+): CreatorFollowStatus {
+  if (!coverage.hasSnapshot) return 'unknown';
+  return activeFollowedMids.has(mid) ? 'followed' : 'not_followed';
+}
+
+function buildFollowGroups(creators: CreatorRanking[]): CreatorFollowStatusGroup[] {
+  const groups: Record<CreatorFollowStatus, CreatorRanking[]> = {
+    followed: [],
+    not_followed: [],
+    unknown: [],
+  };
+
+  for (const creator of creators) {
+    groups[creator.followStatus ?? 'unknown'].push(creator);
+  }
+
+  return (['followed', 'not_followed', 'unknown'] as const).map(status => ({
+    status,
+    creators: groups[status],
+    count: groups[status].length,
+  }));
+}
+
+function buildFollowDataCoverage(
+  followedSnapshot: FollowedCreator[],
+  syncState: Awaited<ReturnType<typeof getDynamicSyncState>>,
+): CreatorFollowDataCoverage {
+  const activeFollowedCreatorCount = followedSnapshot.filter(creator => creator.isActive !== false).length;
+  const snapshotSyncedAt = latestSnapshotSyncedAt(followedSnapshot, syncState.lastSuccessAt);
+  const hasSnapshot = snapshotSyncedAt !== null || followedSnapshot.length > 0;
+
+  return {
+    hasSnapshot,
+    reason: hasSnapshot ? 'snapshot_available' : followDataUnavailableReason(syncState.status),
+    activeFollowedCreatorCount,
+    snapshotSyncedAt,
+    lastError: syncState.lastError,
+  };
+}
+
+function latestSnapshotSyncedAt(followedSnapshot: FollowedCreator[], lastSuccessAt: number): number | null {
+  const latestCreatorSync = followedSnapshot.reduce(
+    (latest, creator) => Math.max(latest, creator.syncedAt || creator.lastSeenAt || 0),
+    0,
+  );
+  const latest = Math.max(latestCreatorSync, lastSuccessAt || 0);
+  return latest > 0 ? latest : null;
+}
+
+function followDataUnavailableReason(
+  status: Awaited<ReturnType<typeof getDynamicSyncState>>['status'],
+): CreatorFollowDataCoverageReason {
+  switch (status) {
+    case 'syncing':
+      return 'syncing';
+    case 'not_logged_in':
+      return 'not_logged_in';
+    case 'failed':
+      return 'sync_failed';
+    default:
+      return 'not_synced';
+  }
 }
