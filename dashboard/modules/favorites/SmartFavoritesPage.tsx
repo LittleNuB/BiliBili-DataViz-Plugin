@@ -3,6 +3,7 @@ import { requestSW } from '../../utils/messaging';
 import { BILI_BLUE, BILI_PINK } from '../../../src/shared/constants';
 import type { AiConfig, UserConfig } from '../../../src/shared/types/config';
 import type {
+  FavoriteFolderSyncDiagnostic,
   FavoriteSyncResult,
   SmartFavoriteOverview,
   SmartFavoriteResult,
@@ -75,7 +76,12 @@ export function SmartFavoritesPage() {
     setError(null);
     try {
       const result = await requestSW<FavoriteSyncResult>('SYNC_FAVORITES');
-      setNotice(`已同步 ${result.folders} 个收藏夹，${result.items} 个视频`);
+      if (result.status === 'blocked') {
+        setError(result.blockedReason ?? 'Favorite sync incomplete; available data was kept.');
+        setNotice(`Sync incomplete: kept/updated ${result.insertedOrUpdated} usable videos, deleted nothing. Reported ${result.reportedItems}, fetched ${result.items}, filtered ${result.filteredItems}; see audit below.`);
+      } else {
+        setNotice(`Sync complete: ${result.folders} folders, ${result.items} videos, ${result.filteredItems} filtered resources.`);
+      }
       setOverview(await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES'));
     } catch (e) {
       setError((e as Error).message);
@@ -197,6 +203,7 @@ export function SmartFavoritesPage() {
           <Metric label="索引失败" value={overview?.failedItems ?? 0} />
           <Metric label="待索引" value={overview?.pendingItems ?? 0} />
         </div>
+        <SyncDiagnostics diagnostics={overview?.lastSyncDiagnostics ?? []} />
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           <ActionButton label={busy === 'sync' ? '同步中...' : '同步收藏夹'} onClick={syncFavorites} disabled={!!busy} />
           <ActionButton label={busy === 'index' ? '生成中...' : '生成智能索引'} onClick={buildIndex} disabled={!!busy || !overview?.totalItems} />
@@ -356,6 +363,78 @@ function Metric({ label, value }: { label: string; value: number }) {
 
 function Status({ color, text }: { color: string; text: string }) {
   return <div style={{ ...CARD, color, fontSize: '13px' }}>{text}</div>;
+}
+
+function SyncDiagnostics({ diagnostics }: { diagnostics: FavoriteFolderSyncDiagnostic[] }) {
+  if (diagnostics.length === 0) return null;
+
+  const totals = diagnostics.reduce((sum, diagnostic) => ({
+    reported: sum.reported + diagnostic.reportedMediaCount,
+    stored: sum.stored + diagnostic.storedVideoItems,
+    filtered: sum.filtered + diagnostic.filteredItems,
+    delta: sum.delta + diagnostic.unexplainedDelta,
+    errors: sum.errors + diagnostic.errors.length,
+  }), { reported: 0, stored: 0, filtered: 0, delta: 0, errors: 0 });
+
+  return (
+    <div style={{ marginBottom: '12px', overflowX: 'auto' }}>
+      <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>
+        Sync audit: reported {totals.reported}, stored {totals.stored}, filtered {totals.filtered}, delta {totals.delta}, errors {totals.errors}
+      </div>
+      <div style={{ minWidth: '720px', display: 'grid', gridTemplateColumns: '1.5fr repeat(6, 72px) 1.8fr', gap: '1px', background: '#333355', border: '1px solid #333355', borderRadius: '6px', overflow: 'hidden' }}>
+        {['Folder', 'Reported', 'Pages', 'Raw', 'Stored', 'Filtered', 'Delta', 'Errors'].map(label => (
+          <AuditCell key={label} header text={label} />
+        ))}
+        {diagnostics.map(diagnostic => (
+          <SyncDiagnosticRow key={diagnostic.mediaId} diagnostic={diagnostic} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SyncDiagnosticRow({ diagnostic }: { diagnostic: FavoriteFolderSyncDiagnostic }) {
+  return (
+    <>
+      <AuditCell text={`${diagnostic.title || 'Untitled'} #${diagnostic.mediaId}`} />
+      <AuditCell text={String(diagnostic.reportedMediaCount)} tone={diagnostic.unexplainedDelta > 0 ? 'warn' : undefined} />
+      <AuditCell text={String(diagnostic.pagesFetched)} />
+      <AuditCell text={String(diagnostic.rawResourcesSeen)} />
+      <AuditCell text={String(diagnostic.storedVideoItems)} />
+      <AuditCell text={String(diagnostic.filteredItems)} />
+      <AuditCell text={String(diagnostic.unexplainedDelta)} tone={diagnostic.unexplainedDelta > 0 ? 'warn' : undefined} />
+      <AuditCell text={diagnostic.errors.join('; ') || '-'} tone={diagnostic.errors.length > 0 ? 'error' : undefined} />
+    </>
+  );
+}
+
+function AuditCell({
+  text,
+  header,
+  tone,
+}: {
+  text: string;
+  header?: boolean;
+  tone?: 'warn' | 'error';
+}) {
+  return (
+    <div
+      title={text}
+      style={{
+        background: header ? '#252545' : '#1A1A2E',
+        color: tone === 'error' ? '#FF6B6B' : tone === 'warn' ? '#FFB347' : header ? '#FFFFFF' : '#A0A0B0',
+        fontSize: '11px',
+        fontWeight: header ? 600 : 400,
+        minWidth: 0,
+        overflow: 'hidden',
+        padding: '7px 8px',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {text}
+    </div>
+  );
 }
 
 function TextInput({

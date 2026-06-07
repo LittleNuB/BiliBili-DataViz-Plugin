@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite build --watch --mode development",
     "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:favorites": "node --test tests/favorite-sync-audit.test.ts"
   },
   "dependencies": {
     "preact": "^10.24.0",

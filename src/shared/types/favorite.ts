@@ -8,6 +8,7 @@ export interface FavoriteFolder {
   createdAt: number;
   updatedAt: number;
   syncedAt: number;
+  lastSyncDiagnostic?: FavoriteFolderSyncDiagnostic;
 }
 
 export interface FavoriteItem {
@@ -66,13 +67,38 @@ export interface SmartFavoriteOverview {
   failedItems: number;
   pendingItems: number;
   lastSyncedAt: number;
+  lastSyncDiagnostics: FavoriteFolderSyncDiagnostic[];
   tree: SmartFavoriteTreeNode[];
 }
 
+export type FavoriteSyncStatus = 'complete' | 'blocked';
+
+export interface FavoriteFolderSyncDiagnostic {
+  mediaId: number;
+  title: string;
+  reportedMediaCount: number;
+  pagesFetched: number;
+  rawResourcesSeen: number;
+  storedVideoItems: number;
+  filteredUnavailableItems: number;
+  filteredMissingIdItems: number;
+  filteredNonVideoItems: number;
+  filteredItems: number;
+  hasMoreAfterStop: boolean;
+  stoppedByMaxPages: boolean;
+  unexplainedDelta: number;
+  errors: string[];
+}
+
 export interface FavoriteSyncResult {
+  status: FavoriteSyncStatus;
   folders: number;
   items: number;
   insertedOrUpdated: number;
+  reportedItems: number;
+  filteredItems: number;
+  blockedReason?: string;
+  diagnostics: FavoriteFolderSyncDiagnostic[];
   syncedAt: number;
 }
 

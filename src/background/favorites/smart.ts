@@ -138,6 +138,9 @@ export async function getSmartFavoriteOverview(): Promise<SmartFavoriteOverview>
     failedItems,
     pendingItems,
     lastSyncedAt: Math.max(0, ...folders.map(folder => folder.syncedAt), ...items.map(item => item.syncedAt)),
+    lastSyncDiagnostics: folders
+      .map(folder => folder.lastSyncDiagnostic)
+      .filter(diagnostic => diagnostic !== undefined),
     tree: buildTree(items, indexMap),
   };
 }
