@@ -1,9 +1,7 @@
 import type {
   QuickStats,
   DashboardOverview,
-  CategoryDistribution,
-  InterestDrift,
-  DurationBucket,
+  PreferenceAnalytics,
   CreatorFollowDataCoverage,
   CreatorFollowStatusGroup,
   CreatorRanking,
@@ -140,12 +138,7 @@ export interface SyncProgress {
 // Typed response data
 export type QuickStatsResponse = BiliVizResponse<QuickStats>;
 export type DashboardResponse = BiliVizResponse<DashboardOverview>;
-export type PreferenceResponse = BiliVizResponse<{
-  categories: CategoryDistribution[];
-  drift: InterestDrift[];
-  durationBuckets: DurationBucket[];
-  topTags: { name: string; count: number }[];
-}>;
+export type PreferenceResponse = BiliVizResponse<PreferenceAnalytics>;
 export type CreatorResponse = BiliVizResponse<{
   topCreators: CreatorRanking[];
   deepBondCreators: CreatorRanking[];

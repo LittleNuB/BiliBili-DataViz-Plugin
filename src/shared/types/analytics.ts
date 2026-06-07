@@ -41,9 +41,27 @@ export interface CategoryDistribution {
   percentage: number;
 }
 
+export type InterestDriftGranularity = 'daily' | 'weekly' | 'monthly';
+
+export interface HistoryCoverage {
+  earliestDate: string | null;
+  latestDate: string | null;
+  activeDays: number;
+  totalRecords: number;
+  coveredDays: number;
+}
+
 export interface InterestDrift {
   month: string;
+  period: string;
+  label: string;
+  granularity: InterestDriftGranularity;
+  startDate: string;
+  endDate: string;
   categories: Record<string, number>;
+  recordCount: number;
+  activeDays: number;
+  totalWatchTime: number;
 }
 
 export interface DurationBucket {
@@ -51,6 +69,16 @@ export interface DurationBucket {
   min: number;
   max: number;
   count: number;
+}
+
+export interface PreferenceAnalytics {
+  categories: CategoryDistribution[];
+  drift: InterestDrift[];
+  driftByGranularity: Record<InterestDriftGranularity, InterestDrift[]>;
+  defaultDriftGranularity: InterestDriftGranularity;
+  coverage: HistoryCoverage;
+  durationBuckets: DurationBucket[];
+  topTags: { name: string; count: number }[];
 }
 
 export interface CreatorRanking {

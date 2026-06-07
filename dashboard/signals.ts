@@ -1,7 +1,7 @@
 import { signal } from '@preact/signals';
 import type {
   DashboardOverview,
-  CategoryDistribution, InterestDrift, DurationBucket,
+  PreferenceAnalytics,
   CreatorFollowDataCoverage, CreatorFollowStatusGroup, CreatorRanking, NewCreator,
   BehaviorMetrics,
   WeeklyTip, BlindBoxItem,
@@ -13,12 +13,7 @@ export const overviewLoading = signal(true);
 export const overviewError = signal<string | null>(null);
 
 // Module 2: Preference
-export const prefData = signal<{
-  categories: CategoryDistribution[];
-  drift: InterestDrift[];
-  durationBuckets: DurationBucket[];
-  topTags: { name: string; count: number }[];
-} | null>(null);
+export const prefData = signal<PreferenceAnalytics | null>(null);
 export const prefLoading = signal(true);
 export const prefError = signal<string | null>(null);
 
