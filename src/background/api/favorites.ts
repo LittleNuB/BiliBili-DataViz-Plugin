@@ -1,5 +1,10 @@
 import { FAVORITE_FOLDERS_ENDPOINT, FAVORITE_PAGE_SIZE, FAVORITE_RESOURCES_ENDPOINT, NAV_ENDPOINT } from '../../shared/constants';
-import type { FavoriteFolder, FavoriteItem } from '../../shared/types/favorite';
+import type { FavoriteFolder } from '../../shared/types/favorite';
+import {
+  fetchFavoriteItemsWithPageFetcher,
+  type FavoriteItemsFetchResult,
+  type FavoriteResourcesData,
+} from '../favorites/favorite-fetch-loop';
 import { biliGet } from './client';
 
 interface NavData {
@@ -22,34 +27,6 @@ interface FavoriteFolderApiItem {
 interface FavoriteFoldersData {
   count?: number;
   list?: FavoriteFolderApiItem[];
-}
-
-interface FavoriteResourceApiItem {
-  id?: number;
-  avid?: number;
-  bvid?: string;
-  title?: string;
-  cover?: string;
-  intro?: string;
-  duration?: number;
-  pubtime?: number;
-  fav_time?: number;
-  ctime?: number;
-  type?: number;
-  upper?: {
-    mid?: number;
-    name?: string;
-  };
-  attr?: number;
-}
-
-interface FavoriteResourcesData {
-  info?: {
-    id?: number;
-    title?: string;
-  };
-  medias?: FavoriteResourceApiItem[];
-  has_more?: boolean;
 }
 
 export async function fetchCurrentUserMid(signal?: AbortSignal): Promise<number> {
@@ -79,12 +56,10 @@ export async function fetchFavoriteItems(
   folder: FavoriteFolder,
   signal?: AbortSignal,
   maxPages = 500,
-): Promise<FavoriteItem[]> {
-  const result: FavoriteItem[] = [];
-  const syncedAt = Date.now();
-
-  for (let pn = 1; pn <= maxPages; pn++) {
-    const data = await biliGet<FavoriteResourcesData>(
+): Promise<FavoriteItemsFetchResult> {
+  return fetchFavoriteItemsWithPageFetcher(
+    folder,
+    (pn, pageSignal) => biliGet<FavoriteResourcesData>(
       FAVORITE_RESOURCES_ENDPOINT,
       {
         media_id: String(folder.mediaId),
@@ -98,21 +73,12 @@ export async function fetchFavoriteItems(
       },
       3,
       false,
-      signal,
-    );
-
-    const medias = data.medias ?? [];
-    if (medias.length === 0) break;
-
-    for (const media of medias) {
-      const item = toFavoriteItem(media, folder, syncedAt);
-      if (item) result.push(item);
-    }
-
-    if (data.has_more === false || medias.length < FAVORITE_PAGE_SIZE) break;
-  }
-
-  return result;
+      pageSignal,
+    ),
+    signal,
+    maxPages,
+    FAVORITE_PAGE_SIZE,
+  );
 }
 
 function toFavoriteFolder(item: FavoriteFolderApiItem, syncedAt: number): FavoriteFolder | null {
@@ -126,32 +92,6 @@ function toFavoriteFolder(item: FavoriteFolderApiItem, syncedAt: number): Favori
     mediaCount: Number(item.media_count ?? 0),
     createdAt: Number(item.ctime ?? 0),
     updatedAt: Number(item.mtime ?? 0),
-    syncedAt,
-  };
-}
-
-function toFavoriteItem(item: FavoriteResourceApiItem, folder: FavoriteFolder, syncedAt: number): FavoriteItem | null {
-  const avid = Number(item.id ?? item.avid ?? 0);
-  const bvid = item.bvid ?? '';
-  if (!avid && !bvid) return null;
-
-  const itemKey = `${folder.mediaId}:${bvid || avid}`;
-  return {
-    itemKey,
-    mediaId: folder.mediaId,
-    folderTitle: folder.title,
-    avid,
-    bvid,
-    title: item.title ?? '',
-    intro: item.intro ?? '',
-    authorName: item.upper?.name ?? '',
-    authorMid: Number(item.upper?.mid ?? 0),
-    tagName: '',
-    tags: [],
-    cover: item.cover ?? '',
-    duration: Number(item.duration ?? 0),
-    pubtime: Number(item.pubtime ?? 0),
-    favTime: Number(item.fav_time ?? item.ctime ?? 0),
     syncedAt,
   };
 }

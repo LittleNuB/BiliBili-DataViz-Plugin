@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Smart Favorites Sync Audit Mock</title>
+    <style>
+      body {
+        margin: 0;
+        background: #18182c;
+        color: #fff;
+        font-family: Arial, sans-serif;
+        padding: 16px;
+      }
+
+      .card {
+        background: #222244;
+        border: 1px solid #333355;
+        border-radius: 8px;
+        padding: 12px;
+      }
+
+      .summary {
+        font-size: 13px;
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1.5fr repeat(6, 72px) 1.8fr;
+        min-width: 720px;
+        gap: 1px;
+        background: #333355;
+        border: 1px solid #333355;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+
+      .cell {
+        background: #1a1a2e;
+        color: #a0a0b0;
+        font-size: 11px;
+        overflow: hidden;
+        padding: 7px 8px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .header {
+        background: #252545;
+        color: #fff;
+        font-weight: 700;
+      }
+
+      .warn {
+        color: #ffb347;
+      }
+
+      .error {
+        color: #ff6b6b;
+      }
+    </style>
+  </head>
+  <body>
+    <section class="card" aria-label="Smart Favorites sync diagnostics">
+      <div class="summary">Sync audit: reported 304, stored 137, filtered 4, delta 163, errors 1</div>
+      <div class="grid">
+        <div class="cell header">Folder</div>
+        <div class="cell header">Reported</div>
+        <div class="cell header">Pages</div>
+        <div class="cell header">Raw</div>
+        <div class="cell header">Stored</div>
+        <div class="cell header">Filtered</div>
+        <div class="cell header">Delta</div>
+        <div class="cell header">Errors</div>
+
+        <div class="cell">Default #100</div>
+        <div class="cell warn">158</div>
+        <div class="cell">7</div>
+        <div class="cell">137</div>
+        <div class="cell">137</div>
+        <div class="cell">0</div>
+        <div class="cell warn">21</div>
+        <div class="cell">-</div>
+
+        <div class="cell">Watch Later #200</div>
+        <div class="cell">146</div>
+        <div class="cell">1</div>
+        <div class="cell">4</div>
+        <div class="cell">0</div>
+        <div class="cell">4</div>
+        <div class="cell warn">142</div>
+        <div class="cell error">page 2: RATE_LIMITED</div>
+      </div>
+    </section>
+  </body>
+</html>

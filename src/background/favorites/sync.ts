@@ -1,9 +1,15 @@
 import { MAX_FAVORITE_SYNC_PAGES } from '../../shared/constants';
-import type { FavoriteItem, FavoriteSyncResult } from '../../shared/types/favorite';
+import type { FavoriteFolderSyncDiagnostic, FavoriteItem, FavoriteSyncResult } from '../../shared/types/favorite';
 import type { VideoInfo } from '../../shared/types/video-info';
 import { fetchFavoriteFolders, fetchFavoriteItems } from '../api/favorites';
 import { batchFetchVideoInfo } from '../api/video-info';
-import { countFavoriteFolders, countFavoriteItems, replaceFavoriteSnapshot } from '../storage/favorite-repo';
+import {
+  countFavoriteFolders,
+  countFavoriteItems,
+  replaceFavoriteSnapshot,
+  updateFavoriteFolderSyncDiagnostics,
+} from '../storage/favorite-repo';
+import { assessFavoriteSyncCompleteness, attachFavoriteSyncDiagnostics } from './sync-audit';
 
 export async function syncFavorites(): Promise<FavoriteSyncResult> {
   const [previousFolderCount, previousItemCount] = await Promise.all([
@@ -12,14 +18,17 @@ export async function syncFavorites(): Promise<FavoriteSyncResult> {
   ]);
   const folders = await fetchFavoriteFolders();
   const allItems: FavoriteItem[] = [];
+  const diagnostics: FavoriteFolderSyncDiagnostic[] = [];
+  const syncedAt = Date.now();
 
   if (folders.length === 0 && (previousFolderCount > 0 || previousItemCount > 0)) {
     throw new Error('FAVORITE_SYNC_EMPTY_SNAPSHOT');
   }
 
   for (const folder of folders) {
-    const folderItems = await fetchFavoriteItems(folder, undefined, MAX_FAVORITE_SYNC_PAGES);
+    const { items: folderItems, diagnostic } = await fetchFavoriteItems(folder, undefined, MAX_FAVORITE_SYNC_PAGES);
     allItems.push(...folderItems);
+    diagnostics.push(diagnostic);
   }
 
   const reportedItemCount = folders.reduce((sum, folder) => sum + Math.max(folder.mediaCount, 0), 0);
@@ -27,14 +36,37 @@ export async function syncFavorites(): Promise<FavoriteSyncResult> {
     throw new Error('FAVORITE_SYNC_EMPTY_ITEMS_SNAPSHOT');
   }
 
+  const assessment = assessFavoriteSyncCompleteness(diagnostics);
+  if (!assessment.complete) {
+    await updateFavoriteFolderSyncDiagnostics(folders, diagnostics);
+    return {
+      status: 'blocked',
+      folders: folders.length,
+      items: allItems.length,
+      insertedOrUpdated: 0,
+      reportedItems: reportedItemCount,
+      filteredItems: diagnostics.reduce((sum, diagnostic) => sum + diagnostic.filteredItems, 0),
+      blockedReason: assessment.reason,
+      diagnostics,
+      syncedAt,
+    };
+  }
+
   const enrichedItems = await enrichFavoriteItems(allItems);
-  const insertedOrUpdated = await replaceFavoriteSnapshot(folders, enrichedItems);
+  const insertedOrUpdated = await replaceFavoriteSnapshot(
+    attachFavoriteSyncDiagnostics(folders, diagnostics),
+    enrichedItems,
+  );
 
   return {
+    status: 'complete',
     folders: folders.length,
     items: enrichedItems.length,
     insertedOrUpdated,
-    syncedAt: Date.now(),
+    reportedItems: reportedItemCount,
+    filteredItems: diagnostics.reduce((sum, diagnostic) => sum + diagnostic.filteredItems, 0),
+    diagnostics,
+    syncedAt,
   };
 }
 

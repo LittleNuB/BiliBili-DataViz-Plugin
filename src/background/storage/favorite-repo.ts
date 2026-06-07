@@ -1,4 +1,4 @@
-import type { FavoriteFolder, FavoriteItem, SmartFavoriteIndex } from '../../shared/types/favorite';
+import type { FavoriteFolder, FavoriteFolderSyncDiagnostic, FavoriteItem, SmartFavoriteIndex } from '../../shared/types/favorite';
 import { db } from './db';
 
 export async function replaceFavoriteSnapshot(folders: FavoriteFolder[], items: FavoriteItem[]): Promise<number> {
@@ -32,6 +32,24 @@ export async function replaceFavoriteSnapshot(folders: FavoriteFolder[], items: 
 export async function upsertFavoriteFolders(folders: FavoriteFolder[]): Promise<void> {
   if (folders.length === 0) return;
   await db.favoriteFolders.bulkPut(folders);
+}
+
+export async function updateFavoriteFolderSyncDiagnostics(
+  folders: FavoriteFolder[],
+  diagnostics: FavoriteFolderSyncDiagnostic[],
+): Promise<void> {
+  if (folders.length === 0) return;
+
+  const diagnosticByMediaId = new Map(diagnostics.map(diagnostic => [diagnostic.mediaId, diagnostic]));
+  const existingFolders = await db.favoriteFolders.toArray();
+  const existingByMediaId = new Map(existingFolders.map(folder => [folder.mediaId, folder]));
+  const merged = folders.map(folder => ({
+    ...(existingByMediaId.get(folder.mediaId) ?? folder),
+    ...folder,
+    lastSyncDiagnostic: diagnosticByMediaId.get(folder.mediaId),
+  }));
+
+  await db.favoriteFolders.bulkPut(merged);
 }
 
 export async function upsertFavoriteItems(items: FavoriteItem[]): Promise<number> {
