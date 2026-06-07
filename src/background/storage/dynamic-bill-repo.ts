@@ -106,6 +106,10 @@ export async function getActiveFollowedCreators(): Promise<FollowedCreator[]> {
   return creators.filter(creator => creator.isActive !== false);
 }
 
+export async function getFollowedCreatorSnapshot(): Promise<FollowedCreator[]> {
+  return db.followedCreators.toArray();
+}
+
 export async function replaceDynamicBillItemsForColumn(
   column: DynamicBillColumn,
   items: DynamicBillItem[],

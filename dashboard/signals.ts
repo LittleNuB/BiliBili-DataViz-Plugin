@@ -2,7 +2,7 @@ import { signal } from '@preact/signals';
 import type {
   DashboardOverview,
   CategoryDistribution, InterestDrift, DurationBucket,
-  CreatorRanking, NewCreator,
+  CreatorFollowDataCoverage, CreatorFollowStatusGroup, CreatorRanking, NewCreator,
   BehaviorMetrics,
   WeeklyTip, BlindBoxItem,
 } from '../src/shared/types/analytics';
@@ -27,6 +27,8 @@ export const creatorData = signal<{
   topCreators: CreatorRanking[];
   deepBondCreators: CreatorRanking[];
   newCreators: NewCreator[];
+  followGroups: CreatorFollowStatusGroup[];
+  followDataCoverage: CreatorFollowDataCoverage;
   overDependency: { creator: CreatorRanking; percentage: number } | null;
 } | null>(null);
 export const creatorLoading = signal(true);

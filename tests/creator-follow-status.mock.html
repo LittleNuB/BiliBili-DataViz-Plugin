@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Creator Follow Status Mock</title>
+  <link rel="stylesheet" href="/dashboard/styles/dashboard.css" />
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    const now = Date.now();
+    const creator = (mid, name, followStatus, extra = {}) => ({
+      mid,
+      name,
+      face: '',
+      videoCount: extra.videoCount ?? 4,
+      totalWatchTime: extra.totalWatchTime ?? 4200,
+      avgCompletion: extra.avgCompletion ?? 0.72,
+      isDeepBond: extra.isDeepBond ?? false,
+      followStatus,
+    });
+    const followed = creator(101, '仍在关注的科技 UP', 'followed', { videoCount: 8, totalWatchTime: 8600, avgCompletion: 0.86, isDeepBond: true });
+    const notFollowed = creator(202, '看过但未关注的游戏 UP', 'not_followed', { videoCount: 3, totalWatchTime: 2400, avgCompletion: 0.61 });
+    const unknown = creator(303, '快照缺失时的未知 UP', 'unknown', { videoCount: 5, totalWatchTime: 3600, avgCompletion: 0.78 });
+
+    const snapshotData = {
+      topCreators: [followed, notFollowed],
+      deepBondCreators: [followed],
+      newCreators: [
+        {
+          mid: 202,
+          name: notFollowed.name,
+          face: '',
+          firstWatchDate: '2026-06-01',
+          subsequentViews: 2,
+          retained: true,
+          followStatus: 'not_followed',
+        },
+      ],
+      followGroups: [
+        { status: 'followed', creators: [followed], count: 1 },
+        { status: 'not_followed', creators: [notFollowed], count: 1 },
+        { status: 'unknown', creators: [], count: 0 },
+      ],
+      followDataCoverage: {
+        hasSnapshot: true,
+        reason: 'snapshot_available',
+        activeFollowedCreatorCount: 1,
+        snapshotSyncedAt: now,
+      },
+      overDependency: { creator: followed, percentage: 43.6 },
+    };
+
+    const missingSnapshotData = {
+      ...snapshotData,
+      topCreators: [unknown],
+      deepBondCreators: [],
+      newCreators: [
+        {
+          mid: 303,
+          name: unknown.name,
+          face: '',
+          firstWatchDate: '2026-06-02',
+          subsequentViews: 0,
+          retained: false,
+          followStatus: 'unknown',
+        },
+      ],
+      followGroups: [
+        { status: 'followed', creators: [], count: 0 },
+        { status: 'not_followed', creators: [], count: 0 },
+        { status: 'unknown', creators: [unknown], count: 1 },
+      ],
+      followDataCoverage: {
+        hasSnapshot: false,
+        reason: 'not_synced',
+        activeFollowedCreatorCount: 0,
+        snapshotSyncedAt: null,
+      },
+      overDependency: null,
+    };
+
+    const emptyData = {
+      topCreators: [],
+      deepBondCreators: [],
+      newCreators: [],
+      followGroups: [
+        { status: 'followed', creators: [], count: 0 },
+        { status: 'not_followed', creators: [], count: 0 },
+        { status: 'unknown', creators: [], count: 0 },
+      ],
+      followDataCoverage: {
+        hasSnapshot: true,
+        reason: 'snapshot_available',
+        activeFollowedCreatorCount: 0,
+        snapshotSyncedAt: now,
+      },
+      overDependency: null,
+    };
+
+    function selectedCreatorData() {
+      const scenario = new URLSearchParams(window.location.search).get('scenario');
+      if (scenario === 'missing') return missingSnapshotData;
+      if (scenario === 'empty') return emptyData;
+      return snapshotData;
+    }
+
+    window.chrome = {
+      runtime: {
+        sendMessage(message) {
+          if (message.action === 'GET_SYNC_STATUS') {
+            return Promise.resolve({
+              success: true,
+              data: { lastSyncTime: now, totalRecords: 18 },
+            });
+          }
+          if (message.action === 'GET_CREATOR_DATA') {
+            return Promise.resolve({ success: true, data: selectedCreatorData() });
+          }
+          return Promise.resolve({ success: true, data: {} });
+        },
+      },
+    };
+  </script>
+  <script type="module" src="/dashboard/main.tsx"></script>
+</body>
+</html>
