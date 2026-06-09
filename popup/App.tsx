@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { quickStats, loading, error, lastSyncResult, syncInProgress, syncProgress, syncPageLimit } from './signals';
 import { requestSW } from './utils/messaging';
 import type { QuickStats } from '../src/shared/types/analytics';
 import type { SyncNowResult, SyncProgress } from '../src/shared/types/messages';
 import type { CurrentVideoContextResult } from '../src/shared/types/current-video-context';
+import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary';
+import { cancelledCurrentVideoSummary, loadingCurrentVideoSummary } from '../src/shared/current-video-summary';
 import { ProgressRing } from './components/ProgressRing';
 import { QuickStats as QuickStatsPanel } from './components/QuickStats';
 import { OpenDashboard } from './components/OpenDashboard';
@@ -16,10 +18,14 @@ interface SyncStatus {
 
 export function App() {
   const [currentVideoContext, setCurrentVideoContext] = useState<CurrentVideoContextResult | null>(null);
+  const [currentVideoSummary, setCurrentVideoSummary] = useState<CurrentVideoSummaryResult | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const summaryRequestRef = useRef(0);
 
   useEffect(() => {
     fetchStats(false);
     fetchCurrentVideoContext();
+    fetchCurrentVideoSummary();
     const timer = window.setInterval(refreshSyncStatus, 1500);
     return () => window.clearInterval(timer);
   }, []);
@@ -46,6 +52,35 @@ export function App() {
     } catch {
       setCurrentVideoContext(null);
     }
+  }
+
+  async function fetchCurrentVideoSummary() {
+    const requestId = summaryRequestRef.current + 1;
+    summaryRequestRef.current = requestId;
+    setSummaryLoading(true);
+    setCurrentVideoSummary(loadingCurrentVideoSummary());
+    try {
+      const summary = await requestSW<CurrentVideoSummaryResult>('GET_CURRENT_VIDEO_SUMMARY');
+      if (summaryRequestRef.current !== requestId) return;
+      setCurrentVideoSummary(summary);
+    } catch (e) {
+      if (summaryRequestRef.current !== requestId) return;
+      setCurrentVideoSummary({
+        ...loadingCurrentVideoSummary(),
+        status: 'cancelled',
+        title: 'Current video summary unavailable',
+        summary: (e as Error).message,
+        limitations: ['The local summary request failed before an AI result was accepted.'],
+      });
+    } finally {
+      if (summaryRequestRef.current === requestId) setSummaryLoading(false);
+    }
+  }
+
+  function cancelCurrentVideoSummary() {
+    summaryRequestRef.current += 1;
+    setSummaryLoading(false);
+    setCurrentVideoSummary(cancelledCurrentVideoSummary(currentVideoContext));
   }
 
   async function fetchStats(forceSync = true) {
@@ -177,7 +212,13 @@ export function App() {
         )}
       </div>
       <OpenDashboard />
-      <CurrentVideoAssistantStatus context={currentVideoContext} />
+      <CurrentVideoAssistantStatus
+        context={currentVideoContext}
+        summary={currentVideoSummary}
+        loading={summaryLoading}
+        onRefresh={fetchCurrentVideoSummary}
+        onCancel={cancelCurrentVideoSummary}
+      />
 
       {loading.value && (
         <div style={{ textAlign: 'center', padding: '40px', color: '#9090A0' }}>
@@ -346,7 +387,19 @@ export function App() {
   );
 }
 
-function CurrentVideoAssistantStatus({ context }: { context: CurrentVideoContextResult | null }) {
+function CurrentVideoAssistantStatus({
+  context,
+  summary,
+  loading,
+  onRefresh,
+  onCancel,
+}: {
+  context: CurrentVideoContextResult | null;
+  summary: CurrentVideoSummaryResult | null;
+  loading: boolean;
+  onRefresh: () => void;
+  onCancel: () => void;
+}) {
   const isVideo = context?.kind === 'video';
 
   return (
@@ -363,7 +416,7 @@ function CurrentVideoAssistantStatus({ context }: { context: CurrentVideoContext
         fontWeight: 700,
         marginBottom: '6px',
       }}>
-        Local assistant context
+        Current video assistant
       </div>
       {isVideo ? (
         <>
@@ -375,13 +428,92 @@ function CurrentVideoAssistantStatus({ context }: { context: CurrentVideoContext
             <br />
             Description {context.sources.description}; transcript {context.sources.transcript}; content text {context.sources.contentText}
           </div>
+          {summary && (
+            <div style={{
+              marginTop: '8px',
+              padding: '8px',
+              border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: '6px',
+              background: 'rgba(0,0,0,0.12)',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
+                <span style={{
+                  color: '#FFD6E2',
+                  background: 'rgba(251, 114, 153, 0.16)',
+                  borderRadius: '6px',
+                  padding: '3px 6px',
+                  fontSize: '10px',
+                  fontWeight: 700,
+                }}>
+                  {summary.sourceTierLabel ?? summary.status}
+                </span>
+                <span style={{ color: '#A0A0B0', fontSize: '10px' }}>
+                  {summary.generationMode === 'ai' ? 'AI' : 'local'} / {summary.confidence}
+                </span>
+              </div>
+              <p style={{
+                color: '#E8E8F2',
+                fontSize: '11px',
+                lineHeight: 1.5,
+                margin: '8px 0 0',
+              }}>
+                {summary.summary}
+              </p>
+              {summary.bullets.slice(0, 2).map((bullet, index) => (
+                <div key={index} style={{ color: '#C8C8D8', fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
+                  - {bullet}
+                </div>
+              ))}
+              <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
+                {summary.limitations[0]}
+              </div>
+              <div style={{ color: '#9090A0', fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
+                AI status: {summary.ai.status}. {summary.ai.note}
+              </div>
+            </div>
+          )}
           <div style={{
             marginTop: '6px',
             color: '#FFCF8A',
             fontSize: '10px',
             lineHeight: 1.45,
           }}>
-            No AI summary is generated. Description is not treated as full content text.
+            No transcript is available. This assistant does not claim a full-video summary.
+          </div>
+          <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+            <button
+              onClick={onRefresh}
+              disabled={loading}
+              style={{
+                flex: 1,
+                background: '#FB7299',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: loading ? 'default' : 'pointer',
+                fontSize: '11px',
+                padding: '6px 8px',
+                opacity: loading ? 0.7 : 1,
+              }}
+            >
+              {loading ? 'Loading...' : 'Refresh summary'}
+            </button>
+            {loading && (
+              <button
+                onClick={onCancel}
+                style={{
+                  background: 'rgba(255, 179, 71, 0.12)',
+                  color: '#FFB347',
+                  border: '1px solid rgba(255, 179, 71, 0.32)',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                  padding: '6px 8px',
+                }}
+              >
+                Cancel
+              </button>
+            )}
           </div>
         </>
       ) : (

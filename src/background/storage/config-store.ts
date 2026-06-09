@@ -16,6 +16,10 @@ export async function loadConfig(): Promise<UserConfig> {
         ...DEFAULT_CONFIG.ai,
         ...(result[CONFIG_KEY].ai ?? {}),
       },
+      assistant: {
+        ...DEFAULT_CONFIG.assistant,
+        ...(result[CONFIG_KEY].assistant ?? {}),
+      },
       dynamicBill: {
         ...DEFAULT_CONFIG.dynamicBill,
         ...(result[CONFIG_KEY].dynamicBill ?? {}),
@@ -33,6 +37,10 @@ export async function saveConfig(config: Partial<UserConfig>): Promise<void> {
     ai: {
       ...current.ai,
       ...(config.ai ?? {}),
+    },
+    assistant: {
+      ...current.assistant,
+      ...(config.assistant ?? {}),
     },
     dynamicBill: {
       ...current.dynamicBill,

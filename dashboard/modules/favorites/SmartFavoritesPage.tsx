@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { requestSW } from '../../utils/messaging';
 import { BILI_BLUE, BILI_PINK } from '../../../src/shared/constants';
-import type { AiConfig, UserConfig } from '../../../src/shared/types/config';
+import type { AiConfig, AssistantConfig, UserConfig } from '../../../src/shared/types/config';
 import type {
   FavoriteFolderSyncDiagnostic,
   FavoriteSyncResult,
@@ -23,6 +23,7 @@ const CARD = {
 export function SmartFavoritesPage() {
   const [overview, setOverview] = useState<SmartFavoriteOverview | null>(null);
   const [config, setConfig] = useState<AiConfig>({ baseURL: 'https://api.deepseek.com', apiKey: '', chatModel: 'deepseek-v4-flash' });
+  const [assistantConfig, setAssistantConfig] = useState<AssistantConfig>({ aiSummariesEnabled: false });
   const [query, setQuery] = useState('');
   const [search, setSearch] = useState<SmartFavoriteSearchResponse | null>(null);
   const [selectedPath, setSelectedPath] = useState<string[]>([]);
@@ -46,6 +47,7 @@ export function SmartFavoritesPage() {
         requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES'),
       ]);
       setConfig(cfg.ai);
+      setAssistantConfig(cfg.assistant);
       setOverview(data);
       if (selectedPath.length > 0) {
         setPathResults(await requestSW<SmartFavoriteResult[]>('GET_SMART_FAVORITES_BY_PATH', { path: selectedPath, limit: 200 }));
@@ -62,7 +64,7 @@ export function SmartFavoritesPage() {
     setError(null);
     try {
       await ensureAiHostPermission(config.baseURL);
-      await requestSW('UPDATE_CONFIG', { ai: config });
+      await requestSW('UPDATE_CONFIG', { ai: config, assistant: assistantConfig });
       setNotice('AI 配置已保存');
     } catch (e) {
       setError((e as Error).message);
@@ -217,8 +219,25 @@ export function SmartFavoritesPage() {
           <TextInput value={config.baseURL} onInput={value => setConfig({ ...config, baseURL: value })} placeholder="Base URL" />
           <TextInput value={config.chatModel} onInput={value => setConfig({ ...config, chatModel: value })} placeholder="模型" />
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '8px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '8px', alignItems: 'center' }}>
           <TextInput value={config.apiKey} onInput={value => setConfig({ ...config, apiKey: value })} placeholder="API Key" password />
+          <label style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            color: '#C8C8D8',
+            fontSize: '11px',
+          }}>
+            <input
+              type="checkbox"
+              checked={assistantConfig.aiSummariesEnabled}
+              onChange={(event) => setAssistantConfig({
+                ...assistantConfig,
+                aiSummariesEnabled: (event.currentTarget as HTMLInputElement).checked,
+              })}
+            />
+            Assistant summaries
+          </label>
           <ActionButton label={busy === 'save' ? '保存中...' : '保存'} onClick={saveAiConfig} disabled={!!busy} />
         </div>
       </section>

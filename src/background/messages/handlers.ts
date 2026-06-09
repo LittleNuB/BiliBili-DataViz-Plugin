@@ -14,6 +14,7 @@ import {
 } from '../storage/config-store';
 import { db } from '../storage/db';
 import type { UserConfig } from '../../shared/types/config';
+import { generateCurrentVideoSummary } from '../current-video-summary';
 import {
   getQuickStats,
   getDashboardOverview,
@@ -217,6 +218,8 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     }
     case 'GET_CURRENT_VIDEO_CONTEXT':
       return { success: true, data: await getCurrentVideoContextForActiveTab() as T };
+    case 'GET_CURRENT_VIDEO_SUMMARY':
+      return { success: true, data: await generateCurrentVideoSummary(await getCurrentVideoContextForActiveTab()) as T };
     case 'GET_SMART_FAVORITES':
       return { success: true, data: await getSmartFavoriteOverview() as T };
     case 'GET_SMART_FAVORITES_BY_PATH': {
