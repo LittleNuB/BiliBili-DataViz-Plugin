@@ -5,6 +5,7 @@ import type { QuickStats } from '../src/shared/types/analytics';
 import type { SyncNowResult, SyncProgress } from '../src/shared/types/messages';
 import type { CurrentVideoContextResult } from '../src/shared/types/current-video-context';
 import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary';
+import type { VideoKnowledgeJumpResponse, VideoKnowledgeNode, VideoKnowledgeResult } from '../src/shared/types/video-knowledge';
 import { cancelledCurrentVideoSummary, loadingCurrentVideoSummary } from '../src/shared/current-video-summary';
 import { ProgressRing } from './components/ProgressRing';
 import { QuickStats as QuickStatsPanel } from './components/QuickStats';
@@ -19,6 +20,9 @@ interface SyncStatus {
 export function App() {
   const [currentVideoContext, setCurrentVideoContext] = useState<CurrentVideoContextResult | null>(null);
   const [currentVideoSummary, setCurrentVideoSummary] = useState<CurrentVideoSummaryResult | null>(null);
+  const [videoKnowledge, setVideoKnowledge] = useState<VideoKnowledgeResult | null>(null);
+  const [jumpPreviewNodeId, setJumpPreviewNodeId] = useState<string | null>(null);
+  const [jumpStatus, setJumpStatus] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const summaryRequestRef = useRef(0);
 
@@ -26,6 +30,7 @@ export function App() {
     fetchStats(false);
     fetchCurrentVideoContext();
     fetchCurrentVideoSummary();
+    fetchVideoKnowledge();
     const timer = window.setInterval(refreshSyncStatus, 1500);
     return () => window.clearInterval(timer);
   }, []);
@@ -74,6 +79,46 @@ export function App() {
       });
     } finally {
       if (summaryRequestRef.current === requestId) setSummaryLoading(false);
+    }
+  }
+
+  async function fetchVideoKnowledge() {
+    try {
+      const result = await requestSW<VideoKnowledgeResult>('GET_VIDEO_KNOWLEDGE');
+      setVideoKnowledge(result);
+      setJumpPreviewNodeId(null);
+      setJumpStatus(null);
+    } catch (e) {
+      setVideoKnowledge({
+        status: 'no_context',
+        title: 'Video knowledge unavailable',
+        generatedAt: Date.now(),
+        sourceState: {
+          metadata: false,
+          description: false,
+          pages: false,
+          chapters: false,
+          transcript: false,
+          contentText: false,
+        },
+        nodes: [],
+        warnings: ['video_knowledge_request_failed'],
+        limitations: [(e as Error).message],
+      });
+    }
+  }
+
+  async function confirmVideoKnowledgeJump(node: VideoKnowledgeNode) {
+    if (!node.jumpAction) return;
+    setJumpStatus('Confirming manual jump...');
+    try {
+      const result = await requestSW<VideoKnowledgeJumpResponse>('REQUEST_VIDEO_KNOWLEDGE_JUMP', {
+        nodeId: node.id,
+        confirmed: true,
+      });
+      setJumpStatus(result.message);
+    } catch (e) {
+      setJumpStatus((e as Error).message);
     }
   }
 
@@ -215,9 +260,15 @@ export function App() {
       <CurrentVideoAssistantStatus
         context={currentVideoContext}
         summary={currentVideoSummary}
+        knowledge={videoKnowledge}
+        previewNodeId={jumpPreviewNodeId}
+        jumpStatus={jumpStatus}
         loading={summaryLoading}
         onRefresh={fetchCurrentVideoSummary}
         onCancel={cancelCurrentVideoSummary}
+        onRefreshKnowledge={fetchVideoKnowledge}
+        onPreviewNode={setJumpPreviewNodeId}
+        onConfirmJump={confirmVideoKnowledgeJump}
       />
 
       {loading.value && (
@@ -390,17 +441,30 @@ export function App() {
 function CurrentVideoAssistantStatus({
   context,
   summary,
+  knowledge,
+  previewNodeId,
+  jumpStatus,
   loading,
   onRefresh,
   onCancel,
+  onRefreshKnowledge,
+  onPreviewNode,
+  onConfirmJump,
 }: {
   context: CurrentVideoContextResult | null;
   summary: CurrentVideoSummaryResult | null;
+  knowledge: VideoKnowledgeResult | null;
+  previewNodeId: string | null;
+  jumpStatus: string | null;
   loading: boolean;
   onRefresh: () => void;
   onCancel: () => void;
+  onRefreshKnowledge: () => void;
+  onPreviewNode: (nodeId: string | null) => void;
+  onConfirmJump: (node: VideoKnowledgeNode) => void;
 }) {
   const isVideo = context?.kind === 'video';
+  const previewNode = knowledge?.nodes.find(node => node.id === previewNodeId) ?? null;
 
   return (
     <section style={{
@@ -480,6 +544,14 @@ function CurrentVideoAssistantStatus({
           }}>
             No transcript is available. This assistant does not claim a full-video summary.
           </div>
+          <VideoKnowledgePanel
+            knowledge={knowledge}
+            previewNode={previewNode}
+            jumpStatus={jumpStatus}
+            onRefresh={onRefreshKnowledge}
+            onPreview={onPreviewNode}
+            onConfirm={onConfirmJump}
+          />
           <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
             <button
               onClick={onRefresh}
@@ -519,8 +591,172 @@ function CurrentVideoAssistantStatus({
       ) : (
         <div style={{ color: '#A0A0B0', fontSize: '11px', lineHeight: 1.45 }}>
           No current video context. Open a Bilibili video page to see metadata and source availability.
+          <VideoKnowledgePanel
+            knowledge={knowledge}
+            previewNode={previewNode}
+            jumpStatus={jumpStatus}
+            onRefresh={onRefreshKnowledge}
+            onPreview={onPreviewNode}
+            onConfirm={onConfirmJump}
+          />
         </div>
       )}
     </section>
   );
+}
+
+function VideoKnowledgePanel({
+  knowledge,
+  previewNode,
+  jumpStatus,
+  onRefresh,
+  onPreview,
+  onConfirm,
+}: {
+  knowledge: VideoKnowledgeResult | null;
+  previewNode: VideoKnowledgeNode | null;
+  jumpStatus: string | null;
+  onRefresh: () => void;
+  onPreview: (nodeId: string | null) => void;
+  onConfirm: (node: VideoKnowledgeNode) => void;
+}) {
+  const nodes = knowledge?.nodes ?? [];
+  return (
+    <div style={{
+      marginTop: '8px',
+      padding: '8px',
+      border: '1px solid rgba(255,255,255,0.12)',
+      borderRadius: '6px',
+      background: 'rgba(0,0,0,0.10)',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
+        <span style={{ color: '#FFD6E2', fontSize: '10px', fontWeight: 700 }}>
+          Video knowledge v0
+        </span>
+        <button
+          onClick={onRefresh}
+          style={{
+            background: 'transparent',
+            color: '#A0A0B0',
+            border: '1px solid rgba(255,255,255,0.14)',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '10px',
+            padding: '3px 6px',
+          }}
+        >
+          Refresh
+        </button>
+      </div>
+      <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
+        No transcript. Nodes use only metadata, description, pages, or chapters; no inferred timestamps.
+      </div>
+      {nodes.length === 0 ? (
+        <div style={{ color: '#A0A0B0', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
+          {knowledge?.status === 'no_context'
+            ? 'No current video context is available for knowledge nodes.'
+            : 'No safe key-node candidates are available.'}
+        </div>
+      ) : (
+        nodes.slice(0, 5).map(node => (
+          <div key={node.id} style={{
+            marginTop: '6px',
+            paddingTop: '6px',
+            borderTop: '1px solid rgba(255,255,255,0.08)',
+          }}>
+            <div style={{ color: '#E8E8F2', fontSize: '10px', lineHeight: 1.35, fontWeight: 650 }}>
+              {node.title}
+            </div>
+            <div style={{ color: '#A0A0B0', fontSize: '9px', lineHeight: 1.45, marginTop: '2px' }}>
+              source {node.sourceLabel} / confidence {Math.round(node.confidence * 100)}%
+              {node.timestamp === null ? ' / no timestamp' : ` / ${formatPopupDuration(node.timestamp)}`}
+            </div>
+            <div style={{ color: '#C8C8D8', fontSize: '9px', lineHeight: 1.4, marginTop: '2px' }}>
+              {node.reason}
+            </div>
+            {node.jumpAction && (
+              <button
+                onClick={() => onPreview(node.id)}
+                style={{
+                  marginTop: '5px',
+                  background: 'rgba(251, 114, 153, 0.18)',
+                  color: '#FFD6E2',
+                  border: '1px solid rgba(251, 114, 153, 0.32)',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '10px',
+                  padding: '4px 7px',
+                }}
+              >
+                Preview jump
+              </button>
+            )}
+          </div>
+        ))
+      )}
+      {previewNode?.jumpAction && (
+        <div style={{
+          marginTop: '8px',
+          padding: '8px',
+          border: '1px solid rgba(255,179,71,0.28)',
+          borderRadius: '6px',
+          background: 'rgba(255,179,71,0.08)',
+        }}>
+          <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45, fontWeight: 700 }}>
+            Manual jump preview
+          </div>
+          <div style={{ color: '#E8E8F2', fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
+            {previewNode.jumpAction.previewLabel}
+          </div>
+          <div style={{ color: '#A0A0B0', fontSize: '9px', lineHeight: 1.45, marginTop: '2px' }}>
+            Source {previewNode.sourceLabel}. Confirmation is required; auto-jump is disabled.
+          </div>
+          <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+            <button
+              onClick={() => onConfirm(previewNode)}
+              style={{
+                flex: 1,
+                background: '#FFB347',
+                color: '#1A1A2E',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '10px',
+                fontWeight: 700,
+                padding: '5px 7px',
+              }}
+            >
+              Confirm jump
+            </button>
+            <button
+              onClick={() => onPreview(null)}
+              style={{
+                background: 'transparent',
+                color: '#C8C8D8',
+                border: '1px solid rgba(255,255,255,0.14)',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '10px',
+                padding: '5px 7px',
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {jumpStatus && (
+        <div style={{ color: '#A0E7A0', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
+          {jumpStatus}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatPopupDuration(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safe / 60);
+  const rest = safe % 60;
+  return `${minutes}:${String(rest).padStart(2, '0')}`;
 }

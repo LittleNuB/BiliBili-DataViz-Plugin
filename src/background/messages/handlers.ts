@@ -1,5 +1,6 @@
 import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse, PlayerActionPayload, PlayerHeartbeatPayload, SyncNowResult } from '../../shared/types/messages';
 import type { CurrentVideoContextResult, CurrentVideoNoContext } from '../../shared/types/current-video-context';
+import type { VideoKnowledgeJumpResponse } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import { runInitialBackfill } from '../sync/initial-backfill';
 import {
@@ -15,6 +16,7 @@ import {
 import { db } from '../storage/db';
 import type { UserConfig } from '../../shared/types/config';
 import { generateCurrentVideoSummary } from '../current-video-summary';
+import { buildVideoKnowledgeResult, findVideoKnowledgeNode } from '../../shared/video-knowledge';
 import {
   getQuickStats,
   getDashboardOverview,
@@ -221,6 +223,10 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       return { success: true, data: await getCurrentVideoContextForActiveTab() as T };
     case 'GET_CURRENT_VIDEO_SUMMARY':
       return { success: true, data: await generateCurrentVideoSummary(await getCurrentVideoContextForActiveTab()) as T };
+    case 'GET_VIDEO_KNOWLEDGE':
+      return { success: true, data: buildVideoKnowledgeResult(await getCurrentVideoContextForActiveTab()) as T };
+    case 'REQUEST_VIDEO_KNOWLEDGE_JUMP':
+      return { success: true, data: await requestVideoKnowledgeJump(request.params) as T };
     case 'GET_SMART_FAVORITES':
       return { success: true, data: await getSmartFavoriteOverview() as T };
     case 'GET_SMART_FAVORITES_BY_PATH': {
@@ -307,6 +313,43 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     default:
       return { success: false, error: `Unknown action: ${request.action}` };
   }
+}
+
+async function requestVideoKnowledgeJump(params: Record<string, unknown> | undefined): Promise<VideoKnowledgeJumpResponse> {
+  const nodeId = requireStringParam(params?.nodeId, 'nodeId');
+  const confirmed = params?.confirmed === true;
+  if (!confirmed) {
+    return {
+      ok: false,
+      message: 'CONFIRMATION_REQUIRED',
+      nodeId,
+      previousPositionSeconds: null,
+      targetSeconds: null,
+      targetPage: null,
+    };
+  }
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tabId = tab?.id ?? 0;
+  if (!tab?.url || tabId <= 0 || !isBilibiliVideoUrl(tab.url)) {
+    throw new Error('NO_ACTIVE_BILIBILI_VIDEO_TAB');
+  }
+
+  const context = await getCurrentVideoContextForActiveTab();
+  const knowledge = buildVideoKnowledgeResult(context);
+  const node = findVideoKnowledgeNode(knowledge, nodeId);
+  if (!node || !node.jumpAction) {
+    throw new Error('VIDEO_KNOWLEDGE_JUMP_TARGET_UNAVAILABLE');
+  }
+
+  return await chrome.tabs.sendMessage(tabId, {
+    action: 'VIDEO_KNOWLEDGE_MANUAL_JUMP',
+    payload: {
+      node,
+      contextBvid: context.kind === 'video' ? context.bvid : null,
+      confirmed: true,
+    },
+  });
 }
 
 async function markConsumedFromPlayerEvent(
