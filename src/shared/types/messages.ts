@@ -29,6 +29,7 @@ import type {
 } from './favorite';
 import type { CurrentVideoContextResult } from './current-video-context';
 import type { CurrentVideoSummaryResult } from './current-video-summary';
+import type { VideoKnowledgeJumpResponse, VideoKnowledgeResult } from './video-knowledge';
 
 // Popup / Dashboard → Service Worker
 export type RequestAction =
@@ -48,6 +49,8 @@ export type RequestAction =
   | 'GET_SYNC_STATUS'
   | 'GET_CURRENT_VIDEO_CONTEXT'
   | 'GET_CURRENT_VIDEO_SUMMARY'
+  | 'GET_VIDEO_KNOWLEDGE'
+  | 'REQUEST_VIDEO_KNOWLEDGE_JUMP'
   | 'GET_SMART_FAVORITES'
   | 'GET_SMART_FAVORITES_BY_PATH'
   | 'SYNC_FAVORITES'
@@ -178,6 +181,8 @@ export type SmartFavoriteQaMessageResponse = BiliVizResponse<SmartFavoriteQaResp
 export type SmartFavoritePathResponse = BiliVizResponse<SmartFavoriteResult[]>;
 export type CurrentVideoContextResponse = BiliVizResponse<CurrentVideoContextResult>;
 export type CurrentVideoSummaryResponse = BiliVizResponse<CurrentVideoSummaryResult>;
+export type VideoKnowledgeResponse = BiliVizResponse<VideoKnowledgeResult>;
+export type VideoKnowledgeJumpMessageResponse = BiliVizResponse<VideoKnowledgeJumpResponse>;
 export type DynamicBillOverviewResponse = BiliVizResponse<DynamicBillOverview>;
 export type DynamicSyncResponse = BiliVizResponse<DynamicSyncResult>;
 export type DynamicBillGenerateResponse = BiliVizResponse<DynamicBillGenerateResult>;
