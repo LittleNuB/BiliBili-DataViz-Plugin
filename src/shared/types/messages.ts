@@ -20,6 +20,7 @@ import type {
   DynamicSyncResult,
 } from './dynamic-bill';
 import type { FavoriteSyncResult, SmartFavoriteOverview, SmartFavoriteResult, SmartFavoriteSearchResponse, SmartIndexResult } from './favorite';
+import type { CurrentVideoContextResult } from './current-video-context';
 
 // Popup / Dashboard → Service Worker
 export type RequestAction =
@@ -37,6 +38,7 @@ export type RequestAction =
   | 'EXPORT_DATA'
   | 'EXPORT_DATA_PAGE'
   | 'GET_SYNC_STATUS'
+  | 'GET_CURRENT_VIDEO_CONTEXT'
   | 'GET_SMART_FAVORITES'
   | 'GET_SMART_FAVORITES_BY_PATH'
   | 'SYNC_FAVORITES'
@@ -57,7 +59,8 @@ export type RequestAction =
 export type ContentAction =
   | 'PLAYER_HEARTBEAT'
   | 'PLAYER_ACTION'
-  | 'PAGE_NAVIGATION';
+  | 'PAGE_NAVIGATION'
+  | 'CURRENT_VIDEO_CONTEXT_UPDATE';
 
 // Player events from content script
 export interface PlayerHeartbeatPayload {
@@ -92,7 +95,7 @@ export interface BiliVizRequest {
 
 export interface BiliVizContentMessage {
   action: ContentAction;
-  payload: PlayerHeartbeatPayload | PlayerActionPayload | PageNavigationPayload;
+  payload: PlayerHeartbeatPayload | PlayerActionPayload | PageNavigationPayload | CurrentVideoContextResult;
 }
 
 export interface BiliVizResponse<T = unknown> {
@@ -162,6 +165,7 @@ export type FavoriteSyncResponse = BiliVizResponse<FavoriteSyncResult>;
 export type SmartFavoriteIndexResponse = BiliVizResponse<SmartIndexResult>;
 export type SmartFavoriteSearchMessageResponse = BiliVizResponse<SmartFavoriteSearchResponse>;
 export type SmartFavoritePathResponse = BiliVizResponse<SmartFavoriteResult[]>;
+export type CurrentVideoContextResponse = BiliVizResponse<CurrentVideoContextResult>;
 export type DynamicBillOverviewResponse = BiliVizResponse<DynamicBillOverview>;
 export type DynamicSyncResponse = BiliVizResponse<DynamicSyncResult>;
 export type DynamicBillGenerateResponse = BiliVizResponse<DynamicBillGenerateResult>;

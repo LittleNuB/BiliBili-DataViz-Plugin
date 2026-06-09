@@ -1,8 +1,9 @@
-import { useEffect } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { quickStats, loading, error, lastSyncResult, syncInProgress, syncProgress, syncPageLimit } from './signals';
 import { requestSW } from './utils/messaging';
 import type { QuickStats } from '../src/shared/types/analytics';
 import type { SyncNowResult, SyncProgress } from '../src/shared/types/messages';
+import type { CurrentVideoContextResult } from '../src/shared/types/current-video-context';
 import { ProgressRing } from './components/ProgressRing';
 import { QuickStats as QuickStatsPanel } from './components/QuickStats';
 import { OpenDashboard } from './components/OpenDashboard';
@@ -14,8 +15,11 @@ interface SyncStatus {
 }
 
 export function App() {
+  const [currentVideoContext, setCurrentVideoContext] = useState<CurrentVideoContextResult | null>(null);
+
   useEffect(() => {
     fetchStats(false);
+    fetchCurrentVideoContext();
     const timer = window.setInterval(refreshSyncStatus, 1500);
     return () => window.clearInterval(timer);
   }, []);
@@ -32,6 +36,15 @@ export function App() {
       }
     } catch {
       // The floating window can outlive a restarting service worker.
+    }
+  }
+
+  async function fetchCurrentVideoContext() {
+    try {
+      const context = await requestSW<CurrentVideoContextResult>('GET_CURRENT_VIDEO_CONTEXT');
+      setCurrentVideoContext(context);
+    } catch {
+      setCurrentVideoContext(null);
     }
   }
 
@@ -164,6 +177,7 @@ export function App() {
         )}
       </div>
       <OpenDashboard />
+      <CurrentVideoAssistantStatus context={currentVideoContext} />
 
       {loading.value && (
         <div style={{ textAlign: 'center', padding: '40px', color: '#9090A0' }}>
@@ -329,5 +343,52 @@ export function App() {
         </div>
       )}
     </div>
+  );
+}
+
+function CurrentVideoAssistantStatus({ context }: { context: CurrentVideoContextResult | null }) {
+  const isVideo = context?.kind === 'video';
+
+  return (
+    <section style={{
+      margin: '10px 18px 12px',
+      padding: '10px 12px',
+      border: '1px solid rgba(251, 114, 153, 0.25)',
+      borderRadius: '8px',
+      background: 'rgba(251, 114, 153, 0.08)',
+    }}>
+      <div style={{
+        color: '#FB7299',
+        fontSize: '12px',
+        fontWeight: 700,
+        marginBottom: '6px',
+      }}>
+        Local assistant context
+      </div>
+      {isVideo ? (
+        <>
+          <div style={{ color: '#E8E8F2', fontSize: '12px', lineHeight: 1.45, fontWeight: 600 }}>
+            {context.title ?? context.bvid}
+          </div>
+          <div style={{ color: '#A0A0B0', fontSize: '10px', lineHeight: 1.5, marginTop: '4px' }}>
+            BVID {context.bvid} / CID {context.cid ?? 'unknown'}
+            <br />
+            Description {context.sources.description}; transcript {context.sources.transcript}; content text {context.sources.contentText}
+          </div>
+          <div style={{
+            marginTop: '6px',
+            color: '#FFCF8A',
+            fontSize: '10px',
+            lineHeight: 1.45,
+          }}>
+            No AI summary is generated. Description is not treated as full content text.
+          </div>
+        </>
+      ) : (
+        <div style={{ color: '#A0A0B0', fontSize: '11px', lineHeight: 1.45 }}>
+          No current video context. Open a Bilibili video page to see metadata and source availability.
+        </div>
+      )}
+    </section>
   );
 }
