@@ -7,6 +7,7 @@ export interface UserConfig {
   showSidebar: boolean;
   theme: 'dark' | 'light';
   ai: AiConfig;
+  assistant: AssistantConfig;
   dynamicBill: DynamicBillConfig;
 }
 
@@ -14,6 +15,10 @@ export interface AiConfig {
   baseURL: string;
   apiKey: string;
   chatModel: string;
+}
+
+export interface AssistantConfig {
+  aiSummariesEnabled: boolean;
 }
 
 export interface DynamicBillConfig {
@@ -32,6 +37,9 @@ export const DEFAULT_CONFIG: UserConfig = {
     baseURL: 'https://api.deepseek.com',
     apiKey: '',
     chatModel: 'deepseek-v4-flash',
+  },
+  assistant: {
+    aiSummariesEnabled: false,
   },
   dynamicBill: {
     aiExplanationsEnabled: false,

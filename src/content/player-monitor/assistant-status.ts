@@ -1,4 +1,5 @@
 import type { CurrentVideoContextResult } from '../../shared/types/current-video-context';
+import { buildLocalCurrentVideoSummary } from '../../shared/current-video-summary';
 
 const CARD_ID = 'bdc-current-video-assistant';
 const STYLE_ID = 'bdc-current-video-assistant-style';
@@ -63,6 +64,22 @@ const CSS = `
   font-size: 12px;
   line-height: 1.45;
 }
+#${CARD_ID} .bdc-assistant-tier {
+  display: inline-block;
+  margin: 4px 0 6px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(251, 114, 153, 0.16);
+  color: #ffd6e2;
+  font-size: 11px;
+  font-weight: 700;
+}
+#${CARD_ID} .bdc-assistant-summary {
+  color: #f2f2f6;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 4px;
+}
 #${CARD_ID} .bdc-assistant-link {
   display: inline-block;
   margin-top: 10px;
@@ -99,13 +116,19 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
   card.appendChild(header);
 
   if (context.kind === 'video') {
+    const summary = buildLocalCurrentVideoSummary(context, {
+      aiStatus: 'not_requested',
+      aiNote: 'Page overlay shows local evidence only; AI summary is available from the popup when enabled.',
+    });
     appendText(card, 'div', 'bdc-assistant-video', context.title ?? context.bvid);
+    appendText(card, 'div', 'bdc-assistant-tier', `${summary.sourceTierLabel} / ${summary.confidence} confidence`);
+    appendText(card, 'div', 'bdc-assistant-summary', summary.summary);
     appendText(card, 'div', 'bdc-assistant-row', `BVID ${context.bvid} / CID ${context.cid ?? 'unknown'}`);
     appendText(
       card,
       'div',
       'bdc-assistant-row',
-      `UP ${context.authorName ?? 'unknown'} / MID ${context.authorMid ?? 'unknown'}`,
+      `UP ${context.authorName ?? 'unknown'}`,
     );
     appendText(
       card,
