@@ -28,6 +28,7 @@ import { getDeviceData } from '../analytics/device';
 import { abortCurrentHistorySync, hasActiveHistorySyncAbortScope } from '../sync/sync-control';
 import { syncFavorites } from '../favorites/sync';
 import { buildSmartFavoriteIndex, getSmartFavoriteOverview, getSmartFavoritesByPath, searchSmartFavorites } from '../favorites/smart';
+import { answerSmartFavoriteQuestion } from '../favorites/qa';
 import { buildDynamicBillExplanations } from '../dynamic-bill/ai';
 import { generateDynamicBillItems } from '../dynamic-bill/generator';
 import { DYNAMIC_BILL_STRATEGY } from '../dynamic-bill/strategy';
@@ -253,6 +254,14 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       return {
         success: true,
         data: await searchSmartFavorites(query, Number.isFinite(limit) ? limit : undefined) as T,
+      };
+    }
+    case 'ASK_SMART_FAVORITES': {
+      const query = String(request.params?.query ?? '');
+      const limit = Number(request.params?.limit);
+      return {
+        success: true,
+        data: await answerSmartFavoriteQuestion(query, Number.isFinite(limit) ? limit : undefined) as T,
       };
     }
     case 'GET_DYNAMIC_BILL_OVERVIEW':

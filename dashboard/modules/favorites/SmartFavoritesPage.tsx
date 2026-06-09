@@ -6,6 +6,8 @@ import type {
   FavoriteFolderSyncDiagnostic,
   FavoriteSyncResult,
   SmartFavoriteOverview,
+  SmartFavoriteQaCitedVideo,
+  SmartFavoriteQaResponse,
   SmartFavoriteResult,
   SmartFavoriteSearchResponse,
   SmartFavoriteTreeNode,
@@ -25,7 +27,9 @@ export function SmartFavoritesPage() {
   const [config, setConfig] = useState<AiConfig>({ baseURL: 'https://api.deepseek.com', apiKey: '', chatModel: 'deepseek-v4-flash' });
   const [assistantConfig, setAssistantConfig] = useState<AssistantConfig>({ aiSummariesEnabled: false });
   const [query, setQuery] = useState('');
+  const [question, setQuestion] = useState('');
   const [search, setSearch] = useState<SmartFavoriteSearchResponse | null>(null);
+  const [qa, setQa] = useState<SmartFavoriteQaResponse | null>(null);
   const [selectedPath, setSelectedPath] = useState<string[]>([]);
   const [pathResults, setPathResults] = useState<SmartFavoriteResult[]>([]);
   const [expandedTree, setExpandedTree] = useState<Set<string>>(() => new Set());
@@ -146,6 +150,24 @@ export function SmartFavoritesPage() {
     setError(null);
     try {
       setSearch(await requestSW<SmartFavoriteSearchResponse>('SEARCH_SMART_FAVORITES', { query: q, limit: 30 }));
+      setQa(null);
+      setSelectedPath([]);
+      setPathResults([]);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function askFavorites() {
+    const q = question.trim();
+    if (!q) return;
+    setBusy('qa');
+    setError(null);
+    try {
+      setQa(await requestSW<SmartFavoriteQaResponse>('ASK_SMART_FAVORITES', { query: q, limit: 8 }));
+      setSearch(null);
       setSelectedPath([]);
       setPathResults([]);
     } catch (e) {
@@ -174,6 +196,7 @@ export function SmartFavoritesPage() {
     try {
       setSelectedPath(path);
       setSearch(null);
+      setQa(null);
       setPathResults(await requestSW<SmartFavoriteResult[]>('GET_SMART_FAVORITES_BY_PATH', { path, limit: 200 }));
     } catch (e) {
       setError((e as Error).message);
@@ -254,6 +277,15 @@ export function SmartFavoritesPage() {
         )}
       </section>
 
+      <section style={CARD}>
+        <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>Smart Favorites Q&A</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '8px' }}>
+          <TextInput value={question} onInput={setQuestion} placeholder="Ask about locally synced favorites" onEnter={askFavorites} />
+          <ActionButton label={busy === 'qa' ? 'Answering...' : 'Ask'} onClick={askFavorites} disabled={!!busy || !question.trim()} />
+        </div>
+        {qa && <QaAnswerPanel qa={qa} />}
+      </section>
+
       <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: '12px', alignItems: 'start' }}>
         <section style={CARD}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
@@ -286,6 +318,7 @@ export function SmartFavoritesPage() {
 
         <section style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <ResultSection
+            qa={qa}
             search={search}
             selectedPath={selectedPath}
             pathResults={pathResults}
@@ -305,16 +338,31 @@ function mergeIndexResult(total: SmartIndexResult, batch: SmartIndexResult): voi
 }
 
 function ResultSection({
+  qa,
   search,
   selectedPath,
   pathResults,
   busy,
 }: {
+  qa: SmartFavoriteQaResponse | null;
   search: SmartFavoriteSearchResponse | null;
   selectedPath: string[];
   pathResults: SmartFavoriteResult[];
   busy: string;
 }) {
+  if (qa) {
+    return (
+      <>
+        <ResultHeader title="Q&A cited results" count={qa.citedVideos.length} />
+        {qa.citedVideos.length === 0 ? (
+          <EmptyPanel text={qa.answer} />
+        ) : (
+          qa.citedVideos.map(video => <QaCitationCard key={video.bvid || String(video.avid)} video={video} />)
+        )}
+      </>
+    );
+  }
+
   if (search) {
     return (
       <>
@@ -369,6 +417,105 @@ function EmptyPanel({ text }: { text: string }) {
       {text}
     </div>
   );
+}
+
+function QaAnswerPanel({ qa }: { qa: SmartFavoriteQaResponse }) {
+  const statusTone = getQaStatusTone(qa.status.kind);
+  return (
+    <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+        <Badge text={qa.answerType} color={statusTone} />
+        <Badge text={`confidence: ${qa.confidence}`} color={qa.confidence === 'high' ? '#00D4AA' : qa.confidence === 'medium' ? BILI_BLUE : '#FFB347'} />
+        <Badge text={`status: ${qa.status.kind}`} color={statusTone} />
+      </div>
+      <div style={{ color: '#FFFFFF', fontSize: '13px', lineHeight: 1.5 }}>{qa.answer}</div>
+      <div style={{ color: '#A0A0B0', fontSize: '12px', lineHeight: 1.5 }}>{qa.evidenceSummary}</div>
+      {qa.status.notes.length > 0 && (
+        <div style={{ color: '#FFB347', fontSize: '12px', lineHeight: 1.5 }}>
+          {qa.status.notes.join(' ')}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QaCitationCard({ video }: { video: SmartFavoriteQaCitedVideo }) {
+  return (
+    <a
+      href={video.link || undefined}
+      target="_blank"
+      rel="noreferrer"
+      onClick={event => {
+        if (!video.link) event.preventDefault();
+      }}
+      style={{ ...CARD, display: 'flex', flexDirection: 'column', gap: '8px', textDecoration: 'none' }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'start' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, lineHeight: 1.4 }}>{video.title}</div>
+          <div style={{ color: '#9090A0', fontSize: '11px', marginTop: '4px' }}>
+            {video.bvid || `av${video.avid}`} · {video.authorName || 'Unknown UP'} · {video.folderTitle || 'Unknown folder'}
+          </div>
+        </div>
+        <Badge text={video.confidence} color={video.confidence === 'high' ? '#00D4AA' : video.confidence === 'medium' ? BILI_BLUE : '#FFB347'} />
+      </div>
+      {video.smartPath.length > 0 && (
+        <div style={{ color: BILI_BLUE, fontSize: '11px' }}>{video.smartPath.join(' / ')}</div>
+      )}
+      <div style={{ color: '#D8D8E8', fontSize: '12px', lineHeight: 1.5 }}>{video.evidence}</div>
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+        {video.matchReasons.map(reason => <Badge key={reason} text={reason} color="#6666AA" />)}
+      </div>
+      <div style={{ color: '#9090A0', fontSize: '11px', lineHeight: 1.5 }}>
+        Source fields: {video.sourceFields.join(', ') || 'local metadata'} · Score {video.score}
+      </div>
+      {video.evidenceHits.length > 0 && (
+        <div style={{ display: 'grid', gap: '4px' }}>
+          {video.evidenceHits.slice(0, 4).map(hit => (
+            <div key={`${hit.field}:${hit.terms.join('|')}`} style={{ color: '#A0A0B0', fontSize: '11px', lineHeight: 1.45 }}>
+              {hit.label}: {hit.terms.join(', ')}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ color: video.link ? BILI_PINK : '#666', fontSize: '11px' }}>{video.link ? 'Open video' : 'No usable link'}</div>
+    </a>
+  );
+}
+
+function Badge({ text, color }: { text: string; color: string }) {
+  return (
+    <span
+      style={{
+        border: `1px solid ${color}`,
+        borderRadius: '999px',
+        color,
+        fontSize: '11px',
+        lineHeight: 1,
+        padding: '4px 7px',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {text}
+    </span>
+  );
+}
+
+function getQaStatusTone(kind: SmartFavoriteQaResponse['status']['kind']): string {
+  switch (kind) {
+    case 'ok':
+      return '#00D4AA';
+    case 'low_confidence':
+    case 'stale_index':
+    case 'index_missing':
+      return '#FFB347';
+    case 'incomplete_sync':
+    case 'insufficient_evidence':
+    case 'no_result':
+      return '#FF6B6B';
+    default:
+      return '#9090A0';
+  }
 }
 
 function Metric({ label, value }: { label: string; value: number }) {

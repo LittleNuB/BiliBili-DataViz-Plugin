@@ -114,3 +114,79 @@ export interface SmartFavoriteSearchResponse {
   rewrittenTerms: string[];
   results: SmartFavoriteResult[];
 }
+
+export type SmartFavoriteQaAnswerType =
+  | 'retrieval_answer'
+  | 'candidate_list'
+  | 'no_result'
+  | 'insufficient_evidence';
+
+export type SmartFavoriteQaConfidence = 'high' | 'medium' | 'low';
+
+export type SmartFavoriteQaStatusKind =
+  | 'ok'
+  | 'no_result'
+  | 'low_confidence'
+  | 'stale_index'
+  | 'incomplete_sync'
+  | 'index_missing'
+  | 'insufficient_evidence';
+
+export interface SmartFavoriteQaEvidenceHit {
+  field: string;
+  label: string;
+  terms: string[];
+  weight: number;
+  snippet: string;
+}
+
+export interface SmartFavoriteQaCitedVideo {
+  bvid: string;
+  avid: number;
+  title: string;
+  authorName: string;
+  folderTitle: string;
+  smartPath: string[];
+  link: string;
+  matchReasons: string[];
+  sourceFields: string[];
+  confidence: SmartFavoriteQaConfidence;
+  evidence: string;
+  evidenceHits: SmartFavoriteQaEvidenceHit[];
+  score: number;
+  indexedAt?: number;
+  syncedAt: number;
+}
+
+export interface SmartFavoriteQaSyncCoverage {
+  complete: boolean;
+  diagnosticsCount: number;
+  problemFolders: number;
+  note?: string;
+}
+
+export interface SmartFavoriteQaIndexCoverage {
+  indexedItems: number;
+  failedItems: number;
+  pendingItems: number;
+  staleItems: number;
+  indexMissing: boolean;
+  staleIndex: boolean;
+}
+
+export interface SmartFavoriteQaStatus {
+  kind: SmartFavoriteQaStatusKind;
+  notes: string[];
+  syncCoverage: SmartFavoriteQaSyncCoverage;
+  indexCoverage: SmartFavoriteQaIndexCoverage;
+}
+
+export interface SmartFavoriteQaResponse {
+  answerType: SmartFavoriteQaAnswerType;
+  query: string;
+  answer: string;
+  confidence: SmartFavoriteQaConfidence;
+  evidenceSummary: string;
+  status: SmartFavoriteQaStatus;
+  citedVideos: SmartFavoriteQaCitedVideo[];
+}

@@ -19,7 +19,14 @@ import type {
   DynamicBillOverview,
   DynamicSyncResult,
 } from './dynamic-bill';
-import type { FavoriteSyncResult, SmartFavoriteOverview, SmartFavoriteResult, SmartFavoriteSearchResponse, SmartIndexResult } from './favorite';
+import type {
+  FavoriteSyncResult,
+  SmartFavoriteOverview,
+  SmartFavoriteQaResponse,
+  SmartFavoriteResult,
+  SmartFavoriteSearchResponse,
+  SmartIndexResult,
+} from './favorite';
 import type { CurrentVideoContextResult } from './current-video-context';
 import type { CurrentVideoSummaryResult } from './current-video-summary';
 
@@ -46,6 +53,7 @@ export type RequestAction =
   | 'SYNC_FAVORITES'
   | 'BUILD_SMART_FAVORITE_INDEX'
   | 'SEARCH_SMART_FAVORITES'
+  | 'ASK_SMART_FAVORITES'
   | 'GET_DYNAMIC_BILL_OVERVIEW'
   | 'SYNC_DYNAMIC_UPDATES'
   | 'GENERATE_DYNAMIC_BILL'
@@ -166,6 +174,7 @@ export type SmartFavoritesResponse = BiliVizResponse<SmartFavoriteOverview>;
 export type FavoriteSyncResponse = BiliVizResponse<FavoriteSyncResult>;
 export type SmartFavoriteIndexResponse = BiliVizResponse<SmartIndexResult>;
 export type SmartFavoriteSearchMessageResponse = BiliVizResponse<SmartFavoriteSearchResponse>;
+export type SmartFavoriteQaMessageResponse = BiliVizResponse<SmartFavoriteQaResponse>;
 export type SmartFavoritePathResponse = BiliVizResponse<SmartFavoriteResult[]>;
 export type CurrentVideoContextResponse = BiliVizResponse<CurrentVideoContextResult>;
 export type CurrentVideoSummaryResponse = BiliVizResponse<CurrentVideoSummaryResult>;
