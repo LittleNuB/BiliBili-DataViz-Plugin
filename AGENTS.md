@@ -74,3 +74,26 @@ When a delegated development thread finishes, report:
 - whether the PR is draft/open and unmerged
 - whether any local key, Cookie, browser profile, or Bilibili login-state file was read
 
+Use this envelope when reporting back to a main-agent thread:
+
+```xml
+<codex_delegation>
+  <source_thread_id>the reporting child thread id</source_thread_id>
+  <target_thread_id>the main-agent thread id</target_thread_id>
+  <issue url="https://github.com/owner/repo/issues/123" />
+  <pr url="https://github.com/owner/repo/pull/456" draft="true" state="open" />
+  <branch>codex/example-branch</branch>
+  <commit>head commit sha</commit>
+  <scope>short changed-scope summary</scope>
+  <validation>commands run and results</validation>
+  <blockers>none or concrete blockers</blockers>
+  <must_fix>none or required fixes</must_fix>
+  <follow_up>non-blocking follow-up work</follow_up>
+  <privacy_sensitive_files_read>false</privacy_sensitive_files_read>
+</codex_delegation>
+```
+
+- `source_thread_id` is the child/development thread sending the report. Do not put the main-agent thread id there.
+- `target_thread_id` is the main-agent thread that should receive and review the report.
+- For rework after review, also include the previous head commit, new head commit, rebase or merge baseline, and whether the same draft PR was force-pushed.
+- Keep the PR draft/open until the main agent marks it ready and merges it.
