@@ -122,10 +122,16 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
     appendText(
       card,
       'div',
+      'bdc-assistant-row bdc-assistant-muted',
+      `Transcript ${context.sources.transcript}; content text ${context.sources.contentText}`,
+    );
+    appendText(
+      card,
+      'div',
       'bdc-assistant-warning',
-      context.sources.contentText === 'available'
-        ? 'No transcript is available in this slice. Any future help must be limited to metadata and description sources.'
-        : 'No transcript or content text source is available. This is not a full video summary.',
+      context.sources.description === 'available'
+        ? 'Description is available, but transcript and full content text are unavailable. This is not a full video summary.'
+        : 'No transcript, description, or full content text source is available. This is not a full video summary.',
     );
   } else {
     appendText(card, 'div', 'bdc-assistant-video', 'No current video context');

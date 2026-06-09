@@ -373,7 +373,7 @@ function CurrentVideoAssistantStatus({ context }: { context: CurrentVideoContext
           <div style={{ color: '#A0A0B0', fontSize: '10px', lineHeight: 1.5, marginTop: '4px' }}>
             BVID {context.bvid} / CID {context.cid ?? 'unknown'}
             <br />
-            Transcript {context.sources.transcript}; content text {context.sources.contentText}
+            Description {context.sources.description}; transcript {context.sources.transcript}; content text {context.sources.contentText}
           </div>
           <div style={{
             marginTop: '6px',
@@ -381,7 +381,7 @@ function CurrentVideoAssistantStatus({ context }: { context: CurrentVideoContext
             fontSize: '10px',
             lineHeight: 1.45,
           }}>
-            No AI summary is generated. No transcript is available in this slice.
+            No AI summary is generated. Description is not treated as full content text.
           </div>
         </>
       ) : (

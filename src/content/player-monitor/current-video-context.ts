@@ -108,7 +108,7 @@ export function collectCurrentVideoContext(): CurrentVideoContext | CurrentVideo
       pages: pagesAvailability,
       chapters: chaptersAvailability,
       transcript: 'unavailable',
-      contentText: descriptionText ? 'available' : 'unavailable',
+      contentText: 'unavailable',
     },
     warnings,
   };

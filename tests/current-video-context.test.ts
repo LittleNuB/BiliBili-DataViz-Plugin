@@ -31,6 +31,7 @@ test('collects Bilibili video metadata and source availability from page runtime
   assert.equal(context.sources.description, 'available');
   assert.equal(context.sources.pages, 'available');
   assert.equal(context.sources.transcript, 'unavailable');
+  assert.equal(context.sources.contentText, 'unavailable');
   assert.equal(context.description.text, 'Visible description text');
 });
 
