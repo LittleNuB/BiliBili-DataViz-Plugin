@@ -1,4 +1,5 @@
 import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse, PlayerActionPayload, PlayerHeartbeatPayload, SyncNowResult } from '../../shared/types/messages';
+import type { CurrentVideoContextResult, CurrentVideoNoContext } from '../../shared/types/current-video-context';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import { runInitialBackfill } from '../sync/initial-backfill';
 import {
@@ -41,13 +42,14 @@ import {
 } from '../storage/dynamic-bill-repo';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
+const currentVideoContexts = new Map<number, CurrentVideoContextResult>();
 
 export function setupMessageHandlers(): void {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Handle content script messages
     const contentMsg = message as BiliVizContentMessage;
-    if (contentMsg.action && ['PLAYER_HEARTBEAT', 'PLAYER_ACTION', 'PAGE_NAVIGATION'].includes(contentMsg.action)) {
-      handleContentMessage(contentMsg).then(() => {
+    if (contentMsg.action && ['PLAYER_HEARTBEAT', 'PLAYER_ACTION', 'PAGE_NAVIGATION', 'CURRENT_VIDEO_CONTEXT_UPDATE'].includes(contentMsg.action)) {
+      handleContentMessage(contentMsg, sender.tab?.id ?? 0).then(() => {
         sendResponse({ success: true });
       }).catch((err) => {
         sendResponse({ success: false, error: String(err) });
@@ -66,10 +68,20 @@ export function setupMessageHandlers(): void {
 
     return false;
   });
+
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    currentVideoContexts.delete(tabId);
+  });
 }
 
-async function handleContentMessage(msg: BiliVizContentMessage): Promise<void> {
+async function handleContentMessage(msg: BiliVizContentMessage, tabId: number): Promise<void> {
   switch (msg.action) {
+    case 'CURRENT_VIDEO_CONTEXT_UPDATE': {
+      if (tabId > 0) {
+        currentVideoContexts.set(tabId, msg.payload as CurrentVideoContextResult);
+      }
+      break;
+    }
     case 'PLAYER_HEARTBEAT': {
       const p = msg.payload as PlayerHeartbeatPayload;
       await db.playerEvents.add({
@@ -80,7 +92,7 @@ async function handleContentMessage(msg: BiliVizContentMessage): Promise<void> {
         currentTime: p.currentTime,
         duration: p.duration,
         playbackRate: p.playbackRate ?? 1,
-        tabId: 0,
+        tabId,
       });
       await markConsumedFromPlayerEvent(p);
       break;
@@ -97,7 +109,7 @@ async function handleContentMessage(msg: BiliVizContentMessage): Promise<void> {
         playbackRate: p.playbackRate ?? 1,
         seekFrom: p.seekFrom,
         seekTo: p.seekTo,
-        tabId: 0,
+        tabId,
       });
       await markConsumedFromPlayerEvent(p);
       break;
@@ -203,6 +215,8 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       const syncProgress = await getHistorySyncProgress();
       return { success: true, data: { lastSyncTime: lastSync, totalRecords: count, syncProgress } as T };
     }
+    case 'GET_CURRENT_VIDEO_CONTEXT':
+      return { success: true, data: await getCurrentVideoContextForActiveTab() as T };
     case 'GET_SMART_FAVORITES':
       return { success: true, data: await getSmartFavoriteOverview() as T };
     case 'GET_SMART_FAVORITES_BY_PATH': {
@@ -288,6 +302,55 @@ async function markConsumedFromPlayerEvent(
 ): Promise<void> {
   if (!payload.bvid || !isEffectivePlayerWatch(payload)) return;
   await markDynamicBillItemsConsumedByBvid(payload.bvid, Date.now());
+}
+
+async function getCurrentVideoContextForActiveTab(): Promise<CurrentVideoContextResult> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const url = tab?.url ?? null;
+  const tabId = tab?.id ?? 0;
+
+  if (!url || !isBilibiliVideoUrl(url)) {
+    return buildNoContext(url, 'non_video_page', 'non_video');
+  }
+
+  const context = tabId > 0 ? currentVideoContexts.get(tabId) : null;
+  if (context?.kind === 'video' && context.bvid === extractBvidFromUrl(url)) {
+    return context;
+  }
+
+  return buildNoContext(url, 'video_context_unavailable', 'video');
+}
+
+function buildNoContext(
+  url: string | null,
+  reason: CurrentVideoNoContext['reason'],
+  pageType: CurrentVideoNoContext['pageType'],
+): CurrentVideoContextResult {
+  return {
+    kind: 'no_context',
+    url,
+    collectedAt: Date.now(),
+    reason,
+    pageType,
+  };
+}
+
+function isBilibiliVideoUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname.endsWith('bilibili.com') && parsed.pathname.startsWith('/video/');
+  } catch {
+    return false;
+  }
+}
+
+function extractBvidFromUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname.match(/\/video\/(BV[A-Za-z0-9]+)/)?.[1] ?? '';
+  } catch {
+    return '';
+  }
 }
 
 function isEffectivePlayerWatch(payload: PlayerHeartbeatPayload | PlayerActionPayload): boolean {
