@@ -36,6 +36,12 @@ import { generateDynamicBillItems } from '../dynamic-bill/generator';
 import { DYNAMIC_BILL_STRATEGY } from '../dynamic-bill/strategy';
 import { getDynamicOverview, syncDynamicBillUpdates } from '../dynamic-bill/sync';
 import {
+  extractBvidFromUrl,
+  isBilibiliVideoUrl,
+  resolveCurrentVideoTabState,
+  type CurrentVideoTabSnapshot,
+} from '../current-video-context-resolver';
+import {
   getDynamicBillFilterPreference,
   getDynamicBillItems,
   addDynamicBillFeedback,
@@ -75,6 +81,20 @@ export function setupMessageHandlers(): void {
 
   chrome.tabs.onRemoved.addListener((tabId) => {
     currentVideoContexts.delete(tabId);
+  });
+
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    const nextUrl = changeInfo.url;
+    if (!nextUrl) return;
+    if (!isBilibiliVideoUrl(nextUrl)) {
+      currentVideoContexts.delete(tabId);
+      return;
+    }
+
+    const cached = currentVideoContexts.get(tabId);
+    if (cached?.kind === 'video' && cached.bvid !== extractBvidFromUrl(nextUrl)) {
+      currentVideoContexts.delete(tabId);
+    }
   });
 }
 
@@ -329,14 +349,16 @@ async function requestVideoKnowledgeJump(params: Record<string, unknown> | undef
     };
   }
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tabId = tab?.id ?? 0;
-  if (!tab?.url || tabId <= 0 || !isBilibiliVideoUrl(tab.url)) {
+  const target = await resolveCurrentVideoLookupState();
+  const tabId = target.tab?.id ?? 0;
+  if (!target.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(target.tab.url)) {
     throw new Error('NO_ACTIVE_BILIBILI_VIDEO_TAB');
   }
 
-  const context = await getCurrentVideoContextForActiveTab();
-  const knowledge = buildVideoKnowledgeResult(context);
+  if (target.context?.kind !== 'video') {
+    throw new Error('VIDEO_CONTEXT_UNAVAILABLE');
+  }
+  const knowledge = buildVideoKnowledgeResult(target.context);
   const node = findVideoKnowledgeNode(knowledge, nodeId);
   if (!node || !node.jumpAction) {
     throw new Error('VIDEO_KNOWLEDGE_JUMP_TARGET_UNAVAILABLE');
@@ -346,7 +368,7 @@ async function requestVideoKnowledgeJump(params: Record<string, unknown> | undef
     action: 'VIDEO_KNOWLEDGE_MANUAL_JUMP',
     payload: {
       node,
-      contextBvid: context.kind === 'video' ? context.bvid : null,
+      contextBvid: target.context.bvid,
       confirmed: true,
     },
   });
@@ -360,20 +382,36 @@ async function markConsumedFromPlayerEvent(
 }
 
 async function getCurrentVideoContextForActiveTab(): Promise<CurrentVideoContextResult> {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const { tab, context } = await resolveCurrentVideoLookupState();
   const url = tab?.url ?? null;
-  const tabId = tab?.id ?? 0;
 
   if (!url || !isBilibiliVideoUrl(url)) {
     return buildNoContext(url, 'non_video_page', 'non_video');
   }
 
-  const context = tabId > 0 ? currentVideoContexts.get(tabId) : null;
-  if (context?.kind === 'video' && context.bvid === extractBvidFromUrl(url)) {
+  if (context?.kind === 'video') {
     return context;
   }
 
   return buildNoContext(url, 'video_context_unavailable', 'video');
+}
+
+async function resolveCurrentVideoLookupState(): Promise<{
+  tab: CurrentVideoTabSnapshot | null;
+  context: CurrentVideoContextResult | null;
+}> {
+  const windows = await chrome.windows.getAll({
+    populate: true,
+    windowTypes: ['normal'],
+  });
+  const tabs = windows.flatMap(window => (window.tabs ?? []).map(tab => ({
+    id: tab.id ?? 0,
+    url: tab.url ?? null,
+    active: tab.active ?? false,
+    lastAccessed: typeof tab.lastAccessed === 'number' ? tab.lastAccessed : null,
+  } satisfies CurrentVideoTabSnapshot)));
+
+  return resolveCurrentVideoTabState(tabs, currentVideoContexts);
 }
 
 function buildNoContext(
@@ -388,24 +426,6 @@ function buildNoContext(
     reason,
     pageType,
   };
-}
-
-function isBilibiliVideoUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.hostname.endsWith('bilibili.com') && parsed.pathname.startsWith('/video/');
-  } catch {
-    return false;
-  }
-}
-
-function extractBvidFromUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    return parsed.pathname.match(/\/video\/(BV[A-Za-z0-9]+)/)?.[1] ?? '';
-  } catch {
-    return '';
-  }
 }
 
 function isEffectivePlayerWatch(payload: PlayerHeartbeatPayload | PlayerActionPayload): boolean {
