@@ -19,6 +19,7 @@ export interface AiConfig {
 
 export interface AssistantConfig {
   aiSummariesEnabled: boolean;
+  smartFavoritesQaAiEnabled: boolean;
 }
 
 export interface DynamicBillConfig {
@@ -40,6 +41,7 @@ export const DEFAULT_CONFIG: UserConfig = {
   },
   assistant: {
     aiSummariesEnabled: false,
+    smartFavoritesQaAiEnabled: false,
   },
   dynamicBill: {
     aiExplanationsEnabled: false,

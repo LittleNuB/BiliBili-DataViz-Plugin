@@ -7,7 +7,7 @@
     "dev": "vite build --watch --mode development",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test:favorites": "node --test tests/favorite-sync-audit.test.ts",
+    "test:favorites": "node --test tests/favorite-sync-audit.test.ts tests/smart-favorites-qa.test.ts",
     "test:current-video-summary": "node --test tests/current-video-summary.test.ts",
     "test:video-knowledge": "node --test tests/video-knowledge.test.ts"
   },
