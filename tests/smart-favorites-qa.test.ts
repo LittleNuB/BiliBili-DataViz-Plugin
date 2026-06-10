@@ -271,6 +271,37 @@ test('audits Smart Favorites Q&A AI payload allowlist and rejects sensitive fiel
   assert.match(report, /C:\\Users\\LittleNub\\Desktop\\Key\.txt/);
 });
 
+test('redacts incomplete sync diagnostic folder details from Smart Favorites Q&A AI payload', () => {
+  const item = makeFavoriteItem(1, { title: 'Kursk tank battle documentary' });
+  const diagnostic = makeIncompleteDiagnostic({
+    mediaId: 987654,
+    title: 'Private research folder',
+    errors: ['network failed for folder sample'],
+  });
+  const local = buildSmartFavoriteQaResponse({
+    query: 'Kursk',
+    items: [item],
+    indexes: new Map(),
+    folders: [makeFolder({ mediaId: 987654, title: 'Private research folder', lastSyncDiagnostic: diagnostic })],
+  });
+  const payload = buildSmartFavoriteQaAiPayload(local);
+  const rawPayload = JSON.stringify(payload);
+
+  assert.match(local.status.syncCoverage.note ?? '', /FAVORITE_SYNC_INCOMPLETE/);
+  assert.match(local.status.syncCoverage.note ?? '', /Private research folder/);
+  assert.equal(payload.syncCoverage.complete, false);
+  assert.equal(payload.syncCoverage.diagnosticsCount, 1);
+  assert.equal(payload.syncCoverage.problemFolders, 1);
+  assert.equal(payload.syncCoverage.coverageStatus, 'incomplete');
+  assert.equal('note' in payload.syncCoverage, false);
+  assert.doesNotMatch(rawPayload, /Private research folder/);
+  assert.doesNotMatch(rawPayload, /987654/);
+  assert.doesNotMatch(rawPayload, /FAVORITE_SYNC_INCOMPLETE/);
+  assert.doesNotMatch(rawPayload, /network failed for folder sample/);
+  assert.equal(auditAssistantPayload(payload, smartFavoriteQaPayloadContract).passed, true);
+  assertAssistantPayloadAudit(payload, smartFavoriteQaPayloadContract);
+});
+
 function makeFolder(overrides: Partial<FavoriteFolder> = {}): FavoriteFolder {
   return {
     mediaId: 100,
@@ -350,7 +381,7 @@ function makeConfig(overrides: {
   };
 }
 
-function makeIncompleteDiagnostic(): FavoriteFolderSyncDiagnostic {
+function makeIncompleteDiagnostic(overrides: Partial<FavoriteFolderSyncDiagnostic> = {}): FavoriteFolderSyncDiagnostic {
   return {
     mediaId: 100,
     title: 'Default',
@@ -366,5 +397,6 @@ function makeIncompleteDiagnostic(): FavoriteFolderSyncDiagnostic {
     stoppedByMaxPages: false,
     unexplainedDelta: 10,
     errors: [],
+    ...overrides,
   };
 }

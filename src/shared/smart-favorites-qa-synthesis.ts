@@ -20,7 +20,7 @@ export interface SmartFavoriteQaSynthesisOptions {
 export interface SmartFavoriteQaAiPayload {
   intent: 'smart_favorites_qa_synthesis';
   question: string;
-  syncCoverage: SmartFavoriteQaResponse['status']['syncCoverage'];
+  syncCoverage: SmartFavoriteQaAiSyncCoverage;
   indexCoverage: SmartFavoriteQaResponse['status']['indexCoverage'];
   availableSources: {
     favoriteMetadata: true;
@@ -30,6 +30,13 @@ export interface SmartFavoriteQaAiPayload {
   };
   citedVideos: SmartFavoriteQaAiPayloadVideo[];
   safetyRules: string[];
+}
+
+export interface SmartFavoriteQaAiSyncCoverage {
+  complete: boolean;
+  diagnosticsCount: number;
+  problemFolders: number;
+  coverageStatus: 'complete' | 'incomplete';
 }
 
 export interface SmartFavoriteQaAiPayloadVideo {
@@ -87,7 +94,7 @@ export function buildSmartFavoriteQaAiPayload(
   const payload: SmartFavoriteQaAiPayload = {
     intent: 'smart_favorites_qa_synthesis',
     question: limitText(response.query, MAX_TEXT.question),
-    syncCoverage: response.status.syncCoverage,
+    syncCoverage: toAiSyncCoverage(response.status.syncCoverage),
     indexCoverage: response.status.indexCoverage,
     availableSources: {
       favoriteMetadata: true,
@@ -105,6 +112,17 @@ export function buildSmartFavoriteQaAiPayload(
     ],
   };
   return payload;
+}
+
+function toAiSyncCoverage(
+  coverage: SmartFavoriteQaResponse['status']['syncCoverage'],
+): SmartFavoriteQaAiSyncCoverage {
+  return {
+    complete: coverage.complete,
+    diagnosticsCount: coverage.diagnosticsCount,
+    problemFolders: coverage.problemFolders,
+    coverageStatus: coverage.complete ? 'complete' : 'incomplete',
+  };
 }
 
 export async function synthesizeSmartFavoriteQaAnswerFromLocal(

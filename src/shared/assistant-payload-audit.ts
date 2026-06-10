@@ -99,7 +99,7 @@ export const smartFavoriteQaPayloadContract: AssistantPayloadAuditContract = {
     '$.syncCoverage.complete',
     '$.syncCoverage.diagnosticsCount',
     '$.syncCoverage.problemFolders',
-    '$.syncCoverage.note',
+    '$.syncCoverage.coverageStatus',
     '$.indexCoverage',
     '$.indexCoverage.indexedItems',
     '$.indexCoverage.failedItems',
