@@ -181,6 +181,23 @@ export interface SmartFavoriteQaStatus {
   indexCoverage: SmartFavoriteQaIndexCoverage;
 }
 
+export type SmartFavoriteQaSynthesisStatus =
+  | 'disabled'
+  | 'not_configured'
+  | 'generated'
+  | 'failed'
+  | 'rejected'
+  | 'local_fallback';
+
+export interface SmartFavoriteQaSynthesis {
+  status: SmartFavoriteQaSynthesisStatus;
+  answer?: string;
+  reason?: string;
+  model?: string | null;
+  generatedAt?: number;
+  citedVideoRefs?: string[];
+}
+
 export interface SmartFavoriteQaResponse {
   answerType: SmartFavoriteQaAnswerType;
   query: string;
@@ -189,4 +206,5 @@ export interface SmartFavoriteQaResponse {
   evidenceSummary: string;
   status: SmartFavoriteQaStatus;
   citedVideos: SmartFavoriteQaCitedVideo[];
+  synthesis?: SmartFavoriteQaSynthesis;
 }

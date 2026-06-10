@@ -25,7 +25,10 @@ const CARD = {
 export function SmartFavoritesPage() {
   const [overview, setOverview] = useState<SmartFavoriteOverview | null>(null);
   const [config, setConfig] = useState<AiConfig>({ baseURL: 'https://api.deepseek.com', apiKey: '', chatModel: 'deepseek-v4-flash' });
-  const [assistantConfig, setAssistantConfig] = useState<AssistantConfig>({ aiSummariesEnabled: false });
+  const [assistantConfig, setAssistantConfig] = useState<AssistantConfig>({
+    aiSummariesEnabled: false,
+    smartFavoritesQaAiEnabled: false,
+  });
   const [query, setQuery] = useState('');
   const [question, setQuestion] = useState('');
   const [search, setSearch] = useState<SmartFavoriteSearchResponse | null>(null);
@@ -242,7 +245,7 @@ export function SmartFavoritesPage() {
           <TextInput value={config.baseURL} onInput={value => setConfig({ ...config, baseURL: value })} placeholder="Base URL" />
           <TextInput value={config.chatModel} onInput={value => setConfig({ ...config, chatModel: value })} placeholder="模型" />
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '8px', alignItems: 'center' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: '8px', alignItems: 'center' }}>
           <TextInput value={config.apiKey} onInput={value => setConfig({ ...config, apiKey: value })} placeholder="API Key" password />
           <label style={{
             display: 'flex',
@@ -260,6 +263,23 @@ export function SmartFavoritesPage() {
               })}
             />
             Assistant summaries
+          </label>
+          <label style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            color: '#C8C8D8',
+            fontSize: '11px',
+          }}>
+            <input
+              type="checkbox"
+              checked={assistantConfig.smartFavoritesQaAiEnabled}
+              onChange={(event) => setAssistantConfig({
+                ...assistantConfig,
+                smartFavoritesQaAiEnabled: (event.currentTarget as HTMLInputElement).checked,
+              })}
+            />
+            Favorites Q&A AI
           </label>
           <ActionButton label={busy === 'save' ? '保存中...' : '保存'} onClick={saveAiConfig} disabled={!!busy} />
         </div>
@@ -353,7 +373,7 @@ function ResultSection({
   if (qa) {
     return (
       <>
-        <ResultHeader title="Q&A cited results" count={qa.citedVideos.length} />
+        <ResultHeader title="Local cited retrieval evidence" count={qa.citedVideos.length} />
         {qa.citedVideos.length === 0 ? (
           <EmptyPanel text={qa.answer} />
         ) : (
@@ -421,15 +441,48 @@ function EmptyPanel({ text }: { text: string }) {
 
 function QaAnswerPanel({ qa }: { qa: SmartFavoriteQaResponse }) {
   const statusTone = getQaStatusTone(qa.status.kind);
+  const synthesisTone = getQaSynthesisTone(qa.synthesis?.status ?? 'local_fallback');
   return (
     <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
         <Badge text={qa.answerType} color={statusTone} />
         <Badge text={`confidence: ${qa.confidence}`} color={qa.confidence === 'high' ? '#00D4AA' : qa.confidence === 'medium' ? BILI_BLUE : '#FFB347'} />
         <Badge text={`status: ${qa.status.kind}`} color={statusTone} />
+        <Badge text={`AI: ${qa.synthesis?.status ?? 'local_fallback'}`} color={synthesisTone} />
       </div>
-      <div style={{ color: '#FFFFFF', fontSize: '13px', lineHeight: 1.5 }}>{qa.answer}</div>
-      <div style={{ color: '#A0A0B0', fontSize: '12px', lineHeight: 1.5 }}>{qa.evidenceSummary}</div>
+      {qa.synthesis?.status === 'generated' && qa.synthesis.answer && (
+        <div style={{
+          background: '#1A1A2E',
+          border: `1px solid ${BILI_BLUE}`,
+          borderRadius: '8px',
+          padding: '10px',
+        }}>
+          <div style={{ color: BILI_BLUE, fontSize: '11px', fontWeight: 600, marginBottom: '5px' }}>
+            AI synthesized answer
+          </div>
+          <div style={{ color: '#FFFFFF', fontSize: '13px', lineHeight: 1.5 }}>{qa.synthesis.answer}</div>
+          <div style={{ color: '#9090A0', fontSize: '11px', lineHeight: 1.45, marginTop: '6px' }}>
+            Model: {qa.synthesis.model ?? 'unknown'} / cited refs: {(qa.synthesis.citedVideoRefs ?? []).join(', ') || 'provided videos'}
+          </div>
+        </div>
+      )}
+      <div style={{
+        background: '#1A1A2E',
+        border: '1px solid #333355',
+        borderRadius: '8px',
+        padding: '10px',
+      }}>
+        <div style={{ color: '#A0A0B0', fontSize: '11px', fontWeight: 600, marginBottom: '5px' }}>
+          Local cited retrieval answer
+        </div>
+        <div style={{ color: '#FFFFFF', fontSize: '13px', lineHeight: 1.5 }}>{qa.answer}</div>
+        <div style={{ color: '#A0A0B0', fontSize: '12px', lineHeight: 1.5, marginTop: '6px' }}>{qa.evidenceSummary}</div>
+      </div>
+      {qa.synthesis && qa.synthesis.status !== 'generated' && (
+        <div style={{ color: synthesisTone, fontSize: '12px', lineHeight: 1.5 }}>
+          AI synthesis {qa.synthesis.status}: {qa.synthesis.reason ?? 'local cited retrieval fallback is shown.'}
+        </div>
+      )}
       {qa.status.notes.length > 0 && (
         <div style={{ color: '#FFB347', fontSize: '12px', lineHeight: 1.5 }}>
           {qa.status.notes.join(' ')}
@@ -513,6 +566,22 @@ function getQaStatusTone(kind: SmartFavoriteQaResponse['status']['kind']): strin
     case 'insufficient_evidence':
     case 'no_result':
       return '#FF6B6B';
+    default:
+      return '#9090A0';
+  }
+}
+
+function getQaSynthesisTone(status: NonNullable<SmartFavoriteQaResponse['synthesis']>['status']): string {
+  switch (status) {
+    case 'generated':
+      return '#00D4AA';
+    case 'disabled':
+    case 'not_configured':
+    case 'local_fallback':
+      return '#9090A0';
+    case 'rejected':
+    case 'failed':
+      return '#FFB347';
     default:
       return '#9090A0';
   }

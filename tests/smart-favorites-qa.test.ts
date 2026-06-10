@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { AiConfig, UserConfig } from '../src/shared/types/config.ts';
 import type { FavoriteFolder, FavoriteFolderSyncDiagnostic, FavoriteItem, SmartFavoriteIndex } from '../src/shared/types/favorite.ts';
+import {
+  assertAssistantPayloadAudit,
+  auditAssistantPayload,
+  smartFavoriteQaPayloadContract,
+} from '../src/shared/assistant-payload-audit.ts';
 import { buildSmartFavoriteQaResponse } from '../src/background/favorites/qa-core.ts';
+import {
+  buildSmartFavoriteQaAiPayload,
+  synthesizeSmartFavoriteQaAnswerFromLocal,
+} from '../src/shared/smart-favorites-qa-synthesis.ts';
 
 test('returns cited videos with source fields and evidence for local matches', () => {
   const item = makeFavoriteItem(1, {
@@ -104,6 +114,163 @@ test('scopes answers to currently synced data when sync diagnostics are incomple
   assert.match(response.answer, /currently synced/);
 });
 
+test('generates optional AI synthesis from cited videos only', async () => {
+  const item = makeFavoriteItem(1, {
+    title: 'Kursk tank battle documentary',
+    folderTitle: 'History',
+  });
+  const local = buildSmartFavoriteQaResponse({
+    query: 'Kursk',
+    items: [item],
+    indexes: new Map([[item.itemKey, makeIndex(item, { keywords: ['Kursk'] })]]),
+    folders: [makeFolder()],
+  });
+  let sawPayload = false;
+
+  const response = await synthesizeSmartFavoriteQaAnswerFromLocal(local, {
+    config: makeConfig({ smartFavoritesQaAiEnabled: true, apiKey: 'test-key' }),
+    now: 2_000,
+    chat: async (_config: AiConfig, messages) => {
+      const payload = JSON.parse(messages[1].content);
+      sawPayload = true;
+      assert.equal(payload.intent, 'smart_favorites_qa_synthesis');
+      assert.equal(payload.citedVideos.length, 1);
+      assert.equal(payload.citedVideos[0].bvid, item.bvid);
+      assert.equal('favoriteItems' in payload, false);
+      return {
+        answer: `The strongest local match is ${item.bvid}, based on the provided title and Smart Favorites evidence.`,
+        citedVideoRefs: [item.bvid],
+      };
+    },
+  });
+
+  assert.equal(sawPayload, true);
+  assert.equal(response.answer, local.answer);
+  assert.equal(response.citedVideos.length, 1);
+  assert.equal(response.synthesis?.status, 'generated');
+  assert.match(response.synthesis?.answer ?? '', /strongest local match/);
+  assert.deepEqual(response.synthesis?.citedVideoRefs, [item.bvid]);
+});
+
+test('marks AI disabled and not configured without blocking local cited results', async () => {
+  const item = makeFavoriteItem(1, { title: 'Kursk tank battle documentary' });
+  const local = buildSmartFavoriteQaResponse({
+    query: 'Kursk',
+    items: [item],
+    indexes: new Map(),
+    folders: [makeFolder()],
+  });
+
+  const disabled = await synthesizeSmartFavoriteQaAnswerFromLocal(local, {
+    config: makeConfig({ smartFavoritesQaAiEnabled: false, apiKey: 'test-key' }),
+  });
+  const notConfigured = await synthesizeSmartFavoriteQaAnswerFromLocal(local, {
+    config: makeConfig({ smartFavoritesQaAiEnabled: true, apiKey: '' }),
+  });
+
+  assert.equal(disabled.synthesis?.status, 'disabled');
+  assert.equal(notConfigured.synthesis?.status, 'not_configured');
+  assert.equal(disabled.citedVideos[0].bvid, item.bvid);
+  assert.equal(notConfigured.citedVideos[0].bvid, item.bvid);
+});
+
+test('marks AI failure without removing local cited results', async () => {
+  const item = makeFavoriteItem(1, { title: 'Kursk tank battle documentary' });
+  const local = buildSmartFavoriteQaResponse({
+    query: 'Kursk',
+    items: [item],
+    indexes: new Map(),
+    folders: [makeFolder()],
+  });
+
+  const response = await synthesizeSmartFavoriteQaAnswerFromLocal(local, {
+    config: makeConfig({ smartFavoritesQaAiEnabled: true, apiKey: 'test-key' }),
+    chat: async () => {
+      throw new Error('AI_TEST_FAILURE');
+    },
+  });
+
+  assert.equal(response.synthesis?.status, 'failed');
+  assert.match(response.synthesis?.reason ?? '', /AI_TEST_FAILURE/);
+  assert.equal(response.citedVideos[0].bvid, item.bvid);
+});
+
+test('rejects AI synthesis that cites outside videos or titles', async () => {
+  const item = makeFavoriteItem(1, { title: 'Kursk tank battle documentary' });
+  const local = buildSmartFavoriteQaResponse({
+    query: 'Kursk',
+    items: [item],
+    indexes: new Map(),
+    folders: [makeFolder()],
+  });
+
+  const outsideBvid = await synthesizeSmartFavoriteQaAnswerFromLocal(local, {
+    config: makeConfig({ smartFavoritesQaAiEnabled: true, apiKey: 'test-key' }),
+    chat: async () => ({
+      answer: 'The answer is probably BV9999999999, which was not provided.',
+      citedVideoRefs: ['BV9999999999'],
+    }),
+  });
+  const outsideTitle = await synthesizeSmartFavoriteQaAnswerFromLocal(local, {
+    config: makeConfig({ smartFavoritesQaAiEnabled: true, apiKey: 'test-key' }),
+    chat: async () => ({
+      answer: 'The answer is 《External Documentary》.',
+      citedVideoRefs: [item.bvid],
+    }),
+  });
+
+  assert.equal(outsideBvid.synthesis?.status, 'rejected');
+  assert.match(outsideBvid.synthesis?.reason ?? '', /AI_OUTSIDE_CITED_VIDEO_REF|AI_OUTSIDE_VIDEO_REFERENCE/);
+  assert.equal(outsideTitle.synthesis?.status, 'rejected');
+  assert.match(outsideTitle.synthesis?.reason ?? '', /AI_OUTSIDE_TITLE_REFERENCE/);
+  assert.equal(outsideBvid.answer, local.answer);
+  assert.equal(outsideTitle.citedVideos[0].bvid, item.bvid);
+});
+
+test('audits Smart Favorites Q&A AI payload allowlist and rejects sensitive fields', () => {
+  const item = makeFavoriteItem(1, {
+    title: 'Kursk tank battle documentary',
+    authorName: 'Archive UP',
+  });
+  const local = buildSmartFavoriteQaResponse({
+    query: 'Kursk',
+    items: [item],
+    indexes: new Map([[item.itemKey, makeIndex(item, { keywords: ['Kursk'] })]]),
+    folders: [makeFolder()],
+  });
+  const payload = buildSmartFavoriteQaAiPayload(local);
+  const rawPayload = JSON.stringify(payload);
+
+  assert.equal(payload.citedVideos.length, 1);
+  assert.equal('authorMid' in payload.citedVideos[0], false);
+  assert.doesNotMatch(rawPayload, /favoriteItems|favoriteFolders|Cookie|Key\.txt|authorMid|userMid/i);
+  assert.equal(auditAssistantPayload(payload, smartFavoriteQaPayloadContract).passed, true);
+  assertAssistantPayloadAudit(payload, smartFavoriteQaPayloadContract);
+
+  const badPayload = {
+    ...payload,
+    favoriteItems: [{ bvid: 'BVFullLeak' }],
+    citedVideos: [
+      {
+        ...payload.citedVideos[0],
+        authorMid: 123,
+      },
+    ],
+    safetyRules: [
+      ...payload.safetyRules,
+      'Do not send Cookie: SESSDATA=abc or C:\\Users\\LittleNub\\Desktop\\Key.txt.',
+    ],
+  };
+  const audit = auditAssistantPayload(badPayload, smartFavoriteQaPayloadContract);
+  const report = audit.violations.map(violation => `${violation.path} ${violation.token ?? ''}`).join('\n');
+
+  assert.equal(audit.passed, false);
+  assert.match(report, /\$\.favoriteItems/);
+  assert.match(report, /\$\.citedVideos\[0\]\.authorMid/);
+  assert.match(report, /Cookie\/login token/);
+  assert.match(report, /C:\\Users\\LittleNub\\Desktop\\Key\.txt/);
+});
+
 function makeFolder(overrides: Partial<FavoriteFolder> = {}): FavoriteFolder {
   return {
     mediaId: 100,
@@ -153,6 +320,33 @@ function makeIndex(item: FavoriteItem, overrides: Partial<SmartFavoriteIndex> = 
     status: 'indexed',
     indexedAt: 1_000,
     ...overrides,
+  };
+}
+
+function makeConfig(overrides: {
+  smartFavoritesQaAiEnabled: boolean;
+  apiKey: string;
+}): UserConfig {
+  return {
+    dailyWatchGoal: 60,
+    weeklyWatchGoal: 420,
+    overDependencyThreshold: 0.3,
+    syncIntervalMinutes: 5,
+    retentionDays: 90,
+    showSidebar: true,
+    theme: 'dark',
+    ai: {
+      baseURL: 'https://api.test',
+      apiKey: overrides.apiKey,
+      chatModel: 'test-model',
+    },
+    assistant: {
+      aiSummariesEnabled: false,
+      smartFavoritesQaAiEnabled: overrides.smartFavoritesQaAiEnabled,
+    },
+    dynamicBill: {
+      aiExplanationsEnabled: false,
+    },
   };
 }
 
