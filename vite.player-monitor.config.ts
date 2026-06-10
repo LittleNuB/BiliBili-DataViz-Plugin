@@ -9,6 +9,7 @@ const resolveRoot = (...segments: string[]) => path.resolve(__dirname, ...segmen
 
 export default defineConfig({
   root: __dirname,
+  publicDir: false,
   esbuild: {
     jsx: 'automatic',
     jsxImportSource: 'preact',
@@ -22,18 +23,16 @@ export default defineConfig({
   build: {
     target: 'es2022',
     outDir: 'dist',
-    emptyOutDir: true,
+    emptyOutDir: false,
     rollupOptions: {
       input: {
-        background: 'src/background/index.ts',
-        'content/sidebar-card': 'src/content/sidebar-card/index.ts',
-        popup: 'popup/index.html',
-        dashboard: 'dashboard/index.html',
+        'content/player-monitor': 'src/content/player-monitor/index.ts',
       },
       output: {
         entryFileNames: '[name].js',
         chunkFileNames: 'chunks/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash].[ext]',
+        inlineDynamicImports: true,
       },
     },
   },
