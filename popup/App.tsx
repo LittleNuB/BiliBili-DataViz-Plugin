@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { quickStats, loading, error, lastSyncResult, syncInProgress, syncProgress, syncPageLimit } from './signals';
 import { requestSW } from './utils/messaging';
 import type { QuickStats } from '../src/shared/types/analytics';
-import type { SyncNowResult, SyncProgress } from '../src/shared/types/messages';
+import type { SyncNowResult } from '../src/shared/types/messages';
+import type { HistorySyncProgress, HistorySyncStatus } from '../src/shared/types/history-sync';
 import type { CurrentVideoContextResult } from '../src/shared/types/current-video-context';
 import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary';
 import type { VideoKnowledgeJumpResponse, VideoKnowledgeNode, VideoKnowledgeResult } from '../src/shared/types/video-knowledge';
@@ -10,12 +11,6 @@ import { cancelledCurrentVideoSummary, loadingCurrentVideoSummary } from '../src
 import { ProgressRing } from './components/ProgressRing';
 import { QuickStats as QuickStatsPanel } from './components/QuickStats';
 import { OpenDashboard } from './components/OpenDashboard';
-
-interface SyncStatus {
-  lastSyncTime: number;
-  totalRecords: number;
-  syncProgress: SyncProgress | null;
-}
 
 export function App() {
   const [currentVideoContext, setCurrentVideoContext] = useState<CurrentVideoContextResult | null>(null);
@@ -37,7 +32,7 @@ export function App() {
 
   async function refreshSyncStatus() {
     try {
-      const status = await requestSW<SyncStatus>('GET_SYNC_STATUS');
+      const status = await requestSW<HistorySyncStatus>('GET_SYNC_STATUS');
       syncProgress.value = status.syncProgress;
       syncInProgress.value = status.syncProgress?.syncing ?? false;
 

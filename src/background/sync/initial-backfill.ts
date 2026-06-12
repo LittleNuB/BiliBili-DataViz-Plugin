@@ -13,26 +13,20 @@ import {
   setLastSyncTime,
 } from '../storage/config-store';
 import type { HistoryCursorItem } from '../../shared/types/video-info';
+import type { VideoInfo } from '../../shared/types/video-info';
 import { MAX_BACKFILL_PAGES } from '../../shared/constants';
+import {
+  classifyHistoryPageStop,
+  isHistoryCursorEnd,
+  normalizeHistoryPageLimit,
+} from '../../shared/history-sync-core';
 import { getHistoryBvid, getHistoryDeviceType, toWatchHistoryRecord } from './watch-history-mapper';
-import type { HistorySyncMode } from '../../shared/types/messages';
+import type { HistorySyncCursorSnapshot, HistorySyncMode, HistorySyncProgress } from '../../shared/types/history-sync';
 import { beginHistorySyncAbortScope, endHistorySyncAbortScope } from './sync-control';
 import { abortableDelay } from '../utils/abortable-delay';
 import { markDynamicBillItemsConsumedByHistoryRecords } from '../storage/dynamic-bill-repo';
 
-export interface BackfillResult {
-  mode: HistorySyncMode;
-  pageLimit: number;
-  currentTask: string;
-  fetchedPages: number;
-  fetchedCount: number;
-  insertedCount: number;
-  updatedCount: number;
-  stoppedReason: string;
-  reachedEnd: boolean;
-  oldestFetchedAt: number | null;
-  newestFetchedAt: number | null;
-}
+export interface BackfillResult extends Omit<HistorySyncProgress, 'syncing' | 'startedAt' | 'updatedAt'> {}
 
 export interface HistorySyncOptions {
   maxPages?: number;
@@ -81,8 +75,9 @@ async function runHistorySyncUnlocked(
   }
 
   console.log(`[BiliViz] Starting ${mode} history sync...`);
-  const pageLimit = normalizePageLimit(options.maxPages);
-  const result = createResult(mode, 'page_limit', pageLimit);
+  const requestedPageLimit = Number.isFinite(options.maxPages) ? Math.floor(options.maxPages!) : null;
+  const pageLimit = normalizeHistoryPageLimit(options.maxPages);
+  const result = createResult(mode, 'page_limit', pageLimit, requestedPageLimit);
   const startedAt = Date.now();
   await writeProgress(result, startedAt, true);
   let cursor: HistoryCursorParams = {};
@@ -90,12 +85,8 @@ async function runHistorySyncUnlocked(
   while (result.fetchedPages < pageLimit) {
     if (signal.aborted || await getHistorySyncCancelRequested()) {
       result.stoppedReason = 'cancelled';
-      result.currentTask = '用户已停止同步';
       break;
     }
-
-    result.currentTask = `正在请求第 ${result.fetchedPages + 1} 页历史记录`;
-    await writeProgress(result, startedAt, true);
 
     let page;
     try {
@@ -103,23 +94,32 @@ async function runHistorySyncUnlocked(
     } catch (error) {
       if (error instanceof Error && error.message === 'SYNC_CANCELLED') {
         result.stoppedReason = 'cancelled';
-        result.currentTask = '用户已停止同步';
         break;
       }
       throw error;
     }
+
     const { list, cursor: nextCursor } = page;
+    result.finalCursor = toCursorSnapshot(nextCursor);
     if (list.length === 0) {
-      result.stoppedReason = 'empty_page';
-      result.currentTask = '接口返回空页，同步结束';
-      result.reachedEnd = true;
+      const stop = classifyHistoryPageStop({
+        mode,
+        listCount: 0,
+        firstStored: false,
+        lastStored: false,
+        newItemsCount: 0,
+        cursor: nextCursor,
+      });
+      if (stop.stoppedReason) {
+        result.stoppedReason = stop.stoppedReason;
+        result.reachedEnd = stop.reachedEnd;
+      }
       break;
     }
 
     result.fetchedPages++;
     result.fetchedCount += list.length;
     updateFetchedRange(result, list);
-    result.currentTask = `已获取第 ${result.fetchedPages} 页，正在去重`;
     await writeProgress(result, startedAt, true);
 
     const [firstStored, lastStored] = await Promise.all([
@@ -127,8 +127,6 @@ async function runHistorySyncUnlocked(
       isHistoryItemStored(list[list.length - 1]),
     ]);
 
-    result.currentTask = `第 ${result.fetchedPages} 页：正在更新设备信息`;
-    await writeProgress(result, startedAt, true);
     result.updatedCount += await updateDeviceTypesFromHistory(
       list.map(item => ({
         kid: item.kid,
@@ -140,33 +138,29 @@ async function runHistorySyncUnlocked(
     );
 
     const newItems = await filterNewItems(list);
+    result.skippedCount += Math.max(0, list.length - newItems.length);
     if (newItems.length > 0) {
-      result.currentTask = `第 ${result.fetchedPages} 页：正在补全 ${newItems.length} 条视频信息`;
-      await writeProgress(result, startedAt, true);
       const bvids = [...new Set(newItems.map(getHistoryBvid).filter(Boolean))];
-      let videoInfo: Map<string, any>;
+      let videoInfo: Map<string, VideoInfo>;
       try {
         if (signal.aborted || await getHistorySyncCancelRequested()) {
           result.stoppedReason = 'cancelled';
-          result.currentTask = '用户已停止同步';
           break;
         }
         videoInfo = await batchFetchVideoInfo(bvids, signal);
       } catch (error) {
         if (error instanceof Error && error.message === 'SYNC_CANCELLED') {
           result.stoppedReason = 'cancelled';
-          result.currentTask = '用户已停止同步';
           break;
         }
         throw error;
       }
+
       if (signal.aborted || await getHistorySyncCancelRequested()) {
         result.stoppedReason = 'cancelled';
-        result.currentTask = '用户已停止同步';
         break;
       }
-      result.currentTask = `第 ${result.fetchedPages} 页：正在写入本地历史`;
-      await writeProgress(result, startedAt, true);
+
       const records = newItems.map(item => toWatchHistoryRecord(item, videoInfo.get(getHistoryBvid(item))));
       await bulkInsert(records);
       await markDynamicBillItemsConsumedByHistoryRecords(records);
@@ -174,28 +168,19 @@ async function runHistorySyncUnlocked(
     }
 
     console.log(`[BiliViz] ${mode} sync page: ${newItems.length} new items (total inserted: ${result.insertedCount})`);
-    result.currentTask = `第 ${result.fetchedPages} 页处理完成`;
     await writeProgress(result, startedAt, true);
 
-    if (mode === 'incremental') {
-      if (newItems.length === 0) {
-        result.stoppedReason = 'no_new_records';
-        result.currentTask = '未发现新记录，增量同步结束';
-        await writeProgress(result, startedAt, true);
-        break;
-      }
-      if (firstStored && lastStored) {
-        result.stoppedReason = 'boundary_records_seen';
-        result.currentTask = '已遇到本地边界记录，增量同步结束';
-        await writeProgress(result, startedAt, true);
-        break;
-      }
-    }
-
-    if (isCursorEnd(nextCursor)) {
-      result.stoppedReason = 'api_end';
-      result.currentTask = 'B站接口已无更多历史记录';
-      result.reachedEnd = true;
+    const stop = classifyHistoryPageStop({
+      mode,
+      listCount: list.length,
+      firstStored,
+      lastStored,
+      newItemsCount: newItems.length,
+      cursor: nextCursor,
+    });
+    if (stop.stoppedReason) {
+      result.stoppedReason = stop.stoppedReason;
+      result.reachedEnd = stop.reachedEnd;
       await writeProgress(result, startedAt, true);
       break;
     }
@@ -211,7 +196,6 @@ async function runHistorySyncUnlocked(
     } catch (error) {
       if (error instanceof Error && error.message === 'SYNC_CANCELLED') {
         result.stoppedReason = 'cancelled';
-        result.currentTask = '用户已停止同步';
         break;
       }
       throw error;
@@ -219,14 +203,12 @@ async function runHistorySyncUnlocked(
   }
 
   if (mode === 'full' && result.reachedEnd) {
-    await setBackfillComplete();
+    await setBackfillComplete(true);
+  } else if (mode === 'full') {
+    await setBackfillComplete(false);
   }
   await setLastSyncTime(Date.now());
-  if (result.stoppedReason === 'cancelled') {
-    result.currentTask = '同步已停止';
-  } else {
-    result.currentTask = '同步完成';
-  }
+  result.currentTask = result.stoppedReason === 'cancelled' ? 'sync_cancelled' : 'sync_complete';
   await writeProgress(result, startedAt, false);
 
   console.log(`[BiliViz] ${mode} history sync complete: ${result.insertedCount} inserted, ${result.updatedCount} updated`);
@@ -237,31 +219,33 @@ function createResult(
   mode: HistorySyncMode,
   stoppedReason: string,
   pageLimit = MAX_BACKFILL_PAGES,
+  requestedPageLimit: number | null = null,
 ): BackfillResult {
   return {
     mode,
+    requestedPageLimit,
     pageLimit,
     currentTask: stoppedReason,
     fetchedPages: 0,
     fetchedCount: 0,
     insertedCount: 0,
     updatedCount: 0,
+    skippedCount: 0,
     stoppedReason,
     reachedEnd: false,
     oldestFetchedAt: null,
     newestFetchedAt: null,
+    finalCursor: null,
   };
 }
 
-function normalizePageLimit(maxPages: number | undefined): number {
-  if (!Number.isFinite(maxPages)) return MAX_BACKFILL_PAGES;
-  return Math.max(1, Math.min(MAX_BACKFILL_PAGES, Math.floor(maxPages!)));
-}
+export const normalizePageLimit = normalizeHistoryPageLimit;
 
 async function writeProgress(result: BackfillResult, startedAt: number, syncing: boolean): Promise<void> {
   await setHistorySyncProgress({
     syncing,
     mode: result.mode,
+    requestedPageLimit: result.requestedPageLimit,
     pageLimit: result.pageLimit,
     currentTask: result.currentTask,
     startedAt,
@@ -270,10 +254,12 @@ async function writeProgress(result: BackfillResult, startedAt: number, syncing:
     fetchedCount: result.fetchedCount,
     insertedCount: result.insertedCount,
     updatedCount: result.updatedCount,
+    skippedCount: result.skippedCount,
     stoppedReason: result.stoppedReason,
     reachedEnd: result.reachedEnd,
     oldestFetchedAt: result.oldestFetchedAt,
     newestFetchedAt: result.newestFetchedAt,
+    finalCursor: result.finalCursor,
   });
 }
 
@@ -288,6 +274,14 @@ function updateFetchedRange(result: BackfillResult, items: HistoryCursorItem[]):
   }
 }
 
-function isCursorEnd(cursor: { max: number; view_at: number; has_more?: boolean }): boolean {
-  return cursor.has_more === false || (cursor.max === 0 && cursor.view_at === 0);
+export const classifyPageStop = classifyHistoryPageStop;
+export const isCursorEnd = isHistoryCursorEnd;
+
+function toCursorSnapshot(cursor: { max: number; view_at: number; business?: string; has_more?: boolean }): HistorySyncCursorSnapshot {
+  return {
+    max: cursor.max,
+    viewAt: cursor.view_at,
+    business: cursor.business ?? null,
+    hasMore: typeof cursor.has_more === 'boolean' ? cursor.has_more : null,
+  };
 }

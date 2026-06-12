@@ -1,5 +1,5 @@
 import { DEFAULT_CONFIG, type UserConfig } from '../../shared/types/config';
-import type { SyncProgress } from '../../shared/types/messages';
+import type { HistorySyncProgress } from '../../shared/types/history-sync';
 
 const CONFIG_KEY = 'userConfig';
 const HISTORY_SYNC_PROGRESS_KEY = 'historySyncProgress';
@@ -86,16 +86,16 @@ export async function setHistorySyncing(syncing: boolean): Promise<void> {
   await chrome.storage.local.remove('historySyncStartedAt');
 }
 
-export async function getHistorySyncProgress(): Promise<SyncProgress | null> {
+export async function getHistorySyncProgress(): Promise<HistorySyncProgress | null> {
   const result = await chrome.storage.local.get(HISTORY_SYNC_PROGRESS_KEY);
-  return result[HISTORY_SYNC_PROGRESS_KEY] ?? null;
+  return normalizeHistorySyncProgress(result[HISTORY_SYNC_PROGRESS_KEY] ?? null);
 }
 
-export async function setHistorySyncProgress(progress: SyncProgress): Promise<void> {
+export async function setHistorySyncProgress(progress: HistorySyncProgress): Promise<void> {
   await chrome.storage.local.set({ [HISTORY_SYNC_PROGRESS_KEY]: progress });
 }
 
-export async function patchHistorySyncProgress(progress: Partial<SyncProgress>): Promise<void> {
+export async function patchHistorySyncProgress(progress: Partial<HistorySyncProgress>): Promise<void> {
   const current = await getHistorySyncProgress();
   if (!current) return;
   await setHistorySyncProgress({
@@ -135,8 +135,8 @@ export async function getBackfillComplete(): Promise<boolean> {
   return result.backfillComplete ?? false;
 }
 
-export async function setBackfillComplete(): Promise<void> {
-  await chrome.storage.local.set({ backfillComplete: true });
+export async function setBackfillComplete(complete = true): Promise<void> {
+  await chrome.storage.local.set({ backfillComplete: complete });
 }
 
 export async function getDeviceTypeMigrationComplete(): Promise<boolean> {
@@ -146,4 +146,56 @@ export async function getDeviceTypeMigrationComplete(): Promise<boolean> {
 
 export async function setDeviceTypeMigrationComplete(): Promise<void> {
   await chrome.storage.local.set({ deviceTypeMigrationComplete: true });
+}
+
+function normalizeHistorySyncProgress(value: unknown): HistorySyncProgress | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Partial<HistorySyncProgress> & {
+    skippedCount?: unknown;
+    requestedPageLimit?: unknown;
+    finalCursor?: unknown;
+  };
+
+  const fetchedCount = asRequiredNumber(raw.fetchedCount, 0);
+  const insertedCount = asRequiredNumber(raw.insertedCount, 0);
+  const skippedCount = Math.max(0, asRequiredNumber(raw.skippedCount, fetchedCount - insertedCount));
+
+  return {
+    syncing: raw.syncing === true,
+    mode: raw.mode === 'full' || raw.mode === 'incremental' ? raw.mode : null,
+    requestedPageLimit: raw.requestedPageLimit == null ? null : asOptionalNumber(raw.requestedPageLimit, null),
+    pageLimit: asRequiredNumber(raw.pageLimit, 0),
+    currentTask: typeof raw.currentTask === 'string' ? raw.currentTask : '',
+    startedAt: asRequiredNumber(raw.startedAt, 0),
+    updatedAt: asRequiredNumber(raw.updatedAt, 0),
+    fetchedPages: asRequiredNumber(raw.fetchedPages, 0),
+    fetchedCount,
+    insertedCount,
+    updatedCount: asRequiredNumber(raw.updatedCount, 0),
+    skippedCount,
+    stoppedReason: typeof raw.stoppedReason === 'string' ? raw.stoppedReason : '',
+    reachedEnd: raw.reachedEnd === true,
+    oldestFetchedAt: asOptionalNumber(raw.oldestFetchedAt, null),
+    newestFetchedAt: asOptionalNumber(raw.newestFetchedAt, null),
+    finalCursor: normalizeCursor(raw.finalCursor),
+  };
+}
+
+function normalizeCursor(value: unknown): HistorySyncProgress['finalCursor'] {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  return {
+    max: asOptionalNumber(raw.max, null),
+    viewAt: asOptionalNumber(raw.viewAt, null),
+    business: typeof raw.business === 'string' ? raw.business : null,
+    hasMore: typeof raw.hasMore === 'boolean' ? raw.hasMore : null,
+  };
+}
+
+function asRequiredNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function asOptionalNumber(value: unknown, fallback: number | null): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
