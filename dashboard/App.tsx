@@ -11,6 +11,7 @@ import { BehaviorPage } from './modules/behavior/BehaviorPage';
 import { ExperimentsPage } from './modules/experiments/ExperimentsPage';
 import { SmartFavoritesPage } from './modules/favorites/SmartFavoritesPage';
 import type { WatchHistoryRecord } from '../src/shared/types/watch-event';
+import type { HistorySyncStatus } from '../src/shared/types/history-sync';
 
 const NAV_ITEMS = [
   { id: 'overview', label: '总览', caption: '观看历史概览', shortLabel: '览' },
@@ -49,7 +50,7 @@ export function App() {
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
-    requestSW<{ lastSyncTime: number; totalRecords: number }>('GET_SYNC_STATUS').then(s => {
+    requestSW<HistorySyncStatus>('GET_SYNC_STATUS').then(s => {
       if (s.lastSyncTime > 0) {
         const d = new Date(s.lastSyncTime);
         setSynced(`已同步 ${s.totalRecords} 条记录 · 最后更新: ${d.toLocaleString('zh-CN')}`);

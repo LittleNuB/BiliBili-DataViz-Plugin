@@ -1,13 +1,15 @@
 import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse, PlayerActionPayload, PlayerHeartbeatPayload, SyncNowResult } from '../../shared/types/messages';
+import type { HistorySyncStatus } from '../../shared/types/history-sync';
 import type { CurrentVideoContextResult, CurrentVideoNoContext } from '../../shared/types/current-video-context';
 import type { VideoKnowledgeJumpResponse } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
-import { runInitialBackfill } from '../sync/initial-backfill';
+import { normalizePageLimit, runInitialBackfill } from '../sync/initial-backfill';
 import {
   saveConfig,
   getLastSyncTime,
   getHistorySyncing,
   getHistorySyncProgress,
+  getBackfillComplete,
   loadConfig,
   requestHistorySyncCancel,
   clearOrphanedHistorySyncLock,
@@ -164,6 +166,7 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
         const requestedMode = request.params?.mode === 'full' ? 'full' : request.params?.mode === 'incremental' ? 'incremental' : null;
         const requestedMaxPages = Number(request.params?.maxPages);
         const maxPages = Number.isFinite(requestedMaxPages) ? requestedMaxPages : undefined;
+        const normalizedMaxPages = normalizePageLimit(maxPages);
         const storedCount = await db.watchHistory.count();
         const mode = requestedMode ?? (storedCount === 0 ? 'full' : 'incremental');
         if (await getHistorySyncing()) {
@@ -184,16 +187,19 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
           data: {
             synced: true,
             mode,
-            pageLimit: maxPages ?? 0,
+            requestedPageLimit: maxPages ?? null,
+            pageLimit: normalizedMaxPages,
             currentTask: 'sync_started',
             fetchedPages: 0,
             fetchedCount: 0,
             insertedCount: 0,
             updatedCount: 0,
+            skippedCount: 0,
             stoppedReason: 'sync_started',
             reachedEnd: false,
             oldestFetchedAt: null,
             newestFetchedAt: null,
+            finalCursor: null,
           } satisfies SyncNowResult as T,
         };
       }
@@ -236,8 +242,19 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       }
       const lastSync = await getLastSyncTime();
       const count = await db.watchHistory.count();
-      const syncProgress = await getHistorySyncProgress();
-      return { success: true, data: { lastSyncTime: lastSync, totalRecords: count, syncProgress } as T };
+      const [syncProgress, backfillComplete] = await Promise.all([
+        getHistorySyncProgress(),
+        getBackfillComplete(),
+      ]);
+      return {
+        success: true,
+        data: {
+          lastSyncTime: lastSync,
+          totalRecords: count,
+          backfillComplete,
+          syncProgress,
+        } satisfies HistorySyncStatus as T,
+      };
     }
     case 'GET_CURRENT_VIDEO_CONTEXT':
       return { success: true, data: await getCurrentVideoContextForActiveTab() as T };

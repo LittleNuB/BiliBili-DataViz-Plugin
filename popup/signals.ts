@@ -1,13 +1,14 @@
 import { signal, computed } from '@preact/signals';
 import type { QuickStats } from '../src/shared/types/analytics';
-import type { SyncNowResult, SyncProgress } from '../src/shared/types/messages';
+import type { SyncNowResult } from '../src/shared/types/messages';
+import type { HistorySyncProgress } from '../src/shared/types/history-sync';
 
 export const quickStats = signal<QuickStats | null>(null);
 export const loading = signal(true);
 export const error = signal<string | null>(null);
 export const lastSyncResult = signal<SyncNowResult | null>(null);
 export const syncInProgress = signal(false);
-export const syncProgress = signal<SyncProgress | null>(null);
+export const syncProgress = signal<HistorySyncProgress | null>(null);
 export const syncPageLimit = signal(50);
 
 export const completionPercent = computed(() => {

@@ -1,11 +1,14 @@
 import type { WatchHistoryRecord, DailyAggregate } from '../../shared/types/watch-event';
 import type { DashboardOverview, QuickStats } from '../../shared/types/analytics';
-import { startOfWeek, startOfMonth, daysAgo, dateKey, daysBetween } from '../../shared/utils/time';
+import { assessHistoryCoverage } from '../../shared/history-sync-diagnostics';
+import { computeStreakFromDateSet } from '../../shared/streak';
+import { startOfWeek, startOfMonth, daysAgo, dateKey } from '../../shared/utils/time';
 import { percentChange } from '../../shared/utils/math';
-import { getNewestRecord, getOldestRecord, getRecordsByDateRange } from '../storage/watch-history-repo';
+import { getNewestRecord, getOldestRecord, getRecordsByDateRange, getTotalCount } from '../storage/watch-history-repo';
 import { loadConfig } from '../storage/config-store';
 import { aggregateWindow } from './aggregator';
 import { getEffectiveWatchDatesByDateRange, getEffectiveWatchRecordsByDateRange } from './effective-watch';
+import { getBackfillComplete, getHistorySyncProgress } from '../storage/config-store';
 
 interface StreakDetails {
   current: number;
@@ -32,59 +35,6 @@ export function computeStreak(dailyList: DailyAggregate[]): StreakDetails {
 export function computeStreakFromRecords(records: WatchHistoryRecord[]): StreakDetails {
   const dates = new Set(records.map(r => dateKey(new Date(r.viewAt * 1000))));
   return computeStreakFromDateSet(dates);
-}
-
-function computeStreakFromDateSet(dates: Set<string>): StreakDetails {
-  if (dates.size === 0) {
-    return {
-      current: 0,
-      currentStartDate: null,
-      currentEndDate: null,
-      longest: 0,
-      longestStartDate: null,
-      longestEndDate: null,
-    };
-  }
-
-  const sorted = Array.from(dates).sort();
-  const ranges: Array<{ startDate: string; endDate: string; days: number }> = [];
-  let startDate = sorted[0];
-  let endDate = sorted[0];
-
-  for (let i = 1; i < sorted.length; i++) {
-    const prev = parseDateKey(sorted[i - 1]);
-    const curr = parseDateKey(sorted[i]);
-    if (daysBetween(prev, curr) === 1) {
-      endDate = sorted[i];
-      continue;
-    }
-
-    ranges.push({ startDate, endDate, days: countInclusiveDays(startDate, endDate) });
-    startDate = sorted[i];
-    endDate = sorted[i];
-  }
-  ranges.push({ startDate, endDate, days: countInclusiveDays(startDate, endDate) });
-
-  const today = dateKey();
-  const yesterday = dateKey(daysAgo(1));
-  const currentAnchor = dates.has(today) ? today : dates.has(yesterday) ? yesterday : null;
-  const currentRange = currentAnchor
-    ? ranges.find(range => range.startDate <= currentAnchor && range.endDate >= currentAnchor)
-    : null;
-  const longestRange = ranges.reduce((best, range) => {
-    if (!best || range.days > best.days) return range;
-    if (range.days === best.days && range.endDate > best.endDate) return range;
-    return best;
-  }, null as { startDate: string; endDate: string; days: number } | null);
-
-  return {
-    current: currentRange?.days ?? 0,
-    currentStartDate: currentRange?.startDate ?? null,
-    currentEndDate: currentRange?.endDate ?? null,
-    longest: longestRange?.days ?? 0,
-    longestStartDate: longestRange?.startDate ?? null,
-    longestEndDate: longestRange?.endDate ?? null,
-  };
 }
 
 export async function getQuickStats(): Promise<QuickStats> {
@@ -132,6 +82,11 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
     getOldestRecord(),
     getNewestRecord(),
   ]);
+  const [syncProgress, backfillComplete, totalRecords] = await Promise.all([
+    getHistorySyncProgress(),
+    getBackfillComplete(),
+    getTotalCount(),
+  ]);
   const oldestRecordDate = oldestRecord ? dateKey(new Date(oldestRecord.viewAt * 1000)) : dateKey(daysAgo(365));
   const effectiveDates = await getEffectiveWatchDatesByDateRange(oldestRecordDate, todayKey);
   const thisWeekWindow = aggregateWindow(thisWeekRecords);
@@ -151,6 +106,10 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
   const lastMonthEnd = dateKey(new Date(now.getFullYear(), now.getMonth(), 0));
   const lastMonthRecords = (await getEffectiveWatchRecordsByDateRange(lastMonthStart, lastMonthEnd)).records;
   const lastMonthWatch = aggregateWindow(lastMonthRecords).totalWatchTime;
+  const coverage = assessHistoryCoverage(syncProgress, backfillComplete, totalRecords);
+  const streakCoverageNote = coverage.trustworthy
+    ? 'Current and longest streaks are based on fully confirmed watch-date coverage.'
+    : `Current and longest streaks use only currently available local watch dates. ${coverage.note}`;
 
   return {
     weeklyWatchTime: weeklyWatch,
@@ -176,6 +135,11 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
     weeklyLocalPcDays: thisWeekEffective.localPcDates.length,
     oldestRecordDate: oldestRecord ? oldestRecordDate : null,
     newestRecordDate: newestRecord ? dateKey(new Date(newestRecord.viewAt * 1000)) : null,
+    historyCoverageStatus: coverage.status,
+    historyCoverageNote: coverage.note,
+    streakTrustworthy: coverage.trustworthy,
+    streakCoverageNote,
+    historySyncDiagnostics: syncProgress,
   };
 }
 
@@ -193,13 +157,4 @@ function computeRawEfficiency(records: WatchHistoryRecord[], dailyGoalSeconds: n
     0.3 * goalScore +
     0.2 * diversityScore
   ) * 100);
-}
-
-function parseDateKey(key: string): Date {
-  const [year, month, day] = key.split('-').map(Number);
-  return new Date(year, month - 1, day);
-}
-
-function countInclusiveDays(startDate: string, endDate: string): number {
-  return daysBetween(parseDateKey(startDate), parseDateKey(endDate)) + 1;
 }

@@ -1,3 +1,5 @@
+import type { HistorySyncProgress } from './history-sync';
+
 export interface QuickStats {
   todayWatchTime: number;
   dailyGoal: number;
@@ -33,6 +35,11 @@ export interface DashboardOverview {
   weeklyLocalPcDays: number;
   oldestRecordDate: string | null;
   newestRecordDate: string | null;
+  historyCoverageStatus: 'not_started' | 'partial' | 'complete';
+  historyCoverageNote: string;
+  streakTrustworthy: boolean;
+  streakCoverageNote: string;
+  historySyncDiagnostics: HistorySyncProgress | null;
 }
 
 export interface CategoryDistribution {
