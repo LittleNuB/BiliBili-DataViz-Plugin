@@ -87,9 +87,9 @@ export function SmartFavoritesPage() {
       const result = await requestSW<FavoriteSyncResult>('SYNC_FAVORITES');
       if (result.status === 'blocked') {
         setError(result.blockedReason ?? 'Favorite sync incomplete; available data was kept.');
-        setNotice(`Sync incomplete: kept/updated ${result.insertedOrUpdated} usable videos, deleted nothing. Reported ${result.reportedItems}, fetched ${result.items}, filtered ${result.filteredItems}; see audit below.`);
+        setNotice(`Sync incomplete: kept/updated ${result.insertedOrUpdated} usable videos, deleted nothing. Bilibili reported ${result.reportedItems}, newly stored ${result.items}, filtered ${result.filteredItems}; see audit below.`);
       } else {
-        setNotice(`Sync complete: ${result.folders} folders, ${result.items} videos, ${result.filteredItems} filtered resources.`);
+        setNotice(`Sync complete: ${result.folders} folders, ${result.items} locally stored videos, ${result.filteredItems} filtered resources.`);
       }
       setOverview(await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES'));
     } catch (e) {
@@ -225,11 +225,17 @@ export function SmartFavoritesPage() {
 
       <section style={CARD}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px', marginBottom: '12px' }}>
-          <Metric label="收藏夹" value={overview?.folders.length ?? 0} />
-          <Metric label="收藏视频" value={overview?.totalItems ?? 0} />
-          <Metric label="索引成功" value={overview?.indexedItems ?? 0} />
-          <Metric label="索引失败" value={overview?.failedItems ?? 0} />
-          <Metric label="待索引" value={overview?.pendingItems ?? 0} />
+          <Metric label="Folders" value={overview?.folders.length ?? 0} />
+          <Metric label="Bilibili reported" value={overview?.reportedItems ?? 0} />
+          <Metric label="Locally stored" value={overview?.storedItems ?? 0} />
+          <Metric label="Indexed" value={overview?.indexedItems ?? 0} />
+          <Metric label="Failed" value={overview?.failedItems ?? 0} />
+          <Metric label="Pending" value={overview?.pendingItems ?? 0} />
+        </div>
+        <div style={{ color: overview?.lastSyncDiagnostics.length && overview?.syncComplete === false ? '#FFB347' : '#9090A0', fontSize: '12px', lineHeight: 1.5, marginBottom: '12px' }}>
+          {overview?.lastSyncDiagnostics.length && overview?.syncComplete === false
+            ? `Favorite sync is incomplete in ${overview.incompleteFolders} folder(s). Smart index coverage is scoped to the current local snapshot: Bilibili reported ${overview.reportedItems}, locally stored ${overview.storedItems}, indexed ${overview.indexedItems}, failed ${overview.failedItems}, pending ${overview.pendingItems}.`
+            : `Smart index coverage only applies to locally stored favorites: Bilibili reported ${overview?.reportedItems ?? 0}, locally stored ${overview?.storedItems ?? 0}, indexed ${overview?.indexedItems ?? 0}, failed ${overview?.failedItems ?? 0}, pending ${overview?.pendingItems ?? 0}.`}
         </div>
         <SyncDiagnostics diagnostics={overview?.lastSyncDiagnostics ?? []} />
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -605,19 +611,23 @@ function SyncDiagnostics({ diagnostics }: { diagnostics: FavoriteFolderSyncDiagn
 
   const totals = diagnostics.reduce((sum, diagnostic) => ({
     reported: sum.reported + diagnostic.reportedMediaCount,
+    requestedPages: sum.requestedPages + diagnostic.requestedPages,
+    fetchedPages: sum.fetchedPages + diagnostic.pagesFetched,
     stored: sum.stored + diagnostic.storedVideoItems,
     filtered: sum.filtered + diagnostic.filteredItems,
     delta: sum.delta + diagnostic.unexplainedDelta,
-    errors: sum.errors + diagnostic.errors.length,
-  }), { reported: 0, stored: 0, filtered: 0, delta: 0, errors: 0 });
+    errors: sum.errors + diagnostic.pageErrors,
+    incomplete: sum.incomplete + (diagnostic.completenessState === 'incomplete' ? 1 : 0),
+  }), { reported: 0, requestedPages: 0, fetchedPages: 0, stored: 0, filtered: 0, delta: 0, errors: 0, incomplete: 0 });
+  const overallState = totals.incomplete > 0 ? 'incomplete' : 'complete';
 
   return (
     <div style={{ marginBottom: '12px', overflowX: 'auto' }}>
       <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>
-        Sync audit: reported {totals.reported}, stored {totals.stored}, filtered {totals.filtered}, delta {totals.delta}, errors {totals.errors}
+        Sync audit: state {overallState}, reported {totals.reported}, requested/fetched pages {totals.requestedPages}/{totals.fetchedPages}, stored {totals.stored}, filtered {totals.filtered}, delta {totals.delta}, page errors {totals.errors}
       </div>
-      <div style={{ minWidth: '720px', display: 'grid', gridTemplateColumns: '1.5fr repeat(6, 72px) 1.8fr', gap: '1px', background: '#333355', border: '1px solid #333355', borderRadius: '6px', overflow: 'hidden' }}>
-        {['Folder', 'Reported', 'Pages', 'Raw', 'Stored', 'Filtered', 'Delta', 'Errors'].map(label => (
+      <div style={{ minWidth: '1080px', display: 'grid', gridTemplateColumns: '1.5fr 88px 88px 92px 72px 72px 180px 72px 2fr', gap: '1px', background: '#333355', border: '1px solid #333355', borderRadius: '6px', overflow: 'hidden' }}>
+        {['Folder', 'State', 'Reported', 'Req/Fetched', 'Raw', 'Stored', 'Filtered (u/mid/nv)', 'Delta', 'Page issues'].map(label => (
           <AuditCell key={label} header text={label} />
         ))}
         {diagnostics.map(diagnostic => (
@@ -629,16 +639,19 @@ function SyncDiagnostics({ diagnostics }: { diagnostics: FavoriteFolderSyncDiagn
 }
 
 function SyncDiagnosticRow({ diagnostic }: { diagnostic: FavoriteFolderSyncDiagnostic }) {
+  const filteredBreakdown = `${diagnostic.filteredItems} (${diagnostic.filteredUnavailableItems}/${diagnostic.filteredMissingIdItems}/${diagnostic.filteredNonVideoItems})`;
+  const pageIssues = diagnostic.pageErrors > 0 ? `${diagnostic.pageErrors}: ${diagnostic.errors.join(' | ')}` : '-';
   return (
     <>
       <AuditCell text={`${diagnostic.title || 'Untitled'} #${diagnostic.mediaId}`} />
+      <AuditCell text={diagnostic.completenessState} tone={diagnostic.completenessState === 'incomplete' ? 'error' : undefined} />
       <AuditCell text={String(diagnostic.reportedMediaCount)} tone={diagnostic.unexplainedDelta > 0 ? 'warn' : undefined} />
-      <AuditCell text={String(diagnostic.pagesFetched)} />
+      <AuditCell text={`${diagnostic.requestedPages}/${diagnostic.pagesFetched}`} tone={diagnostic.requestedPages > diagnostic.pagesFetched ? 'warn' : undefined} />
       <AuditCell text={String(diagnostic.rawResourcesSeen)} />
       <AuditCell text={String(diagnostic.storedVideoItems)} />
-      <AuditCell text={String(diagnostic.filteredItems)} />
+      <AuditCell text={filteredBreakdown} />
       <AuditCell text={String(diagnostic.unexplainedDelta)} tone={diagnostic.unexplainedDelta > 0 ? 'warn' : undefined} />
-      <AuditCell text={diagnostic.errors.join('; ') || '-'} tone={diagnostic.errors.length > 0 ? 'error' : undefined} />
+      <AuditCell text={pageIssues} tone={diagnostic.pageErrors > 0 ? 'error' : undefined} />
     </>
   );
 }

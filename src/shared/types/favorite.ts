@@ -62,14 +62,20 @@ export interface SmartFavoriteResult {
 
 export interface SmartFavoriteOverview {
   folders: FavoriteFolder[];
+  reportedItems: number;
+  storedItems: number;
   totalItems: number;
   indexedItems: number;
   failedItems: number;
   pendingItems: number;
+  incompleteFolders: number;
+  syncComplete: boolean;
   lastSyncedAt: number;
   lastSyncDiagnostics: FavoriteFolderSyncDiagnostic[];
   tree: SmartFavoriteTreeNode[];
 }
+
+export type FavoriteFolderSyncCompletenessState = 'complete' | 'incomplete';
 
 export type FavoriteSyncStatus = 'complete' | 'blocked';
 
@@ -77,6 +83,7 @@ export interface FavoriteFolderSyncDiagnostic {
   mediaId: number;
   title: string;
   reportedMediaCount: number;
+  requestedPages: number;
   pagesFetched: number;
   rawResourcesSeen: number;
   storedVideoItems: number;
@@ -84,9 +91,11 @@ export interface FavoriteFolderSyncDiagnostic {
   filteredMissingIdItems: number;
   filteredNonVideoItems: number;
   filteredItems: number;
+  pageErrors: number;
   hasMoreAfterStop: boolean;
   stoppedByMaxPages: boolean;
   unexplainedDelta: number;
+  completenessState: FavoriteFolderSyncCompletenessState;
   errors: string[];
 }
 
@@ -166,6 +175,8 @@ export interface SmartFavoriteQaSyncCoverage {
 }
 
 export interface SmartFavoriteQaIndexCoverage {
+  bilibiliReportedItems: number;
+  storedItems: number;
   indexedItems: number;
   failedItems: number;
   pendingItems: number;

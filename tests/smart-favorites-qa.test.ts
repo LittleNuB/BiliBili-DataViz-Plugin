@@ -93,13 +93,15 @@ test('marks answers when the Smart Favorites index is stale', () => {
   });
 
   assert.equal(response.status.kind, 'stale_index');
+  assert.equal(response.status.indexCoverage.bilibiliReportedItems, 1);
+  assert.equal(response.status.indexCoverage.storedItems, 1);
   assert.equal(response.status.indexCoverage.staleItems, 1);
   assert.match(response.status.notes.join(' '), /stale or partial/);
 });
 
 test('scopes answers to currently synced data when sync diagnostics are incomplete', () => {
   const item = makeFavoriteItem(1, { title: 'Creator workflow automation' });
-  const folder = makeFolder({ lastSyncDiagnostic: makeIncompleteDiagnostic() });
+  const folder = makeFolder({ mediaCount: 20, lastSyncDiagnostic: makeIncompleteDiagnostic() });
 
   const response = buildSmartFavoriteQaResponse({
     query: 'creator workflow',
@@ -111,7 +113,32 @@ test('scopes answers to currently synced data when sync diagnostics are incomple
   assert.equal(response.status.kind, 'incomplete_sync');
   assert.equal(response.status.syncCoverage.complete, false);
   assert.equal(response.status.syncCoverage.problemFolders, 1);
-  assert.match(response.answer, /currently synced/);
+  assert.match(response.answer, /当前已同步收藏中/);
+  assert.match(response.status.notes.join(' '), /Index coverage: Bilibili reported 20, locally stored 1, indexed 0, failed 0, pending 1/);
+});
+
+test('reports index coverage counts for Bilibili reported, locally stored, indexed, failed, and pending items', () => {
+  const indexed = makeFavoriteItem(1, { title: 'Indexed item' });
+  const failed = makeFavoriteItem(2, { title: 'Failed item' });
+  const pending = makeFavoriteItem(3, { title: 'Pending item' });
+  const failedIndex = makeIndex(failed, { status: 'failed' });
+
+  const response = buildSmartFavoriteQaResponse({
+    query: 'item',
+    items: [indexed, failed, pending],
+    indexes: new Map([
+      [indexed.itemKey, makeIndex(indexed, { keywords: ['item'] })],
+      [failed.itemKey, failedIndex],
+    ]),
+    folders: [makeFolder({ mediaCount: 5 })],
+  });
+
+  assert.equal(response.status.indexCoverage.bilibiliReportedItems, 5);
+  assert.equal(response.status.indexCoverage.storedItems, 3);
+  assert.equal(response.status.indexCoverage.indexedItems, 1);
+  assert.equal(response.status.indexCoverage.failedItems, 1);
+  assert.equal(response.status.indexCoverage.pendingItems, 1);
+  assert.match(response.status.notes.join(' '), /indexed 1, failed 1, pending 1/);
 });
 
 test('generates optional AI synthesis from cited videos only', async () => {
@@ -294,6 +321,8 @@ test('redacts incomplete sync diagnostic folder details from Smart Favorites Q&A
   assert.equal(payload.syncCoverage.problemFolders, 1);
   assert.equal(payload.syncCoverage.coverageStatus, 'incomplete');
   assert.equal('note' in payload.syncCoverage, false);
+  assert.equal('bilibiliReportedItems' in payload.indexCoverage, false);
+  assert.equal('storedItems' in payload.indexCoverage, false);
   assert.doesNotMatch(rawPayload, /Private research folder/);
   assert.doesNotMatch(rawPayload, /987654/);
   assert.doesNotMatch(rawPayload, /FAVORITE_SYNC_INCOMPLETE/);
@@ -386,6 +415,7 @@ function makeIncompleteDiagnostic(overrides: Partial<FavoriteFolderSyncDiagnosti
     mediaId: 100,
     title: 'Default',
     reportedMediaCount: 20,
+    requestedPages: 1,
     pagesFetched: 1,
     rawResourcesSeen: 10,
     storedVideoItems: 10,
@@ -393,9 +423,11 @@ function makeIncompleteDiagnostic(overrides: Partial<FavoriteFolderSyncDiagnosti
     filteredMissingIdItems: 0,
     filteredNonVideoItems: 0,
     filteredItems: 0,
+    pageErrors: 1,
     hasMoreAfterStop: true,
     stoppedByMaxPages: false,
     unexplainedDelta: 10,
+    completenessState: 'incomplete',
     errors: [],
     ...overrides,
   };

@@ -11,6 +11,7 @@ export const HISTORY_PAGE_SIZE = 30;
 export const MAX_BACKFILL_PAGES = 300;
 export const FAVORITE_PAGE_SIZE = 20;
 export const MAX_FAVORITE_SYNC_PAGES = 500;
+export const FAVORITE_SHORT_PAGE_RETRY_LIMIT = 2;
 export const DYNAMIC_UPDATE_WINDOW_DAYS = 7;
 export const DYNAMIC_FEED_MAX_PAGES = 80;
 export const FOLLOWING_PAGE_SIZE = 50;
