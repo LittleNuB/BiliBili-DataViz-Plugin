@@ -7,9 +7,10 @@ import type {
   SmartFavoriteTreeNode,
   SmartIndexResult,
 } from '../../shared/types/favorite';
+import { normalizeFavoriteFoldersWithDiagnostics } from '../../shared/favorite-sync-diagnostics.ts';
+import { summarizeSmartFavoriteIndexCoverage } from '../../shared/smart-favorite-coverage.ts';
 import { loadConfig } from '../storage/config-store';
 import {
-  countIndexedFavorites,
   getFavoriteFolders,
   getFavoriteItems,
   getSmartFavoriteIndexMap,
@@ -122,25 +123,29 @@ function shouldProcessCandidate(
 }
 
 export async function getSmartFavoriteOverview(): Promise<SmartFavoriteOverview> {
-  const [folders, items, indexedItems, indexMap] = await Promise.all([
+  const [storedFolders, items, indexMap] = await Promise.all([
     getFavoriteFolders(),
     getFavoriteItems(),
-    countIndexedFavorites(),
     getSmartFavoriteIndexMap(),
   ]);
-  const failedItems = Array.from(indexMap.values()).filter(index => index.status === 'failed').length;
-  const pendingItems = Math.max(0, items.length - indexedItems - failedItems);
+  const folders = normalizeFavoriteFoldersWithDiagnostics(storedFolders);
+  const coverage = summarizeSmartFavoriteIndexCoverage(folders, items, indexMap);
+  const diagnostics = folders
+    .map(folder => folder.lastSyncDiagnostic)
+    .filter(diagnostic => diagnostic !== undefined);
 
   return {
     folders,
+    reportedItems: coverage.bilibiliReportedItems,
+    storedItems: coverage.storedItems,
     totalItems: items.length,
-    indexedItems,
-    failedItems,
-    pendingItems,
+    indexedItems: coverage.indexedItems,
+    failedItems: coverage.failedItems,
+    pendingItems: coverage.pendingItems,
+    incompleteFolders: diagnostics.filter(diagnostic => diagnostic.completenessState === 'incomplete').length,
+    syncComplete: diagnostics.length > 0 && diagnostics.every(diagnostic => diagnostic.completenessState === 'complete'),
     lastSyncedAt: Math.max(0, ...folders.map(folder => folder.syncedAt), ...items.map(item => item.syncedAt)),
-    lastSyncDiagnostics: folders
-      .map(folder => folder.lastSyncDiagnostic)
-      .filter(diagnostic => diagnostic !== undefined),
+    lastSyncDiagnostics: diagnostics,
     tree: buildTree(items, indexMap),
   };
 }

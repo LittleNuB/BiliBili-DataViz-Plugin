@@ -12,6 +12,8 @@ import type {
   SmartFavoriteQaStatusKind,
   SmartFavoriteQaSyncCoverage,
 } from '../../shared/types/favorite';
+import { normalizeFavoriteFolderSyncDiagnostic } from '../../shared/favorite-sync-diagnostics.ts';
+import { summarizeSmartFavoriteIndexCoverage } from '../../shared/smart-favorite-coverage.ts';
 
 const DEFAULT_QA_LIMIT = 8;
 const MEDIUM_SCORE = 28;
@@ -111,10 +113,10 @@ export function buildSmartFavoriteQaResponse(input: SmartFavoriteQaInput): Smart
   const query = input.query.trim();
   const limit = Math.max(1, Math.min(Math.floor(input.limit ?? DEFAULT_QA_LIMIT), 20));
   const diagnostics = input.folders
-    .map(folder => folder.lastSyncDiagnostic)
+    .map(folder => folder.lastSyncDiagnostic ? normalizeFavoriteFolderSyncDiagnostic(folder.lastSyncDiagnostic) : undefined)
     .filter((diagnostic): diagnostic is FavoriteFolderSyncDiagnostic => diagnostic !== undefined);
   const syncCoverage = buildSyncCoverage(diagnostics);
-  const indexCoverage = buildIndexCoverage(input.items, input.indexes);
+  const indexCoverage = buildIndexCoverage(input.folders, input.items, input.indexes);
   const notes = buildCoverageNotes(syncCoverage, indexCoverage);
 
   if (!query) {
@@ -144,8 +146,8 @@ export function buildSmartFavoriteQaResponse(input: SmartFavoriteQaInput): Smart
       answerType: asksForUnsupportedContent ? 'insufficient_evidence' : 'no_result',
       query,
       answer: syncCoverage.complete
-        ? 'No matching favorite was found in the locally synced data.'
-        : 'No matching favorite was found in the currently synced data.',
+        ? 'No matching favorite was found in the locally synced favorites.'
+        : '当前已同步收藏中，未找到匹配的收藏。',
       confidence: 'low',
       evidenceSummary: asksForUnsupportedContent
         ? 'This local slice can only use favorite metadata and Smart Favorites index fields; transcript, comments, and video body text are not available.'
@@ -170,7 +172,7 @@ export function buildSmartFavoriteQaResponse(input: SmartFavoriteQaInput): Smart
     indexCoverage,
     asksForUnsupportedContent,
   });
-  const scopedPrefix = syncCoverage.complete ? 'In locally synced favorites' : 'In the currently synced favorite data';
+  const scopedPrefix = syncCoverage.complete ? 'In locally synced favorites' : '当前已同步收藏中';
   const answer = answerType === 'candidate_list'
     ? `${scopedPrefix}, there is not enough evidence for a firm answer. The closest cited candidates are listed below.`
     : `${scopedPrefix}, the strongest cited matches are listed below.`;
@@ -309,31 +311,20 @@ function buildSyncCoverage(diagnostics: FavoriteFolderSyncDiagnostic[]): SmartFa
   };
 }
 
-function buildIndexCoverage(items: FavoriteItem[], indexes: Map<string, SmartFavoriteIndex>): SmartFavoriteQaIndexCoverage {
-  const indexedItems = Array.from(indexes.values()).filter(index => index.status === 'indexed').length;
-  const failedItems = Array.from(indexes.values()).filter(index => index.status === 'failed').length;
-  const pendingItems = items.filter(item => !indexes.has(item.itemKey)).length;
-  const staleItems = items.filter(item => {
-    const index = indexes.get(item.itemKey);
-    return index !== undefined && item.syncedAt > index.indexedAt;
-  }).length;
-  const indexMissing = items.length > 0 && indexedItems === 0;
-  const staleIndex = staleItems > 0 || pendingItems > 0 || failedItems > 0;
-
-  return {
-    indexedItems,
-    failedItems,
-    pendingItems,
-    staleItems,
-    indexMissing,
-    staleIndex,
-  };
+function buildIndexCoverage(
+  folders: FavoriteFolder[],
+  items: FavoriteItem[],
+  indexes: Map<string, SmartFavoriteIndex>,
+): SmartFavoriteQaIndexCoverage {
+  return summarizeSmartFavoriteIndexCoverage(folders, items, indexes);
 }
 
 function buildCoverageNotes(syncCoverage: SmartFavoriteQaSyncCoverage, indexCoverage: SmartFavoriteQaIndexCoverage): string[] {
-  const notes: string[] = [];
+  const notes: string[] = [
+    `Index coverage: Bilibili reported ${indexCoverage.bilibiliReportedItems}, locally stored ${indexCoverage.storedItems}, indexed ${indexCoverage.indexedItems}, failed ${indexCoverage.failedItems}, pending ${indexCoverage.pendingItems}.`,
+  ];
   if (!syncCoverage.complete) {
-    notes.push('Favorite sync is incomplete; answers are scoped to the currently synced data.');
+    notes.push('Favorite sync is incomplete; answers are scoped to the currently synced favorites only.');
   }
   if (indexCoverage.indexMissing) {
     notes.push('Smart Favorites index is missing; only favorite metadata was used.');
@@ -453,16 +444,14 @@ function reasonForField(field: string): string {
 }
 
 function hasDiagnosticIssue(diagnostic: FavoriteFolderSyncDiagnostic): boolean {
-  return diagnostic.errors.length > 0
-    || diagnostic.hasMoreAfterStop
-    || diagnostic.stoppedByMaxPages
-    || diagnostic.unexplainedDelta > 0;
+  return diagnostic.completenessState === 'incomplete';
 }
 
 function buildIncompleteSyncNote(diagnostics: FavoriteFolderSyncDiagnostic[]): string {
   const samples = diagnostics.slice(0, 3).map(diagnostic => {
     const issues = [
-      diagnostic.errors.length > 0 ? `${diagnostic.errors.length} error(s)` : '',
+      diagnostic.pageErrors > 0 ? `${diagnostic.pageErrors} page error(s)` : '',
+      `requested/fetched ${diagnostic.requestedPages}/${diagnostic.pagesFetched}`,
       diagnostic.unexplainedDelta > 0 ? `delta ${diagnostic.unexplainedDelta}` : '',
       diagnostic.hasMoreAfterStop ? 'has_more after stop' : '',
       diagnostic.stoppedByMaxPages ? 'max pages reached' : '',

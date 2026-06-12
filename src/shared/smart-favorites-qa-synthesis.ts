@@ -21,7 +21,7 @@ export interface SmartFavoriteQaAiPayload {
   intent: 'smart_favorites_qa_synthesis';
   question: string;
   syncCoverage: SmartFavoriteQaAiSyncCoverage;
-  indexCoverage: SmartFavoriteQaResponse['status']['indexCoverage'];
+  indexCoverage: SmartFavoriteQaAiIndexCoverage;
   availableSources: {
     favoriteMetadata: true;
     smartIndex: boolean;
@@ -37,6 +37,15 @@ export interface SmartFavoriteQaAiSyncCoverage {
   diagnosticsCount: number;
   problemFolders: number;
   coverageStatus: 'complete' | 'incomplete';
+}
+
+export interface SmartFavoriteQaAiIndexCoverage {
+  indexedItems: number;
+  failedItems: number;
+  pendingItems: number;
+  staleItems: number;
+  indexMissing: boolean;
+  staleIndex: boolean;
 }
 
 export interface SmartFavoriteQaAiPayloadVideo {
@@ -95,7 +104,7 @@ export function buildSmartFavoriteQaAiPayload(
     intent: 'smart_favorites_qa_synthesis',
     question: limitText(response.query, MAX_TEXT.question),
     syncCoverage: toAiSyncCoverage(response.status.syncCoverage),
-    indexCoverage: response.status.indexCoverage,
+    indexCoverage: toAiIndexCoverage(response.status.indexCoverage),
     availableSources: {
       favoriteMetadata: true,
       smartIndex: response.status.indexCoverage.indexedItems > 0,
@@ -122,6 +131,19 @@ function toAiSyncCoverage(
     diagnosticsCount: coverage.diagnosticsCount,
     problemFolders: coverage.problemFolders,
     coverageStatus: coverage.complete ? 'complete' : 'incomplete',
+  };
+}
+
+function toAiIndexCoverage(
+  coverage: SmartFavoriteQaResponse['status']['indexCoverage'],
+): SmartFavoriteQaAiIndexCoverage {
+  return {
+    indexedItems: coverage.indexedItems,
+    failedItems: coverage.failedItems,
+    pendingItems: coverage.pendingItems,
+    staleItems: coverage.staleItems,
+    indexMissing: coverage.indexMissing,
+    staleIndex: coverage.staleIndex,
   };
 }
 
