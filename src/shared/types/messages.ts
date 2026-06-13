@@ -7,8 +7,7 @@ import type {
   CreatorRanking,
   NewCreator,
   BehaviorMetrics,
-  WeeklyTip,
-  BlindBoxItem,
+  ExperimentData,
 } from './analytics';
 import type {
   DynamicBillExplanationResult,
@@ -157,10 +156,7 @@ export type CreatorResponse = BiliVizResponse<{
   overDependency: { creator: CreatorRanking; percentage: number } | null;
 }>;
 export type BehaviorResponse = BiliVizResponse<BehaviorMetrics>;
-export type ExperimentResponse = BiliVizResponse<{
-  tips: WeeklyTip[];
-  blindBox: BlindBoxItem[];
-}>;
+export type ExperimentResponse = BiliVizResponse<ExperimentData>;
 export type DeviceResponse = BiliVizResponse<{
   breakdown: { label: string; deviceType: number; watchTime: number; videoCount: number; avgCompletion: number; percentage: number }[];
   hourly: { mobile: number[]; pc: number[] };

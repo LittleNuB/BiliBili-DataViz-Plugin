@@ -1,6 +1,6 @@
 import { BILI_PINK } from '../../src/shared/constants';
 
-const TABS = ['总览', '偏好', 'UP主', '行为', '实验', '智能收藏'];
+const TABS = ['总览', '偏好', 'UP主', '行为', '盲盒', '智能收藏'];
 
 interface Props {
   activeTab: number;

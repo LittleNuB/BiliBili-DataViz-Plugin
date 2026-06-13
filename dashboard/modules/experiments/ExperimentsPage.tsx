@@ -1,77 +1,259 @@
-import { useEffect } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { expData, expLoading, expError } from '../../signals';
 import { requestSW } from '../../utils/messaging';
-import type { WeeklyTip, BlindBoxItem } from '../../../src/shared/types/analytics';
+import type { ExperimentBlindBox } from '../../../src/shared/types/analytics';
 import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
-import { BILI_PINK } from '../../../src/shared/constants';
+import { BILI_BLUE, BILI_PINK } from '../../../src/shared/constants';
 
-const CATEGORY_COLORS: Record<string, string> = {
-  completion: '#FB7299',
-  diversity: '#00A1D6',
-  creator: '#FFB347',
-  habit: '#00D4AA',
+const CARD_ACCENT: Record<ExperimentBlindBox['id'], string> = {
+  variety: '#FF9F6E',
+  hidden_favorite: '#FFD166',
+  revive_interest: '#7FD1FF',
+  random_explore: '#A78BFA',
 };
 
 export function ExperimentsPage() {
-  useEffect(() => { fetchData(); }, []);
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+  const [opened, setOpened] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    void fetchData();
+  }, []);
 
   async function fetchData() {
     expLoading.value = true;
     expError.value = null;
     try {
       expData.value = await requestSW<typeof expData.value>('GET_EXPERIMENT_DATA');
-    } catch (e) {
-      expError.value = (e as Error).message;
+      setRevealed({});
+      setOpened({});
+    } catch (error) {
+      expError.value = (error as Error).message;
     } finally {
       expLoading.value = false;
     }
   }
 
-  if (expLoading.value) return <div style={{ padding: '16px' }}><LoadingSkeleton height={400} /></div>;
+  function revealBox(boxId: string) {
+    setRevealed(current => ({ ...current, [boxId]: true }));
+  }
+
+  function markOpened(boxId: string) {
+    setOpened(current => ({ ...current, [boxId]: true }));
+  }
+
+  if (expLoading.value) return <div style={{ padding: '16px' }}><LoadingSkeleton height={460} /></div>;
   if (expError.value) return <div style={{ padding: '16px', color: '#FF6B6B' }}>{expError.value}</div>;
-  const d = expData.value;
-  if (!d) return <EmptyState />;
+  const data = expData.value;
+  if (!data) return <EmptyState />;
 
   return (
     <ErrorBoundary>
-      <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        <div>
-          <h3 style={{ color: '#A0A0B0', fontSize: '13px', margin: '0 0 8px 0' }}>每周优化建议</h3>
-          {d.tips.map((tip: WeeklyTip, i: number) => (
-            <div key={i} style={{
-              background: '#222244', borderRadius: '10px', padding: '12px 14px', marginBottom: '8px',
-              borderLeft: `3px solid ${CATEGORY_COLORS[tip.category] ?? BILI_PINK}`,
-            }}>
-              <div style={{ color: '#FFFFFF', fontSize: '14px', fontWeight: 600, marginBottom: '4px' }}>{tip.title}</div>
-              <div style={{ color: '#A0A0B0', fontSize: '13px', lineHeight: 1.5 }}>{tip.description}</div>
-            </div>
-          ))}
-          {d.tips.length === 0 && <div style={{ padding: '20px', textAlign: 'center', color: '#666', background: '#222244', borderRadius: '10px' }}>暂无建议，多看一些视频吧</div>}
+      <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <section style={{
+          background: 'linear-gradient(135deg, rgba(251,114,153,0.18), rgba(0,161,214,0.14))',
+          border: '1px solid rgba(255,255,255,0.06)',
+          borderRadius: '16px',
+          padding: '16px',
+        }}>
+          <div style={{ color: '#FFFFFF', fontSize: '18px', fontWeight: 700, marginBottom: '8px' }}>本地视频盲盒</div>
+          <div style={{ color: '#D4D8E8', fontSize: '13px', lineHeight: 1.7 }}>
+            这里只从本地历史和本地收藏里挑具体视频，不假装 B 站推荐排序，也不会写回 B 站。
+          </div>
+          <div style={{ color: '#8F97B5', fontSize: '12px', marginTop: '8px' }}>
+            最近生成时间：{new Date(data.generatedAt).toLocaleString('zh-CN')}
+          </div>
+        </section>
+
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+          gap: '12px',
+        }}>
+          {data.blindBoxes.map(box => {
+            const isRevealed = revealed[box.id] === true;
+            const isReady = box.state === 'ready';
+            const accent = CARD_ACCENT[box.id];
+            return (
+              <article
+                key={box.id}
+                data-box-id={box.id}
+                style={{
+                  background: '#171B2E',
+                  borderRadius: '16px',
+                  border: `1px solid ${accent}33`,
+                  boxShadow: `0 10px 24px ${accent}18`,
+                  padding: '14px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  minHeight: '320px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
+                  <div>
+                    <div style={{ color: '#FFFFFF', fontSize: '16px', fontWeight: 700 }}>{box.title}</div>
+                    <div style={{ color: '#A8B0CE', fontSize: '12px', lineHeight: 1.5, marginTop: '4px' }}>{box.teaser}</div>
+                  </div>
+                  <span style={{
+                    color: accent,
+                    background: `${accent}1A`,
+                    border: `1px solid ${accent}40`,
+                    borderRadius: '999px',
+                    padding: '4px 8px',
+                    fontSize: '11px',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {isReady ? '可揭晓' : '本地证据不足'}
+                  </span>
+                </div>
+
+                {!isRevealed ? (
+                  <div style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    flex: 1,
+                    gap: '12px',
+                    background: 'linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))',
+                    borderRadius: '14px',
+                    padding: '16px',
+                    border: '1px dashed rgba(255,255,255,0.08)',
+                  }}>
+                    <div style={{ color: '#DCE2F8', fontSize: '13px', lineHeight: 1.7 }}>
+                      {isReady
+                        ? '这盒里是一个可以直接打开的具体视频。揭晓后会显示标题、UP 主、来源、理由和本地证据。'
+                        : '这盒不会拿泛泛建议充数。揭晓后只会告诉你为什么本地证据还不够。'}
+                    </div>
+                    <button
+                      type="button"
+                      data-action={isReady ? 'reveal' : 'explain'}
+                      onClick={() => revealBox(box.id)}
+                      style={primaryButtonStyle(accent)}
+                    >
+                      {isReady ? '揭晓视频' : '查看原因'}
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', flex: 1 }}>
+                    <div style={{ color: accent, fontSize: '12px', fontWeight: 600 }}>来源：{box.source}</div>
+                    <div style={{
+                      background: 'rgba(255,255,255,0.03)',
+                      borderRadius: '12px',
+                      padding: '12px',
+                      border: '1px solid rgba(255,255,255,0.05)',
+                      flex: 1,
+                    }}>
+                      {isReady && box.video ? (
+                        <>
+                          <div style={{ color: '#FFFFFF', fontSize: '15px', fontWeight: 700, lineHeight: 1.5 }}>{box.video.title}</div>
+                          <div style={{ color: '#C7CEE7', fontSize: '12px', marginTop: '6px' }}>UP 主：{box.video.authorName}</div>
+                          <div style={{ color: '#DCE2F8', fontSize: '13px', lineHeight: 1.7, marginTop: '10px' }}>
+                            理由：{box.reason}
+                          </div>
+                          <ul style={{ color: '#AAB3D2', fontSize: '12px', lineHeight: 1.7, paddingLeft: '18px', margin: '10px 0 0 0' }}>
+                            {box.evidence.map(line => <li key={line}>{line}</li>)}
+                          </ul>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ color: '#FFFFFF', fontSize: '15px', fontWeight: 700, lineHeight: 1.5 }}>
+                            {box.emptyTitle ?? '这盒暂时开不出来'}
+                          </div>
+                          <div style={{ color: '#DCE2F8', fontSize: '13px', lineHeight: 1.7, marginTop: '10px' }}>
+                            {box.emptyDescription ?? box.reason}
+                          </div>
+                          <ul style={{ color: '#AAB3D2', fontSize: '12px', lineHeight: 1.7, paddingLeft: '18px', margin: '10px 0 0 0' }}>
+                            {box.evidence.map(line => <li key={line}>{line}</li>)}
+                          </ul>
+                        </>
+                      )}
+                    </div>
+
+                    {isReady && box.video ? (
+                      <a
+                        href={box.video.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        data-action="open-video"
+                        data-bvid={box.video.bvid}
+                        onClick={() => markOpened(box.id)}
+                        style={openLinkStyle(accent, opened[box.id] === true)}
+                      >
+                        {opened[box.id] === true ? '再次打开 B 站视频页' : '打开 B 站视频页'}
+                      </a>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void fetchData()}
+                        style={secondaryButtonStyle()}
+                      >
+                        重新生成这一页
+                      </button>
+                    )}
+                  </div>
+                )}
+              </article>
+            );
+          })}
         </div>
 
-        <div>
-          <h3 style={{ color: '#A0A0B0', fontSize: '13px', margin: '0 0 8px 0' }}>兴趣盲盒</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
-            {d.blindBox.map((item: BlindBoxItem, i: number) => (
-              <div key={i} style={{
-                background: '#222244', borderRadius: '10px', padding: '12px', textAlign: 'center',
-              }}>
-                <div style={{ fontSize: '24px', marginBottom: '6px' }}>
-                  {item.type === 'video' ? '🎬' : item.type === 'creator' ? '👤' : '📂'}
-                </div>
-                <div style={{ color: '#FFFFFF', fontSize: '12px', fontWeight: 500, marginBottom: '4px', lineHeight: 1.3 }}>
-                  {item.name}
-                </div>
-                <div style={{ color: '#9090A0', fontSize: '11px', lineHeight: 1.4 }}>
-                  {item.reason}
-                </div>
-              </div>
-            ))}
+        <section style={{
+          background: '#15192A',
+          border: '1px solid rgba(255,255,255,0.05)',
+          borderRadius: '14px',
+          padding: '14px',
+        }}>
+          <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>说明</div>
+          <div style={{ color: '#A8B0CE', fontSize: '12px', lineHeight: 1.7 }}>
+            盲盒只使用本地历史、收藏和收藏分类路径来挑视频。打开动作只会新开一个 B 站视频页，不会回写收藏、关注或观看状态。
           </div>
-        </div>
+        </section>
       </div>
     </ErrorBoundary>
   );
+}
+
+function primaryButtonStyle(accent: string): Record<string, string> {
+  return {
+    width: '100%',
+    border: 'none',
+    borderRadius: '12px',
+    padding: '11px 14px',
+    background: `linear-gradient(135deg, ${accent}, ${BILI_PINK})`,
+    color: '#FFFFFF',
+    fontSize: '13px',
+    fontWeight: '700',
+    cursor: 'pointer',
+  };
+}
+
+function secondaryButtonStyle(): Record<string, string> {
+  return {
+    width: '100%',
+    border: '1px solid rgba(255,255,255,0.08)',
+    borderRadius: '12px',
+    padding: '11px 14px',
+    background: 'rgba(255,255,255,0.03)',
+    color: '#DCE2F8',
+    fontSize: '13px',
+    fontWeight: '600',
+    cursor: 'pointer',
+  };
+}
+
+function openLinkStyle(accent: string, opened: boolean): Record<string, string> {
+  return {
+    display: 'block',
+    textAlign: 'center',
+    textDecoration: 'none',
+    borderRadius: '12px',
+    padding: '11px 14px',
+    background: opened ? 'rgba(0,161,214,0.14)' : 'rgba(251,114,153,0.12)',
+    border: `1px solid ${opened ? BILI_BLUE : accent}55`,
+    color: opened ? BILI_BLUE : BILI_PINK,
+    fontSize: '13px',
+    fontWeight: '700',
+  };
 }

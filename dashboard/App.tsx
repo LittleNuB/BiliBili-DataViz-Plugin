@@ -19,7 +19,7 @@ const NAV_ITEMS = [
   { id: 'preference', label: '偏好', caption: '分区与标签', shortLabel: '偏' },
   { id: 'creator', label: 'UP主', caption: '创作者关系', shortLabel: 'UP' },
   { id: 'behavior', label: '行为', caption: '节奏与时段', shortLabel: '行' },
-  { id: 'experiments', label: '实验', caption: '建议与盲盒', shortLabel: '验' },
+  { id: 'experiments', label: '盲盒', caption: '视频盲盒', shortLabel: '盒' },
   { id: 'smart-favorites', label: '智能收藏', caption: '收藏夹整理', shortLabel: '藏' },
 ];
 

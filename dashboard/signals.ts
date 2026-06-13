@@ -4,7 +4,7 @@ import type {
   PreferenceAnalytics,
   CreatorFollowDataCoverage, CreatorFollowStatusGroup, CreatorRanking, NewCreator,
   BehaviorMetrics,
-  WeeklyTip, BlindBoxItem,
+  ExperimentData,
 } from '../src/shared/types/analytics';
 
 // Module 1: Overview
@@ -35,10 +35,7 @@ export const behaviorLoading = signal(true);
 export const behaviorError = signal<string | null>(null);
 
 // Module 5: Experiments
-export const expData = signal<{
-  tips: WeeklyTip[];
-  blindBox: BlindBoxItem[];
-} | null>(null);
+export const expData = signal<ExperimentData | null>(null);
 export const expLoading = signal(true);
 export const expError = signal<string | null>(null);
 
