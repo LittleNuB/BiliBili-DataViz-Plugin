@@ -80,7 +80,7 @@ export async function generateCurrentVideoSummary(
       return buildLocalCurrentVideoSummary(context, {
         aiStatus: 'low_confidence',
         aiModel: config.ai.chatModel,
-        aiNote: `AI 返回置信度 ${normalized.confidence.toFixed(2)}，低于本地 fallback 阈值；当前显示本地证据结果。`,
+        aiNote: `AI 返回置信度 ${normalized.confidence.toFixed(2)}，低于本地证据结果阈值；当前显示本地证据结果。`,
         now,
       });
     }

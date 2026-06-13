@@ -13,7 +13,7 @@ interface Props {
 
 export function SideNav({ items, activeIndex, onChange }: Props) {
   return (
-    <aside className="bb-sidebar" aria-label="Bili-Bill Dashboard 导航">
+    <aside className="bb-sidebar" aria-label="Bili-Bill 面板导航">
       <div className="bb-brand">
         <div className="bb-brand-mark" aria-hidden="true">BB</div>
         <div className="bb-brand-text">

@@ -276,7 +276,7 @@ export function DynamicBillPage() {
       await refreshConfig();
       setNotice(nextEnabled
         ? "已启用动态账单 AI 解释；生成时只会发送已入选账单项的必要视频元数据和紧凑证据事实。"
-        : "已关闭动态账单 AI 解释；页面继续显示本地证据 fallback。");
+        : "已关闭动态账单 AI 解释；页面继续显示本地证据结果。");
     } catch (error) {
       setNotice(`更新 AI 解释开关失败：${describeError(error)}`);
     }
@@ -327,7 +327,7 @@ export function DynamicBillPage() {
       } while (total.pending > 0 && guard-- > 0);
       await refreshBillItems();
     } catch (error) {
-      setNotice(`生成 AI 解释失败：${describeError(error)}。页面仍展示本地证据 fallback。`);
+      setNotice(`生成 AI 解释失败：${describeError(error)}。页面仍展示本地证据结果。`);
       await refreshBillItems().catch(() => {});
     } finally {
       setExplaining(false);
@@ -371,7 +371,7 @@ export function DynamicBillPage() {
           <span className="dynamic-bill-kicker">消费前 / 已关注视频投稿</span>
           <h2>动态账单</h2>
           <p>
-            面向兴趣再平衡，久违更新、换换口味和被淹没的关注由本地规则入选和排序；AI 只生成解释展示，未启用、未配置或失败时继续显示本地证据 fallback。
+            面向兴趣再平衡，久违更新、换换口味和被淹没的关注由本地规则入选和排序；AI 只生成解释展示，未启用、未配置或失败时继续显示本地证据结果。
           </p>
         </div>
         <div className="dynamic-bill-scope">
@@ -770,11 +770,11 @@ function ExplanationPanel({
     >
       <div className="dynamic-bill-ai-head">
         <div>
-          <strong>{hasAiExplanation ? "AI 解释" : "本地证据 fallback"}</strong>
+          <strong>{hasAiExplanation ? "AI 解释" : "本地证据说明"}</strong>
           <span>{explanationStateCopy(explanation, aiAvailability)}</span>
         </div>
         {hasAiExplanation ? (
-          <em title="confidence 只展示，不参与入选、排序或后续规则">
+          <em title="置信度只展示，不参与入选、排序或后续规则">
             置信度 {Math.round(explanation.confidence * 100)}%
           </em>
         ) : null}
@@ -883,13 +883,13 @@ function describeGenerateResult(result: DynamicBillGenerateResult): string {
 
 function describeExplanationResult(result: DynamicBillExplanationResult): string {
   if (result.status === "disabled") {
-    return `AI 解释未启用，已为 ${result.fallback} 个账单项展示本地证据 fallback。`;
+    return `AI 解释未启用，已为 ${result.fallback} 个账单项展示本地证据结果。`;
   }
   if (result.status === "not_configured") {
-    return `AI 未配置 API Key，已为 ${result.fallback} 个账单项展示本地证据 fallback。`;
+    return `AI 未配置 API Key，已为 ${result.fallback} 个账单项展示本地证据结果。`;
   }
   const pending = result.pending > 0 ? `，剩余 ${result.pending} 个待处理` : "";
-  return `AI 解释处理 ${result.processed} 项：成功 ${result.generated} 项，失败 ${result.failed} 项，跳过 ${result.skipped} 项${pending}；失败项仍展示本地证据 fallback。`;
+  return `AI 解释处理 ${result.processed} 项：成功 ${result.generated} 项，失败 ${result.failed} 项，跳过 ${result.skipped} 项${pending}；失败项仍展示本地证据结果。`;
 }
 
 function describeFeedbackResult(result: DynamicBillFeedbackResult): string {

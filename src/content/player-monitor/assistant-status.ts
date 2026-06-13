@@ -171,7 +171,7 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
   dashboard.href = chrome.runtime.getURL('dashboard/index.html');
   dashboard.target = '_blank';
   dashboard.rel = 'noopener noreferrer';
-  dashboard.textContent = '打开 Dashboard';
+  dashboard.textContent = '打开完整面板';
   card.appendChild(dashboard);
 
   if (!existing) {
