@@ -166,7 +166,7 @@ export function OverviewPage() {
           </div>
           {d.historySyncDiagnostics && (
             <div style={{ marginTop: '8px', color: '#C8C8D8', fontSize: '11px', lineHeight: 1.6 }}>
-              {formatHistorySyncDiagnostics(d.historySyncDiagnostics)}
+              {formatHistorySyncDiagnosticsV2(d.historySyncDiagnostics)}
             </div>
           )}
         </div>
@@ -304,6 +304,30 @@ function formatHistorySyncDiagnostics(progress: HistorySyncProgress): string {
     );
   }
   return parts.join(' · ');
+}
+
+function formatHistorySyncDiagnosticsV2(progress: HistorySyncProgress): string {
+  const parts = [
+    `模式=${progress.mode === 'full' ? '全量' : progress.mode === 'incremental' ? '增量' : '未知'}`,
+    `页数=${progress.fetchedPages}/${progress.pageLimit}`,
+    `获取=${progress.fetchedCount} 条`,
+    `新增=${progress.insertedCount} 条`,
+    `更新=${progress.updatedCount} 条`,
+    `重复=${progress.duplicateCount} 条`,
+    `直播排除=${progress.liveExcludedCount} 条`,
+    `非视频/不支持=${progress.unsupportedBusinessCount} 条`,
+    `缺少标识=${progress.missingIdCount} 条`,
+    `总跳过=${progress.skippedCount} 条`,
+    `范围=${formatViewAt(progress.oldestFetchedAt)} -> ${formatViewAt(progress.newestFetchedAt)}`,
+    `停止原因=${progress.stoppedReason}`,
+    `到达末尾=${String(progress.reachedEnd)}`,
+  ];
+  if (progress.finalCursor) {
+    parts.push(
+      `cursor(max=${progress.finalCursor.max ?? 'null'}, view_at=${progress.finalCursor.viewAt ?? 'null'}, business=${progress.finalCursor.business ?? 'null'}, has_more=${progress.finalCursor.hasMore == null ? 'null' : String(progress.finalCursor.hasMore)})`,
+    );
+  }
+  return parts.join('；');
 }
 
 function formatViewAt(value: number | null): string {
