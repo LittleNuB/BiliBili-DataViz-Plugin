@@ -38,10 +38,16 @@ test('fetches all favorite resource pages until has_more is false', async () => 
   assert.equal(result.items.length, 25);
   assert.equal(result.diagnostic.requestedPages, 2);
   assert.equal(result.diagnostic.pagesFetched, 2);
+  assert.equal(result.diagnostic.pageSize, FAVORITE_PAGE_SIZE);
   assert.equal(result.diagnostic.rawResourcesSeen, 25);
+  assert.equal(result.diagnostic.uniqueResourcesSeen, 25);
+  assert.equal(result.diagnostic.duplicateResourceIds, 0);
+  assert.equal(result.diagnostic.duplicateBvids, 0);
   assert.equal(result.diagnostic.pageErrors, 0);
   assert.equal(result.diagnostic.completenessState, 'complete');
+  assert.equal(result.diagnostic.stopReason, 'has_more_false');
   assert.equal(result.diagnostic.unexplainedDelta, 0);
+  assert.equal(result.diagnostic.pageDiagnostics.length, 2);
   assert.deepEqual(result.diagnostic.errors, []);
 });
 
@@ -71,7 +77,11 @@ test('retries short pages with has_more=true, continues, and still marks the fol
   assert.equal(result.diagnostic.pagesFetched, 2);
   assert.equal(result.diagnostic.pageErrors, 1);
   assert.equal(result.diagnostic.completenessState, 'incomplete');
+  assert.equal(result.diagnostic.stopReason, 'has_more_false');
   assert.equal(result.diagnostic.unexplainedDelta, 0);
+  assert.deepEqual(result.diagnostic.pageDiagnostics[0]?.attemptResourceCounts, [18, 18, 18]);
+  assert.equal(result.diagnostic.pageDiagnostics[0]?.retryImprovedShortPage, false);
+  assert.equal(result.diagnostic.pageDiagnostics[0]?.shortPageWithHasMore, true);
   assert.match(result.diagnostic.errors[0] ?? '', /has_more=true but returned 18\/20 resources after 3 attempt\(s\)/);
 });
 
@@ -99,6 +109,36 @@ test('counts unavailable, non-video, and missing-id favorite resources as filter
   assert.equal(result.diagnostic.pageErrors, 0);
   assert.equal(result.diagnostic.completenessState, 'complete');
   assert.equal(result.diagnostic.unexplainedDelta, 0);
+  assert.equal(result.diagnostic.pageDiagnostics[0]?.filteredItems, 3);
+});
+
+test('tracks retry improvement and duplicate resources without double-counting stored items', async () => {
+  const pageOneAttempts = [
+    { medias: makeVideos(18, 0), has_more: true },
+    { medias: [...makeVideos(19, 0), makeVideo(5)], has_more: true },
+  ];
+  const pageTwo = { medias: [makeVideo(20)], has_more: false };
+
+  const result = await fetchFavoriteItemsWithPageFetcher(
+    { ...folder, mediaCount: 21 },
+    async pageNumber => {
+      if (pageNumber === 1) {
+        return pageOneAttempts.shift() ?? { medias: [], has_more: false };
+      }
+      return pageTwo;
+    },
+    undefined,
+    500,
+    FAVORITE_PAGE_SIZE,
+  );
+
+  assert.equal(result.items.length, 20);
+  assert.equal(result.diagnostic.uniqueResourcesSeen, 20);
+  assert.equal(result.diagnostic.duplicateResourceIds, 1);
+  assert.equal(result.diagnostic.duplicateBvids, 1);
+  assert.equal(result.diagnostic.pageDiagnostics[0]?.retryImprovedShortPage, true);
+  assert.deepEqual(result.diagnostic.pageDiagnostics[0]?.attemptResourceCounts, [18, 20]);
+  assert.equal(result.diagnostic.unexplainedDelta, 1);
 });
 
 test('blocks incomplete favorite sync diagnostics before snapshot replacement', () => {
@@ -106,9 +146,13 @@ test('blocks incomplete favorite sync diagnostics before snapshot replacement', 
     mediaId: 100,
     title: 'Default',
     reportedMediaCount: 158,
+    pageSize: FAVORITE_PAGE_SIZE,
     requestedPages: 7,
     pagesFetched: 7,
     rawResourcesSeen: 137,
+    uniqueResourcesSeen: 137,
+    duplicateResourceIds: 0,
+    duplicateBvids: 0,
     storedVideoItems: 137,
     filteredUnavailableItems: 0,
     filteredMissingIdItems: 0,
@@ -119,6 +163,7 @@ test('blocks incomplete favorite sync diagnostics before snapshot replacement', 
     stoppedByMaxPages: false,
     unexplainedDelta: 21,
     completenessState: 'incomplete',
+    pageDiagnostics: [],
     errors: [],
   }];
 
@@ -206,9 +251,13 @@ function makeIncompleteDiagnostic(): FavoriteFolderSyncDiagnostic {
     mediaId: 100,
     title: 'Default',
     reportedMediaCount: 158,
+    pageSize: FAVORITE_PAGE_SIZE,
     requestedPages: 7,
     pagesFetched: 7,
     rawResourcesSeen: 137,
+    uniqueResourcesSeen: 137,
+    duplicateResourceIds: 0,
+    duplicateBvids: 0,
     storedVideoItems: 137,
     filteredUnavailableItems: 0,
     filteredMissingIdItems: 0,
@@ -219,6 +268,7 @@ function makeIncompleteDiagnostic(): FavoriteFolderSyncDiagnostic {
     stoppedByMaxPages: false,
     unexplainedDelta: 21,
     completenessState: 'incomplete',
+    pageDiagnostics: [],
     errors: [],
   };
 }

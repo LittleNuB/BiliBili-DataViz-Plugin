@@ -3,6 +3,7 @@ import { requestSW } from '../../utils/messaging';
 import { BILI_BLUE, BILI_PINK } from '../../../src/shared/constants';
 import type { AiConfig, AssistantConfig, UserConfig } from '../../../src/shared/types/config';
 import type {
+  FavoriteFolderGapProbeResult,
   FavoriteFolderSyncDiagnostic,
   FavoriteSyncResult,
   SmartFavoriteOverview,
@@ -36,6 +37,8 @@ export function SmartFavoritesPage() {
   const [selectedPath, setSelectedPath] = useState<string[]>([]);
   const [pathResults, setPathResults] = useState<SmartFavoriteResult[]>([]);
   const [expandedTree, setExpandedTree] = useState<Set<string>>(() => new Set());
+  const [probeMediaId, setProbeMediaId] = useState('');
+  const [probeResult, setProbeResult] = useState<FavoriteFolderGapProbeResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -146,6 +149,26 @@ export function SmartFavoritesPage() {
     }
   }
 
+  async function runFolderProbe(mediaIdText = probeMediaId) {
+    const mediaId = Number(mediaIdText);
+    if (!Number.isFinite(mediaId) || mediaId <= 0) return;
+    setBusy('probe');
+    setError(null);
+    try {
+      setProbeMediaId(String(Math.floor(mediaId)));
+      setProbeResult(await requestSW<FavoriteFolderGapProbeResult>('PROBE_FAVORITE_FOLDER_GAP', {
+        mediaId: Math.floor(mediaId),
+        maxPages: 12,
+      }));
+      setNotice(`Live folder probe finished for mediaId ${Math.floor(mediaId)}. Review the breakdown below before treating the gap as a plugin-only issue.`);
+    } catch (e) {
+      setProbeResult(null);
+      setError((e as Error).message);
+    } finally {
+      setBusy('');
+    }
+  }
+
   async function runSearch() {
     const q = query.trim();
     if (!q) return;
@@ -237,7 +260,30 @@ export function SmartFavoritesPage() {
             ? `Favorite sync is incomplete in ${overview.incompleteFolders} folder(s). Smart index coverage is scoped to the current local snapshot: Bilibili reported ${overview.reportedItems}, locally stored ${overview.storedItems}, indexed ${overview.indexedItems}, failed ${overview.failedItems}, pending ${overview.pendingItems}.`
             : `Smart index coverage only applies to locally stored favorites: Bilibili reported ${overview?.reportedItems ?? 0}, locally stored ${overview?.storedItems ?? 0}, indexed ${overview?.indexedItems ?? 0}, failed ${overview?.failedItems ?? 0}, pending ${overview?.pendingItems ?? 0}.`}
         </div>
-        <SyncDiagnostics diagnostics={overview?.lastSyncDiagnostics ?? []} />
+        <SyncDiagnostics
+          diagnostics={overview?.lastSyncDiagnostics ?? []}
+          onProbe={mediaId => { void runFolderProbe(String(mediaId)); }}
+        />
+        <div style={{ ...CARD, marginBottom: '12px', background: '#1A1A2E' }}>
+          <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>Folder gap probe</div>
+          <div style={{ color: '#9090A0', fontSize: '12px', lineHeight: 1.5, marginBottom: '8px' }}>
+            Run a bounded live probe for one favorite folder using the current extension runtime login state. The probe records counts only: no full folder contents, raw API payloads, Cookies, or local database dumps.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '8px' }}>
+            <TextInput
+              value={probeMediaId}
+              onInput={setProbeMediaId}
+              placeholder="Favorite folder mediaId"
+              onEnter={() => { void runFolderProbe(); }}
+            />
+            <ActionButton
+              label={busy === 'probe' ? 'Probing...' : 'Run probe'}
+              onClick={() => { void runFolderProbe(); }}
+              disabled={!!busy || !probeMediaId.trim()}
+            />
+          </div>
+        </div>
+        {probeResult && <FavoriteFolderProbePanel result={probeResult} />}
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           <ActionButton label={busy === 'sync' ? '同步中...' : '同步收藏夹'} onClick={syncFavorites} disabled={!!busy} />
           <ActionButton label={busy === 'index' ? '生成中...' : '生成智能索引'} onClick={buildIndex} disabled={!!busy || !overview?.totalItems} />
@@ -606,7 +652,13 @@ function Status({ color, text }: { color: string; text: string }) {
   return <div style={{ ...CARD, color, fontSize: '13px' }}>{text}</div>;
 }
 
-function SyncDiagnostics({ diagnostics }: { diagnostics: FavoriteFolderSyncDiagnostic[] }) {
+function SyncDiagnostics({
+  diagnostics,
+  onProbe,
+}: {
+  diagnostics: FavoriteFolderSyncDiagnostic[];
+  onProbe?: (mediaId: number) => void;
+}) {
   if (diagnostics.length === 0) return null;
 
   const totals = diagnostics.reduce((sum, diagnostic) => ({
@@ -626,19 +678,25 @@ function SyncDiagnostics({ diagnostics }: { diagnostics: FavoriteFolderSyncDiagn
       <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>
         Sync audit: state {overallState}, reported {totals.reported}, requested/fetched pages {totals.requestedPages}/{totals.fetchedPages}, stored {totals.stored}, filtered {totals.filtered}, delta {totals.delta}, page errors {totals.errors}
       </div>
-      <div style={{ minWidth: '1080px', display: 'grid', gridTemplateColumns: '1.5fr 88px 88px 92px 72px 72px 180px 72px 2fr', gap: '1px', background: '#333355', border: '1px solid #333355', borderRadius: '6px', overflow: 'hidden' }}>
-        {['Folder', 'State', 'Reported', 'Req/Fetched', 'Raw', 'Stored', 'Filtered (u/mid/nv)', 'Delta', 'Page issues'].map(label => (
+      <div style={{ minWidth: '1160px', display: 'grid', gridTemplateColumns: '1.5fr 88px 88px 92px 72px 72px 180px 72px 2fr 80px', gap: '1px', background: '#333355', border: '1px solid #333355', borderRadius: '6px', overflow: 'hidden' }}>
+        {['Folder', 'State', 'Reported', 'Req/Fetched', 'Raw', 'Stored', 'Filtered (u/mid/nv)', 'Delta', 'Page issues', 'Probe'].map(label => (
           <AuditCell key={label} header text={label} />
         ))}
         {diagnostics.map(diagnostic => (
-          <SyncDiagnosticRow key={diagnostic.mediaId} diagnostic={diagnostic} />
+          <SyncDiagnosticRow key={diagnostic.mediaId} diagnostic={diagnostic} onProbe={onProbe} />
         ))}
       </div>
     </div>
   );
 }
 
-function SyncDiagnosticRow({ diagnostic }: { diagnostic: FavoriteFolderSyncDiagnostic }) {
+function SyncDiagnosticRow({
+  diagnostic,
+  onProbe,
+}: {
+  diagnostic: FavoriteFolderSyncDiagnostic;
+  onProbe?: (mediaId: number) => void;
+}) {
   const filteredBreakdown = `${diagnostic.filteredItems} (${diagnostic.filteredUnavailableItems}/${diagnostic.filteredMissingIdItems}/${diagnostic.filteredNonVideoItems})`;
   const pageIssues = diagnostic.pageErrors > 0 ? `${diagnostic.pageErrors}: ${diagnostic.errors.join(' | ')}` : '-';
   return (
@@ -652,6 +710,85 @@ function SyncDiagnosticRow({ diagnostic }: { diagnostic: FavoriteFolderSyncDiagn
       <AuditCell text={filteredBreakdown} />
       <AuditCell text={String(diagnostic.unexplainedDelta)} tone={diagnostic.unexplainedDelta > 0 ? 'warn' : undefined} />
       <AuditCell text={pageIssues} tone={diagnostic.pageErrors > 0 ? 'error' : undefined} />
+      <AuditActionCell
+        label="Probe"
+        disabled={!onProbe}
+        onClick={onProbe ? () => onProbe(diagnostic.mediaId) : undefined}
+      />
+    </>
+  );
+}
+
+function FavoriteFolderProbePanel({ result }: { result: FavoriteFolderGapProbeResult }) {
+  const { folder, diagnostic, gapBuckets, localIndexCoverage } = result;
+  const pageCount = diagnostic.pageDiagnostics.length;
+
+  return (
+    <section style={{ ...CARD, marginBottom: '12px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'start', marginBottom: '8px' }}>
+        <div>
+          <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600 }}>
+            Probe result: {folder.title || 'Untitled'} #{folder.mediaId}
+          </div>
+          <div style={{ color: '#9090A0', fontSize: '12px', lineHeight: 1.5, marginTop: '4px' }}>
+            Classification {result.classification} | stop {diagnostic.stopReason ?? 'unknown'} | pages {pageCount} | reported {folder.reportedMediaCount}
+          </div>
+        </div>
+        <Badge text={result.classification} color={result.classification === 'complete' ? '#00D4AA' : '#FFB347'} />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))', gap: '8px', marginBottom: '10px' }}>
+        <Metric label="API unique" value={diagnostic.uniqueResourcesSeen} />
+        <Metric label="Probe stored" value={diagnostic.storedVideoItems} />
+        <Metric label="Filtered" value={gapBuckets.filteredItems} />
+        <Metric label="API missing" value={gapBuckets.apiMissingItems} />
+        <Metric label="Local stored" value={localIndexCoverage.storedItems} />
+        <Metric label="Indexed gap" value={gapBuckets.storedButNotIndexedItems} />
+      </div>
+
+      <div style={{ color: '#A0A0B0', fontSize: '12px', lineHeight: 1.6, marginBottom: '10px' }}>
+        Duplicates: resource id {diagnostic.duplicateResourceIds}, bvid {diagnostic.duplicateBvids}. Local overlap {localIndexCoverage.overlapItems}, local-only retained {localIndexCoverage.localOnlyItems}, probe-only {localIndexCoverage.probeOnlyItems}. Indexed {localIndexCoverage.indexedItems}, failed {localIndexCoverage.failedItems}, pending {localIndexCoverage.pendingItems}, stale {localIndexCoverage.staleItems}.
+      </div>
+
+      {result.notes.length > 0 && (
+        <div style={{ display: 'grid', gap: '4px', marginBottom: '10px' }}>
+          {result.notes.map(note => (
+            <div key={note} style={{ color: '#FFB347', fontSize: '12px', lineHeight: 1.5 }}>{note}</div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ overflowX: 'auto' }}>
+        <div style={{ minWidth: '980px', display: 'grid', gridTemplateColumns: '74px 90px 90px 84px 96px 84px 84px 84px 100px 100px', gap: '1px', background: '#333355', border: '1px solid #333355', borderRadius: '6px', overflow: 'hidden' }}>
+          {['Page', 'Attempts', 'Attempt sizes', 'Has more', 'Short page', 'Stored', 'Filtered', 'Dup id', 'Dup bvid', 'Retry fixed'].map(label => (
+            <AuditCell key={label} header text={label} />
+          ))}
+          {diagnostic.pageDiagnostics.map(page => (
+            <FavoriteFolderProbePageRow key={page.pageNumber} page={page} />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function FavoriteFolderProbePageRow({
+  page,
+}: {
+  page: FavoriteFolderGapProbeResult['diagnostic']['pageDiagnostics'][number];
+}) {
+  return (
+    <>
+      <AuditCell text={String(page.pageNumber)} />
+      <AuditCell text={String(page.attempts)} tone={page.attempts > 1 ? 'warn' : undefined} />
+      <AuditCell text={page.attemptResourceCounts.join(' / ')} tone={page.attempts > 1 ? 'warn' : undefined} />
+      <AuditCell text={page.hasMore ? 'true' : 'false'} tone={page.hasMore ? 'warn' : undefined} />
+      <AuditCell text={page.shortPageWithHasMore ? `${page.returnedResourceCount}/${page.requestedPageSize}` : 'full'} tone={page.shortPageWithHasMore ? 'warn' : undefined} />
+      <AuditCell text={String(page.storedVideoItems)} />
+      <AuditCell text={`${page.filteredItems} (${page.filteredUnavailableItems}/${page.filteredMissingIdItems}/${page.filteredNonVideoItems})`} />
+      <AuditCell text={String(page.duplicateResourceIds)} tone={page.duplicateResourceIds > 0 ? 'warn' : undefined} />
+      <AuditCell text={String(page.duplicateBvids)} tone={page.duplicateBvids > 0 ? 'warn' : undefined} />
+      <AuditCell text={page.retryImprovedShortPage ? 'yes' : 'no'} tone={page.retryImprovedShortPage ? 'warn' : undefined} />
     </>
   );
 }
@@ -681,6 +818,37 @@ function AuditCell({
       }}
     >
       {text}
+    </div>
+  );
+}
+
+function AuditActionCell({
+  label,
+  onClick,
+  disabled,
+}: {
+  label: string;
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div style={{ background: '#1A1A2E', padding: '6px 8px' }}>
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        style={{
+          width: '100%',
+          background: 'transparent',
+          color: disabled ? '#666' : BILI_BLUE,
+          border: '1px solid #333355',
+          borderRadius: '5px',
+          padding: '4px 6px',
+          fontSize: '11px',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+        }}
+      >
+        {label}
+      </button>
     </div>
   );
 }

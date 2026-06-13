@@ -32,6 +32,7 @@ import {
 import { getDeviceData } from '../analytics/device';
 import { abortCurrentHistorySync, hasActiveHistorySyncAbortScope } from '../sync/sync-control';
 import { syncFavorites } from '../favorites/sync';
+import { probeFavoriteFolderGap } from '../favorites/folder-gap-probe';
 import { buildSmartFavoriteIndex, getSmartFavoriteOverview, getSmartFavoritesByPath, searchSmartFavorites } from '../favorites/smart';
 import { answerSmartFavoriteQuestion } from '../favorites/qa';
 import { buildDynamicBillExplanations } from '../dynamic-bill/ai';
@@ -292,6 +293,17 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     }
     case 'SYNC_FAVORITES':
       return { success: true, data: await syncFavorites() as T };
+    case 'PROBE_FAVORITE_FOLDER_GAP': {
+      const mediaId = normalizePositiveInteger(request.params?.mediaId, 0);
+      if (mediaId <= 0) {
+        throw new Error('INVALID_FAVORITE_MEDIA_ID');
+      }
+      const maxPages = Math.min(normalizePositiveInteger(request.params?.maxPages, 12), 50);
+      return {
+        success: true,
+        data: await probeFavoriteFolderGap(mediaId, maxPages) as T,
+      };
+    }
     case 'BUILD_SMART_FAVORITE_INDEX': {
       const maxItems = Number(request.params?.maxItems);
       const includeFailed = request.params?.includeFailed === true;
