@@ -1,6 +1,6 @@
-import type { WatchHistoryRecord } from '../../shared/types/watch-event';
-import type { HistoryCursorItem, VideoInfo } from '../../shared/types/video-info';
-import { buildWatchSessionKey } from '../../shared/utils/session-key';
+import type { WatchHistoryRecord } from '../../shared/types/watch-event.ts';
+import type { HistoryCursorItem, VideoInfo } from '../../shared/types/video-info.ts';
+import { buildWatchSessionKey } from '../../shared/utils/session-key.ts';
 
 export function getHistoryAvid(item: HistoryCursorItem): number {
   return item.avid ?? item.history?.oid ?? 0;

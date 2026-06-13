@@ -152,13 +152,27 @@ function normalizeHistorySyncProgress(value: unknown): HistorySyncProgress | nul
   if (!value || typeof value !== 'object') return null;
   const raw = value as Partial<HistorySyncProgress> & {
     skippedCount?: unknown;
+    duplicateCount?: unknown;
+    unsupportedBusinessCount?: unknown;
+    liveExcludedCount?: unknown;
+    missingIdCount?: unknown;
     requestedPageLimit?: unknown;
     finalCursor?: unknown;
   };
 
   const fetchedCount = asRequiredNumber(raw.fetchedCount, 0);
   const insertedCount = asRequiredNumber(raw.insertedCount, 0);
-  const skippedCount = Math.max(0, asRequiredNumber(raw.skippedCount, fetchedCount - insertedCount));
+  const duplicateCount = Math.max(0, asRequiredNumber(raw.duplicateCount, 0));
+  const unsupportedBusinessCount = Math.max(0, asRequiredNumber(raw.unsupportedBusinessCount, 0));
+  const liveExcludedCount = Math.max(0, asRequiredNumber(raw.liveExcludedCount, 0));
+  const missingIdCount = Math.max(0, asRequiredNumber(raw.missingIdCount, 0));
+  const skippedCount = Math.max(
+    0,
+    asRequiredNumber(
+      raw.skippedCount,
+      duplicateCount + unsupportedBusinessCount + liveExcludedCount + missingIdCount,
+    ),
+  );
 
   return {
     syncing: raw.syncing === true,
@@ -173,6 +187,10 @@ function normalizeHistorySyncProgress(value: unknown): HistorySyncProgress | nul
     insertedCount,
     updatedCount: asRequiredNumber(raw.updatedCount, 0),
     skippedCount,
+    duplicateCount,
+    unsupportedBusinessCount,
+    liveExcludedCount,
+    missingIdCount,
     stoppedReason: typeof raw.stoppedReason === 'string' ? raw.stoppedReason : '',
     reachedEnd: raw.reachedEnd === true,
     oldestFetchedAt: asOptionalNumber(raw.oldestFetchedAt, null),

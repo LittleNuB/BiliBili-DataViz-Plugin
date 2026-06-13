@@ -20,6 +20,10 @@ export interface HistorySyncProgress {
   insertedCount: number;
   updatedCount: number;
   skippedCount: number;
+  duplicateCount: number;
+  unsupportedBusinessCount: number;
+  liveExcludedCount: number;
+  missingIdCount: number;
   stoppedReason: string;
   reachedEnd: boolean;
   oldestFetchedAt: number | null;
