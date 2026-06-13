@@ -1,4 +1,4 @@
-import type { FavoriteItem } from '../../shared/types/favorite';
+import type { FavoriteItem } from '../../shared/types/favorite.ts';
 
 export const UNCATEGORIZED_PATH = ['未分类'];
 

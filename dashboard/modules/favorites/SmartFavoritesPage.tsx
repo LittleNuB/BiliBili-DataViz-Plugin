@@ -89,10 +89,16 @@ export function SmartFavoritesPage() {
     try {
       const result = await requestSW<FavoriteSyncResult>('SYNC_FAVORITES');
       if (result.status === 'blocked') {
-        setError(result.blockedReason ?? 'Favorite sync incomplete; available data was kept.');
-        setNotice(`Sync incomplete: kept/updated ${result.insertedOrUpdated} usable videos, deleted nothing. Bilibili reported ${result.reportedItems}, newly stored ${result.items}, filtered ${result.filteredItems}; see audit below.`);
+        setError(result.blockedReason ?? '收藏同步未完成，已保留当前可用数据。');
+        setNotice(joinNoticeParts([
+          `收藏同步未完成：已保留并更新 ${result.insertedOrUpdated} 条可用视频，未删除旧数据。Bilibili 报告 ${result.reportedItems} 条，本次写入 ${result.items} 条，过滤 ${result.filteredItems} 条。`,
+          ...result.notes,
+        ]));
       } else {
-        setNotice(`Sync complete: ${result.folders} folders, ${result.items} locally stored videos, ${result.filteredItems} filtered resources.`);
+        setNotice(joinNoticeParts([
+          `收藏同步完成：${result.folders} 个收藏夹，本地写入 ${result.insertedOrUpdated} 条视频，过滤 ${result.filteredItems} 条资源。`,
+          ...result.notes,
+        ]));
       }
       setOverview(await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES'));
     } catch (e) {
@@ -106,7 +112,7 @@ export function SmartFavoritesPage() {
     setBusy('index');
     setError(null);
     try {
-      const result: SmartIndexResult = { processed: 0, indexed: 0, failed: 0, skipped: 0 };
+      const result: SmartIndexResult = { processed: 0, indexed: 0, failed: 0, skipped: 0, notes: [] };
       const initialOverview = overview ?? await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES');
       let pending = initialOverview.pendingItems;
       let guard = Math.ceil((initialOverview.totalItems + initialOverview.failedItems) / 8) + 4;
@@ -120,7 +126,10 @@ export function SmartFavoritesPage() {
         const latest = await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES');
         setOverview(latest);
         pending = latest.pendingItems;
-        setNotice(`智能索引生成中：已处理 ${result.processed} 条，成功 ${result.indexed} 条，失败 ${result.failed} 条`);
+        setNotice(joinNoticeParts([
+          `智能索引生成中：已处理 ${result.processed} 条，成功 ${result.indexed} 条，失败 ${result.failed} 条，跳过 ${result.skipped} 条。`,
+          ...result.notes,
+        ]));
         if (batch.processed === 0) break;
       }
 
@@ -136,11 +145,17 @@ export function SmartFavoritesPage() {
         failedRetriesLeft -= batch.processed;
         const latest = await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES');
         setOverview(latest);
-        setNotice(`失败项重试中：已处理 ${result.processed} 条，成功 ${result.indexed} 条，失败 ${result.failed} 条`);
+        setNotice(joinNoticeParts([
+          `失败项重试中：已处理 ${result.processed} 条，成功 ${result.indexed} 条，失败 ${result.failed} 条，跳过 ${result.skipped} 条。`,
+          ...result.notes,
+        ]));
         if (batch.processed === 0) break;
       }
 
-      setNotice(`智能索引完成：新增/更新 ${result.indexed} 条，失败 ${result.failed} 条，跳过 ${result.skipped} 条`);
+      setNotice(joinNoticeParts([
+        `智能索引完成：新增或更新 ${result.indexed} 条，失败 ${result.failed} 条，跳过 ${result.skipped} 条。`,
+        ...result.notes,
+      ]));
       setOverview(await requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES'));
     } catch (e) {
       setError((e as Error).message);
@@ -407,6 +422,15 @@ function mergeIndexResult(total: SmartIndexResult, batch: SmartIndexResult): voi
   total.indexed += batch.indexed;
   total.failed += batch.failed;
   total.skipped += batch.skipped;
+  for (const note of batch.notes) {
+    if (!total.notes.includes(note)) {
+      total.notes.push(note);
+    }
+  }
+}
+
+function joinNoticeParts(parts: string[]): string {
+  return parts.filter(Boolean).join(' ');
 }
 
 function ResultSection({

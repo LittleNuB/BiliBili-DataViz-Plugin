@@ -140,6 +140,7 @@ export interface FavoriteSyncResult {
   filteredItems: number;
   blockedReason?: string;
   diagnostics: FavoriteFolderSyncDiagnostic[];
+  notes: string[];
   syncedAt: number;
 }
 
@@ -188,6 +189,7 @@ export interface SmartIndexResult {
   indexed: number;
   failed: number;
   skipped: number;
+  notes: string[];
 }
 
 export interface SmartFavoriteSearchResponse {

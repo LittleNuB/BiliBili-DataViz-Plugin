@@ -1,4 +1,4 @@
-import type { AiConfig } from '../../shared/types/config';
+import type { AiConfig } from '../../shared/types/config.ts';
 
 interface ChatMessage {
   role: 'system' | 'user';

@@ -9,20 +9,20 @@ import type {
 } from '../../shared/types/favorite';
 import { normalizeFavoriteFoldersWithDiagnostics } from '../../shared/favorite-sync-diagnostics.ts';
 import { summarizeSmartFavoriteIndexCoverage } from '../../shared/smart-favorite-coverage.ts';
-import { loadConfig } from '../storage/config-store';
+import { loadConfig } from '../storage/config-store.ts';
 import {
   getFavoriteFolders,
   getFavoriteItems,
   getSmartFavoriteIndexMap,
   putSmartFavoriteIndex,
-} from '../storage/favorite-repo';
-import { chatJson } from '../ai/openai-compatible';
+} from '../storage/favorite-repo.ts';
+import { chatJson } from '../ai/openai-compatible.ts';
 import {
   buildTaxonomyPromptSummary,
   expandFavoriteSearchTerms,
   normalizeFavoritePath,
   UNCATEGORIZED_PATH,
-} from './taxonomy';
+} from './taxonomy.ts';
 
 interface AiFavoriteIndexResponse {
   path?: unknown;
@@ -37,6 +37,24 @@ interface AiQueryRewriteResponse {
 
 const DEFAULT_INDEX_LIMIT = 200;
 
+type SmartAiConfig = Awaited<ReturnType<typeof loadConfig>>['ai'];
+
+interface SmartFavoriteIndexDeps {
+  createSmartIndex: (item: FavoriteItem, config: SmartAiConfig) => Promise<AiFavoriteIndexResponse>;
+  getFavoriteItems: typeof getFavoriteItems;
+  getSmartFavoriteIndexMap: typeof getSmartFavoriteIndexMap;
+  loadConfig: typeof loadConfig;
+  putSmartFavoriteIndex: typeof putSmartFavoriteIndex;
+}
+
+const defaultSmartFavoriteIndexDeps: SmartFavoriteIndexDeps = {
+  createSmartIndex,
+  getFavoriteItems,
+  getSmartFavoriteIndexMap,
+  loadConfig,
+  putSmartFavoriteIndex,
+};
+
 export interface SmartFavoriteIndexOptions {
   includeFailed?: boolean;
   failedOnly?: boolean;
@@ -45,11 +63,12 @@ export interface SmartFavoriteIndexOptions {
 export async function buildSmartFavoriteIndex(
   maxItems = DEFAULT_INDEX_LIMIT,
   options: SmartFavoriteIndexOptions = {},
+  deps: SmartFavoriteIndexDeps = defaultSmartFavoriteIndexDeps,
 ): Promise<SmartIndexResult> {
-  const config = await loadConfig();
-  const items = await getFavoriteItems();
-  const indexes = await getSmartFavoriteIndexMap();
-  const result: SmartIndexResult = { processed: 0, indexed: 0, failed: 0, skipped: 0 };
+  const config = await deps.loadConfig();
+  const items = await deps.getFavoriteItems();
+  const indexes = await deps.getSmartFavoriteIndexMap();
+  const result: SmartIndexResult = { processed: 0, indexed: 0, failed: 0, skipped: 0, notes: [] };
   const candidates = items
     .map(item => {
       const contentHash = hashText(buildFavoriteDocument(item));
@@ -69,9 +88,9 @@ export async function buildSmartFavoriteIndex(
 
     result.processed++;
     try {
-      const ai = await createSmartIndex(item, config.ai);
+      const ai = await deps.createSmartIndex(item, config.ai);
       const path = normalizeFavoritePath(ai.path, item);
-      await putSmartFavoriteIndex({
+      const write = await deps.putSmartFavoriteIndex({
         itemKey: item.itemKey,
         path,
         summary: normalizeText(ai.summary, item.intro || item.title),
@@ -83,9 +102,14 @@ export async function buildSmartFavoriteIndex(
         status: 'indexed',
         indexedAt: Date.now(),
       });
-      result.indexed++;
+      mergeNotes(result.notes, write.notes);
+      if (write.written > 0) {
+        result.indexed++;
+      } else {
+        result.skipped++;
+      }
     } catch (error) {
-      await putSmartFavoriteIndex({
+      const write = await deps.putSmartFavoriteIndex({
         itemKey: item.itemKey,
         path: UNCATEGORIZED_PATH,
         summary: item.intro || item.title,
@@ -98,7 +122,12 @@ export async function buildSmartFavoriteIndex(
         error: error instanceof Error ? error.message : String(error),
         indexedAt: Date.now(),
       });
-      result.failed++;
+      mergeNotes(result.notes, write.notes);
+      if (write.written > 0) {
+        result.failed++;
+      } else {
+        result.skipped++;
+      }
     }
   }
 
@@ -191,7 +220,7 @@ export async function getSmartFavoritesByPath(path: string[], limit = 200): Prom
     .slice(0, limit);
 }
 
-async function createSmartIndex(item: FavoriteItem, config: Awaited<ReturnType<typeof loadConfig>>['ai']): Promise<AiFavoriteIndexResponse> {
+async function createSmartIndex(item: FavoriteItem, config: SmartAiConfig): Promise<AiFavoriteIndexResponse> {
   return chatJson<AiFavoriteIndexResponse>(config, [
     {
       role: 'system',
@@ -209,6 +238,14 @@ async function createSmartIndex(item: FavoriteItem, config: Awaited<ReturnType<t
       content: buildFavoriteDocument(item),
     },
   ]);
+}
+
+function mergeNotes(target: string[], incoming: string[]): void {
+  for (const note of incoming) {
+    if (!target.includes(note)) {
+      target.push(note);
+    }
+  }
 }
 
 async function rewriteQuery(

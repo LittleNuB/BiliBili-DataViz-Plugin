@@ -1,13 +1,13 @@
 import Dexie, { type Table } from 'dexie';
-import type { WatchHistoryRecord, PlayerEvent, DailyAggregate } from '../../shared/types/watch-event';
-import type { FavoriteFolder, FavoriteItem, SmartFavoriteIndex } from '../../shared/types/favorite';
+import type { WatchHistoryRecord, PlayerEvent, DailyAggregate } from '../../shared/types/watch-event.ts';
+import type { FavoriteFolder, FavoriteItem, SmartFavoriteIndex } from '../../shared/types/favorite.ts';
 import type {
   DynamicBillExplanation,
   DynamicBillFeedbackRecord,
   DynamicBillItem,
   FollowedCreator,
   FollowedVideoUpdate,
-} from '../../shared/types/dynamic-bill';
+} from '../../shared/types/dynamic-bill.ts';
 
 export class BiliAnalyticsDB extends Dexie {
   watchHistory!: Table<WatchHistoryRecord, number>;
