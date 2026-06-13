@@ -140,6 +140,7 @@ function mergeSmartFavoriteIndex(current: SmartFavoriteIndex | undefined, next: 
     summary: next.summary || current.summary,
     keywords: next.keywords.length > 0 ? next.keywords : current.keywords,
     aliases: next.aliases.length > 0 ? next.aliases : current.aliases,
+    categoryEvidence: next.categoryEvidence ?? current.categoryEvidence,
     searchableText: next.searchableText || current.searchableText,
     contentHash: next.contentHash || current.contentHash,
     model: next.model || current.model,

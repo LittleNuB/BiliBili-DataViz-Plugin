@@ -38,12 +38,27 @@ export interface SmartFavoriteIndex {
   summary: string;
   keywords: string[];
   aliases: string[];
+  categoryEvidence?: SmartFavoriteCategoryEvidence;
   searchableText: string;
   contentHash: string;
   model: string;
   status: 'indexed' | 'failed';
   error?: string;
   indexedAt: number;
+}
+
+export type SmartFavoriteCategoryEvidenceKind =
+  | 'ai'
+  | 'metadata'
+  | 'mixed'
+  | 'path_fallback';
+
+export interface SmartFavoriteCategoryEvidence {
+  kind: SmartFavoriteCategoryEvidenceKind;
+  summary: string;
+  directTerms: string[];
+  weakTerms: string[];
+  downgraded: boolean;
 }
 
 export interface SmartFavoriteTreeNode {
