@@ -4,6 +4,7 @@ import type { CurrentVideoContextResult, CurrentVideoNoContext } from '../../sha
 import type { VideoKnowledgeJumpResponse } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import { normalizePageLimit, runInitialBackfill } from '../sync/initial-backfill';
+import { probeHistoryTailCoverage } from '../sync/history-tail-probe';
 import {
   saveConfig,
   getLastSyncTime,
@@ -254,6 +255,18 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
           backfillComplete,
           syncProgress,
         } satisfies HistorySyncStatus as T,
+      };
+    }
+    case 'PROBE_HISTORY_TAIL': {
+      const requestedMaxPages = Number(request.params?.maxPages);
+      if (await getHistorySyncing()) {
+        throw new Error('HISTORY_SYNC_IN_PROGRESS');
+      }
+      return {
+        success: true,
+        data: await probeHistoryTailCoverage({
+          maxPages: Number.isFinite(requestedMaxPages) ? requestedMaxPages : undefined,
+        }) as T,
       };
     }
     case 'GET_CURRENT_VIDEO_CONTEXT':

@@ -3,6 +3,7 @@ import { quickStats, loading, error, lastSyncResult, syncInProgress, syncProgres
 import { requestSW } from './utils/messaging';
 import type { QuickStats } from '../src/shared/types/analytics';
 import type { SyncNowResult } from '../src/shared/types/messages';
+import type { HistoryTailProbeReport } from '../src/shared/types/history-tail-probe';
 import type { HistorySyncProgress, HistorySyncStatus } from '../src/shared/types/history-sync';
 import type { CurrentVideoContextResult } from '../src/shared/types/current-video-context';
 import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary';
@@ -19,6 +20,9 @@ export function App() {
   const [jumpPreviewNodeId, setJumpPreviewNodeId] = useState<string | null>(null);
   const [jumpStatus, setJumpStatus] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [tailProbeReport, setTailProbeReport] = useState<HistoryTailProbeReport | null>(null);
+  const [tailProbeLoading, setTailProbeLoading] = useState(false);
+  const [tailProbeError, setTailProbeError] = useState<string | null>(null);
   const summaryRequestRef = useRef(0);
 
   useEffect(() => {
@@ -174,6 +178,21 @@ export function App() {
     await refreshSyncStatus();
   }
 
+  async function runTailProbe() {
+    setTailProbeLoading(true);
+    setTailProbeError(null);
+    try {
+      const report = await requestSW<HistoryTailProbeReport>('PROBE_HISTORY_TAIL', {
+        maxPages: syncPageLimit.value,
+      });
+      setTailProbeReport(report);
+    } catch (e) {
+      setTailProbeError((e as Error).message);
+    } finally {
+      setTailProbeLoading(false);
+    }
+  }
+
   return (
     <div style={{ padding: '12px 0' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 12px', gap: '8px' }}>
@@ -251,6 +270,52 @@ export function App() {
           </button>
         )}
       </div>
+      <section style={{
+        margin: '8px 18px 12px',
+        padding: '10px 12px',
+        border: '1px solid rgba(0, 161, 214, 0.25)',
+        borderRadius: '8px',
+        background: 'rgba(0, 161, 214, 0.08)',
+      }}>
+        <div style={{
+          color: '#7FDBFF',
+          fontSize: '12px',
+          fontWeight: 700,
+          marginBottom: '4px',
+        }}>
+          History API tail probe
+        </div>
+        <div style={{ color: '#A0A0B0', fontSize: '10px', lineHeight: 1.5 }}>
+          Diagnostic only. Uses the current runtime login state, fetches bounded history pages, and stores no history rows.
+        </div>
+        <button
+          onClick={runTailProbe}
+          disabled={tailProbeLoading || syncInProgress.value}
+          style={{
+            marginTop: '8px',
+            background: 'rgba(0, 161, 214, 0.16)',
+            color: '#7FDBFF',
+            border: '1px solid rgba(0, 161, 214, 0.32)',
+            borderRadius: '6px',
+            cursor: tailProbeLoading || syncInProgress.value ? 'default' : 'pointer',
+            fontSize: '11px',
+            padding: '6px 8px',
+            opacity: tailProbeLoading || syncInProgress.value ? 0.7 : 1,
+          }}
+        >
+          {tailProbeLoading ? 'Probing...' : 'Probe API tail'}
+        </button>
+        {tailProbeError && (
+          <div style={{ color: '#FFB347', fontSize: '10px', lineHeight: 1.45, marginTop: '8px' }}>
+            {tailProbeError}
+          </div>
+        )}
+        {tailProbeReport && (
+          <div style={{ color: '#C8EFFF', fontSize: '10px', lineHeight: 1.55, marginTop: '8px', whiteSpace: 'pre-wrap' }}>
+            {formatTailProbeReport(tailProbeReport)}
+          </div>
+        )}
+      </section>
       <OpenDashboard />
       <CurrentVideoAssistantStatus
         context={currentVideoContext}
@@ -754,4 +819,35 @@ function formatPopupDuration(seconds: number): string {
   const minutes = Math.floor(safe / 60);
   const rest = safe % 60;
   return `${minutes}:${String(rest).padStart(2, '0')}`;
+}
+
+function formatTailProbeReport(report: HistoryTailProbeReport): string {
+  const lines = [
+    `requested=${report.requestedMaxPages ?? 'default'} pages; normalized=${report.normalizedPageLimit}; pageSize=${report.pageSize}`,
+    `fetchedPages=${report.fetchedPages}; fetchedItems=${report.fetchedItems}; stop=${report.stopReason}; reachedEnd=${String(report.reachedDeclaredEnd)}`,
+    `range=${formatProbeViewAt(report.oldestFetchedAt)} -> ${formatProbeViewAt(report.newestFetchedAt)}`,
+    `repeatedCursor=${String(report.repeatedCursorDetected)}; shortPages=${report.shortPageAnomalyCount}; emptyAnomalies=${report.emptyPageAnomalyCount}`,
+  ];
+
+  if (report.finalCursor) {
+    lines.push(`finalCursor=${formatProbeCursor(report.finalCursor)}`);
+  }
+
+  for (const page of report.pages) {
+    lines.push(
+      `p${page.pageIndex}: items=${page.itemCount}; range=${formatProbeViewAt(page.oldestViewAt)} -> ${formatProbeViewAt(page.newestViewAt)}; request=${formatProbeCursor(page.requestedCursor)}; cursor=${formatProbeCursor(page.responseCursor)}; repeated=${String(page.repeatedCursor)}; short=${String(page.shortPageAnomaly)}; empty=${String(page.emptyPage)}; end=${String(page.declaredEnd)}`,
+    );
+  }
+
+  return lines.join('\n');
+}
+
+function formatProbeCursor(cursor: HistoryTailProbeReport['finalCursor']): string {
+  if (!cursor) return 'initial';
+  return `max=${cursor.max ?? 'null'},view_at=${cursor.viewAt ?? 'null'},business=${cursor.business ?? 'null'},has_more=${cursor.hasMore == null ? 'null' : String(cursor.hasMore)}`;
+}
+
+function formatProbeViewAt(value: number | null): string {
+  if (!value) return 'n/a';
+  return new Date(value * 1000).toLocaleString('zh-CN');
 }
