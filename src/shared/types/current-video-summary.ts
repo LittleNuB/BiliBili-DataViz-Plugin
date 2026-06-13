@@ -26,7 +26,7 @@ export interface CurrentVideoSummaryAiState {
 export interface CurrentVideoSummaryResult {
   status: CurrentVideoSummaryStatus;
   sourceTier: CurrentVideoSummarySourceTier | null;
-  sourceTierLabel: 'metadata summary' | 'description summary' | null;
+  sourceTierLabel: '元数据摘要' | '简介摘要' | null;
   confidence: CurrentVideoSummaryConfidence;
   generationMode: CurrentVideoSummaryGenerationMode;
   title: string;

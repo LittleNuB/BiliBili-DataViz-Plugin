@@ -99,17 +99,17 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
   const existing = document.getElementById(CARD_ID);
   const card = existing ?? document.createElement('aside');
   card.id = CARD_ID;
-  card.setAttribute('aria-label', 'Bili-Bill local assistant status');
+  card.setAttribute('aria-label', 'Bili-Bill 本地助手状态');
   card.textContent = '';
 
   const header = document.createElement('div');
   header.className = 'bdc-assistant-title';
-  header.textContent = 'Bili-Bill local assistant';
+  header.textContent = 'Bili-Bill 本地助手';
 
   const close = document.createElement('button');
   close.className = 'bdc-assistant-close';
   close.type = 'button';
-  close.title = 'Hide';
+  close.title = '隐藏';
   close.textContent = 'x';
   close.addEventListener('click', () => card.remove());
   header.appendChild(close);
@@ -118,51 +118,51 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
   if (context.kind === 'video') {
     const summary = buildLocalCurrentVideoSummary(context, {
       aiStatus: 'not_requested',
-      aiNote: 'Page overlay shows local evidence only; AI summary is available from the popup when enabled.',
+      aiNote: '页面悬浮卡只显示本地证据；启用后可在 Popup 查看 AI 摘要。',
     });
     appendText(card, 'div', 'bdc-assistant-video', context.title ?? context.bvid);
-    appendText(card, 'div', 'bdc-assistant-tier', `${summary.sourceTierLabel} / ${summary.confidence} confidence`);
+    appendText(card, 'div', 'bdc-assistant-tier', `${summary.sourceTierLabel} / 证据强度 ${summary.confidence === 'medium' ? '中' : '低'}`);
     appendText(card, 'div', 'bdc-assistant-summary', summary.summary);
-    appendText(card, 'div', 'bdc-assistant-row', `BVID ${context.bvid} / CID ${context.cid ?? 'unknown'}`);
+    appendText(card, 'div', 'bdc-assistant-row', `BVID ${context.bvid} / CID ${context.cid ?? '未知'}`);
     appendText(
       card,
       'div',
       'bdc-assistant-row',
-      `UP ${context.authorName ?? 'unknown'}`,
+      `UP 主 ${context.authorName ?? '未知'}`,
     );
     appendText(
       card,
       'div',
       'bdc-assistant-row',
-      `Duration ${formatDuration(context.durationSeconds)} / Part ${context.currentPart.page}${context.currentPart.total ? ` of ${context.currentPart.total}` : ''}`,
+      `时长 ${formatDuration(context.durationSeconds)} / 第 ${context.currentPart.page}${context.currentPart.total ? ` / ${context.currentPart.total} P` : ' P'}`,
     );
     appendText(
       card,
       'div',
       'bdc-assistant-row bdc-assistant-muted',
-      `Sources: metadata ${context.sources.metadata}, description ${context.sources.description}, pages ${context.sources.pages}, chapters ${context.sources.chapters}`,
+      `来源：元数据 ${availabilityLabel(context.sources.metadata)}，简介 ${availabilityLabel(context.sources.description)}，分 P ${availabilityLabel(context.sources.pages)}，章节 ${availabilityLabel(context.sources.chapters)}`,
     );
     appendText(
       card,
       'div',
       'bdc-assistant-row bdc-assistant-muted',
-      `Transcript ${context.sources.transcript}; content text ${context.sources.contentText}`,
+      `字幕 ${availabilityLabel(context.sources.transcript)}；正文文本 ${availabilityLabel(context.sources.contentText)}`,
     );
     appendText(
       card,
       'div',
       'bdc-assistant-warning',
       context.sources.description === 'available'
-        ? 'Description is available, but transcript and full content text are unavailable. This is not a full video summary.'
-        : 'No transcript, description, or full content text source is available. This is not a full video summary.',
+        ? '简介可用，但字幕和完整正文文本不可用；这不是完整视频总结。'
+        : '当前没有可用字幕、简介或完整正文文本；这不是完整视频总结。',
     );
   } else {
-    appendText(card, 'div', 'bdc-assistant-video', 'No current video context');
+    appendText(card, 'div', 'bdc-assistant-video', '没有当前视频上下文');
     appendText(
       card,
       'div',
       'bdc-assistant-row bdc-assistant-muted',
-      'Open a Bilibili video page to use the local current-video assistant context.',
+      '请打开 B 站视频页后再使用当前视频助手上下文。',
     );
   }
 
@@ -171,7 +171,7 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
   dashboard.href = chrome.runtime.getURL('dashboard/index.html');
   dashboard.target = '_blank';
   dashboard.rel = 'noopener noreferrer';
-  dashboard.textContent = 'Open dashboard';
+  dashboard.textContent = '打开完整面板';
   card.appendChild(dashboard);
 
   if (!existing) {
@@ -195,8 +195,21 @@ function injectStyle(): void {
 }
 
 function formatDuration(seconds: number | null): string {
-  if (!seconds) return 'unknown';
+  if (!seconds) return '未知';
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
   return `${minutes}:${String(rest).padStart(2, '0')}`;
+}
+
+function availabilityLabel(value: string): string {
+  switch (value) {
+    case 'available':
+      return '可用';
+    case 'unavailable':
+      return '不可用';
+    case 'unknown':
+      return '未知';
+    default:
+      return '未知';
+  }
 }

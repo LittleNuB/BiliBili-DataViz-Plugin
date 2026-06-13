@@ -18,4 +18,4 @@ if (root) {
   render(<App />, root);
 }
 
-console.log('[Bili-Bill] Dashboard loaded');
+console.log('[Bili-Bill] 面板已加载');

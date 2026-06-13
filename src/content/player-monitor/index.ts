@@ -219,15 +219,15 @@ function showReturnToast(seconds: number | null, url?: string): void {
 
   const label = document.createElement('div');
   label.textContent = seconds === null
-    ? 'Manual jump complete. You can return to the previous page.'
-    : `Manual jump complete. Previous position: ${formatDuration(seconds)}.`;
+    ? '手动跳转完成。你可以返回上一页。'
+    : `手动跳转完成。上一播放位置：${formatDuration(seconds)}。`;
   toast.appendChild(label);
 
   const actions = document.createElement('div');
   actions.style.cssText = 'display:flex;gap:6px;margin-top:8px';
   const back = document.createElement('button');
   back.type = 'button';
-  back.textContent = 'Return';
+  back.textContent = '返回';
   back.style.cssText = 'flex:1;border:0;border-radius:6px;background:#ffb347;color:#1a1a2e;font-weight:700;font-size:12px;padding:6px 8px;cursor:pointer';
   back.addEventListener('click', async () => {
     if (url) {

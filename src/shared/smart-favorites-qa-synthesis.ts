@@ -159,7 +159,7 @@ export async function synthesizeSmartFavoriteQaAnswerFromLocal(
       ...local,
       synthesis: {
         status: 'local_fallback',
-        reason: 'AI synthesis was not requested because local retrieval returned no cited videos.',
+        reason: '本地检索没有返回可引用视频，因此没有请求 AI 综合。',
         model,
         generatedAt: now,
       },
@@ -171,7 +171,7 @@ export async function synthesizeSmartFavoriteQaAnswerFromLocal(
       ...local,
       synthesis: {
         status: 'disabled',
-        reason: 'Smart Favorites Q&A AI synthesis is disabled; local cited retrieval evidence is shown.',
+        reason: '收藏问答 AI 综合未启用，当前显示本地引用证据。',
         model,
         generatedAt: now,
       },
@@ -183,7 +183,7 @@ export async function synthesizeSmartFavoriteQaAnswerFromLocal(
       ...local,
       synthesis: {
         status: 'not_configured',
-        reason: 'AI synthesis is enabled but no API key is configured; local cited retrieval evidence is shown.',
+        reason: '收藏问答 AI 综合已启用但没有配置 API Key，当前显示本地引用证据。',
         model,
         generatedAt: now,
       },
@@ -200,7 +200,7 @@ export async function synthesizeSmartFavoriteQaAnswerFromLocal(
         ...local,
         synthesis: {
           status: 'rejected',
-          reason: guarded.reason ?? 'AI output violated Smart Favorites citation boundaries.',
+          reason: guarded.reason ?? 'AI 输出没有遵守智能收藏引用边界。',
           model,
           generatedAt: now,
           citedVideoRefs: guarded.citedVideoRefs,
@@ -237,7 +237,7 @@ export function buildSmartFavoriteQaAiMessages(payload: SmartFavoriteQaAiPayload
     {
       role: 'system',
       content: [
-        'You are Bili-Bill Smart Favorites Q&A synthesis. Return JSON only.',
+        'You are Bili-Bill smart favorite question-answer synthesis. Return JSON only.',
         'Local retrieval has already selected citedVideos. You must not search, add, infer, or mention videos outside citedVideos.',
         'Use only the question, citedVideos evidence, sourceFields, sync/index coverage, availableSources, and safetyRules payload.',
         'Do not claim transcript, comments, danmaku, audio, visual, or full video body evidence.',

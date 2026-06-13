@@ -28,7 +28,7 @@ export function AppShell({
       <main className="bb-workspace">
         <header className="bb-topbar">
           <div className="bb-title-block">
-            <span>Dashboard / {activeItem.label}</span>
+            <span>面板 / {activeItem.label}</span>
             <h1>Bili-Bill</h1>
           </div>
           <div className="bb-topbar-tools">

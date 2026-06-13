@@ -20,13 +20,13 @@ test('builds metadata-only summary without treating missing description as conte
   }));
 
   assert.equal(summary.status, 'ready');
-  assert.equal(summary.sourceTierLabel, 'metadata summary');
+  assert.equal(summary.sourceTierLabel, '元数据摘要');
   assert.equal(summary.confidence, 'low');
-  assert.match(summary.summary, /^Metadata summary:/);
-  assert.ok(summary.missingSources.includes('description'));
-  assert.ok(summary.missingSources.includes('transcript'));
-  assert.ok(summary.missingSources.includes('content text'));
-  assert.ok(summary.limitations.some(item => item.includes('not a full video summary')));
+  assert.match(summary.summary, /^仅基于可见元数据/);
+  assert.ok(summary.missingSources.includes('简介'));
+  assert.ok(summary.missingSources.includes('字幕'));
+  assert.ok(summary.missingSources.includes('正文文本'));
+  assert.ok(summary.limitations.some(item => item.includes('不是完整视频总结')));
 });
 
 test('builds description summary while keeping contentText unavailable', () => {
@@ -36,11 +36,11 @@ test('builds description summary while keeping contentText unavailable', () => {
   });
   const summary = buildLocalCurrentVideoSummary(context);
 
-  assert.equal(summary.sourceTierLabel, 'description summary');
+  assert.equal(summary.sourceTierLabel, '简介摘要');
   assert.equal(summary.confidence, 'medium');
   assert.ok(summary.evidence.some(item => item.source === 'description'));
   assert.equal(context.sources.contentText, 'unavailable');
-  assert.ok(summary.limitations.some(item => item.includes('description is not treated as body content')));
+  assert.ok(summary.limitations.some(item => item.includes('简介不会被当作正文内容')));
 });
 
 test('marks AI disabled fallback without changing source tier', () => {
@@ -51,7 +51,7 @@ test('marks AI disabled fallback without changing source tier', () => {
 
   assert.equal(summary.generationMode, 'local_fallback');
   assert.equal(summary.ai.status, 'disabled');
-  assert.equal(summary.sourceTierLabel, 'description summary');
+  assert.equal(summary.sourceTierLabel, '简介摘要');
 });
 
 test('marks AI not configured fallback', () => {

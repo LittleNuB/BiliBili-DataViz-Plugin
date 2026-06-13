@@ -33,7 +33,7 @@ import type { VideoKnowledgeJumpResponse, VideoKnowledgeResult } from './video-k
 import type { HistoryTailProbeReport } from './history-tail-probe';
 import type { HistorySyncCursorSnapshot, HistorySyncMode } from './history-sync';
 
-// Popup / Dashboard → Service Worker
+// 弹窗 / 面板 → Service Worker
 export type RequestAction =
   | 'GET_QUICK_STATS'
   | 'GET_DASHBOARD_DATA'

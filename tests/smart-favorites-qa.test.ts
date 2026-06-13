@@ -39,7 +39,7 @@ test('returns cited videos with source fields and evidence for local matches', (
   assert.equal(response.citedVideos[0].link, `https://www.bilibili.com/video/${item.bvid}`);
   assert.ok(response.citedVideos[0].sourceFields.includes('title'));
   assert.ok(response.citedVideos[0].sourceFields.includes('smart.keywords'));
-  assert.match(response.citedVideos[0].evidence, /Matched/);
+  assert.match(response.citedVideos[0].evidence, /本地词项命中/);
 });
 
 test('returns no_result without inventing citations', () => {
@@ -55,7 +55,7 @@ test('returns no_result without inventing citations', () => {
   assert.equal(response.answerType, 'no_result');
   assert.equal(response.status.kind, 'no_result');
   assert.equal(response.citedVideos.length, 0);
-  assert.match(response.evidenceSummary, /No local metadata/);
+  assert.match(response.evidenceSummary, /没有本地元数据/);
 });
 
 test('returns low-confidence candidates when evidence is weak', () => {
@@ -96,7 +96,7 @@ test('marks answers when the Smart Favorites index is stale', () => {
   assert.equal(response.status.indexCoverage.bilibiliReportedItems, 1);
   assert.equal(response.status.indexCoverage.storedItems, 1);
   assert.equal(response.status.indexCoverage.staleItems, 1);
-  assert.match(response.status.notes.join(' '), /stale or partial/);
+  assert.match(response.status.notes.join(' '), /可能过期或不完整/);
 });
 
 test('scopes answers to currently synced data when sync diagnostics are incomplete', () => {
@@ -114,7 +114,7 @@ test('scopes answers to currently synced data when sync diagnostics are incomple
   assert.equal(response.status.syncCoverage.complete, false);
   assert.equal(response.status.syncCoverage.problemFolders, 1);
   assert.match(response.answer, /当前已同步收藏中/);
-  assert.match(response.status.notes.join(' '), /Index coverage: Bilibili reported 20, locally stored 1, indexed 0, failed 0, pending 1/);
+  assert.match(response.status.notes.join(' '), /索引覆盖：B站报告 20 条，本地保存 1 条，已索引 0 条，失败 0 条，待索引 1 条/);
 });
 
 test('reports index coverage counts for Bilibili reported, locally stored, indexed, failed, and pending items', () => {
@@ -138,7 +138,7 @@ test('reports index coverage counts for Bilibili reported, locally stored, index
   assert.equal(response.status.indexCoverage.indexedItems, 1);
   assert.equal(response.status.indexCoverage.failedItems, 1);
   assert.equal(response.status.indexCoverage.pendingItems, 1);
-  assert.match(response.status.notes.join(' '), /indexed 1, failed 1, pending 1/);
+  assert.match(response.status.notes.join(' '), /已索引 1 条，失败 1 条，待索引 1 条/);
 });
 
 test('generates optional AI synthesis from cited videos only', async () => {
@@ -254,7 +254,7 @@ test('rejects AI synthesis that cites outside videos or titles', async () => {
   assert.equal(outsideTitle.citedVideos[0].bvid, item.bvid);
 });
 
-test('audits Smart Favorites Q&A AI payload allowlist and rejects sensitive fields', () => {
+test('audits smart favorite QA AI payload allowlist and rejects sensitive fields', () => {
   const item = makeFavoriteItem(1, {
     title: 'Kursk tank battle documentary',
     authorName: 'Archive UP',
@@ -298,7 +298,7 @@ test('audits Smart Favorites Q&A AI payload allowlist and rejects sensitive fiel
   assert.match(report, /C:\\Users\\LittleNub\\Desktop\\Key\.txt/);
 });
 
-test('redacts incomplete sync diagnostic folder details from Smart Favorites Q&A AI payload', () => {
+test('redacts incomplete sync diagnostic folder details from smart favorite QA AI payload', () => {
   const item = makeFavoriteItem(1, { title: 'Kursk tank battle documentary' });
   const diagnostic = makeIncompleteDiagnostic({
     mediaId: 987654,
@@ -314,7 +314,7 @@ test('redacts incomplete sync diagnostic folder details from Smart Favorites Q&A
   const payload = buildSmartFavoriteQaAiPayload(local);
   const rawPayload = JSON.stringify(payload);
 
-  assert.match(local.status.syncCoverage.note ?? '', /FAVORITE_SYNC_INCOMPLETE/);
+  assert.match(local.status.syncCoverage.note ?? '', /收藏同步可能不完整/);
   assert.match(local.status.syncCoverage.note ?? '', /Private research folder/);
   assert.equal(payload.syncCoverage.complete, false);
   assert.equal(payload.syncCoverage.diagnosticsCount, 1);
@@ -325,7 +325,7 @@ test('redacts incomplete sync diagnostic folder details from Smart Favorites Q&A
   assert.equal('storedItems' in payload.indexCoverage, false);
   assert.doesNotMatch(rawPayload, /Private research folder/);
   assert.doesNotMatch(rawPayload, /987654/);
-  assert.doesNotMatch(rawPayload, /FAVORITE_SYNC_INCOMPLETE/);
+  assert.doesNotMatch(rawPayload, /收藏同步可能不完整/);
   assert.doesNotMatch(rawPayload, /network failed for folder sample/);
   assert.equal(auditAssistantPayload(payload, smartFavoriteQaPayloadContract).passed, true);
   assertAssistantPayloadAudit(payload, smartFavoriteQaPayloadContract);
