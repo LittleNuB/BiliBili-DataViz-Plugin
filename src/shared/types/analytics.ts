@@ -169,16 +169,37 @@ export interface BehaviorMetrics {
   totalPauses: number;
 }
 
-export interface WeeklyTip {
-  category: 'completion' | 'diversity' | 'creator' | 'habit';
+export type ExperimentBlindBoxId =
+  | 'variety'
+  | 'hidden_favorite'
+  | 'revive_interest'
+  | 'random_explore';
+
+export type ExperimentBlindBoxState = 'ready' | 'empty';
+
+export interface ExperimentVideoCandidate {
+  bvid: string;
+  avid?: number;
   title: string;
-  description: string;
+  authorName: string;
+  cover: string;
+  url: string;
 }
 
-export interface BlindBoxItem {
-  bvid?: string;
-  mid?: number;
-  name: string;
+export interface ExperimentBlindBox {
+  id: ExperimentBlindBoxId;
+  title: string;
+  teaser: string;
+  source: string;
   reason: string;
-  type: 'video' | 'creator' | 'category';
+  evidence: string[];
+  state: ExperimentBlindBoxState;
+  video?: ExperimentVideoCandidate;
+  emptyTitle?: string;
+  emptyDescription?: string;
+}
+
+export interface ExperimentData {
+  blindBoxes: ExperimentBlindBox[];
+  generatedAt: number;
 }
