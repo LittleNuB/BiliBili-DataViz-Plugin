@@ -72,9 +72,9 @@ export function App() {
       setCurrentVideoSummary({
         ...loadingCurrentVideoSummary(),
         status: 'cancelled',
-        title: 'Current video summary unavailable',
+        title: '当前视频摘要不可用',
         summary: (e as Error).message,
-        limitations: ['The local summary request failed before an AI result was accepted.'],
+        limitations: ['在采用 AI 结果前，本地摘要请求已经失败。'],
       });
     } finally {
       if (summaryRequestRef.current === requestId) setSummaryLoading(false);
@@ -90,7 +90,7 @@ export function App() {
     } catch (e) {
       setVideoKnowledge({
         status: 'no_context',
-        title: 'Video knowledge unavailable',
+        title: '视频知识节点不可用',
         generatedAt: Date.now(),
         sourceState: {
           metadata: false,
@@ -109,7 +109,7 @@ export function App() {
 
   async function confirmVideoKnowledgeJump(node: VideoKnowledgeNode) {
     if (!node.jumpAction) return;
-    setJumpStatus('Confirming manual jump...');
+    setJumpStatus('正在确认手动跳转...');
     try {
       const result = await requestSW<VideoKnowledgeJumpResponse>('REQUEST_VIDEO_KNOWLEDGE_JUMP', {
         nodeId: node.id,
@@ -283,10 +283,10 @@ export function App() {
           fontWeight: 700,
           marginBottom: '4px',
         }}>
-          History API tail probe
+          历史接口尾页诊断
         </div>
         <div style={{ color: '#A0A0B0', fontSize: '10px', lineHeight: 1.5 }}>
-          Diagnostic only. Uses the current runtime login state, fetches bounded history pages, and stores no history rows.
+          仅用于诊断。使用当前运行时登录状态，有限拉取历史页，不保存历史明细。
         </div>
         <button
           onClick={runTailProbe}
@@ -303,7 +303,7 @@ export function App() {
             opacity: tailProbeLoading || syncInProgress.value ? 0.7 : 1,
           }}
         >
-          {tailProbeLoading ? 'Probing...' : 'Probe API tail'}
+          {tailProbeLoading ? '诊断中...' : '诊断历史尾页'}
         </button>
         {tailProbeError && (
           <div style={{ color: '#FFB347', fontSize: '10px', lineHeight: 1.45, marginTop: '8px' }}>
@@ -540,7 +540,7 @@ function CurrentVideoAssistantStatus({
         fontWeight: 700,
         marginBottom: '6px',
       }}>
-        Current video assistant
+        当前视频助手
       </div>
       {isVideo ? (
         <>
@@ -548,9 +548,9 @@ function CurrentVideoAssistantStatus({
             {context.title ?? context.bvid}
           </div>
           <div style={{ color: '#A0A0B0', fontSize: '10px', lineHeight: 1.5, marginTop: '4px' }}>
-            BVID {context.bvid} / CID {context.cid ?? 'unknown'}
+            BVID {context.bvid} / CID {context.cid ?? '未知'}
             <br />
-            Description {context.sources.description}; transcript {context.sources.transcript}; content text {context.sources.contentText}
+            简介 {availabilityLabel(context.sources.description)}；字幕 {availabilityLabel(context.sources.transcript)}；正文文本 {availabilityLabel(context.sources.contentText)}
           </div>
           {summary && (
             <div style={{
@@ -569,10 +569,10 @@ function CurrentVideoAssistantStatus({
                   fontSize: '10px',
                   fontWeight: 700,
                 }}>
-                  {summary.sourceTierLabel ?? summary.status}
+                  {summary.sourceTierLabel ?? summaryStatusLabel(summary.status)}
                 </span>
                 <span style={{ color: '#A0A0B0', fontSize: '10px' }}>
-                  {summary.generationMode === 'ai' ? 'AI' : 'local'} / {summary.confidence}
+                  {summary.generationMode === 'ai' ? 'AI 生成' : '本地结果'} / 证据强度 {summaryConfidenceLabel(summary.confidence)}
                 </span>
               </div>
               <p style={{
@@ -592,7 +592,7 @@ function CurrentVideoAssistantStatus({
                 {summary.limitations[0]}
               </div>
               <div style={{ color: '#9090A0', fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
-                AI status: {summary.ai.status}. {summary.ai.note}
+                AI 状态：{aiStatusLabel(summary.ai.status)}。{summary.ai.note}
               </div>
             </div>
           )}
@@ -602,7 +602,7 @@ function CurrentVideoAssistantStatus({
             fontSize: '10px',
             lineHeight: 1.45,
           }}>
-            No transcript is available. This assistant does not claim a full-video summary.
+            当前没有可用字幕；本助手不会声称这是完整视频总结。
           </div>
           <VideoKnowledgePanel
             knowledge={knowledge}
@@ -628,7 +628,7 @@ function CurrentVideoAssistantStatus({
                 opacity: loading ? 0.7 : 1,
               }}
             >
-              {loading ? 'Loading...' : 'Refresh summary'}
+              {loading ? '加载中...' : '刷新摘要'}
             </button>
             {loading && (
               <button
@@ -643,14 +643,14 @@ function CurrentVideoAssistantStatus({
                   padding: '6px 8px',
                 }}
               >
-                Cancel
+                取消
               </button>
             )}
           </div>
         </>
       ) : (
         <div style={{ color: '#A0A0B0', fontSize: '11px', lineHeight: 1.45 }}>
-          No current video context. Open a Bilibili video page to see metadata and source availability.
+          没有当前视频上下文。请打开 B 站视频页后再查看元数据和来源可用性。
           <VideoKnowledgePanel
             knowledge={knowledge}
             previewNode={previewNode}
@@ -691,7 +691,7 @@ function VideoKnowledgePanel({
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
         <span style={{ color: '#FFD6E2', fontSize: '10px', fontWeight: 700 }}>
-          Video knowledge v0
+          视频知识节点 v0
         </span>
         <button
           onClick={onRefresh}
@@ -705,17 +705,17 @@ function VideoKnowledgePanel({
             padding: '3px 6px',
           }}
         >
-          Refresh
+          刷新
         </button>
       </div>
       <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
-        No transcript. Nodes use only metadata, description, pages, or chapters; no inferred timestamps.
+        当前没有字幕。节点只使用元数据、简介、分 P 或章节；不会生成推测时间戳。
       </div>
       {nodes.length === 0 ? (
         <div style={{ color: '#A0A0B0', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
           {knowledge?.status === 'no_context'
-            ? 'No current video context is available for knowledge nodes.'
-            : 'No safe key-node candidates are available.'}
+            ? '当前没有可用于知识节点的视频上下文。'
+            : '当前没有足够安全的关键节点候选。'}
         </div>
       ) : (
         nodes.slice(0, 5).map(node => (
@@ -728,8 +728,8 @@ function VideoKnowledgePanel({
               {node.title}
             </div>
             <div style={{ color: '#A0A0B0', fontSize: '9px', lineHeight: 1.45, marginTop: '2px' }}>
-              source {node.sourceLabel} / confidence {Math.round(node.confidence * 100)}%
-              {node.timestamp === null ? ' / no timestamp' : ` / ${formatPopupDuration(node.timestamp)}`}
+              来源 {node.sourceLabel} / 证据强度 {Math.round(node.confidence * 100)}%
+              {node.timestamp === null ? ' / 无时间点' : ` / ${formatPopupDuration(node.timestamp)}`}
             </div>
             <div style={{ color: '#C8C8D8', fontSize: '9px', lineHeight: 1.4, marginTop: '2px' }}>
               {node.reason}
@@ -748,7 +748,7 @@ function VideoKnowledgePanel({
                   padding: '4px 7px',
                 }}
               >
-                Preview jump
+                预览跳转
               </button>
             )}
           </div>
@@ -763,13 +763,13 @@ function VideoKnowledgePanel({
           background: 'rgba(255,179,71,0.08)',
         }}>
           <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45, fontWeight: 700 }}>
-            Manual jump preview
+            手动跳转预览
           </div>
           <div style={{ color: '#E8E8F2', fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
             {previewNode.jumpAction.previewLabel}
           </div>
           <div style={{ color: '#A0A0B0', fontSize: '9px', lineHeight: 1.45, marginTop: '2px' }}>
-            Source {previewNode.sourceLabel}. Confirmation is required; auto-jump is disabled.
+            来源：{previewNode.sourceLabel}。必须确认后才会跳转；自动跳转默认关闭。
           </div>
           <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
             <button
@@ -786,7 +786,7 @@ function VideoKnowledgePanel({
                 padding: '5px 7px',
               }}
             >
-              Confirm jump
+              确认跳转
             </button>
             <button
               onClick={() => onPreview(null)}
@@ -800,7 +800,7 @@ function VideoKnowledgePanel({
                 padding: '5px 7px',
               }}
             >
-              Cancel
+              取消
             </button>
           </div>
         </div>
@@ -814,6 +814,61 @@ function VideoKnowledgePanel({
   );
 }
 
+function availabilityLabel(value: string): string {
+  switch (value) {
+    case 'available':
+      return '可用';
+    case 'unavailable':
+      return '不可用';
+    case 'unknown':
+      return '未知';
+    default:
+      return '未知';
+  }
+}
+
+function summaryStatusLabel(status: CurrentVideoSummaryResult['status']): string {
+  switch (status) {
+    case 'ready':
+      return '可用';
+    case 'no_context':
+      return '无上下文';
+    case 'loading':
+      return '加载中';
+    case 'cancelled':
+      return '已取消';
+    default:
+      return '未知状态';
+  }
+}
+
+function summaryConfidenceLabel(confidence: CurrentVideoSummaryResult['confidence']): string {
+  return confidence === 'medium' ? '中' : '低';
+}
+
+function aiStatusLabel(status: CurrentVideoSummaryResult['ai']['status']): string {
+  switch (status) {
+    case 'not_requested':
+      return '未请求';
+    case 'disabled':
+      return '未启用';
+    case 'not_configured':
+      return '未配置';
+    case 'generated':
+      return '已生成';
+    case 'failed':
+      return '失败';
+    case 'low_confidence':
+      return '低置信';
+    default:
+      return '未知状态';
+  }
+}
+
+function formatBoolean(value: boolean): string {
+  return value ? '是' : '否';
+}
+
 function formatPopupDuration(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds));
   const minutes = Math.floor(safe / 60);
@@ -823,19 +878,19 @@ function formatPopupDuration(seconds: number): string {
 
 function formatTailProbeReport(report: HistoryTailProbeReport): string {
   const lines = [
-    `requested=${report.requestedMaxPages ?? 'default'} pages; normalized=${report.normalizedPageLimit}; pageSize=${report.pageSize}`,
-    `fetchedPages=${report.fetchedPages}; fetchedItems=${report.fetchedItems}; stop=${report.stopReason}; reachedEnd=${String(report.reachedDeclaredEnd)}`,
-    `range=${formatProbeViewAt(report.oldestFetchedAt)} -> ${formatProbeViewAt(report.newestFetchedAt)}`,
-    `repeatedCursor=${String(report.repeatedCursorDetected)}; shortPages=${report.shortPageAnomalyCount}; emptyAnomalies=${report.emptyPageAnomalyCount}`,
+    `请求页数=${report.requestedMaxPages ?? '默认'}；规范化页数=${report.normalizedPageLimit}；每页=${report.pageSize}`,
+    `已获取页数=${report.fetchedPages}；已获取条目=${report.fetchedItems}；停止原因=${report.stopReason}；到达末页=${formatBoolean(report.reachedDeclaredEnd)}`,
+    `时间范围=${formatProbeViewAt(report.oldestFetchedAt)} -> ${formatProbeViewAt(report.newestFetchedAt)}`,
+    `重复游标=${formatBoolean(report.repeatedCursorDetected)}；短页=${report.shortPageAnomalyCount}；空页异常=${report.emptyPageAnomalyCount}`,
   ];
 
   if (report.finalCursor) {
-    lines.push(`finalCursor=${formatProbeCursor(report.finalCursor)}`);
+    lines.push(`最终游标=${formatProbeCursor(report.finalCursor)}`);
   }
 
   for (const page of report.pages) {
     lines.push(
-      `p${page.pageIndex}: items=${page.itemCount}; range=${formatProbeViewAt(page.oldestViewAt)} -> ${formatProbeViewAt(page.newestViewAt)}; request=${formatProbeCursor(page.requestedCursor)}; cursor=${formatProbeCursor(page.responseCursor)}; repeated=${String(page.repeatedCursor)}; short=${String(page.shortPageAnomaly)}; empty=${String(page.emptyPage)}; end=${String(page.declaredEnd)}`,
+      `第 ${page.pageIndex} 页：条目=${page.itemCount}；范围=${formatProbeViewAt(page.oldestViewAt)} -> ${formatProbeViewAt(page.newestViewAt)}；请求游标=${formatProbeCursor(page.requestedCursor)}；响应游标=${formatProbeCursor(page.responseCursor)}；重复=${formatBoolean(page.repeatedCursor)}；短页=${formatBoolean(page.shortPageAnomaly)}；空页=${formatBoolean(page.emptyPage)}；末页=${formatBoolean(page.declaredEnd)}`,
     );
   }
 
@@ -843,11 +898,11 @@ function formatTailProbeReport(report: HistoryTailProbeReport): string {
 }
 
 function formatProbeCursor(cursor: HistoryTailProbeReport['finalCursor']): string {
-  if (!cursor) return 'initial';
-  return `max=${cursor.max ?? 'null'},view_at=${cursor.viewAt ?? 'null'},business=${cursor.business ?? 'null'},has_more=${cursor.hasMore == null ? 'null' : String(cursor.hasMore)}`;
+  if (!cursor) return '初始';
+  return `max=${cursor.max ?? '空'},view_at=${cursor.viewAt ?? '空'},business=${cursor.business ?? '空'},has_more=${cursor.hasMore == null ? '空' : formatBoolean(cursor.hasMore)}`;
 }
 
 function formatProbeViewAt(value: number | null): string {
-  if (!value) return 'n/a';
+  if (!value) return '无';
   return new Date(value * 1000).toLocaleString('zh-CN');
 }

@@ -14,11 +14,11 @@ test('builds metadata-only node without transcript or fabricated timestamp', () 
   assert.equal(result.sourceState.transcript, false);
   assert.equal(result.nodes.length, 1);
   assert.equal(result.nodes[0].source, 'metadata');
-  assert.equal(result.nodes[0].sourceLabel, 'metadata');
+  assert.equal(result.nodes[0].sourceLabel, '元数据');
   assert.equal(result.nodes[0].timestamp, null);
   assert.equal(result.nodes[0].jumpAction, null);
   assert.ok(result.nodes[0].confidence > 0);
-  assert.ok(result.limitations.some(item => item.includes('do not represent full-video understanding')));
+  assert.ok(result.limitations.some(item => item.includes('不代表完整视频理解')));
 });
 
 test('builds description helper without jump target', () => {
@@ -32,7 +32,7 @@ test('builds description helper without jump target', () => {
   assert.ok(description);
   assert.equal(description.timestamp, null);
   assert.equal(description.jumpAction, null);
-  assert.equal(description.sourceLabel, 'description');
+  assert.equal(description.sourceLabel, '简介');
   assert.ok(description.safetyFlags.includes('description_only'));
   assert.ok(description.evidence?.textSpan?.includes('visible description'));
 });
@@ -54,14 +54,14 @@ test('builds page and chapter nodes with confirmed manual jump previews', () => 
   const chapterNode = result.nodes.find(node => node.source === 'chapter' && node.timestamp === 45);
 
   assert.ok(pageNode);
-  assert.equal(pageNode.sourceLabel, 'page');
+  assert.equal(pageNode.sourceLabel, '分 P');
   assert.equal(pageNode.timestamp, 0);
   assert.equal(pageNode.jumpAction?.type, 'page');
   assert.equal(pageNode.jumpAction?.requiresConfirmation, true);
   assert.ok(pageNode.safetyFlags.includes('manual_confirm_required'));
 
   assert.ok(chapterNode);
-  assert.equal(chapterNode.sourceLabel, 'chapter');
+  assert.equal(chapterNode.sourceLabel, '章节');
   assert.equal(chapterNode.jumpAction?.type, 'seek');
   assert.equal(chapterNode.jumpAction?.targetSeconds, 45);
   assert.equal(chapterNode.jumpAction?.requiresConfirmation, true);
@@ -93,7 +93,7 @@ test('returns no-context fallback with no nodes', () => {
   assert.equal(result.status, 'no_context');
   assert.equal(result.nodes.length, 0);
   assert.equal(result.sourceState.metadata, false);
-  assert.ok(result.limitations.some(item => item.includes('Open a Bilibili video page')));
+  assert.ok(result.limitations.some(item => item.includes('打开一个 B 站视频页')));
 });
 
 function videoContext(options: {

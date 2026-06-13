@@ -124,9 +124,9 @@ export function buildSmartFavoriteQaResponse(input: SmartFavoriteQaInput): Smart
     return {
       answerType: 'no_result',
       query,
-      answer: 'Enter a question to search locally synced favorites.',
+      answer: '请输入问题后再搜索当前已同步收藏。',
       confidence: 'low',
-      evidenceSummary: 'No query was provided.',
+      evidenceSummary: '还没有提供可检索的问题。',
       status,
       citedVideos: [],
     };
@@ -146,16 +146,16 @@ export function buildSmartFavoriteQaResponse(input: SmartFavoriteQaInput): Smart
       answerType: asksForUnsupportedContent ? 'insufficient_evidence' : 'no_result',
       query,
       answer: syncCoverage.complete
-        ? 'No matching favorite was found in the locally synced favorites.'
+        ? '在本地已同步收藏中，未找到匹配的收藏。'
         : '当前已同步收藏中，未找到匹配的收藏。',
       confidence: 'low',
       evidenceSummary: asksForUnsupportedContent
-        ? 'This local slice can only use favorite metadata and Smart Favorites index fields; transcript, comments, and video body text are not available.'
-        : 'No local metadata or Smart Favorites index field matched the question.',
+        ? '当前收藏问答只能使用收藏元数据和智能收藏索引字段；字幕、评论、弹幕和视频正文不可用。'
+        : '没有本地元数据或智能收藏索引字段命中这个问题。',
       status: asksForUnsupportedContent
         ? buildStatus('insufficient_evidence', [
           ...notes,
-          'Transcript, comments, danmaku, and full video body evidence are not available for Smart Favorites Q&A.',
+          '收藏问答当前没有字幕、评论、弹幕或完整视频正文证据。',
         ], syncCoverage, indexCoverage)
         : status,
       citedVideos: [],
@@ -172,24 +172,24 @@ export function buildSmartFavoriteQaResponse(input: SmartFavoriteQaInput): Smart
     indexCoverage,
     asksForUnsupportedContent,
   });
-  const scopedPrefix = syncCoverage.complete ? 'In locally synced favorites' : '当前已同步收藏中';
+  const scopedPrefix = syncCoverage.complete ? '在本地已同步收藏中' : '在当前已同步收藏中';
   const answer = answerType === 'candidate_list'
-    ? `${scopedPrefix}, there is not enough evidence for a firm answer. The closest cited candidates are listed below.`
-    : `${scopedPrefix}, the strongest cited matches are listed below.`;
+    ? `${scopedPrefix}，证据还不足以给出确定答案；下方列出最接近的引用候选。`
+    : `${scopedPrefix}，下方是最有证据支持的引用匹配。`;
   const evidenceSummary = summarizeEvidence(citedVideos, indexCoverage);
 
   return {
     answerType: asksForUnsupportedContent ? 'insufficient_evidence' : answerType,
     query,
     answer: asksForUnsupportedContent
-      ? `${scopedPrefix}, these are only metadata/index candidates. This slice cannot answer transcript or full-video content questions.`
+      ? `${scopedPrefix}，这些只是元数据或索引候选；当前切片不能回答字幕或完整视频正文问题。`
       : answer,
     confidence,
     evidenceSummary,
     status: buildStatus(statusKind, asksForUnsupportedContent
       ? [
         ...notes,
-        'Only favorite metadata, folder/path, UP, category/tags, aliases, keywords, summaries, and path fields were used.',
+        '本次只使用收藏元数据、收藏夹/路径、UP、分区/标签、别名、关键词、摘要和分类路径字段。',
       ]
       : notes, syncCoverage, indexCoverage),
     citedVideos,
@@ -259,17 +259,17 @@ function scoreFavoriteForQuestion(
 
 function buildSearchableFields(item: FavoriteItem, smart: SmartFavoriteIndex | undefined): SearchableField[] {
   return [
-    { field: 'bvid', label: 'BVID', value: item.bvid, weight: 60, reason: 'BVID match' },
-    { field: 'title', label: 'Title', value: item.title, weight: 28, reason: 'Title match' },
-    { field: 'authorName', label: 'UP', value: item.authorName, weight: 22, reason: 'UP match' },
-    { field: 'smart.path', label: 'Smart path', value: (smart?.path ?? []).join(' / '), weight: 20, reason: 'Smart path match' },
-    { field: 'smart.keywords', label: 'Smart keywords', value: (smart?.keywords ?? []).join(' '), weight: 18, reason: 'Smart keyword match' },
-    { field: 'smart.aliases', label: 'Smart aliases', value: (smart?.aliases ?? []).join(' '), weight: 18, reason: 'Smart alias match' },
-    { field: 'smart.summary', label: 'Smart summary', value: smart?.summary ?? '', weight: 14, reason: 'Smart summary match' },
-    { field: 'folderTitle', label: 'Favorite folder', value: item.folderTitle, weight: 12, reason: 'Folder match' },
-    { field: 'tagName', label: 'Category', value: item.tagName, weight: 10, reason: 'Category match' },
-    { field: 'tags', label: 'Tags', value: (item.tags ?? []).join(' '), weight: 10, reason: 'Tag match' },
-    { field: 'intro', label: 'Intro', value: item.intro, weight: 8, reason: 'Intro match' },
+    { field: 'bvid', label: 'BVID', value: item.bvid, weight: 60, reason: 'BVID 命中' },
+    { field: 'title', label: '标题', value: item.title, weight: 28, reason: '标题命中' },
+    { field: 'authorName', label: 'UP 主', value: item.authorName, weight: 22, reason: 'UP 主命中' },
+    { field: 'smart.path', label: '智能分类路径', value: (smart?.path ?? []).join(' / '), weight: 20, reason: '智能分类路径命中' },
+    { field: 'smart.keywords', label: '智能关键词', value: (smart?.keywords ?? []).join(' '), weight: 18, reason: '智能关键词命中' },
+    { field: 'smart.aliases', label: '智能别名', value: (smart?.aliases ?? []).join(' '), weight: 18, reason: '智能别名命中' },
+    { field: 'smart.summary', label: '智能摘要', value: smart?.summary ?? '', weight: 14, reason: '智能摘要命中' },
+    { field: 'folderTitle', label: '收藏夹', value: item.folderTitle, weight: 12, reason: '收藏夹命中' },
+    { field: 'tagName', label: '分区', value: item.tagName, weight: 10, reason: '分区命中' },
+    { field: 'tags', label: '标签', value: (item.tags ?? []).join(' '), weight: 10, reason: '标签命中' },
+    { field: 'intro', label: '简介', value: item.intro, weight: 8, reason: '简介命中' },
   ];
 }
 
@@ -297,7 +297,7 @@ function toCitedVideo(result: ScoredVideo): SmartFavoriteQaCitedVideo {
 function buildEvidenceSentence(result: ScoredVideo): string {
   const labels = uniqueStrings(result.evidenceHits.map(hit => hit.label)).slice(0, 3);
   const terms = uniqueStrings(result.evidenceHits.flatMap(hit => hit.terms)).slice(0, 5);
-  return `Matched ${labels.join(', ')} with local term evidence: ${terms.join(', ')}.`;
+  return `本地词项命中 ${labels.join('、')}：${terms.join('、')}。`;
 }
 
 function buildSyncCoverage(diagnostics: FavoriteFolderSyncDiagnostic[]): SmartFavoriteQaSyncCoverage {
@@ -321,15 +321,15 @@ function buildIndexCoverage(
 
 function buildCoverageNotes(syncCoverage: SmartFavoriteQaSyncCoverage, indexCoverage: SmartFavoriteQaIndexCoverage): string[] {
   const notes: string[] = [
-    `Index coverage: Bilibili reported ${indexCoverage.bilibiliReportedItems}, locally stored ${indexCoverage.storedItems}, indexed ${indexCoverage.indexedItems}, failed ${indexCoverage.failedItems}, pending ${indexCoverage.pendingItems}.`,
+    `索引覆盖：B站报告 ${indexCoverage.bilibiliReportedItems} 条，本地保存 ${indexCoverage.storedItems} 条，已索引 ${indexCoverage.indexedItems} 条，失败 ${indexCoverage.failedItems} 条，待索引 ${indexCoverage.pendingItems} 条。`,
   ];
   if (!syncCoverage.complete) {
-    notes.push('Favorite sync is incomplete; answers are scoped to the currently synced favorites only.');
+    notes.push('收藏同步可能不完整；回答只基于当前已同步收藏。');
   }
   if (indexCoverage.indexMissing) {
-    notes.push('Smart Favorites index is missing; only favorite metadata was used.');
+    notes.push('智能收藏索引缺失；本次只使用收藏元数据。');
   } else if (indexCoverage.staleIndex) {
-    notes.push('Smart Favorites index may be stale or partial; metadata evidence is still used.');
+    notes.push('智能收藏索引可能过期或不完整；本次仍会使用元数据证据。');
   }
   return notes;
 }
@@ -366,11 +366,11 @@ function buildStatus(
 function summarizeEvidence(citedVideos: SmartFavoriteQaCitedVideo[], indexCoverage: SmartFavoriteQaIndexCoverage): string {
   const fields = uniqueStrings(citedVideos.flatMap(video => video.sourceFields));
   const indexNote = indexCoverage.indexMissing
-    ? ' Smart index fields were unavailable.'
+    ? ' 智能索引字段不可用。'
     : indexCoverage.staleIndex
-      ? ' Some index fields may be stale or partial.'
+      ? ' 部分索引字段可能过期或不完整。'
       : '';
-  return `Matched ${citedVideos.length} cited video(s) using ${fields.join(', ') || 'local metadata'}.${indexNote}`;
+  return `命中 ${citedVideos.length} 个引用视频，使用字段：${fields.map(displaySourceField).join('、') || '本地元数据'}。${indexNote}`;
 }
 
 function buildLocalQueryTerms(query: string): string[] {
@@ -417,29 +417,29 @@ function isUsefulTerm(term: string): boolean {
 function reasonForField(field: string): string {
   switch (field) {
     case 'bvid':
-      return 'BVID matched';
+      return 'BVID 命中';
     case 'title':
-      return 'Title matched';
+      return '标题命中';
     case 'authorName':
-      return 'UP matched';
+      return 'UP 主命中';
     case 'smart.path':
-      return 'Smart path matched';
+      return '智能分类路径命中';
     case 'smart.keywords':
-      return 'Smart keyword matched';
+      return '智能关键词命中';
     case 'smart.aliases':
-      return 'Smart alias matched';
+      return '智能别名命中';
     case 'smart.summary':
-      return 'Smart summary matched';
+      return '智能摘要命中';
     case 'folderTitle':
-      return 'Favorite folder matched';
+      return '收藏夹命中';
     case 'tagName':
-      return 'Category matched';
+      return '分区命中';
     case 'tags':
-      return 'Tag matched';
+      return '标签命中';
     case 'intro':
-      return 'Intro matched';
+      return '简介命中';
     default:
-      return 'Local metadata matched';
+      return '本地元数据命中';
   }
 }
 
@@ -450,15 +450,44 @@ function hasDiagnosticIssue(diagnostic: FavoriteFolderSyncDiagnostic): boolean {
 function buildIncompleteSyncNote(diagnostics: FavoriteFolderSyncDiagnostic[]): string {
   const samples = diagnostics.slice(0, 3).map(diagnostic => {
     const issues = [
-      diagnostic.pageErrors > 0 ? `${diagnostic.pageErrors} page error(s)` : '',
-      `requested/fetched ${diagnostic.requestedPages}/${diagnostic.pagesFetched}`,
-      diagnostic.unexplainedDelta > 0 ? `delta ${diagnostic.unexplainedDelta}` : '',
-      diagnostic.hasMoreAfterStop ? 'has_more after stop' : '',
-      diagnostic.stoppedByMaxPages ? 'max pages reached' : '',
+      diagnostic.pageErrors > 0 ? `${diagnostic.pageErrors} 个页面错误` : '',
+      `请求/获取页数 ${diagnostic.requestedPages}/${diagnostic.pagesFetched}`,
+      diagnostic.unexplainedDelta > 0 ? `差异 ${diagnostic.unexplainedDelta}` : '',
+      diagnostic.hasMoreAfterStop ? '停止后仍提示有更多' : '',
+      diagnostic.stoppedByMaxPages ? '达到页数上限' : '',
     ].filter(Boolean).join(', ');
     return `${diagnostic.title || diagnostic.mediaId}(${diagnostic.mediaId}): ${issues}`;
   });
-  return `FAVORITE_SYNC_INCOMPLETE: ${samples.join('; ')}`;
+  return `收藏同步可能不完整：${samples.join('；')}`;
+}
+
+function displaySourceField(field: string): string {
+  switch (field) {
+    case 'bvid':
+      return 'BVID';
+    case 'title':
+      return '标题';
+    case 'authorName':
+      return 'UP 主';
+    case 'smart.path':
+      return '智能分类路径';
+    case 'smart.keywords':
+      return '智能关键词';
+    case 'smart.aliases':
+      return '智能别名';
+    case 'smart.summary':
+      return '智能摘要';
+    case 'folderTitle':
+      return '收藏夹';
+    case 'tagName':
+      return '分区';
+    case 'tags':
+      return '标签';
+    case 'intro':
+      return '简介';
+    default:
+      return field;
+  }
 }
 
 function getVideoUrl(item: FavoriteItem): string {

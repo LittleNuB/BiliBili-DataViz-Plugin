@@ -18,7 +18,7 @@ export function buildVideoKnowledgeResult(
   if (context.kind !== 'video') {
     return {
       status: 'no_context',
-      title: 'No current video context',
+      title: '没有当前视频上下文',
       generatedAt: now,
       sourceState: {
         metadata: false,
@@ -30,7 +30,7 @@ export function buildVideoKnowledgeResult(
       },
       nodes: [],
       warnings: ['no_current_video_context'],
-      limitations: ['Open a Bilibili video page before generating video knowledge nodes.'],
+      limitations: ['请先打开一个 B 站视频页，再生成视频知识节点。'],
     };
   }
 
@@ -56,9 +56,9 @@ export function buildVideoKnowledgeResult(
     nodes,
     warnings: Array.from(new Set([...context.warnings, 'transcript_unavailable'])),
     limitations: [
-      'No transcript is available, so metadata and description nodes do not represent full-video understanding.',
-      'Metadata and description nodes never include generated timestamps.',
-      'Jump actions are manual preview actions and require explicit confirmation before changing playback.',
+      '没有可用字幕，因此元数据和简介节点不代表完整视频理解。',
+      '元数据和简介节点不会生成推测时间戳。',
+      '跳转动作是手动预览动作，改变播放位置前必须由用户明确确认。',
     ],
   };
 }
@@ -72,16 +72,16 @@ export function findVideoKnowledgeNode(
 
 function buildMetadataNode(context: CurrentVideoContext, now: number): VideoKnowledgeNode {
   const partsLabel = context.currentPart.total && context.currentPart.total > 1
-    ? `Part ${context.currentPart.page} of ${context.currentPart.total}`
-    : 'Single visible video page';
-  const duration = context.durationSeconds ? `, duration ${formatDuration(context.durationSeconds)}` : '';
-  const creator = context.authorName ? `, creator ${context.authorName}` : '';
+    ? `第 ${context.currentPart.page} / ${context.currentPart.total} P`
+    : '单个可见视频页';
+  const duration = context.durationSeconds ? `，时长 ${formatDuration(context.durationSeconds)}` : '';
+  const creator = context.authorName ? `，UP 主 ${context.authorName}` : '';
   return node({
     id: `node:${context.bvid}:metadata`,
     context,
     page: context.currentPart.page,
-    title: context.title ? `Metadata: ${context.title}` : 'Metadata helper',
-    reason: `Built only from visible metadata (${partsLabel}${creator}${duration}).`,
+    title: context.title ? `元数据：${context.title}` : '元数据辅助节点',
+    reason: `仅基于可见元数据生成（${partsLabel}${creator}${duration}）。`,
     source: 'metadata',
     confidence: 0.34,
     evidence: evidence('metadata:visible', context.title ?? context.bvid),
@@ -101,8 +101,8 @@ function buildDescriptionNodes(context: CurrentVideoContext, now: number): Video
       id: `node:${context.bvid}:description`,
       context,
       page: context.currentPart.page,
-      title: 'Description helper',
-      reason: 'Built from the visible video description only; it is not transcript or body-content evidence.',
+      title: '简介辅助节点',
+      reason: '仅基于可见视频简介生成；它不是字幕或正文内容证据。',
       source: 'description',
       confidence: text.length >= 80 ? 0.54 : 0.46,
       evidence: {
@@ -131,7 +131,7 @@ function buildPageNodes(context: CurrentVideoContext, now: number): VideoKnowled
       cid: part.cid,
       timestamp: 0,
       title: part.title ? `P${page}: ${part.title}` : `P${page}`,
-      reason: 'Built from the Bilibili page/part list. The timestamp is only the start of that part.',
+      reason: '基于 B 站分 P 列表生成；时间点只表示该分 P 的起始位置。',
       source: 'page',
       confidence: 0.74,
       evidence: evidence(`page:${page}`, part.title ?? `P${page}`),
@@ -140,7 +140,7 @@ function buildPageNodes(context: CurrentVideoContext, now: number): VideoKnowled
         targetSeconds: 0,
         targetPage: page,
         targetCid: part.cid,
-        previewLabel: `Jump to P${page}${part.title ? `: ${part.title}` : ''}`,
+        previewLabel: `跳到 P${page}${part.title ? `：${part.title}` : ''}`,
         requiresConfirmation: true,
         returnPointSeconds: null,
       },
@@ -160,8 +160,8 @@ function buildChapterNodes(context: CurrentVideoContext, now: number): VideoKnow
         context,
         page: context.currentPart.page,
         timestamp: startSeconds,
-        title: `Chapter: ${chapter.title}`,
-        reason: 'Built from a visible chapter start time. It does not infer content beyond the chapter label.',
+        title: `章节：${chapter.title}`,
+        reason: '基于可见章节起始时间生成，不推断章节标题之外的正文内容。',
         source: 'chapter',
         confidence: 0.82,
         evidence: evidence(`chapter:${index}:${startSeconds}`, chapter.title),
@@ -170,7 +170,7 @@ function buildChapterNodes(context: CurrentVideoContext, now: number): VideoKnow
           targetSeconds: startSeconds,
           targetPage: context.currentPart.page,
           targetCid: context.cid,
-          previewLabel: `Jump to ${formatDuration(startSeconds)}: ${chapter.title}`,
+          previewLabel: `跳到 ${formatDuration(startSeconds)}：${chapter.title}`,
           requiresConfirmation: true,
           returnPointSeconds: null,
         },
@@ -205,7 +205,7 @@ function node(input: {
     title: limitText(input.title, 140),
     reason: limitText(input.reason, 260),
     source: input.source,
-    sourceLabel: input.source,
+    sourceLabel: videoKnowledgeSourceLabel(input.source),
     confidence: Math.round(Math.max(0, Math.min(1, input.confidence)) * 100) / 100,
     evidence: input.evidence,
     jumpAction: input.jumpAction,
@@ -224,6 +224,31 @@ function evidence(sourceId: string, text: string): VideoKnowledgeEvidence {
     language: null,
     sourceId,
   };
+}
+
+function videoKnowledgeSourceLabel(source: VideoKnowledgeSource): string {
+  switch (source) {
+    case 'metadata':
+      return '元数据';
+    case 'description':
+      return '简介';
+    case 'page':
+      return '分 P';
+    case 'chapter':
+      return '章节';
+    case 'transcript':
+      return '字幕';
+    case 'user_bookmark':
+      return '用户书签';
+    case 'user_note':
+      return '用户笔记';
+    case 'local_watch_event':
+      return '本地播放记录';
+    case 'local_fallback':
+      return '本地结果';
+    default:
+      return '本地来源';
+  }
 }
 
 function normalizePage(part: CurrentVideoPart, index: number): number {

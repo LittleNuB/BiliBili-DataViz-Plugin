@@ -176,7 +176,7 @@ export function SmartFavoritesPage() {
         mediaId: Math.floor(mediaId),
         maxPages: 12,
       }));
-      setNotice(`Live folder probe finished for mediaId ${Math.floor(mediaId)}. Review the breakdown below before treating the gap as a plugin-only issue.`);
+      setNotice(`收藏夹缺口诊断已完成：mediaId ${Math.floor(mediaId)}。请先查看下方拆分结果，再判断是否为插件侧缺口。`);
     } catch (e) {
       setProbeResult(null);
       setError((e as Error).message);
@@ -264,36 +264,36 @@ export function SmartFavoritesPage() {
 
       <section style={CARD}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px', marginBottom: '12px' }}>
-          <Metric label="Folders" value={overview?.folders.length ?? 0} />
-          <Metric label="Bilibili reported" value={overview?.reportedItems ?? 0} />
-          <Metric label="Locally stored" value={overview?.storedItems ?? 0} />
-          <Metric label="Indexed" value={overview?.indexedItems ?? 0} />
-          <Metric label="Failed" value={overview?.failedItems ?? 0} />
-          <Metric label="Pending" value={overview?.pendingItems ?? 0} />
+          <Metric label="收藏夹" value={overview?.folders.length ?? 0} />
+          <Metric label="B站报告" value={overview?.reportedItems ?? 0} />
+          <Metric label="本地保存" value={overview?.storedItems ?? 0} />
+          <Metric label="已索引" value={overview?.indexedItems ?? 0} />
+          <Metric label="索引失败" value={overview?.failedItems ?? 0} />
+          <Metric label="待索引" value={overview?.pendingItems ?? 0} />
         </div>
         <div style={{ color: overview?.lastSyncDiagnostics.length && overview?.syncComplete === false ? '#FFB347' : '#9090A0', fontSize: '12px', lineHeight: 1.5, marginBottom: '12px' }}>
           {overview?.lastSyncDiagnostics.length && overview?.syncComplete === false
-            ? `Favorite sync is incomplete in ${overview.incompleteFolders} folder(s). Smart index coverage is scoped to the current local snapshot: Bilibili reported ${overview.reportedItems}, locally stored ${overview.storedItems}, indexed ${overview.indexedItems}, failed ${overview.failedItems}, pending ${overview.pendingItems}.`
-            : `Smart index coverage only applies to locally stored favorites: Bilibili reported ${overview?.reportedItems ?? 0}, locally stored ${overview?.storedItems ?? 0}, indexed ${overview?.indexedItems ?? 0}, failed ${overview?.failedItems ?? 0}, pending ${overview?.pendingItems ?? 0}.`}
+            ? `有 ${overview.incompleteFolders} 个收藏夹同步可能不完整；智能索引只覆盖当前本地快照：B站报告 ${overview.reportedItems} 条，本地保存 ${overview.storedItems} 条，已索引 ${overview.indexedItems} 条，失败 ${overview.failedItems} 条，待索引 ${overview.pendingItems} 条。`
+            : `智能索引只覆盖本地已保存的收藏：B站报告 ${overview?.reportedItems ?? 0} 条，本地保存 ${overview?.storedItems ?? 0} 条，已索引 ${overview?.indexedItems ?? 0} 条，失败 ${overview?.failedItems ?? 0} 条，待索引 ${overview?.pendingItems ?? 0} 条。`}
         </div>
         <SyncDiagnostics
           diagnostics={overview?.lastSyncDiagnostics ?? []}
           onProbe={mediaId => { void runFolderProbe(String(mediaId)); }}
         />
         <div style={{ ...CARD, marginBottom: '12px', background: '#1A1A2E' }}>
-          <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>Folder gap probe</div>
+          <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>收藏夹缺口诊断</div>
           <div style={{ color: '#9090A0', fontSize: '12px', lineHeight: 1.5, marginBottom: '8px' }}>
-            Run a bounded live probe for one favorite folder using the current extension runtime login state. The probe records counts only: no full folder contents, raw API payloads, Cookies, or local database dumps.
+            使用当前扩展运行时登录状态，对单个收藏夹做有边界的实时诊断。只记录数量统计，不保存完整收藏夹内容、原始接口响应、Cookie 或本地数据库转储。
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '8px' }}>
             <TextInput
               value={probeMediaId}
               onInput={setProbeMediaId}
-              placeholder="Favorite folder mediaId"
+              placeholder="收藏夹 mediaId"
               onEnter={() => { void runFolderProbe(); }}
             />
             <ActionButton
-              label={busy === 'probe' ? 'Probing...' : 'Run probe'}
+              label={busy === 'probe' ? '诊断中...' : '运行诊断'}
               onClick={() => { void runFolderProbe(); }}
               disabled={!!busy || !probeMediaId.trim()}
             />
@@ -330,7 +330,7 @@ export function SmartFavoritesPage() {
                 aiSummariesEnabled: (event.currentTarget as HTMLInputElement).checked,
               })}
             />
-            Assistant summaries
+            当前视频摘要
           </label>
           <label style={{
             display: 'flex',
@@ -347,7 +347,7 @@ export function SmartFavoritesPage() {
                 smartFavoritesQaAiEnabled: (event.currentTarget as HTMLInputElement).checked,
               })}
             />
-            Favorites Q&A AI
+            收藏问答 AI
           </label>
           <ActionButton label={busy === 'save' ? '保存中...' : '保存'} onClick={saveAiConfig} disabled={!!busy} />
         </div>
@@ -366,10 +366,10 @@ export function SmartFavoritesPage() {
       </section>
 
       <section style={CARD}>
-        <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>Smart Favorites Q&A</div>
+        <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>智能收藏问答</div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '8px' }}>
-          <TextInput value={question} onInput={setQuestion} placeholder="Ask about locally synced favorites" onEnter={askFavorites} />
-          <ActionButton label={busy === 'qa' ? 'Answering...' : 'Ask'} onClick={askFavorites} disabled={!!busy || !question.trim()} />
+          <TextInput value={question} onInput={setQuestion} placeholder="询问当前已同步收藏，例如：有没有讲库尔斯克的二战视频" onEnter={askFavorites} />
+          <ActionButton label={busy === 'qa' ? '回答中...' : '提问'} onClick={askFavorites} disabled={!!busy || !question.trim()} />
         </div>
         {qa && <QaAnswerPanel qa={qa} />}
       </section>
@@ -450,7 +450,7 @@ function ResultSection({
   if (qa) {
     return (
       <>
-        <ResultHeader title="Local cited retrieval evidence" count={qa.citedVideos.length} />
+        <ResultHeader title="本地引用证据" count={qa.citedVideos.length} />
         {qa.citedVideos.length === 0 ? (
           <EmptyPanel text={qa.answer} />
         ) : (
@@ -522,10 +522,10 @@ function QaAnswerPanel({ qa }: { qa: SmartFavoriteQaResponse }) {
   return (
     <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-        <Badge text={qa.answerType} color={statusTone} />
-        <Badge text={`confidence: ${qa.confidence}`} color={qa.confidence === 'high' ? '#00D4AA' : qa.confidence === 'medium' ? BILI_BLUE : '#FFB347'} />
-        <Badge text={`status: ${qa.status.kind}`} color={statusTone} />
-        <Badge text={`AI: ${qa.synthesis?.status ?? 'local_fallback'}`} color={synthesisTone} />
+        <Badge text={qaAnswerTypeLabel(qa.answerType)} color={statusTone} />
+        <Badge text={`证据强度：${qaConfidenceLabel(qa.confidence)}`} color={qa.confidence === 'high' ? '#00D4AA' : qa.confidence === 'medium' ? BILI_BLUE : '#FFB347'} />
+        <Badge text={`结果状态：${qaStatusLabel(qa.status.kind)}`} color={statusTone} />
+        <Badge text={`AI：${qaSynthesisStatusLabel(qa.synthesis?.status ?? 'local_fallback')}`} color={synthesisTone} />
       </div>
       {qa.synthesis?.status === 'generated' && qa.synthesis.answer && (
         <div style={{
@@ -535,11 +535,11 @@ function QaAnswerPanel({ qa }: { qa: SmartFavoriteQaResponse }) {
           padding: '10px',
         }}>
           <div style={{ color: BILI_BLUE, fontSize: '11px', fontWeight: 600, marginBottom: '5px' }}>
-            AI synthesized answer
+            AI 综合回答
           </div>
           <div style={{ color: '#FFFFFF', fontSize: '13px', lineHeight: 1.5 }}>{qa.synthesis.answer}</div>
           <div style={{ color: '#9090A0', fontSize: '11px', lineHeight: 1.45, marginTop: '6px' }}>
-            Model: {qa.synthesis.model ?? 'unknown'} / cited refs: {(qa.synthesis.citedVideoRefs ?? []).join(', ') || 'provided videos'}
+            模型：{qa.synthesis.model ?? '未知'} / 引用来源：{(qa.synthesis.citedVideoRefs ?? []).join('、') || '下方引用视频'}
           </div>
         </div>
       )}
@@ -550,14 +550,14 @@ function QaAnswerPanel({ qa }: { qa: SmartFavoriteQaResponse }) {
         padding: '10px',
       }}>
         <div style={{ color: '#A0A0B0', fontSize: '11px', fontWeight: 600, marginBottom: '5px' }}>
-          Local cited retrieval answer
+          本地引用回答
         </div>
         <div style={{ color: '#FFFFFF', fontSize: '13px', lineHeight: 1.5 }}>{qa.answer}</div>
         <div style={{ color: '#A0A0B0', fontSize: '12px', lineHeight: 1.5, marginTop: '6px' }}>{qa.evidenceSummary}</div>
       </div>
       {qa.synthesis && qa.synthesis.status !== 'generated' && (
         <div style={{ color: synthesisTone, fontSize: '12px', lineHeight: 1.5 }}>
-          AI synthesis {qa.synthesis.status}: {qa.synthesis.reason ?? 'local cited retrieval fallback is shown.'}
+          {qaSynthesisMessage(qa.synthesis)}
         </div>
       )}
       {qa.status.notes.length > 0 && (
@@ -584,10 +584,10 @@ function QaCitationCard({ video }: { video: SmartFavoriteQaCitedVideo }) {
         <div style={{ minWidth: 0 }}>
           <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, lineHeight: 1.4 }}>{video.title}</div>
           <div style={{ color: '#9090A0', fontSize: '11px', marginTop: '4px' }}>
-            {video.bvid || `av${video.avid}`} · {video.authorName || 'Unknown UP'} · {video.folderTitle || 'Unknown folder'}
+            {video.bvid || `av${video.avid}`} · {video.authorName || '未知 UP'} · {video.folderTitle || '未知收藏夹'}
           </div>
         </div>
-        <Badge text={video.confidence} color={video.confidence === 'high' ? '#00D4AA' : video.confidence === 'medium' ? BILI_BLUE : '#FFB347'} />
+        <Badge text={qaConfidenceLabel(video.confidence)} color={video.confidence === 'high' ? '#00D4AA' : video.confidence === 'medium' ? BILI_BLUE : '#FFB347'} />
       </div>
       {video.smartPath.length > 0 && (
         <div style={{ color: BILI_BLUE, fontSize: '11px' }}>{video.smartPath.join(' / ')}</div>
@@ -597,7 +597,7 @@ function QaCitationCard({ video }: { video: SmartFavoriteQaCitedVideo }) {
         {video.matchReasons.map(reason => <Badge key={reason} text={reason} color="#6666AA" />)}
       </div>
       <div style={{ color: '#9090A0', fontSize: '11px', lineHeight: 1.5 }}>
-        Source fields: {video.sourceFields.join(', ') || 'local metadata'} · Score {video.score}
+        证据字段：{formatQaSourceFields(video.sourceFields)} · 本地评分 {video.score}
       </div>
       {video.evidenceHits.length > 0 && (
         <div style={{ display: 'grid', gap: '4px' }}>
@@ -608,9 +608,139 @@ function QaCitationCard({ video }: { video: SmartFavoriteQaCitedVideo }) {
           ))}
         </div>
       )}
-      <div style={{ color: video.link ? BILI_PINK : '#666', fontSize: '11px' }}>{video.link ? 'Open video' : 'No usable link'}</div>
+      <div style={{ color: video.link ? BILI_PINK : '#666', fontSize: '11px' }}>{video.link ? '打开视频' : '无可用链接'}</div>
     </a>
   );
+}
+
+function qaAnswerTypeLabel(type: SmartFavoriteQaResponse['answerType']): string {
+  switch (type) {
+    case 'retrieval_answer':
+      return '引用回答';
+    case 'candidate_list':
+      return '候选列表';
+    case 'no_result':
+      return '未找到结果';
+    case 'insufficient_evidence':
+      return '证据不足';
+    default:
+      return '本地回答';
+  }
+}
+
+function qaConfidenceLabel(confidence: SmartFavoriteQaResponse['confidence']): string {
+  switch (confidence) {
+    case 'high':
+      return '高';
+    case 'medium':
+      return '中';
+    default:
+      return '低';
+  }
+}
+
+function qaStatusLabel(kind: SmartFavoriteQaResponse['status']['kind']): string {
+  switch (kind) {
+    case 'ok':
+      return '可回答';
+    case 'no_result':
+      return '未找到匹配';
+    case 'low_confidence':
+      return '低置信候选';
+    case 'stale_index':
+      return '索引可能过期';
+    case 'incomplete_sync':
+      return '同步可能不完整';
+    case 'index_missing':
+      return '智能索引缺失';
+    case 'insufficient_evidence':
+      return '证据不足';
+    default:
+      return '待确认';
+  }
+}
+
+function qaSynthesisStatusLabel(status: NonNullable<SmartFavoriteQaResponse['synthesis']>['status']): string {
+  switch (status) {
+    case 'generated':
+      return '已综合';
+    case 'disabled':
+      return '未启用';
+    case 'not_configured':
+      return '未配置';
+    case 'failed':
+      return '生成失败';
+    case 'rejected':
+      return '已拒绝';
+    case 'local_fallback':
+      return '本地结果';
+    default:
+      return '本地结果';
+  }
+}
+
+function qaSynthesisMessage(synthesis: NonNullable<SmartFavoriteQaResponse['synthesis']>): string {
+  const reason = synthesis.reason ?? '';
+  if (synthesis.status === 'disabled') {
+    return 'AI 综合未启用，当前显示本地引用结果。';
+  }
+  if (synthesis.status === 'not_configured') {
+    return 'AI 综合尚未配置 API Key，当前显示本地引用结果。';
+  }
+  if (synthesis.status === 'local_fallback') {
+    return '没有可引用视频时不会请求 AI，当前显示本地检索结果。';
+  }
+  if (synthesis.status === 'rejected') {
+    return `AI 综合结果未通过引用边界检查，已显示本地引用结果。${qaGuardReasonLabel(reason)}`;
+  }
+  if (synthesis.status === 'failed') {
+    return `AI 综合失败，已显示本地引用结果。${reason ? `诊断：${reason}` : ''}`;
+  }
+  return '当前显示本地引用结果。';
+}
+
+function qaGuardReasonLabel(reason: string): string {
+  if (!reason) return '';
+  if (reason.startsWith('AI_OUTSIDE_CITED_VIDEO_REF')) return '原因：AI 引用了未提供的视频编号。';
+  if (reason.startsWith('AI_OUTSIDE_VIDEO_REFERENCE')) return '原因：AI 在回答中提到了引用列表外的视频。';
+  if (reason.startsWith('AI_OUTSIDE_TITLE_REFERENCE')) return '原因：AI 提到了引用列表外的视频标题。';
+  if (reason === 'AI_EMPTY_ANSWER') return '原因：AI 没有返回可用回答。';
+  if (reason === 'AI_MISSING_CITED_VIDEO_REFS') return '原因：AI 没有标注引用视频。';
+  return `诊断：${reason}`;
+}
+
+function formatQaSourceFields(fields: string[]): string {
+  const labels = fields.map(qaSourceFieldLabel).filter(Boolean);
+  return labels.length ? labels.join('、') : '本地元数据';
+}
+
+function qaSourceFieldLabel(field: string): string {
+  switch (field) {
+    case 'bvid':
+      return 'BVID';
+    case 'title':
+      return '标题';
+    case 'authorName':
+      return 'UP 主';
+    case 'smart.path':
+      return '智能分类路径';
+    case 'smart.keywords':
+      return '智能关键词';
+    case 'smart.aliases':
+      return '智能别名';
+    case 'smart.summary':
+      return '智能摘要';
+    case 'folderTitle':
+      return '收藏夹';
+    case 'tagName':
+      return '分区';
+    case 'tags':
+      return '标签';
+    case 'intro':
+      return '简介';
+    default:
+      return field;
+  }
 }
 
 function Badge({ text, color }: { text: string; color: string }) {
@@ -701,10 +831,10 @@ function SyncDiagnostics({
   return (
     <div style={{ marginBottom: '12px', overflowX: 'auto' }}>
       <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>
-        Sync audit: state {overallState}, reported {totals.reported}, requested/fetched pages {totals.requestedPages}/{totals.fetchedPages}, stored {totals.stored}, filtered {totals.filtered}, delta {totals.delta}, page errors {totals.errors}
+        同步诊断：{syncCompletenessLabel(overallState)}，B站报告 {totals.reported} 条，请求/获取页数 {totals.requestedPages}/{totals.fetchedPages}，本地保存 {totals.stored} 条，过滤 {totals.filtered} 条，差异 {totals.delta} 条，页面错误 {totals.errors} 个。
       </div>
       <div style={{ minWidth: '1160px', display: 'grid', gridTemplateColumns: '1.5fr 88px 88px 92px 72px 72px 180px 72px 2fr 80px', gap: '1px', background: '#333355', border: '1px solid #333355', borderRadius: '6px', overflow: 'hidden' }}>
-        {['Folder', 'State', 'Reported', 'Req/Fetched', 'Raw', 'Stored', 'Filtered (u/mid/nv)', 'Delta', 'Page issues', 'Probe'].map(label => (
+        {['收藏夹', '状态', 'B站报告', '请求/获取', '原始项', '已保存', '已过滤(失效/缺ID/非视频)', '差异', '页面问题', '诊断'].map(label => (
           <AuditCell key={label} header text={label} />
         ))}
         {diagnostics.map(diagnostic => (
@@ -723,11 +853,11 @@ function SyncDiagnosticRow({
   onProbe?: (mediaId: number) => void;
 }) {
   const filteredBreakdown = `${diagnostic.filteredItems} (${diagnostic.filteredUnavailableItems}/${diagnostic.filteredMissingIdItems}/${diagnostic.filteredNonVideoItems})`;
-  const pageIssues = diagnostic.pageErrors > 0 ? `${diagnostic.pageErrors}: ${diagnostic.errors.join(' | ')}` : '-';
+  const pageIssues = diagnostic.pageErrors > 0 ? `${diagnostic.pageErrors} 个：${diagnostic.errors.join(' | ')}` : '-';
   return (
     <>
-      <AuditCell text={`${diagnostic.title || 'Untitled'} #${diagnostic.mediaId}`} />
-      <AuditCell text={diagnostic.completenessState} tone={diagnostic.completenessState === 'incomplete' ? 'error' : undefined} />
+      <AuditCell text={`${diagnostic.title || '未命名收藏夹'} #${diagnostic.mediaId}`} />
+      <AuditCell text={syncCompletenessLabel(diagnostic.completenessState)} tone={diagnostic.completenessState === 'incomplete' ? 'error' : undefined} />
       <AuditCell text={String(diagnostic.reportedMediaCount)} tone={diagnostic.unexplainedDelta > 0 ? 'warn' : undefined} />
       <AuditCell text={`${diagnostic.requestedPages}/${diagnostic.pagesFetched}`} tone={diagnostic.requestedPages > diagnostic.pagesFetched ? 'warn' : undefined} />
       <AuditCell text={String(diagnostic.rawResourcesSeen)} />
@@ -736,7 +866,7 @@ function SyncDiagnosticRow({
       <AuditCell text={String(diagnostic.unexplainedDelta)} tone={diagnostic.unexplainedDelta > 0 ? 'warn' : undefined} />
       <AuditCell text={pageIssues} tone={diagnostic.pageErrors > 0 ? 'error' : undefined} />
       <AuditActionCell
-        label="Probe"
+        label="诊断"
         disabled={!onProbe}
         onClick={onProbe ? () => onProbe(diagnostic.mediaId) : undefined}
       />
@@ -753,26 +883,26 @@ function FavoriteFolderProbePanel({ result }: { result: FavoriteFolderGapProbeRe
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'start', marginBottom: '8px' }}>
         <div>
           <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600 }}>
-            Probe result: {folder.title || 'Untitled'} #{folder.mediaId}
+            诊断结果：{folder.title || '未命名收藏夹'} #{folder.mediaId}
           </div>
           <div style={{ color: '#9090A0', fontSize: '12px', lineHeight: 1.5, marginTop: '4px' }}>
-            Classification {result.classification} | stop {diagnostic.stopReason ?? 'unknown'} | pages {pageCount} | reported {folder.reportedMediaCount}
+            结论：{probeClassificationLabel(result.classification)} | 停止原因：{syncStopReasonLabel(diagnostic.stopReason)} | 页面 {pageCount} | B站报告 {folder.reportedMediaCount}
           </div>
         </div>
-        <Badge text={result.classification} color={result.classification === 'complete' ? '#00D4AA' : '#FFB347'} />
+        <Badge text={probeClassificationLabel(result.classification)} color={result.classification === 'complete' ? '#00D4AA' : '#FFB347'} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))', gap: '8px', marginBottom: '10px' }}>
-        <Metric label="API unique" value={diagnostic.uniqueResourcesSeen} />
-        <Metric label="Probe stored" value={diagnostic.storedVideoItems} />
-        <Metric label="Filtered" value={gapBuckets.filteredItems} />
-        <Metric label="API missing" value={gapBuckets.apiMissingItems} />
-        <Metric label="Local stored" value={localIndexCoverage.storedItems} />
-        <Metric label="Indexed gap" value={gapBuckets.storedButNotIndexedItems} />
+        <Metric label="接口唯一项" value={diagnostic.uniqueResourcesSeen} />
+        <Metric label="诊断保存" value={diagnostic.storedVideoItems} />
+        <Metric label="过滤项" value={gapBuckets.filteredItems} />
+        <Metric label="接口缺口" value={gapBuckets.apiMissingItems} />
+        <Metric label="本地保存" value={localIndexCoverage.storedItems} />
+        <Metric label="索引缺口" value={gapBuckets.storedButNotIndexedItems} />
       </div>
 
       <div style={{ color: '#A0A0B0', fontSize: '12px', lineHeight: 1.6, marginBottom: '10px' }}>
-        Duplicates: resource id {diagnostic.duplicateResourceIds}, bvid {diagnostic.duplicateBvids}. Local overlap {localIndexCoverage.overlapItems}, local-only retained {localIndexCoverage.localOnlyItems}, probe-only {localIndexCoverage.probeOnlyItems}. Indexed {localIndexCoverage.indexedItems}, failed {localIndexCoverage.failedItems}, pending {localIndexCoverage.pendingItems}, stale {localIndexCoverage.staleItems}.
+        重复项：资源 ID {diagnostic.duplicateResourceIds}，BVID {diagnostic.duplicateBvids}。本地重合 {localIndexCoverage.overlapItems}，仅本地保留 {localIndexCoverage.localOnlyItems}，仅诊断命中 {localIndexCoverage.probeOnlyItems}。已索引 {localIndexCoverage.indexedItems}，失败 {localIndexCoverage.failedItems}，待索引 {localIndexCoverage.pendingItems}，可能过期 {localIndexCoverage.staleItems}。
       </div>
 
       {result.notes.length > 0 && (
@@ -785,7 +915,7 @@ function FavoriteFolderProbePanel({ result }: { result: FavoriteFolderGapProbeRe
 
       <div style={{ overflowX: 'auto' }}>
         <div style={{ minWidth: '980px', display: 'grid', gridTemplateColumns: '74px 90px 90px 84px 96px 84px 84px 84px 100px 100px', gap: '1px', background: '#333355', border: '1px solid #333355', borderRadius: '6px', overflow: 'hidden' }}>
-          {['Page', 'Attempts', 'Attempt sizes', 'Has more', 'Short page', 'Stored', 'Filtered', 'Dup id', 'Dup bvid', 'Retry fixed'].map(label => (
+          {['页码', '尝试次数', '返回数量', '仍有更多', '短页', '已保存', '已过滤', '重复ID', '重复BVID', '重试改善'].map(label => (
             <AuditCell key={label} header text={label} />
           ))}
           {diagnostic.pageDiagnostics.map(page => (
@@ -807,15 +937,61 @@ function FavoriteFolderProbePageRow({
       <AuditCell text={String(page.pageNumber)} />
       <AuditCell text={String(page.attempts)} tone={page.attempts > 1 ? 'warn' : undefined} />
       <AuditCell text={page.attemptResourceCounts.join(' / ')} tone={page.attempts > 1 ? 'warn' : undefined} />
-      <AuditCell text={page.hasMore ? 'true' : 'false'} tone={page.hasMore ? 'warn' : undefined} />
-      <AuditCell text={page.shortPageWithHasMore ? `${page.returnedResourceCount}/${page.requestedPageSize}` : 'full'} tone={page.shortPageWithHasMore ? 'warn' : undefined} />
+      <AuditCell text={formatBoolean(page.hasMore)} tone={page.hasMore ? 'warn' : undefined} />
+      <AuditCell text={page.shortPageWithHasMore ? `${page.returnedResourceCount}/${page.requestedPageSize}` : '完整页'} tone={page.shortPageWithHasMore ? 'warn' : undefined} />
       <AuditCell text={String(page.storedVideoItems)} />
       <AuditCell text={`${page.filteredItems} (${page.filteredUnavailableItems}/${page.filteredMissingIdItems}/${page.filteredNonVideoItems})`} />
       <AuditCell text={String(page.duplicateResourceIds)} tone={page.duplicateResourceIds > 0 ? 'warn' : undefined} />
       <AuditCell text={String(page.duplicateBvids)} tone={page.duplicateBvids > 0 ? 'warn' : undefined} />
-      <AuditCell text={page.retryImprovedShortPage ? 'yes' : 'no'} tone={page.retryImprovedShortPage ? 'warn' : undefined} />
+      <AuditCell text={formatBoolean(page.retryImprovedShortPage)} tone={page.retryImprovedShortPage ? 'warn' : undefined} />
     </>
   );
+}
+
+function syncCompletenessLabel(state: FavoriteFolderSyncDiagnostic['completenessState']): string {
+  return state === 'complete' ? '完整' : '可能不完整';
+}
+
+function syncStopReasonLabel(reason: FavoriteFolderSyncDiagnostic['stopReason']): string {
+  switch (reason) {
+    case 'has_more_false':
+      return '接口提示已到末页';
+    case 'empty_page':
+      return '返回空页';
+    case 'empty_page_has_more':
+      return '空页但仍提示有更多';
+    case 'request_error':
+      return '请求出错';
+    case 'max_pages_reached':
+      return '达到页数上限';
+    case 'probe_limit_reached':
+      return '达到诊断上限';
+    default:
+      return '未知';
+  }
+}
+
+function probeClassificationLabel(classification: FavoriteFolderGapProbeResult['classification']): string {
+  switch (classification) {
+    case 'complete':
+      return '未发现缺口';
+    case 'api_gap_only':
+      return '接口侧缺口';
+    case 'filtered_only':
+      return '过滤项造成差异';
+    case 'index_gap_only':
+      return '索引缺口';
+    case 'local_retained_only':
+      return '仅本地保留差异';
+    case 'mixed':
+      return '混合差异';
+    default:
+      return '待确认';
+  }
+}
+
+function formatBoolean(value: boolean): string {
+  return value ? '是' : '否';
 }
 
 function AuditCell({

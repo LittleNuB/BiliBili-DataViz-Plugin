@@ -31,7 +31,7 @@ export async function generateCurrentVideoSummary(
   const local = buildLocalCurrentVideoSummary(context, {
     aiStatus: 'disabled',
     aiModel: config.ai.chatModel,
-    aiNote: 'AI summaries are disabled; local evidence fallback is shown.',
+    aiNote: 'AI 摘要未启用，当前显示本地证据结果。',
     now,
   });
 
@@ -39,7 +39,7 @@ export async function generateCurrentVideoSummary(
     return buildLocalCurrentVideoSummary(context, {
       aiStatus: 'not_requested',
       aiModel: config.ai.chatModel,
-      aiNote: 'AI was not requested because no current video context is available.',
+      aiNote: '没有当前视频上下文，因此没有请求 AI。',
       now,
     });
   }
@@ -52,7 +52,7 @@ export async function generateCurrentVideoSummary(
     return buildLocalCurrentVideoSummary(context, {
       aiStatus: 'not_configured',
       aiModel: config.ai.chatModel,
-      aiNote: 'AI summaries are enabled but no API key is configured; local evidence fallback is shown.',
+      aiNote: 'AI 摘要已启用但没有配置 API Key，当前显示本地证据结果。',
       now,
     });
   }
@@ -80,7 +80,7 @@ export async function generateCurrentVideoSummary(
       return buildLocalCurrentVideoSummary(context, {
         aiStatus: 'low_confidence',
         aiModel: config.ai.chatModel,
-        aiNote: `AI confidence ${normalized.confidence.toFixed(2)} was below the local fallback threshold.`,
+        aiNote: `AI 返回置信度 ${normalized.confidence.toFixed(2)}，低于本地 fallback 阈值；当前显示本地证据结果。`,
         now,
       });
     }
@@ -94,7 +94,7 @@ export async function generateCurrentVideoSummary(
         status: 'generated',
         model: config.ai.chatModel,
         error: null,
-        note: 'AI generated from bounded current-video metadata and description payload only.',
+        note: 'AI 只基于有边界的当前视频元数据和简介 payload 生成。',
       },
       generatedAt: now,
     };
@@ -103,7 +103,7 @@ export async function generateCurrentVideoSummary(
       aiStatus: 'failed',
       aiModel: config.ai.chatModel,
       aiError: errorMessage(error),
-      aiNote: 'AI generation failed; local evidence fallback is shown.',
+      aiNote: 'AI 生成失败，当前显示本地证据结果。',
       now,
     });
   }

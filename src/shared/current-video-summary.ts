@@ -30,19 +30,19 @@ export function buildLocalCurrentVideoSummary(
       sourceTierLabel: null,
       confidence: 'low',
       generationMode: 'local_fallback',
-      title: 'No current video context',
+      title: '没有当前视频上下文',
       summary: noContextSummary(context.reason),
-      bullets: ['Open a Bilibili video page so Bili-Bill can read the current video metadata.'],
+      bullets: ['请打开一个 B 站视频页，Bili-Bill 才能读取当前视频元数据。'],
       evidence: [],
-      missingSources: ['metadata', 'description', 'transcript', 'content text'],
+      missingSources: ['元数据', '简介', '字幕', '正文文本'],
       warnings: [],
-      limitations: ['No video metadata is available for this tab.'],
+      limitations: ['当前标签页没有可用的视频元数据。'],
       nextQuestions: [],
       ai: {
         status: options.aiStatus ?? 'not_requested',
         model: options.aiModel ?? null,
         error: options.aiError ?? null,
-        note: options.aiNote ?? 'AI was not requested because no current video context is available.',
+        note: options.aiNote ?? '没有当前视频上下文，因此没有请求 AI。',
       },
       generatedAt: now,
     };
@@ -85,19 +85,19 @@ export function loadingCurrentVideoSummary(now = Date.now()): CurrentVideoSummar
     sourceTierLabel: null,
     confidence: 'low',
     generationMode: 'local_fallback',
-    title: 'Preparing current video summary',
-    summary: 'Reading the current video context and checking whether AI generation is allowed.',
+    title: '正在准备当前视频摘要',
+    summary: '正在读取当前视频上下文，并检查是否允许 AI 生成。',
     bullets: [],
     evidence: [],
     missingSources: [],
     warnings: [],
-    limitations: ['You can cancel this request; local evidence remains available after cancellation.'],
+    limitations: ['你可以取消本次请求；取消后仍会保留本地证据结果。'],
     nextQuestions: [],
     ai: {
       status: 'not_requested',
       model: null,
       error: null,
-      note: 'Loading state before any AI request result is accepted.',
+      note: '正在等待 AI 请求结果被确认。',
     },
     generatedAt: now,
   };
@@ -111,7 +111,7 @@ export function cancelledCurrentVideoSummary(
     return {
       ...buildLocalCurrentVideoSummary(context, {
         aiStatus: 'not_requested',
-        aiNote: 'The visible AI summary request was cancelled; this is the local evidence fallback.',
+        aiNote: '可见的 AI 摘要请求已取消；当前显示本地证据结果。',
         now,
       }),
       status: 'cancelled',
@@ -121,9 +121,9 @@ export function cancelledCurrentVideoSummary(
   return {
     ...loadingCurrentVideoSummary(now),
     status: 'cancelled',
-    title: 'Summary request cancelled',
-    summary: 'The visible summary request was cancelled before a current video context was available.',
-    limitations: ['No AI result was accepted after cancellation.'],
+    title: '摘要请求已取消',
+    summary: '当前视频上下文可用前，摘要请求已被取消。',
+    limitations: ['取消后没有采用任何 AI 结果。'],
   };
 }
 
@@ -212,7 +212,7 @@ export function buildCurrentVideoSummaryAiPayload(
       transcript: context.sources.transcript,
       contentText: context.sources.contentText,
     },
-    sourceTier: sourceTierLabel(tier),
+    sourceTier: payloadSourceTierLabel(tier),
     warnings: Array.from(new Set(context.warnings)).slice(0, 12),
     safetyRules: [
       'Do not claim a full-video summary because transcript and content text are unavailable.',
@@ -228,7 +228,11 @@ function selectSourceTier(context: CurrentVideoContext): CurrentVideoSummarySour
     : 'metadata_summary';
 }
 
-function sourceTierLabel(tier: CurrentVideoSummarySourceTier): 'metadata summary' | 'description summary' {
+function sourceTierLabel(tier: CurrentVideoSummarySourceTier): '元数据摘要' | '简介摘要' {
+  return tier === 'description_summary' ? '简介摘要' : '元数据摘要';
+}
+
+function payloadSourceTierLabel(tier: CurrentVideoSummarySourceTier): 'metadata summary' | 'description summary' {
   return tier === 'description_summary' ? 'description summary' : 'metadata summary';
 }
 
@@ -241,11 +245,11 @@ function buildSummarySentence(
   tier: CurrentVideoSummarySourceTier,
 ): string {
   const title = context.title ?? context.bvid;
-  const author = context.authorName ? ` by ${context.authorName}` : '';
+  const author = context.authorName ? `，UP 主：${context.authorName}` : '';
   if (tier === 'description_summary') {
-    return `Description summary: based on the visible description and metadata, "${title}"${author} appears to center on ${descriptionLead(context.description.text)}.`;
+    return `基于可见简介和元数据，《${title}》${author}大致围绕：${descriptionLead(context.description.text)}。`;
   }
-  return `Metadata summary: based only on visible metadata, "${title}"${author} can be described by its title, creator, duration, and available page or chapter labels.`;
+  return `仅基于可见元数据，《${title}》${author}。目前只能从标题、UP 主、时长，以及可用的分 P 或章节标题判断主题。`;
 }
 
 function buildSummaryBullets(
@@ -253,22 +257,22 @@ function buildSummaryBullets(
   tier: CurrentVideoSummarySourceTier,
 ): string[] {
   const bullets: string[] = [];
-  if (context.authorName) bullets.push(`Creator shown in metadata: ${context.authorName}.`);
-  if (context.durationSeconds) bullets.push(`Visible duration: ${formatDuration(context.durationSeconds)}.`);
+  if (context.authorName) bullets.push(`元数据显示 UP 主：${context.authorName}。`);
+  if (context.durationSeconds) bullets.push(`可见时长：${formatDuration(context.durationSeconds)}。`);
   if (context.currentPart.total && context.currentPart.total > 1) {
-    bullets.push(`Current part: ${context.currentPart.page} of ${context.currentPart.total}${context.currentPart.title ? `, "${context.currentPart.title}"` : ''}.`);
+    bullets.push(`当前分 P：第 ${context.currentPart.page} / ${context.currentPart.total} P${context.currentPart.title ? `，「${context.currentPart.title}」` : ''}。`);
   }
   if (context.parts.length > 1) {
-    bullets.push(`Page labels are available for ${context.parts.length} parts, so navigation context is stronger than a single title.`);
+    bullets.push(`可见 ${context.parts.length} 个分 P 标题，导航上下文比单个标题更充分。`);
   }
   if (context.chapters.length > 0) {
-    bullets.push(`Chapter labels are available, but they are treated as structure labels, not transcript evidence.`);
+    bullets.push('检测到章节标题，但它们只作为结构标签，不当作字幕证据。');
   }
   if (tier === 'description_summary' && context.description.text) {
-    bullets.unshift(`The description says: ${limitText(context.description.text, 180)}`);
+    bullets.unshift(`简介写到：${limitText(context.description.text, 180)}`);
   }
   if (bullets.length === 0) {
-    bullets.push('Only the BVID and basic page context are available.');
+    bullets.push('当前只有 BVID 和基础页面上下文可用。');
   }
   return bullets.slice(0, 5);
 }
@@ -280,40 +284,40 @@ function buildEvidence(
   const evidence: CurrentVideoSummaryEvidence[] = [
     { source: 'metadata', label: 'BVID', value: context.bvid },
   ];
-  if (context.title) evidence.push({ source: 'metadata', label: 'Title', value: context.title });
-  if (context.authorName) evidence.push({ source: 'metadata', label: 'Creator', value: context.authorName });
-  if (context.durationSeconds) evidence.push({ source: 'metadata', label: 'Duration', value: formatDuration(context.durationSeconds) });
-  if (context.currentPart.title) evidence.push({ source: 'page', label: 'Current part', value: context.currentPart.title });
-  if (context.parts.length > 0) evidence.push({ source: 'page', label: 'Parts', value: String(context.parts.length) });
+  if (context.title) evidence.push({ source: 'metadata', label: '标题', value: context.title });
+  if (context.authorName) evidence.push({ source: 'metadata', label: 'UP 主', value: context.authorName });
+  if (context.durationSeconds) evidence.push({ source: 'metadata', label: '时长', value: formatDuration(context.durationSeconds) });
+  if (context.currentPart.title) evidence.push({ source: 'page', label: '当前分 P', value: context.currentPart.title });
+  if (context.parts.length > 0) evidence.push({ source: 'page', label: '分 P 数量', value: String(context.parts.length) });
   if (context.chapters.length > 0) {
     evidence.push({
       source: 'chapter',
-      label: 'Chapters',
-      value: context.chapters.slice(0, 3).map(chapter => chapter.title).join(', '),
+      label: '章节',
+      value: context.chapters.slice(0, 3).map(chapter => chapter.title).join('、'),
     });
   }
   if (tier === 'description_summary' && context.description.text) {
     evidence.push({
       source: 'description',
-      label: 'Description excerpt',
+      label: '简介摘录',
       value: limitText(context.description.text, DESCRIPTION_EVIDENCE_LIMIT),
     });
   }
   evidence.push({
     source: 'local_fallback',
-    label: 'Source boundary',
-    value: 'Description and content text are different source tiers; content text remains unavailable.',
+    label: '来源边界',
+    value: '简介和正文文本是不同来源层级；当前正文文本不可用。',
   });
   return evidence;
 }
 
 function buildMissingSources(context: CurrentVideoContext): string[] {
   const missing: string[] = [];
-  if (context.sources.description !== 'available') missing.push('description');
-  if (context.sources.transcript !== 'available') missing.push('transcript');
-  if (context.sources.contentText !== 'available') missing.push('content text');
-  if (context.sources.pages !== 'available') missing.push('page labels');
-  if (context.sources.chapters !== 'available') missing.push('chapters');
+  if (context.sources.description !== 'available') missing.push('简介');
+  if (context.sources.transcript !== 'available') missing.push('字幕');
+  if (context.sources.contentText !== 'available') missing.push('正文文本');
+  if (context.sources.pages !== 'available') missing.push('分 P 标题');
+  if (context.sources.chapters !== 'available') missing.push('章节');
   return missing;
 }
 
@@ -322,35 +326,35 @@ function buildLimitations(
   tier: CurrentVideoSummarySourceTier,
 ): string[] {
   const limitations = [
-    'No transcript is available, so this is not a full video summary and does not claim to understand the complete video body.',
-    'Full content text is unavailable; the description is not treated as body content.',
+    '没有可用字幕，因此这不是完整视频总结，也不会声称理解了完整视频正文。',
+    '完整正文文本不可用；简介不会被当作正文内容。',
   ];
   if (tier === 'metadata_summary') {
-    limitations.unshift('Only metadata is available, so the summary is low confidence and topic-level.');
+    limitations.unshift('当前只有元数据可用，因此摘要置信度较低，只能判断主题层面。');
   } else {
-    limitations.unshift('The summary uses the visible description plus metadata, but not transcript or full content text.');
+    limitations.unshift('摘要使用可见简介和元数据，但不包含字幕或完整正文文本。');
   }
   if (context.sources.chapters === 'available') {
-    limitations.push('Chapter labels can describe structure only; they are not expanded into body claims.');
+    limitations.push('章节标题只能说明结构，不会被扩展成正文内容判断。');
   }
   return limitations;
 }
 
 function buildNextQuestions(tier: CurrentVideoSummarySourceTier): string[] {
   return tier === 'description_summary'
-    ? ['Show only description highlights', 'Find related favorites']
-    : ['Refresh current video metadata', 'Find related favorites'];
+    ? ['只看简介重点', '查找相关收藏']
+    : ['刷新当前视频元数据', '查找相关收藏'];
 }
 
 function noContextSummary(reason: string): string {
-  if (reason === 'non_video_page') return 'This tab is not a Bilibili video page.';
-  if (reason === 'video_context_unavailable') return 'The current Bilibili video context is still unavailable.';
-  return 'No current video context is available.';
+  if (reason === 'non_video_page') return '当前标签页不是 B 站视频页。';
+  if (reason === 'video_context_unavailable') return '当前 B 站视频上下文暂时不可用。';
+  return '没有可用的当前视频上下文。';
 }
 
 function descriptionLead(text: string | null): string {
   const normalized = normalizeText(text);
-  if (!normalized) return 'the text visible in the description';
+  if (!normalized) return '简介里的可见文本';
   const sentence = normalized.split(/(?<=[.!?。！？])\s+/u)[0] ?? normalized;
   return limitText(sentence, 180);
 }
@@ -358,15 +362,15 @@ function descriptionLead(text: string | null): string {
 function localAiNote(status?: CurrentVideoSummaryAiStatus): string {
   switch (status) {
     case 'disabled':
-      return 'AI summaries are disabled, so this is a local evidence fallback.';
+      return 'AI 摘要未启用，因此当前显示本地证据结果。';
     case 'not_configured':
-      return 'AI summaries are enabled but no API key is configured, so this is a local evidence fallback.';
+      return 'AI 摘要已启用但没有配置 API Key，因此当前显示本地证据结果。';
     case 'failed':
-      return 'AI generation failed; local evidence fallback is shown.';
+      return 'AI 生成失败，当前显示本地证据结果。';
     case 'low_confidence':
-      return 'AI returned low confidence; local evidence fallback is shown.';
+      return 'AI 返回的置信度较低，当前显示本地证据结果。';
     default:
-      return 'Local evidence fallback; AI was not requested.';
+      return '本地证据结果；本次没有请求 AI。';
   }
 }
 
