@@ -6,6 +6,7 @@ import type {
   FavoriteFolderGapProbeResult,
   FavoriteFolderSyncDiagnostic,
   FavoriteSyncResult,
+  SmartFavoriteCategoryEvidenceKind,
   SmartFavoriteOverview,
   SmartFavoriteQaCitedVideo,
   SmartFavoriteQaResponse,
@@ -383,7 +384,7 @@ export function SmartFavoritesPage() {
             </div>
           </div>
           <div style={{ color: '#666', fontSize: '11px', lineHeight: 1.5, marginBottom: '8px' }}>
-            未分类包含模型归入未分类、索引失败和待索引内容；失败项再次生成索引会重试。
+            待确认表示只有宽泛分类或路径提示，证据不足，未放入具体子类；未分类包含索引失败和待索引内容。
           </div>
           {treeRows.length === 0 ? (
             <div style={{ color: '#666', fontSize: '12px', lineHeight: 1.6 }}>同步并生成智能索引后显示分类</div>
@@ -1042,6 +1043,7 @@ function TreeRow({
 function ResultCard({ result }: { result: SmartFavoriteResult }) {
   const item = result.item;
   const videoUrl = getVideoUrl(item);
+  const categoryEvidence = result.smart?.categoryEvidence;
   return (
     <a
       href={videoUrl ?? undefined}
@@ -1068,6 +1070,9 @@ function ResultCard({ result }: { result: SmartFavoriteResult }) {
         <div style={{ color: '#A0A0B0', fontSize: '12px', lineHeight: 1.5 }}>
           {result.smart?.summary || item.intro || '暂无摘要'}
         </div>
+        <div style={{ color: getCategoryEvidenceColor(categoryEvidence?.kind), fontSize: '11px', lineHeight: 1.5, marginTop: '6px' }}>
+          分类证据：{categoryEvidence?.summary ?? '暂无分类证据说明。'}
+        </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center', marginTop: '6px' }}>
           <span style={{ color: '#666', fontSize: '11px' }}>
             {result.reasons.join(' · ')}{result.score > 0 ? ` · 分数 ${Math.round(result.score)}` : ''}
@@ -1085,6 +1090,21 @@ function getVideoUrl(item: SmartFavoriteResult['item']): string | null {
   if (item.bvid) return `https://www.bilibili.com/video/${item.bvid}`;
   if (item.avid) return `https://www.bilibili.com/video/av${item.avid}`;
   return null;
+}
+
+function getCategoryEvidenceColor(kind: SmartFavoriteCategoryEvidenceKind | undefined): string {
+  switch (kind) {
+    case 'ai':
+      return '#7FD1FF';
+    case 'metadata':
+      return '#A8E6A1';
+    case 'mixed':
+      return '#C9B6FF';
+    case 'path_fallback':
+      return '#FFB347';
+    default:
+      return '#9090A0';
+  }
 }
 
 interface TreeRowData extends SmartFavoriteTreeNode {

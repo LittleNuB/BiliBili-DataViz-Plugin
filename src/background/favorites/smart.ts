@@ -19,8 +19,8 @@ import {
 import { chatJson } from '../ai/openai-compatible.ts';
 import {
   buildTaxonomyPromptSummary,
+  classifyFavoritePath,
   expandFavoriteSearchTerms,
-  normalizeFavoritePath,
   UNCATEGORIZED_PATH,
 } from './taxonomy.ts';
 
@@ -36,6 +36,7 @@ interface AiQueryRewriteResponse {
 }
 
 const DEFAULT_INDEX_LIMIT = 200;
+const SMART_FAVORITE_INDEX_VERSION = 'smart-favorites-category-v2';
 
 type SmartAiConfig = Awaited<ReturnType<typeof loadConfig>>['ai'];
 
@@ -71,7 +72,7 @@ export async function buildSmartFavoriteIndex(
   const result: SmartIndexResult = { processed: 0, indexed: 0, failed: 0, skipped: 0, notes: [] };
   const candidates = items
     .map(item => {
-      const contentHash = hashText(buildFavoriteDocument(item));
+      const contentHash = hashText(buildFavoriteIndexFingerprint(item));
       const current = indexes.get(item.itemKey);
       return { item, contentHash, current };
     })
@@ -89,14 +90,15 @@ export async function buildSmartFavoriteIndex(
     result.processed++;
     try {
       const ai = await deps.createSmartIndex(item, config.ai);
-      const path = normalizeFavoritePath(ai.path, item);
+      const classification = classifyFavoritePath(item, ai);
       const write = await deps.putSmartFavoriteIndex({
         itemKey: item.itemKey,
-        path,
+        path: classification.path,
         summary: normalizeText(ai.summary, item.intro || item.title),
         keywords: normalizeTextArray(ai.keywords).slice(0, 12),
         aliases: normalizeTextArray(ai.aliases).slice(0, 8),
-        searchableText: buildSearchableText(item, ai, path),
+        categoryEvidence: classification.evidence,
+        searchableText: buildSearchableText(item, ai, classification.path),
         contentHash,
         model: config.ai.chatModel,
         status: 'indexed',
@@ -115,6 +117,13 @@ export async function buildSmartFavoriteIndex(
         summary: item.intro || item.title,
         keywords: [],
         aliases: [],
+        categoryEvidence: {
+          kind: 'path_fallback',
+          summary: '路径兜底：智能索引失败，暂列未分类。',
+          directTerms: [],
+          weakTerms: [],
+          downgraded: true,
+        },
         searchableText: buildSearchableText(item, undefined, UNCATEGORIZED_PATH),
         contentHash,
         model: config.ai.chatModel,
@@ -212,7 +221,7 @@ export async function getSmartFavoritesByPath(path: string[], limit = 200): Prom
         item,
         ...(smart ? { smart } : {}),
         score: 0,
-        reasons: ['分类路径匹配'],
+        reasons: ['分类浏览'],
       } satisfies SmartFavoriteResult;
     })
     .filter((result): result is SmartFavoriteResult => result !== null)
@@ -226,7 +235,9 @@ async function createSmartIndex(item: FavoriteItem, config: SmartAiConfig): Prom
       role: 'system',
       content: [
         '你是一个 B站收藏夹整理助手。请只输出 JSON。',
-        'B站分区和标签是主要依据，原收藏夹名是辅助依据。',
+        '优先依据标题、简介、B站分区、标签和可见文本；原收藏夹名只能作为弱提示。',
+        '只有在标题、简介、标签、AI摘要或关键词出现直接证据时，才输出具体子类，例如“娱乐 / 游戏”。',
+        '如果只能判断到宽泛父类，请返回父类；如果证据不足，请返回 ["待确认"] 或 ["未分类"]，不要强行猜测具体叶子类。',
         '分类路径最多 4 层，颗粒度从高到低；优先使用下面的标准路径，不要随意创造新的一级类目。',
         buildTaxonomyPromptSummary(),
         'JSON 字段：path: string[]，summary: string，keywords: string[]，aliases: string[]。',
@@ -383,7 +394,11 @@ function buildFavoriteDocument(item: FavoriteItem): string {
   ].join('\n');
 }
 
-function buildSearchableText(item: FavoriteItem, ai?: AiFavoriteIndexResponse, path = normalizeFavoritePath(ai?.path, item)): string {
+function buildFavoriteIndexFingerprint(item: FavoriteItem): string {
+  return [SMART_FAVORITE_INDEX_VERSION, buildFavoriteDocument(item)].join('\n');
+}
+
+function buildSearchableText(item: FavoriteItem, ai?: AiFavoriteIndexResponse, path = classifyFavoritePath(item, ai).path): string {
   return [
     buildFavoriteDocument(item),
     path.join(' '),
