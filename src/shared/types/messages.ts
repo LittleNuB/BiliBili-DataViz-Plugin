@@ -30,6 +30,7 @@ import type {
 import type { CurrentVideoContextResult } from './current-video-context';
 import type { CurrentVideoSummaryResult } from './current-video-summary';
 import type { VideoKnowledgeJumpResponse, VideoKnowledgeResult } from './video-knowledge';
+import type { HistoryTailProbeReport } from './history-tail-probe';
 import type { HistorySyncCursorSnapshot, HistorySyncMode } from './history-sync';
 
 // Popup / Dashboard → Service Worker
@@ -48,6 +49,7 @@ export type RequestAction =
   | 'EXPORT_DATA'
   | 'EXPORT_DATA_PAGE'
   | 'GET_SYNC_STATUS'
+  | 'PROBE_HISTORY_TAIL'
   | 'GET_CURRENT_VIDEO_CONTEXT'
   | 'GET_CURRENT_VIDEO_SUMMARY'
   | 'GET_VIDEO_KNOWLEDGE'
@@ -176,3 +178,4 @@ export type DynamicBillItemsResponse = BiliVizResponse<DynamicBillItem[]>;
 export type DynamicBillItemResponse = BiliVizResponse<DynamicBillItem | null>;
 export type DynamicBillFilterResponse = BiliVizResponse<DynamicBillFilterPreference>;
 export type DynamicBillFeedbackResponse = BiliVizResponse<DynamicBillFeedbackResult>;
+export type HistoryTailProbeResponse = BiliVizResponse<HistoryTailProbeReport>;
