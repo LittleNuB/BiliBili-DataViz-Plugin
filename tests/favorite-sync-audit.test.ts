@@ -190,17 +190,18 @@ test('incomplete favorite sync upserts fetched items without snapshot replacemen
     {
       async replaceFavoriteSnapshot() {
         calls.push('replace');
-        return 0;
+        return { written: 0, notes: [] };
       },
       async updateFavoriteFolderSyncDiagnostics(folders, diagnostics) {
         calls.push('diagnostics');
         assert.equal(folders[0].lastSyncDiagnostic?.unexplainedDelta, 21);
         assert.equal(diagnostics[0].mediaId, 100);
+        return { written: folders.length, notes: [] };
       },
       async upsertFavoriteItems(items) {
         calls.push('upsert-items');
         assert.deepEqual(items.map(saved => saved.itemKey), [item.itemKey]);
-        return items.length;
+        return { written: items.length, notes: [] };
       },
     },
   );
@@ -208,6 +209,7 @@ test('incomplete favorite sync upserts fetched items without snapshot replacemen
   assert.deepEqual(calls, ['diagnostics', 'upsert-items']);
   assert.equal(result.destructiveReplacement, false);
   assert.equal(result.insertedOrUpdated, 1);
+  assert.deepEqual(result.notes, []);
 });
 
 function makeVideos(count: number, offset: number): FavoriteResourceApiItem[] {

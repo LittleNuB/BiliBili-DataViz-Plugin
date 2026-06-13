@@ -1,12 +1,13 @@
 import type { FavoriteFolder, FavoriteFolderSyncDiagnostic, FavoriteItem } from '../../shared/types/favorite';
+import type { FavoriteRepoWriteResult } from '../storage/favorite-repo';
 
 export interface FavoriteSyncPersistenceRepo {
-  replaceFavoriteSnapshot(folders: FavoriteFolder[], items: FavoriteItem[]): Promise<number>;
+  replaceFavoriteSnapshot(folders: FavoriteFolder[], items: FavoriteItem[]): Promise<FavoriteRepoWriteResult>;
   updateFavoriteFolderSyncDiagnostics(
     folders: FavoriteFolder[],
     diagnostics: FavoriteFolderSyncDiagnostic[],
-  ): Promise<void>;
-  upsertFavoriteItems(items: FavoriteItem[]): Promise<number>;
+  ): Promise<FavoriteRepoWriteResult>;
+  upsertFavoriteItems(items: FavoriteItem[]): Promise<FavoriteRepoWriteResult>;
 }
 
 export interface FavoriteSyncPersistenceInput {
@@ -19,6 +20,7 @@ export interface FavoriteSyncPersistenceInput {
 export interface FavoriteSyncPersistenceResult {
   insertedOrUpdated: number;
   destructiveReplacement: boolean;
+  notes: string[];
 }
 
 export async function persistFavoriteSyncData(
@@ -28,16 +30,20 @@ export async function persistFavoriteSyncData(
   const foldersWithDiagnostics = attachDiagnosticsToFolders(input.folders, input.diagnostics);
 
   if (input.complete) {
+    const write = await repo.replaceFavoriteSnapshot(foldersWithDiagnostics, input.items);
     return {
-      insertedOrUpdated: await repo.replaceFavoriteSnapshot(foldersWithDiagnostics, input.items),
+      insertedOrUpdated: write.written,
       destructiveReplacement: true,
+      notes: write.notes,
     };
   }
 
-  await repo.updateFavoriteFolderSyncDiagnostics(foldersWithDiagnostics, input.diagnostics);
+  const folderWrite = await repo.updateFavoriteFolderSyncDiagnostics(foldersWithDiagnostics, input.diagnostics);
+  const itemWrite = await repo.upsertFavoriteItems(input.items);
   return {
-    insertedOrUpdated: await repo.upsertFavoriteItems(input.items),
+    insertedOrUpdated: itemWrite.written,
     destructiveReplacement: false,
+    notes: [...folderWrite.notes, ...itemWrite.notes],
   };
 }
 

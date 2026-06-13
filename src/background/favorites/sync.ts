@@ -54,6 +54,7 @@ export async function syncFavorites(): Promise<FavoriteSyncResult> {
       filteredItems: diagnostics.reduce((sum, diagnostic) => sum + diagnostic.filteredItems, 0),
       blockedReason: assessment.reason,
       diagnostics,
+      notes: persistence.notes,
       syncedAt,
     };
   }
@@ -71,6 +72,7 @@ export async function syncFavorites(): Promise<FavoriteSyncResult> {
     reportedItems: reportedItemCount,
     filteredItems: diagnostics.reduce((sum, diagnostic) => sum + diagnostic.filteredItems, 0),
     diagnostics,
+    notes: persistence.notes,
     syncedAt,
   };
 }

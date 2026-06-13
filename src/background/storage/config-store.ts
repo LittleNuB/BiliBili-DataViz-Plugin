@@ -1,5 +1,5 @@
-import { DEFAULT_CONFIG, type UserConfig } from '../../shared/types/config';
-import type { HistorySyncProgress } from '../../shared/types/history-sync';
+import { DEFAULT_CONFIG, type UserConfig } from '../../shared/types/config.ts';
+import type { HistorySyncProgress } from '../../shared/types/history-sync.ts';
 
 const CONFIG_KEY = 'userConfig';
 const HISTORY_SYNC_PROGRESS_KEY = 'historySyncProgress';
