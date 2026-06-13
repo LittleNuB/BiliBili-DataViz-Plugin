@@ -50,6 +50,26 @@ export interface CategoryDistribution {
 
 export type InterestDriftGranularity = 'daily' | 'weekly' | 'monthly';
 
+export interface PreferenceWindowOption {
+  key: string;
+  label: string;
+  startDate: string;
+  endDate: string;
+  granularity: InterestDriftGranularity;
+  recordCount: number;
+  activeDays: number;
+  totalWatchTime: number;
+  partialCoverage: boolean;
+}
+
+export type PreferenceWindowState = 'empty' | 'insufficient_sample' | 'ready';
+
+export type PreferenceWindowStateReason =
+  | 'no_records'
+  | 'no_watch_time'
+  | 'too_few_records'
+  | 'too_little_watch_time';
+
 export interface HistoryCoverage {
   earliestDate: string | null;
   latestDate: string | null;
@@ -58,17 +78,13 @@ export interface HistoryCoverage {
   coveredDays: number;
 }
 
-export interface InterestDrift {
-  month: string;
-  period: string;
-  label: string;
-  granularity: InterestDriftGranularity;
-  startDate: string;
-  endDate: string;
-  categories: Record<string, number>;
-  recordCount: number;
-  activeDays: number;
-  totalWatchTime: number;
+export interface PreferenceWindowSummary {
+  window: PreferenceWindowOption;
+  state: PreferenceWindowState;
+  stateReason: PreferenceWindowStateReason | null;
+  categories: CategoryDistribution[];
+  durationBuckets: DurationBucket[];
+  topTags: { name: string; count: number }[];
 }
 
 export interface DurationBucket {
@@ -79,13 +95,10 @@ export interface DurationBucket {
 }
 
 export interface PreferenceAnalytics {
-  categories: CategoryDistribution[];
-  drift: InterestDrift[];
-  driftByGranularity: Record<InterestDriftGranularity, InterestDrift[]>;
-  defaultDriftGranularity: InterestDriftGranularity;
+  windows: Record<InterestDriftGranularity, PreferenceWindowOption[]>;
+  selectedWindow: PreferenceWindowSummary | null;
+  defaultGranularity: InterestDriftGranularity;
   coverage: HistoryCoverage;
-  durationBuckets: DurationBucket[];
-  topTags: { name: string; count: number }[];
 }
 
 export interface CreatorRanking {

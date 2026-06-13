@@ -154,7 +154,7 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     case 'GET_DASHBOARD_DATA':
       return { success: true, data: await getDashboardOverview() as T };
     case 'GET_PREFERENCE_DATA':
-      return { success: true, data: await getPreferenceData() as T };
+      return { success: true, data: await getPreferenceData(request.params) as T };
     case 'GET_CREATOR_DATA':
       return { success: true, data: await getCreatorData() as T };
     case 'GET_BEHAVIOR_DATA':
