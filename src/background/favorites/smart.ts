@@ -36,6 +36,7 @@ interface AiQueryRewriteResponse {
 }
 
 const DEFAULT_INDEX_LIMIT = 200;
+const SMART_FAVORITE_INDEX_VERSION = 'smart-favorites-category-v2';
 
 type SmartAiConfig = Awaited<ReturnType<typeof loadConfig>>['ai'];
 
@@ -71,7 +72,7 @@ export async function buildSmartFavoriteIndex(
   const result: SmartIndexResult = { processed: 0, indexed: 0, failed: 0, skipped: 0, notes: [] };
   const candidates = items
     .map(item => {
-      const contentHash = hashText(buildFavoriteDocument(item));
+      const contentHash = hashText(buildFavoriteIndexFingerprint(item));
       const current = indexes.get(item.itemKey);
       return { item, contentHash, current };
     })
@@ -391,6 +392,10 @@ function buildFavoriteDocument(item: FavoriteItem): string {
     `B站分区：${item.tagName || '未知'}`,
     `B站标签：${(item.tags ?? []).join('、') || '无'}`,
   ].join('\n');
+}
+
+function buildFavoriteIndexFingerprint(item: FavoriteItem): string {
+  return [SMART_FAVORITE_INDEX_VERSION, buildFavoriteDocument(item)].join('\n');
 }
 
 function buildSearchableText(item: FavoriteItem, ai?: AiFavoriteIndexResponse, path = classifyFavoritePath(item, ai).path): string {
