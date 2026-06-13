@@ -362,7 +362,7 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
     return emptyBox(
       'random_explore',
       '随机探索',
-      '不猜你喜欢什么，只从本地视频池里随机抽一条。',
+      '不做推荐排序，只从本地视频池里随机抽一条。',
       ['本地视频池里暂时没有可以安全抽取的候选。'],
       '先积累可抽取的视频池',
       `这盒会排除最近 ${RANDOM_VIDEO_BLOCK_DAYS} 天刚看过的视频，以及其他盲盒已经占用的候选。等本地池子再大一点，它就能开出来。`,
@@ -376,7 +376,7 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
   return {
     id: 'random_explore',
     title: '随机探索',
-    teaser: '不猜你喜欢什么，只从本地视频池里随机抽一条。',
+    teaser: '不做推荐排序，只从本地视频池里随机抽一条。',
     source: pick.source,
     reason: pick.reason,
     evidence: [

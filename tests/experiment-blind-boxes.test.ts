@@ -7,6 +7,7 @@ import type { WatchHistoryRecord } from '../src/shared/types/watch-event';
 const NOW_MS = Date.UTC(2026, 5, 13, 12, 0, 0);
 
 test('builds four local blind boxes with concrete video candidates', () => {
+  const bannedGuessWord = `猜${'你喜欢'}`;
   const records: WatchHistoryRecord[] = [
     createRecord({ bvid: 'BVREC001', tagName: '游戏', daysAgo: 3, actualCompletion: 0.82, title: '最近游戏 1' }),
     createRecord({ bvid: 'BVREC002', tagName: '游戏', daysAgo: 5, actualCompletion: 0.78, title: '最近游戏 2' }),
@@ -83,7 +84,7 @@ test('builds four local blind boxes with concrete video candidates', () => {
   assert.notEqual(randomExplore.video?.bvid, reviveInterest.video?.bvid);
 
   for (const box of data.blindBoxes) {
-    assert.doesNotMatch(box.reason, /猜你喜欢/);
+    assert.equal(box.reason.includes(bannedGuessWord), false);
     assert.ok(box.evidence.length > 0);
     if (box.state === 'ready') {
       assert.ok(box.video);
@@ -95,6 +96,8 @@ test('builds four local blind boxes with concrete video candidates', () => {
 });
 
 test('returns Chinese empty states instead of generic filler when local evidence is insufficient', () => {
+  const bannedGuessWord = `猜${'你喜欢'}`;
+  const bannedUnconsumedWord = `未${'消费'}`;
   const data = buildExperimentData([], [], new Map(), NOW_MS);
 
   assert.equal(data.blindBoxes.length, 4);
@@ -103,7 +106,8 @@ test('returns Chinese empty states instead of generic filler when local evidence
     assert.ok(box.emptyTitle);
     assert.ok(box.emptyDescription);
     assert.ok(box.evidence.length > 0);
-    assert.doesNotMatch(box.reason, /猜你喜欢|未消费/);
+    assert.equal(box.reason.includes(bannedGuessWord), false);
+    assert.equal(box.reason.includes(bannedUnconsumedWord), false);
   }
 });
 
