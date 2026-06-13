@@ -20,6 +20,7 @@ import type {
   DynamicSyncResult,
 } from './dynamic-bill';
 import type {
+  FavoriteFolderGapProbeResult,
   FavoriteSyncResult,
   SmartFavoriteOverview,
   SmartFavoriteQaResponse,
@@ -55,6 +56,7 @@ export type RequestAction =
   | 'GET_SMART_FAVORITES'
   | 'GET_SMART_FAVORITES_BY_PATH'
   | 'SYNC_FAVORITES'
+  | 'PROBE_FAVORITE_FOLDER_GAP'
   | 'BUILD_SMART_FAVORITE_INDEX'
   | 'SEARCH_SMART_FAVORITES'
   | 'ASK_SMART_FAVORITES'
@@ -160,6 +162,7 @@ export type DeviceResponse = BiliVizResponse<{
 }>;
 export type SmartFavoritesResponse = BiliVizResponse<SmartFavoriteOverview>;
 export type FavoriteSyncResponse = BiliVizResponse<FavoriteSyncResult>;
+export type FavoriteFolderGapProbeResponse = BiliVizResponse<FavoriteFolderGapProbeResult>;
 export type SmartFavoriteIndexResponse = BiliVizResponse<SmartIndexResult>;
 export type SmartFavoriteSearchMessageResponse = BiliVizResponse<SmartFavoriteSearchResponse>;
 export type SmartFavoriteQaMessageResponse = BiliVizResponse<SmartFavoriteQaResponse>;

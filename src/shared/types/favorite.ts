@@ -79,13 +79,43 @@ export type FavoriteFolderSyncCompletenessState = 'complete' | 'incomplete';
 
 export type FavoriteSyncStatus = 'complete' | 'blocked';
 
+export type FavoriteFolderSyncStopReason =
+  | 'has_more_false'
+  | 'empty_page'
+  | 'empty_page_has_more'
+  | 'request_error'
+  | 'max_pages_reached'
+  | 'probe_limit_reached';
+
+export interface FavoriteFolderSyncPageDiagnostic {
+  pageNumber: number;
+  requestedPageSize: number;
+  attempts: number;
+  attemptResourceCounts: number[];
+  returnedResourceCount: number;
+  hasMore: boolean;
+  shortPageWithHasMore: boolean;
+  retryImprovedShortPage: boolean;
+  duplicateResourceIds: number;
+  duplicateBvids: number;
+  storedVideoItems: number;
+  filteredUnavailableItems: number;
+  filteredMissingIdItems: number;
+  filteredNonVideoItems: number;
+  filteredItems: number;
+}
+
 export interface FavoriteFolderSyncDiagnostic {
   mediaId: number;
   title: string;
   reportedMediaCount: number;
+  pageSize: number;
   requestedPages: number;
   pagesFetched: number;
   rawResourcesSeen: number;
+  uniqueResourcesSeen: number;
+  duplicateResourceIds: number;
+  duplicateBvids: number;
   storedVideoItems: number;
   filteredUnavailableItems: number;
   filteredMissingIdItems: number;
@@ -96,6 +126,8 @@ export interface FavoriteFolderSyncDiagnostic {
   stoppedByMaxPages: boolean;
   unexplainedDelta: number;
   completenessState: FavoriteFolderSyncCompletenessState;
+  stopReason?: FavoriteFolderSyncStopReason;
+  pageDiagnostics: FavoriteFolderSyncPageDiagnostic[];
   errors: string[];
 }
 
@@ -109,6 +141,46 @@ export interface FavoriteSyncResult {
   blockedReason?: string;
   diagnostics: FavoriteFolderSyncDiagnostic[];
   syncedAt: number;
+}
+
+export interface FavoriteFolderProbeLocalIndexCoverage {
+  storedItems: number;
+  indexedItems: number;
+  failedItems: number;
+  pendingItems: number;
+  staleItems: number;
+  overlapItems: number;
+  localOnlyItems: number;
+  probeOnlyItems: number;
+}
+
+export interface FavoriteFolderGapBuckets {
+  apiMissingItems: number;
+  filteredItems: number;
+  storedButNotIndexedItems: number;
+  localOnlyItems: number;
+}
+
+export type FavoriteFolderProbeClassification =
+  | 'complete'
+  | 'api_gap_only'
+  | 'filtered_only'
+  | 'index_gap_only'
+  | 'local_retained_only'
+  | 'mixed';
+
+export interface FavoriteFolderGapProbeResult {
+  folder: {
+    mediaId: number;
+    title: string;
+    reportedMediaCount: number;
+  };
+  diagnostic: FavoriteFolderSyncDiagnostic;
+  localIndexCoverage: FavoriteFolderProbeLocalIndexCoverage;
+  gapBuckets: FavoriteFolderGapBuckets;
+  classification: FavoriteFolderProbeClassification;
+  notes: string[];
+  probedAt: number;
 }
 
 export interface SmartIndexResult {

@@ -25,10 +25,15 @@ export function normalizeFavoriteFolderSyncDiagnostic(diagnostic: FavoriteFolder
 
   return {
     ...diagnostic,
+    pageSize: Number.isFinite(diagnostic.pageSize) ? diagnostic.pageSize : 20,
     filteredItems,
     pageErrors,
     requestedPages,
+    uniqueResourcesSeen: Number.isFinite(diagnostic.uniqueResourcesSeen) ? diagnostic.uniqueResourcesSeen : Math.max(0, Number(diagnostic.rawResourcesSeen ?? 0)),
+    duplicateResourceIds: Number.isFinite(diagnostic.duplicateResourceIds) ? diagnostic.duplicateResourceIds : 0,
+    duplicateBvids: Number.isFinite(diagnostic.duplicateBvids) ? diagnostic.duplicateBvids : 0,
     completenessState,
+    pageDiagnostics: Array.isArray(diagnostic.pageDiagnostics) ? diagnostic.pageDiagnostics : [],
   };
 }
 
