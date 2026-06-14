@@ -20,6 +20,7 @@
   "host_permissions": [
     "*://*.bilibili.com/*",
     "*://bilibili.com/*",
+    "https://*.hdslb.com/*",
     "https://api.deepseek.com/*",
     "https://api.openai.com/*"
   ],

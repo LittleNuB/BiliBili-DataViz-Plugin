@@ -82,6 +82,46 @@ test('keeps available subtitle source state separate from transcript summary', (
   assert.doesNotMatch(JSON.stringify(payload), /subtitleProbe|track|aisubtitle|subtitle_url/i);
 });
 
+test('keeps cached transcript evidence out of current video summary AI payload', () => {
+  const context = videoContext({
+    descriptionText: 'This description is still the only text supplied to the summary payload.',
+    descriptionAvailable: true,
+  });
+  context.sources.transcript = 'available';
+  context.transcriptEvidence = {
+    status: 'cached',
+    active: true,
+    checkedAt: 2000,
+    bvid: context.bvid,
+    cid: context.cid,
+    page: context.currentPart.page,
+    language: 'zh-CN',
+    source: 'bilibili_subtitle',
+    sourceType: 'bilibili_player_wbi_v2',
+    sourceHash: 'hash123',
+    segmentCount: 2,
+    staleSegmentCount: 0,
+    coverageStartSeconds: 0,
+    coverageEndSeconds: 8,
+    fetchedAt: 2000,
+    updatedAt: 2000,
+    reason: 'transcript_segments_cached',
+    message: 'cached transcript evidence only',
+    warnings: [],
+  };
+
+  const summary = buildLocalCurrentVideoSummary(context);
+  const payload = buildCurrentVideoSummaryAiPayload(context);
+  const rawPayload = JSON.stringify(payload);
+
+  assert.equal(summary.sourceTier, 'description_summary');
+  assert.equal(payload.availableSources.transcript, 'available');
+  assert.equal(payload.availableSources.contentText, 'unavailable');
+  assert.ok(summary.evidence.some(item => item.label === 'Transcript evidence cache'));
+  assert.ok(summary.limitations.some(item => item.includes('当前摘要 slice')));
+  assert.doesNotMatch(rawPayload, /sourceHash|segmentId|cached transcript evidence|SECRET TRANSCRIPT|watchHistory|Cookie|Key\.txt/i);
+});
+
 test('marks AI disabled fallback without changing source tier', () => {
   const summary = buildLocalCurrentVideoSummary(videoContext({}), {
     aiStatus: 'disabled',

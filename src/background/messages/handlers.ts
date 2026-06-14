@@ -6,6 +6,7 @@ import type {
   CurrentVideoNoContext,
   CurrentVideoSubtitleSourceState,
 } from '../../shared/types/current-video-context';
+import type { CurrentVideoTranscriptEvidenceState } from '../../shared/types/current-video-transcript';
 import type { VideoKnowledgeJumpResponse } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import { normalizePageLimit, runInitialBackfill } from '../sync/initial-backfill';
@@ -28,6 +29,11 @@ import {
   probeCurrentVideoSubtitleSource,
   withSubtitleSourceState,
 } from '../current-video-subtitle-probe';
+import { cacheCurrentVideoTranscriptEvidence } from '../current-video-transcript-cache';
+import {
+  buildCurrentVideoTranscriptEvidenceState,
+  withTranscriptEvidenceState,
+} from '../../shared/current-video-transcript-cache';
 import { buildVideoKnowledgeResult, findVideoKnowledgeNode } from '../../shared/video-knowledge';
 import {
   getQuickStats,
@@ -63,11 +69,13 @@ import {
   markDynamicBillItemsConsumedByBvid,
   setDynamicBillFilterPreference,
 } from '../storage/dynamic-bill-repo';
+import { getCurrentVideoTranscriptEvidenceState } from '../storage/current-video-transcript-repo';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
 const SUBTITLE_PROBE_CACHE_MS = 5 * 60 * 1000;
 const currentVideoContexts = new Map<number, CurrentVideoContextResult>();
 const currentVideoSubtitleProbes = new Map<string, CurrentVideoSubtitleSourceState>();
+const currentVideoSubtitleProbeRequests = new Map<string, Promise<CurrentVideoSubtitleSourceState>>();
 
 export function setupMessageHandlers(): void {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -289,6 +297,8 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       return { success: true, data: await getCurrentVideoContextForActiveTab() as T };
     case 'PROBE_CURRENT_VIDEO_SUBTITLE_SOURCE':
       return { success: true, data: await probeSubtitleSourceForActiveTab() as T };
+    case 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE':
+      return { success: true, data: await getTranscriptEvidenceForActiveTab(request.params) as T };
     case 'GET_CURRENT_VIDEO_SUMMARY':
       return { success: true, data: await generateCurrentVideoSummary(await getCurrentVideoContextForActiveTab()) as T };
     case 'GET_VIDEO_KNOWLEDGE':
@@ -443,7 +453,8 @@ async function markConsumedFromPlayerEvent(
 async function getCurrentVideoContextForActiveTab(): Promise<CurrentVideoContextResult> {
   const context = await getRawCurrentVideoContextForActiveTab();
   if (context.kind !== 'video') return context;
-  return await enrichCurrentVideoContextWithSubtitleProbe(context);
+  const withSubtitle = await enrichCurrentVideoContextWithSubtitleProbe(context);
+  return await enrichCurrentVideoContextWithTranscriptEvidence(withSubtitle);
 }
 
 async function getRawCurrentVideoContextForActiveTab(): Promise<CurrentVideoContextResult> {
@@ -469,6 +480,16 @@ async function probeSubtitleSourceForActiveTab(): Promise<CurrentVideoSubtitleSo
   return await probeCurrentVideoSubtitleSource(context);
 }
 
+async function getTranscriptEvidenceForActiveTab(
+  params: Record<string, unknown> | undefined,
+): Promise<CurrentVideoTranscriptEvidenceState> {
+  const context = await getCurrentVideoContextForActiveTab();
+  const requestedLanguage = typeof params?.language === 'string'
+    ? params.language
+    : null;
+  return await cacheCurrentVideoTranscriptEvidence(context, { requestedLanguage });
+}
+
 async function enrichCurrentVideoContextWithSubtitleProbe(
   context: CurrentVideoContext,
 ): Promise<CurrentVideoContext> {
@@ -483,9 +504,45 @@ async function enrichCurrentVideoContextWithSubtitleProbe(
     return withSubtitleSourceState(context, cached);
   }
 
-  const probe = await probeCurrentVideoSubtitleSource(context);
+  const existingRequest = currentVideoSubtitleProbeRequests.get(cacheKey);
+  if (existingRequest) {
+    const probe = await existingRequest;
+    return withSubtitleSourceState(context, probe);
+  }
+
+  const request = probeCurrentVideoSubtitleSource(context).finally(() => {
+    currentVideoSubtitleProbeRequests.delete(cacheKey);
+  });
+  currentVideoSubtitleProbeRequests.set(cacheKey, request);
+  const probe = await request;
   currentVideoSubtitleProbes.set(cacheKey, probe);
   return withSubtitleSourceState(context, probe);
+}
+
+async function enrichCurrentVideoContextWithTranscriptEvidence(
+  context: CurrentVideoContext,
+): Promise<CurrentVideoContext> {
+  if (!context.cid) {
+    return withTranscriptEvidenceState(context, buildCurrentVideoTranscriptEvidenceState({
+      status: 'unsupported',
+      target: {
+        bvid: context.bvid,
+        cid: context.cid,
+        page: context.currentPart.page,
+      },
+      now: Date.now(),
+      reason: 'missing_cid',
+      message: '当前视频缺少 CID，无法读取本地 transcript 证据状态。',
+      warnings: ['cid_unknown'],
+    }));
+  }
+
+  const state = await getCurrentVideoTranscriptEvidenceState({
+    bvid: context.bvid,
+    cid: context.cid,
+    page: context.currentPart.page,
+  });
+  return withTranscriptEvidenceState(context, state);
 }
 
 function subtitleProbeCacheKey(context: CurrentVideoContext): string {

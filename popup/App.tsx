@@ -9,6 +9,7 @@ import type {
   CurrentVideoContextResult,
   CurrentVideoSubtitleSourceState,
 } from '../src/shared/types/current-video-context';
+import type { CurrentVideoTranscriptEvidenceState } from '../src/shared/types/current-video-transcript';
 import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary';
 import type { VideoKnowledgeJumpResponse, VideoKnowledgeNode, VideoKnowledgeResult } from '../src/shared/types/video-knowledge';
 import { cancelledCurrentVideoSummary, loadingCurrentVideoSummary } from '../src/shared/current-video-summary';
@@ -101,8 +102,10 @@ export function App() {
           pages: false,
           chapters: false,
           transcript: false,
+          transcriptEvidence: false,
           contentText: false,
         },
+        transcriptEvidence: null,
         nodes: [],
         warnings: ['video_knowledge_request_failed'],
         limitations: [(e as Error).message],
@@ -560,6 +563,12 @@ function CurrentVideoAssistantStatus({
                 {subtitleProbeDetail(context.subtitleProbe)}
               </>
             )}
+            {context.transcriptEvidence && context.transcriptEvidence.status !== 'missing' && (
+              <>
+                <br />
+                {transcriptEvidenceDetail(context.transcriptEvidence)}
+              </>
+            )}
           </div>
           {summary && (
             <div style={{
@@ -843,6 +852,11 @@ function subtitleProbeDetail(probe: CurrentVideoSubtitleSourceState): string {
     ? `；覆盖至 ${formatSeconds(probe.coverageEndSeconds)}`
     : '';
   return `${probe.message}（track ${probe.trackCount}${languages}${coverage}）`;
+}
+
+function transcriptEvidenceDetail(evidence: CurrentVideoTranscriptEvidenceState): string {
+  if (!evidence.active) return evidence.message;
+  return `${evidence.message} 已缓存片段=${evidence.segmentCount}`;
 }
 
 function formatSeconds(seconds: number): string {

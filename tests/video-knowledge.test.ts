@@ -68,10 +68,51 @@ test('exposes available subtitle source state without generating transcript node
   const result = buildVideoKnowledgeResult(context, 1000);
 
   assert.equal(result.sourceState.transcript, true);
+  assert.equal(result.sourceState.transcriptEvidence, false);
   assert.equal(result.sourceState.contentText, false);
+  assert.equal(result.transcriptEvidence, null);
   assert.equal(result.nodes.some(node => node.source === 'transcript'), false);
   assert.ok(result.warnings.includes('transcript_nodes_not_generated'));
   assert.ok(result.limitations.some(item => item.includes('尚未生成 transcript 节点')));
+});
+
+test('exposes cached transcript evidence state without generating transcript nodes', () => {
+  const context = videoContext({
+    descriptionText: 'Description fallback remains visible.',
+    parts: [],
+    chapters: [],
+  });
+  context.sources.transcript = 'available';
+  context.transcriptEvidence = {
+    status: 'cached',
+    active: true,
+    checkedAt: 2000,
+    bvid: context.bvid,
+    cid: context.cid,
+    page: context.currentPart.page,
+    language: 'zh-CN',
+    source: 'bilibili_subtitle',
+    sourceType: 'bilibili_player_wbi_v2',
+    sourceHash: 'hash123',
+    segmentCount: 2,
+    staleSegmentCount: 0,
+    coverageStartSeconds: 0,
+    coverageEndSeconds: 9,
+    fetchedAt: 2000,
+    updatedAt: 2000,
+    reason: 'transcript_segments_cached',
+    message: 'cached transcript evidence only',
+    warnings: [],
+  };
+
+  const result = buildVideoKnowledgeResult(context, 2000);
+
+  assert.equal(result.sourceState.transcript, true);
+  assert.equal(result.sourceState.transcriptEvidence, true);
+  assert.equal(result.sourceState.contentText, false);
+  assert.equal(result.transcriptEvidence?.segmentCount, 2);
+  assert.equal(result.nodes.some(node => node.source === 'transcript'), false);
+  assert.ok(result.warnings.includes('transcript_evidence_not_used_for_nodes'));
 });
 
 test('marks pending subtitle probe as unknown source state', () => {

@@ -316,6 +316,13 @@ function buildEvidence(
       value: context.subtitleProbe.message,
     });
   }
+  if (context.transcriptEvidence && context.transcriptEvidence.status !== 'missing') {
+    evidence.push({
+      source: 'local_fallback',
+      label: 'Transcript evidence cache',
+      value: context.transcriptEvidence.message,
+    });
+  }
   return evidence;
 }
 
@@ -355,6 +362,10 @@ function buildLimitations(
 }
 
 function transcriptLimitation(context: CurrentVideoContext): string {
+  if (context.transcriptEvidence?.active) {
+    return '已缓存本地 transcript 证据，但当前摘要 slice 仍不读取或发送字幕正文，不会生成完整视频总结；#101 才会接入 transcript summary pipeline。';
+  }
+
   if (context.sources.transcript === 'available') {
     return '已探测到字幕来源，但当前版本只记录来源状态，尚未读取、缓存或总结 transcript 正文；因此这仍不是完整视频总结。';
   }

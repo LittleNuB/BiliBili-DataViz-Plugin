@@ -216,6 +216,10 @@ function availabilityLabel(value: string): string {
 }
 
 function subtitleStatusMessage(context: CurrentVideoContext): string {
+  if (context.transcriptEvidence?.active) return context.transcriptEvidence.message;
+  if (context.transcriptEvidence && context.transcriptEvidence.status !== 'missing') {
+    return context.transcriptEvidence.message;
+  }
   if (context.subtitleProbe) return context.subtitleProbe.message;
   if (context.sources.transcript === 'unknown') {
     return '字幕来源等待后台探测；当前只使用元数据/简介 fallback，不能做完整视频总结。';

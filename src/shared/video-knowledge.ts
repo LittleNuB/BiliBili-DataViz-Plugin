@@ -26,8 +26,10 @@ export function buildVideoKnowledgeResult(
         pages: false,
         chapters: false,
         transcript: false,
+        transcriptEvidence: false,
         contentText: false,
       },
+      transcriptEvidence: null,
       nodes: [],
       warnings: ['no_current_video_context'],
       limitations: ['请先打开一个 B 站视频页，再生成视频知识节点。'],
@@ -51,8 +53,10 @@ export function buildVideoKnowledgeResult(
       pages: context.sources.pages === 'available',
       chapters: context.sources.chapters === 'available',
       transcript: context.sources.transcript === 'available',
+      transcriptEvidence: context.transcriptEvidence?.active === true,
       contentText: false,
     },
+    transcriptEvidence: context.transcriptEvidence ?? null,
     nodes,
     warnings: buildVideoKnowledgeWarnings(context),
     limitations: buildVideoKnowledgeLimitations(context),
@@ -186,11 +190,17 @@ function buildVideoKnowledgeWarnings(context: CurrentVideoContext): string[] {
   } else {
     warnings.add('transcript_unavailable');
   }
+  if (context.transcriptEvidence?.active) {
+    warnings.add('transcript_evidence_cached');
+    warnings.add('transcript_evidence_not_used_for_nodes');
+  }
   return Array.from(warnings);
 }
 
 function buildVideoKnowledgeLimitations(context: CurrentVideoContext): string[] {
-  const transcriptLimitation = context.sources.transcript === 'available'
+  const transcriptLimitation = context.transcriptEvidence?.active
+    ? '已缓存本地 transcript 证据，但当前 slice 仍不生成 transcript 节点、key nodes、模糊检索或完整视频总结。'
+    : context.sources.transcript === 'available'
     ? '已探测到字幕来源，但当前版本只记录来源状态，尚未生成 transcript 节点或完整视频总结。'
     : context.sources.transcript === 'unknown'
       ? '字幕来源尚未完成探测；当前节点只基于元数据、简介、分 P 或章节。'

@@ -1,3 +1,5 @@
+import type { CurrentVideoTranscriptEvidenceState } from './current-video-transcript';
+
 export type VideoKnowledgeSource =
   | 'metadata'
   | 'description'
@@ -64,6 +66,7 @@ export interface VideoKnowledgeSourceState {
   pages: boolean;
   chapters: boolean;
   transcript: boolean;
+  transcriptEvidence: boolean;
   contentText: boolean;
 }
 
@@ -72,6 +75,7 @@ export interface VideoKnowledgeResult {
   title: string;
   generatedAt: number;
   sourceState: VideoKnowledgeSourceState;
+  transcriptEvidence: CurrentVideoTranscriptEvidenceState | null;
   nodes: VideoKnowledgeNode[];
   warnings: string[];
   limitations: string[];
