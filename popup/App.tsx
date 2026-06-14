@@ -770,9 +770,9 @@ function VideoKnowledgePanel({
                 证据片段：{node.evidence.textSpan}
               </div>
             )}
-            {node.source === 'transcript' && node.evidence?.segmentId && (
-              <div style={{ color: '#9090A0', fontSize: '9px', lineHeight: 1.4, marginTop: '2px', wordBreak: 'break-all' }}>
-                字幕证据编号：{compactEvidenceId(node.evidence.segmentId)}；暂不提供跳转。
+            {node.source === 'transcript' && node.timestamp !== null && (
+              <div style={{ color: '#9090A0', fontSize: '9px', lineHeight: 1.4, marginTop: '2px' }}>
+                字幕证据：{formatNodeTimeRange(node)}；来自当前视频字幕片段，暂不提供跳转。
               </div>
             )}
             {node.jumpAction && (
@@ -932,11 +932,6 @@ function formatNodeTimeRange(node: VideoKnowledgeNode): string {
     return `${formatPopupDuration(node.timestamp)}-${formatPopupDuration(node.endTimestamp)}`;
   }
   return formatPopupDuration(node.timestamp);
-}
-
-function compactEvidenceId(segmentId: string): string {
-  if (segmentId.length <= 40) return segmentId;
-  return `${segmentId.slice(0, 24)}...${segmentId.slice(-12)}`;
 }
 
 function formatSeconds(seconds: number): string {
