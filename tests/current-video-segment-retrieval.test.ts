@@ -19,6 +19,12 @@ test('returns an exact local transcript keyword match without inventing timestam
   assert.equal(result.candidates[0].binding.segmentId, segments[0].segmentId);
   assert.equal(result.candidates[0].timeRangeLabel, '0:12-0:18');
   assert.equal(result.candidates[0].sourceLabel, '可定位字幕证据');
+  assert.equal(result.candidates[0].jumpPreview.canJump, true);
+  assert.equal(result.candidates[0].jumpPreview.requiresConfirmation, true);
+  assert.equal(result.candidates[0].jumpPreview.targetSeconds, 12);
+  assert.equal(result.candidates[0].jumpPreview.targetTimeLabel, '0:12');
+  assert.ok(result.candidates[0].jumpPreview.message.includes('确认后'));
+  assert.ok(result.candidates[0].jumpPreview.evidencePreview.includes('DeepSeek V3.2'));
   assert.ok(result.candidates[0].confidence >= 0.78);
   assert.ok(result.candidates[0].matchReasons.some(reason => reason.includes('deepseek')));
   assert.equal(result.candidates[0].binding.segmentId?.startsWith('transcript:'), true);
@@ -58,6 +64,8 @@ test('uses a weak metadata helper only when no timed evidence is available', () 
   assert.equal(result.candidates[0].startSeconds, null);
   assert.equal(result.candidates[0].timeRangeLabel, '无法定位具体时间');
   assert.equal(result.candidates[0].binding.kind, 'metadata_hint');
+  assert.equal(result.candidates[0].jumpPreview.canJump, false);
+  assert.equal(result.candidates[0].jumpPreview.disabledReason, 'metadata_only');
   assert.ok(result.summary.includes('无法定位到具体时间点'));
   assert.ok(result.candidates[0].note?.includes('无法定位到具体时间点'));
 });
@@ -101,6 +109,8 @@ test('marks weak transcript overlap as low confidence', () => {
 
   assert.equal(result.status, 'low_confidence');
   assert.equal(result.candidates[0].confidenceLabel, '低');
+  assert.equal(result.candidates[0].jumpPreview.canJump, false);
+  assert.equal(result.candidates[0].jumpPreview.disabledReason, 'low_confidence');
   assert.ok(result.candidates[0].note?.includes('匹配较弱'));
 });
 
@@ -134,7 +144,7 @@ test('does not use transcript segments when active evidence is absent', () => {
   assert.equal(result.candidates.length, 0);
 });
 
-test('uses current-video knowledge node matches without adding a jump action', () => {
+test('uses current-video knowledge node matches with manual-only jump preview', () => {
   const context = videoContext({
     chapters: [{ title: '模型架构章节', startSeconds: 120 }],
   });
@@ -151,6 +161,29 @@ test('uses current-video knowledge node matches without adding a jump action', (
   assert.equal(result.candidates[0].sourceLabel, '章节弱提示');
   assert.equal(result.candidates[0].timeRangeLabel, '2:00');
   assert.equal('jumpAction' in result.candidates[0], false);
+  assert.equal(result.candidates[0].jumpPreview.canJump, true);
+  assert.equal(result.candidates[0].jumpPreview.requiresConfirmation, true);
+  assert.equal(result.candidates[0].jumpPreview.targetSeconds, 120);
+});
+
+test('disables jump preview when candidate timestamp exceeds current video duration', () => {
+  const context = withTranscriptEvidence(videoContext());
+  const [first] = transcriptSegments();
+  const result = searchCurrentVideoSegments(context, {
+    query: 'DeepSeek V3.2',
+    transcriptSegments: [{
+      ...first,
+      startSeconds: 700,
+      endSeconds: 706,
+    }],
+    videoKnowledge: null,
+    now: 3000,
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.candidates[0].jumpPreview.canJump, false);
+  assert.equal(result.candidates[0].jumpPreview.disabledReason, 'invalid_timestamp');
+  assert.ok(result.candidates[0].jumpPreview.message.includes('超出当前视频时长'));
 });
 
 test('returns no context without reading broader local data', () => {
