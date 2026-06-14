@@ -304,11 +304,14 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       return { success: true, data: await getTranscriptEvidenceForActiveTab(request.params) as T };
     case 'GET_CURRENT_VIDEO_SUMMARY': {
       const context = await getCurrentVideoContextForActiveTab();
-      const transcriptSegments = await getSummaryTranscriptSegments(context);
+      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
       return { success: true, data: await generateCurrentVideoSummary(context, { transcriptSegments }) as T };
     }
-    case 'GET_VIDEO_KNOWLEDGE':
-      return { success: true, data: buildVideoKnowledgeResult(await getCurrentVideoContextForActiveTab()) as T };
+    case 'GET_VIDEO_KNOWLEDGE': {
+      const context = await getCurrentVideoContextForActiveTab();
+      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
+      return { success: true, data: buildVideoKnowledgeResult(context, { transcriptSegments }) as T };
+    }
     case 'REQUEST_VIDEO_KNOWLEDGE_JUMP':
       return { success: true, data: await requestVideoKnowledgeJump(request.params) as T };
     case 'GET_SMART_FAVORITES':
@@ -551,7 +554,7 @@ async function enrichCurrentVideoContextWithTranscriptEvidence(
   return withTranscriptEvidenceState(context, state);
 }
 
-async function getSummaryTranscriptSegments(
+async function getActiveCurrentVideoTranscriptSegments(
   context: CurrentVideoContextResult,
 ) {
   if (

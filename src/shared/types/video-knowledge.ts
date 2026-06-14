@@ -18,10 +18,20 @@ export type VideoKnowledgeSafetyFlag =
   | 'description_only'
   | 'page_bound'
   | 'chapter_bound'
+  | 'transcript_grounded'
+  | 'bounded_current_video'
   | 'manual_confirm_required'
   | 'auto_jump_disabled'
   | 'no_transcript'
-  | 'low_confidence';
+  | 'low_confidence'
+  | 'stale_source'
+  | 'language_mismatch';
+
+export type VideoKnowledgeEvidenceSourceStatus =
+  | 'active'
+  | 'stale'
+  | 'mismatch'
+  | 'unavailable';
 
 export interface VideoKnowledgeEvidence {
   textSpan: string | null;
@@ -29,6 +39,11 @@ export interface VideoKnowledgeEvidence {
   endChar: number | null;
   language: string | null;
   sourceId: string;
+  segmentId?: string | null;
+  startSeconds?: number | null;
+  endSeconds?: number | null;
+  sourceHash?: string | null;
+  sourceStatus?: VideoKnowledgeEvidenceSourceStatus;
 }
 
 export interface VideoKnowledgeJumpAction {

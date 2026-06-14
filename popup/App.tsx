@@ -710,6 +710,7 @@ function VideoKnowledgePanel({
   onConfirm: (node: VideoKnowledgeNode) => void;
 }) {
   const nodes = knowledge?.nodes ?? [];
+  const transcriptNodeCount = nodes.filter(node => node.source === 'transcript').length;
   return (
     <div style={{
       marginTop: '8px',
@@ -720,7 +721,7 @@ function VideoKnowledgePanel({
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'center' }}>
         <span style={{ color: '#FFD6E2', fontSize: '10px', fontWeight: 700 }}>
-          视频知识节点 v0
+          视频知识节点
         </span>
         <button
           onClick={onRefresh}
@@ -738,7 +739,7 @@ function VideoKnowledgePanel({
         </button>
       </div>
       <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
-        当前没有字幕。节点只使用元数据、简介、分 P 或章节；不会生成推测时间戳。
+        {videoKnowledgeNotice(knowledge, transcriptNodeCount)}
       </div>
       {nodes.length === 0 ? (
         <div style={{ color: '#A0A0B0', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
@@ -758,11 +759,22 @@ function VideoKnowledgePanel({
             </div>
             <div style={{ color: '#A0A0B0', fontSize: '9px', lineHeight: 1.45, marginTop: '2px' }}>
               来源 {node.sourceLabel} / 证据强度 {Math.round(node.confidence * 100)}%
-              {node.timestamp === null ? ' / 无时间点' : ` / ${formatPopupDuration(node.timestamp)}`}
+              {node.timestamp === null ? ' / 无时间点' : ` / ${formatNodeTimeRange(node)}`}
+              {node.evidence?.sourceStatus ? ` / 来源状态 ${evidenceSourceStatusLabel(node.evidence.sourceStatus)}` : ''}
             </div>
             <div style={{ color: '#C8C8D8', fontSize: '9px', lineHeight: 1.4, marginTop: '2px' }}>
               {node.reason}
             </div>
+            {node.evidence?.textSpan && (
+              <div style={{ color: '#C8E6FF', fontSize: '9px', lineHeight: 1.4, marginTop: '2px' }}>
+                证据片段：{node.evidence.textSpan}
+              </div>
+            )}
+            {node.source === 'transcript' && node.timestamp !== null && (
+              <div style={{ color: '#9090A0', fontSize: '9px', lineHeight: 1.4, marginTop: '2px' }}>
+                字幕证据：{formatNodeTimeRange(node)}；来自当前视频字幕片段，暂不提供跳转。
+              </div>
+            )}
             {node.jumpAction && (
               <button
                 onClick={() => onPreview(node.id)}
@@ -868,6 +880,58 @@ function subtitleProbeDetail(probe: CurrentVideoSubtitleSourceState): string {
 function transcriptEvidenceDetail(evidence: CurrentVideoTranscriptEvidenceState): string {
   if (!evidence.active) return evidence.message;
   return `${evidence.message} 已缓存片段=${evidence.segmentCount}`;
+}
+
+function videoKnowledgeNotice(knowledge: VideoKnowledgeResult | null, transcriptNodeCount: number): string {
+  if (!knowledge) return '正在读取当前视频的知识节点。';
+  if (transcriptNodeCount > 0) {
+    return `已用当前视频本地字幕证据生成 ${transcriptNodeCount} 个节点；时间范围只来自字幕片段，暂不提供跳转。`;
+  }
+  const evidence = knowledge.transcriptEvidence;
+  if (!evidence) {
+    return '当前没有可引用字幕正文。节点只使用元数据、简介、分 P 或章节；不会生成推测时间戳。';
+  }
+  if (evidence.status === 'stale') {
+    return '本地字幕证据与当前视频或分 P 不匹配，已回退到元数据、简介、分 P 或章节节点。';
+  }
+  if (evidence.status === 'language_mismatch') {
+    return '本地字幕语言与当前请求不匹配，暂不生成字幕节点。';
+  }
+  if (evidence.status === 'empty') {
+    return '已检测到字幕来源，但没有可用正文片段，暂不生成字幕节点。';
+  }
+  if (evidence.status === 'malformed') {
+    return '字幕正文结构异常，暂不作为节点证据。';
+  }
+  if (evidence.active) {
+    return '已检测到本地字幕证据，但没有匹配当前版本的可用片段，已回退到辅助节点。';
+  }
+  return evidence.message || '当前没有可引用字幕正文；不会生成推测时间戳。';
+}
+
+function evidenceSourceStatusLabel(
+  status: NonNullable<NonNullable<VideoKnowledgeNode['evidence']>['sourceStatus']>,
+): string {
+  switch (status) {
+    case 'active':
+      return '当前匹配';
+    case 'stale':
+      return '已过期';
+    case 'mismatch':
+      return '不匹配';
+    case 'unavailable':
+      return '不可用';
+    default:
+      return '未知';
+  }
+}
+
+function formatNodeTimeRange(node: VideoKnowledgeNode): string {
+  if (node.timestamp === null) return '无时间点';
+  if (typeof node.endTimestamp === 'number' && node.endTimestamp > node.timestamp) {
+    return `${formatPopupDuration(node.timestamp)}-${formatPopupDuration(node.endTimestamp)}`;
+  }
+  return formatPopupDuration(node.timestamp);
 }
 
 function formatSeconds(seconds: number): string {
