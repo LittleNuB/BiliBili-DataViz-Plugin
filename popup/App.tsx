@@ -10,6 +10,10 @@ import type {
   CurrentVideoSubtitleSourceState,
 } from '../src/shared/types/current-video-context';
 import type { CurrentVideoTranscriptEvidenceState } from '../src/shared/types/current-video-transcript';
+import type {
+  CurrentVideoSegmentRetrievalCandidate,
+  CurrentVideoSegmentRetrievalResult,
+} from '../src/shared/types/current-video-segment-retrieval';
 import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary';
 import type { VideoKnowledgeJumpResponse, VideoKnowledgeNode, VideoKnowledgeResult } from '../src/shared/types/video-knowledge';
 import { cancelledCurrentVideoSummary, loadingCurrentVideoSummary } from '../src/shared/current-video-summary';
@@ -531,6 +535,33 @@ function CurrentVideoAssistantStatus({
 }) {
   const isVideo = context?.kind === 'video';
   const previewNode = knowledge?.nodes.find(node => node.id === previewNodeId) ?? null;
+  const [segmentQuery, setSegmentQuery] = useState('');
+  const [segmentResult, setSegmentResult] = useState<CurrentVideoSegmentRetrievalResult | null>(null);
+  const [segmentLoading, setSegmentLoading] = useState(false);
+  const [segmentError, setSegmentError] = useState<string | null>(null);
+
+  async function searchCurrentVideoSegments() {
+    const query = segmentQuery.trim();
+    if (!query) {
+      setSegmentError('请输入想查找的片段内容。');
+      setSegmentResult(null);
+      return;
+    }
+
+    setSegmentLoading(true);
+    setSegmentError(null);
+    try {
+      const result = await requestSW<CurrentVideoSegmentRetrievalResult>('SEARCH_CURRENT_VIDEO_SEGMENTS', {
+        query,
+      });
+      setSegmentResult(result);
+    } catch (e) {
+      setSegmentError((e as Error).message);
+      setSegmentResult(null);
+    } finally {
+      setSegmentLoading(false);
+    }
+  }
 
   return (
     <section style={{
@@ -641,6 +672,14 @@ function CurrentVideoAssistantStatus({
             onPreview={onPreviewNode}
             onConfirm={onConfirmJump}
           />
+          <CurrentVideoSegmentRetrievalPanel
+            query={segmentQuery}
+            result={segmentResult}
+            loading={segmentLoading}
+            error={segmentError}
+            onQueryChange={setSegmentQuery}
+            onSearch={searchCurrentVideoSegments}
+          />
           <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
             <button
               onClick={onRefresh}
@@ -691,6 +730,144 @@ function CurrentVideoAssistantStatus({
         </div>
       )}
     </section>
+  );
+}
+
+function CurrentVideoSegmentRetrievalPanel({
+  query,
+  result,
+  loading,
+  error,
+  onQueryChange,
+  onSearch,
+}: {
+  query: string;
+  result: CurrentVideoSegmentRetrievalResult | null;
+  loading: boolean;
+  error: string | null;
+  onQueryChange: (query: string) => void;
+  onSearch: () => void;
+}) {
+  return (
+    <div style={{
+      marginTop: '8px',
+      padding: '8px',
+      border: '1px solid rgba(127, 219, 255, 0.18)',
+      borderRadius: '6px',
+      background: 'rgba(0, 161, 214, 0.08)',
+    }}>
+      <div style={{ color: '#C8E6FF', fontSize: '10px', fontWeight: 700 }}>
+        本地片段检索
+      </div>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSearch();
+        }}
+        style={{ display: 'flex', gap: '6px', marginTop: '6px' }}
+      >
+        <input
+          value={query}
+          onInput={(event) => onQueryChange((event.currentTarget as HTMLInputElement).value)}
+          placeholder="例如：模型架构那段"
+          style={{
+            minWidth: 0,
+            flex: 1,
+            background: 'rgba(255,255,255,0.08)',
+            color: '#E8E8F2',
+            border: '1px solid rgba(255,255,255,0.14)',
+            borderRadius: '6px',
+            fontSize: '11px',
+            padding: '6px 8px',
+            outline: 'none',
+          }}
+        />
+        <button
+          type="submit"
+          disabled={loading}
+          style={{
+            width: '54px',
+            background: loading ? 'rgba(0, 161, 214, 0.12)' : 'rgba(0, 161, 214, 0.28)',
+            color: '#C8E6FF',
+            border: '1px solid rgba(127, 219, 255, 0.32)',
+            borderRadius: '6px',
+            cursor: loading ? 'default' : 'pointer',
+            fontSize: '10px',
+            padding: '6px 8px',
+          }}
+        >
+          {loading ? '检索中' : '检索'}
+        </button>
+      </form>
+      <div style={{ color: '#A0A0B0', fontSize: '9px', lineHeight: 1.45, marginTop: '5px' }}>
+        只查当前视频本地已有证据；结果只展示候选时间和证据，不提供跳转。
+      </div>
+      {error && (
+        <div style={{ color: '#FFB347', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
+          {error}
+        </div>
+      )}
+      {result && (
+        <div style={{ marginTop: '7px' }}>
+          <div style={{ color: retrievalStatusColor(result), fontSize: '10px', lineHeight: 1.45 }}>
+            {retrievalStatusMessage(result)}
+          </div>
+          {result.candidates.length === 0 ? (
+            <div style={{ color: '#A0A0B0', fontSize: '10px', lineHeight: 1.45, marginTop: '5px' }}>
+              {result.limitations[0]}
+            </div>
+          ) : (
+            result.candidates.map((candidate, index) => (
+              <SegmentCandidateCard key={candidate.id} candidate={candidate} index={index} />
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SegmentCandidateCard({
+  candidate,
+  index,
+}: {
+  candidate: CurrentVideoSegmentRetrievalCandidate;
+  index: number;
+}) {
+  return (
+    <div style={{
+      marginTop: '6px',
+      paddingTop: '6px',
+      borderTop: '1px solid rgba(255,255,255,0.08)',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+        <div style={{ minWidth: 0, color: '#E8E8F2', fontSize: '10px', lineHeight: 1.35, fontWeight: 650 }}>
+          候选 {index + 1} · {candidate.timeRangeLabel}
+        </div>
+        <div style={{
+          flex: '0 0 auto',
+          color: candidate.confidenceLabel === '低' ? '#FFCF8A' : '#A0E7A0',
+          fontSize: '9px',
+          lineHeight: 1.35,
+        }}>
+          {candidate.confidenceLabel} {Math.round(candidate.confidence * 100)}%
+        </div>
+      </div>
+      <div style={{ color: '#A0A0B0', fontSize: '9px', lineHeight: 1.4, marginTop: '2px' }}>
+        来源 {candidate.sourceLabel}
+      </div>
+      <div style={{ color: '#C8E6FF', fontSize: '9px', lineHeight: 1.4, marginTop: '3px' }}>
+        证据片段：{candidate.evidenceText || '暂无可展示文本'}
+      </div>
+      <div style={{ color: '#C8C8D8', fontSize: '9px', lineHeight: 1.4, marginTop: '3px' }}>
+        匹配原因：{candidate.matchReasons.join('；')}
+      </div>
+      {candidate.note && (
+        <div style={{ color: '#FFCF8A', fontSize: '9px', lineHeight: 1.4, marginTop: '3px' }}>
+          {candidate.note}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -924,6 +1101,33 @@ function evidenceSourceStatusLabel(
     default:
       return '未知';
   }
+}
+
+function retrievalStatusMessage(result: CurrentVideoSegmentRetrievalResult): string {
+  switch (result.status) {
+    case 'ready':
+      return result.summary;
+    case 'low_confidence':
+      return result.summary;
+    case 'metadata_only':
+      return result.summary;
+    case 'empty_query':
+      return '请输入想查找的片段内容。';
+    case 'no_context':
+      return '当前没有可用的视频上下文。';
+    case 'stale_context':
+      return '当前视频上下文已过期，请刷新后再试。';
+    case 'no_evidence':
+      return '没有找到可用的本地证据。';
+    default:
+      return result.summary;
+  }
+}
+
+function retrievalStatusColor(result: CurrentVideoSegmentRetrievalResult): string {
+  if (result.status === 'ready') return '#A0E7A0';
+  if (result.status === 'metadata_only' || result.status === 'low_confidence') return '#FFCF8A';
+  return '#A0A0B0';
 }
 
 function formatNodeTimeRange(node: VideoKnowledgeNode): string {

@@ -34,6 +34,7 @@ import {
   buildCurrentVideoTranscriptEvidenceState,
   withTranscriptEvidenceState,
 } from '../../shared/current-video-transcript-cache';
+import { searchCurrentVideoSegments } from '../../shared/current-video-segment-retrieval';
 import { buildVideoKnowledgeResult, findVideoKnowledgeNode } from '../../shared/video-knowledge';
 import {
   getQuickStats,
@@ -311,6 +312,20 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       const context = await getCurrentVideoContextForActiveTab();
       const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
       return { success: true, data: buildVideoKnowledgeResult(context, { transcriptSegments }) as T };
+    }
+    case 'SEARCH_CURRENT_VIDEO_SEGMENTS': {
+      const query = String(request.params?.query ?? '');
+      const context = await getCurrentVideoContextForActiveTab();
+      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
+      const videoKnowledge = buildVideoKnowledgeResult(context, { transcriptSegments });
+      return {
+        success: true,
+        data: searchCurrentVideoSegments(context, {
+          query,
+          transcriptSegments,
+          videoKnowledge,
+        }) as T,
+      };
     }
     case 'REQUEST_VIDEO_KNOWLEDGE_JUMP':
       return { success: true, data: await requestVideoKnowledgeJump(request.params) as T };

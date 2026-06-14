@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Current Video Segment Retrieval Mock QA</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --panel: rgba(0, 161, 214, 0.08);
+      --line: rgba(127, 219, 255, 0.22);
+      --text: #f4f7fb;
+      --muted: #aeb4c4;
+      --blue: #c8e6ff;
+      --green: #a0e7a0;
+      --warn: #ffcf8a;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      width: 360px;
+      background: #161824;
+      color: var(--text);
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+    }
+
+    main {
+      padding: 18px;
+      display: grid;
+      gap: 12px;
+    }
+
+    section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 12px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      color: var(--blue);
+      font-size: 13px;
+    }
+
+    .status {
+      color: var(--green);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .candidate {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .title {
+      min-width: 0;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.35;
+    }
+
+    .confidence {
+      flex: 0 0 auto;
+      color: var(--green);
+      font-size: 11px;
+    }
+
+    .confidence.low,
+    .warning {
+      color: var(--warn);
+    }
+
+    .meta,
+    .reason,
+    .evidence {
+      margin-top: 4px;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .meta {
+      color: var(--muted);
+    }
+
+    .evidence {
+      color: var(--blue);
+    }
+
+    .reason {
+      color: #cfd3df;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section data-testid="retrieval-ready">
+      <h1>本地片段检索</h1>
+      <div class="status">找到 2 个基于当前视频本地证据的候选片段。</div>
+      <article class="candidate" data-testid="candidate-card">
+        <div class="row">
+          <div class="title">候选 1 · 0:24-0:32</div>
+          <div class="confidence">高 86%</div>
+        </div>
+        <div class="meta">来源 可定位字幕证据</div>
+        <div class="evidence">证据片段：接下来讲模型的整体架构，包括专家路由和参数组织。</div>
+        <div class="reason">匹配原因：和问题词有重叠：模型、架构；中文短语有连续重叠</div>
+      </article>
+      <article class="candidate" data-testid="node-card">
+        <div class="row">
+          <div class="title">候选 2 · 2:00</div>
+          <div class="confidence">中 68%</div>
+        </div>
+        <div class="meta">来源 章节弱提示</div>
+        <div class="evidence">证据片段：模型架构章节</div>
+        <div class="reason">匹配原因：命中当前视频本地节点提示</div>
+      </article>
+    </section>
+
+    <section data-testid="retrieval-low-confidence">
+      <h1>低置信状态</h1>
+      <div class="status warning">只找到低置信候选，请把问题写得更接近字幕原文或章节标题。</div>
+      <article class="candidate">
+        <div class="row">
+          <div class="title">候选 1 · 1:20-1:26</div>
+          <div class="confidence low">低 42%</div>
+        </div>
+        <div class="meta">来源 可定位字幕证据</div>
+        <div class="evidence">证据片段：最后补充一点模型之外的部署注意事项。</div>
+        <div class="reason">匹配原因：和问题词有重叠：模型</div>
+        <div class="warning">匹配较弱，建议换成更具体的关键词。</div>
+      </article>
+    </section>
+
+    <section data-testid="retrieval-no-evidence">
+      <h1>无证据状态</h1>
+      <div class="status warning">没有找到可用的本地证据。</div>
+      <div class="reason">没有字幕片段或本地关键节点时，不会编造时间点。</div>
+    </section>
+
+    <section data-testid="retrieval-metadata-only">
+      <h1>仅弱匹配</h1>
+      <div class="status warning">仅找到视频信息或简介中的弱匹配，无法定位到具体时间点。</div>
+      <article class="candidate">
+        <div class="row">
+          <div class="title">候选 1 · 无法定位具体时间</div>
+          <div class="confidence low">低 35%</div>
+        </div>
+        <div class="meta">来源 视频信息弱提示</div>
+        <div class="evidence">证据片段：DeepSeek V3.2 发布会重点回顾</div>
+        <div class="reason">匹配原因：这只是视频信息中的弱提示</div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>
