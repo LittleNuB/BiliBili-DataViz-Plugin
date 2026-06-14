@@ -2,6 +2,7 @@ export * from './watch-event';
 export * from './video-info';
 export * from './current-video-context';
 export * from './current-video-transcript';
+export * from './current-video-segment-retrieval';
 export * from './analytics';
 export * from './messages';
 export * from './config';

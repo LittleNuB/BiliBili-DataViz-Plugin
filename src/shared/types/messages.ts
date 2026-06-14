@@ -29,6 +29,7 @@ import type {
 } from './favorite';
 import type { CurrentVideoContextResult, CurrentVideoSubtitleSourceState } from './current-video-context';
 import type { CurrentVideoTranscriptEvidenceState } from './current-video-transcript';
+import type { CurrentVideoSegmentRetrievalResult } from './current-video-segment-retrieval';
 import type { CurrentVideoSummaryResult } from './current-video-summary';
 import type { VideoKnowledgeJumpResponse, VideoKnowledgeResult } from './video-knowledge';
 import type { HistoryTailProbeReport } from './history-tail-probe';
@@ -56,6 +57,7 @@ export type RequestAction =
   | 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE'
   | 'GET_CURRENT_VIDEO_SUMMARY'
   | 'GET_VIDEO_KNOWLEDGE'
+  | 'SEARCH_CURRENT_VIDEO_SEGMENTS'
   | 'REQUEST_VIDEO_KNOWLEDGE_JUMP'
   | 'GET_SMART_FAVORITES'
   | 'GET_SMART_FAVORITES_BY_PATH'
@@ -177,6 +179,7 @@ export type CurrentVideoSubtitleSourceResponse = BiliVizResponse<CurrentVideoSub
 export type CurrentVideoTranscriptEvidenceResponse = BiliVizResponse<CurrentVideoTranscriptEvidenceState>;
 export type CurrentVideoSummaryResponse = BiliVizResponse<CurrentVideoSummaryResult>;
 export type VideoKnowledgeResponse = BiliVizResponse<VideoKnowledgeResult>;
+export type CurrentVideoSegmentRetrievalResponse = BiliVizResponse<CurrentVideoSegmentRetrievalResult>;
 export type VideoKnowledgeJumpMessageResponse = BiliVizResponse<VideoKnowledgeJumpResponse>;
 export type DynamicBillOverviewResponse = BiliVizResponse<DynamicBillOverview>;
 export type DynamicSyncResponse = BiliVizResponse<DynamicSyncResult>;
