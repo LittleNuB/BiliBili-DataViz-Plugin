@@ -316,6 +316,13 @@ function buildEvidence(
       value: context.subtitleProbe.message,
     });
   }
+  if (context.transcriptEvidence && context.transcriptEvidence.status !== 'missing') {
+    evidence.push({
+      source: 'local_fallback',
+      label: '字幕正文证据缓存',
+      value: context.transcriptEvidence.message,
+    });
+  }
   return evidence;
 }
 
@@ -355,12 +362,16 @@ function buildLimitations(
 }
 
 function transcriptLimitation(context: CurrentVideoContext): string {
+  if (context.transcriptEvidence?.active) {
+    return '已缓存本地字幕正文证据，但当前版本仍不读取或发送字幕正文，不会生成完整视频总结；后续摘要能力再接入。';
+  }
+
   if (context.sources.transcript === 'available') {
-    return '已探测到字幕来源，但当前版本只记录来源状态，尚未读取、缓存或总结 transcript 正文；因此这仍不是完整视频总结。';
+    return '已探测到字幕来源，但当前版本只记录来源状态，尚未读取、缓存或总结字幕正文；因此这仍不是完整视频总结。';
   }
 
   if (context.sources.transcript === 'unknown') {
-    return '字幕来源尚未完成探测；当前只能使用元数据/简介 fallback，不能做完整视频总结。';
+    return '字幕来源尚未完成探测；当前只能使用元数据和简介作为本地证据兜底，不能做完整视频总结。';
   }
 
   if (context.subtitleProbe?.message) {

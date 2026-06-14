@@ -28,6 +28,7 @@ import type {
   SmartIndexResult,
 } from './favorite';
 import type { CurrentVideoContextResult, CurrentVideoSubtitleSourceState } from './current-video-context';
+import type { CurrentVideoTranscriptEvidenceState } from './current-video-transcript';
 import type { CurrentVideoSummaryResult } from './current-video-summary';
 import type { VideoKnowledgeJumpResponse, VideoKnowledgeResult } from './video-knowledge';
 import type { HistoryTailProbeReport } from './history-tail-probe';
@@ -52,6 +53,7 @@ export type RequestAction =
   | 'PROBE_HISTORY_TAIL'
   | 'GET_CURRENT_VIDEO_CONTEXT'
   | 'PROBE_CURRENT_VIDEO_SUBTITLE_SOURCE'
+  | 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE'
   | 'GET_CURRENT_VIDEO_SUMMARY'
   | 'GET_VIDEO_KNOWLEDGE'
   | 'REQUEST_VIDEO_KNOWLEDGE_JUMP'
@@ -172,6 +174,7 @@ export type SmartFavoriteQaMessageResponse = BiliVizResponse<SmartFavoriteQaResp
 export type SmartFavoritePathResponse = BiliVizResponse<SmartFavoriteResult[]>;
 export type CurrentVideoContextResponse = BiliVizResponse<CurrentVideoContextResult>;
 export type CurrentVideoSubtitleSourceResponse = BiliVizResponse<CurrentVideoSubtitleSourceState>;
+export type CurrentVideoTranscriptEvidenceResponse = BiliVizResponse<CurrentVideoTranscriptEvidenceState>;
 export type CurrentVideoSummaryResponse = BiliVizResponse<CurrentVideoSummaryResult>;
 export type VideoKnowledgeResponse = BiliVizResponse<VideoKnowledgeResult>;
 export type VideoKnowledgeJumpMessageResponse = BiliVizResponse<VideoKnowledgeJumpResponse>;

@@ -1,3 +1,5 @@
+import type { CurrentVideoTranscriptEvidenceState } from './current-video-transcript';
+
 export type CurrentVideoAvailability = 'available' | 'unavailable' | 'unknown';
 export type CurrentVideoSubtitleSourceStatus =
   | 'available'
@@ -90,6 +92,7 @@ export interface CurrentVideoContext {
   };
   sources: CurrentVideoSourceAvailability;
   subtitleProbe?: CurrentVideoSubtitleSourceState | null;
+  transcriptEvidence?: CurrentVideoTranscriptEvidenceState | null;
   warnings: string[];
 }
 

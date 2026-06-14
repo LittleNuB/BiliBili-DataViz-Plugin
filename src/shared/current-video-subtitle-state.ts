@@ -37,7 +37,7 @@ export async function probeCurrentVideoSubtitleSourceWithFetcher(
       now,
       reason: "no_current_video_context",
       message:
-        "当前没有可探测的 B 站视频上下文；只能保留元数据/简介 fallback。",
+        "当前没有可探测的 B 站视频上下文；只能保留元数据和简介作为本地证据结果。",
       warnings: ["no_current_video_context"],
     });
   }
@@ -55,7 +55,7 @@ export async function probeCurrentVideoSubtitleSourceWithFetcher(
       now,
       reason: "missing_cid",
       message:
-        "当前视频缺少 CID，暂时无法探测 B 站字幕来源；只能保留元数据/简介 fallback。",
+        "当前视频缺少 CID，暂时无法探测 B 站字幕来源；只能保留元数据和简介作为本地证据结果。",
       warnings: ["cid_unknown"],
     });
   }
@@ -107,7 +107,7 @@ export async function probeCurrentVideoSubtitleSourceWithFetcher(
       sourcePath: "/x/player/v2",
       reason: "login_required",
       message:
-        "B 站字幕接口要求当前浏览器会话具备访问权限；当前只能保留元数据/简介 fallback。",
+        "B 站字幕接口要求当前浏览器会话具备访问权限；当前只能保留元数据和简介作为本地证据结果。",
       warnings: ["subtitle_login_required"],
     });
   }
@@ -119,7 +119,7 @@ export async function probeCurrentVideoSubtitleSourceWithFetcher(
     sourceType: "bilibili_player_v2",
     sourcePath: "/x/player/v2",
     reason: lastError ?? "endpoint_failed",
-    message: "B 站字幕接口请求失败；当前只能保留元数据/简介 fallback。",
+    message: "B 站字幕接口请求失败；当前只能保留元数据和简介作为本地证据结果。",
     warnings: ["subtitle_endpoint_failed"],
   });
 }
@@ -175,7 +175,7 @@ export function normalizeBilibiliSubtitleSourceState(
       sourcePath: options.sourcePath,
       reason: "subtitle_field_missing",
       message:
-        "B 站播放器接口没有返回字幕字段；当前只能保留元数据/简介 fallback。",
+        "B 站播放器接口没有返回字幕字段；当前只能保留元数据和简介作为本地证据结果。",
       warnings: ["subtitle_field_missing"],
     });
   }
@@ -189,7 +189,7 @@ export function normalizeBilibiliSubtitleSourceState(
       sourceType: options.sourceType,
       sourcePath: options.sourcePath,
       reason: "subtitle_tracks_not_array",
-      message: "B 站字幕接口返回结构异常；当前不会把它当作可用 transcript。",
+      message: "B 站字幕接口返回结构异常；当前不会把它当作可用字幕正文证据。",
       warnings: ["subtitle_malformed"],
     });
   }
@@ -223,7 +223,7 @@ export function normalizeBilibiliSubtitleSourceState(
       sourcePath: options.sourcePath,
       reason: "subtitle_tracks_unusable",
       message:
-        "B 站字幕接口返回了字幕列表，但没有可识别的语言或 track 信息；当前不会把它当作可用 transcript。",
+        "B 站字幕接口返回了字幕列表，但没有可识别的语言或字幕轨道信息；当前不会把它当作可用字幕正文证据。",
       warnings: ["subtitle_malformed"],
     });
   }
@@ -252,7 +252,7 @@ export function normalizeBilibiliSubtitleSourceState(
     sourceType: options.sourceType,
     sourcePath: options.sourcePath,
     reason: "subtitle_tracks_available",
-    message: `已探测到 ${tracks.length} 条字幕 track；本版本只记录来源状态，不缓存字幕正文，也不会据此生成完整视频总结。`,
+    message: `已探测到 ${tracks.length} 条字幕轨道；本版本只记录来源状态，不缓存字幕正文，也不会据此生成完整视频总结。`,
     warnings: ["transcript_source_available", "transcript_text_not_cached"],
     tracks,
     trackCount: tracks.length,
