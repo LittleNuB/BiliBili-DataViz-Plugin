@@ -606,6 +606,15 @@ function CurrentVideoAssistantStatus({
                   - {bullet}
                 </div>
               ))}
+              {summary.timestampRanges.length > 0 && (
+                <div style={{ marginTop: '6px' }}>
+                  {summary.timestampRanges.slice(0, 2).map(range => (
+                    <div key={`${range.label}:${range.evidenceSnippet}`} style={{ color: '#C8E6FF', fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
+                      证据片段 {range.label}：{range.evidenceSnippet}
+                    </div>
+                  ))}
+                </div>
+              )}
               <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
                 {summary.limitations[0]}
               </div>
@@ -620,7 +629,9 @@ function CurrentVideoAssistantStatus({
             fontSize: '10px',
             lineHeight: 1.45,
           }}>
-            当前没有可用字幕；本助手不会声称这是完整视频总结。
+            {summary?.sourceTier === 'transcript_summary'
+              ? '当前摘要使用本地字幕正文证据；时间范围只来自已缓存字幕片段。'
+              : '当前没有可引用的字幕正文；本助手不会声称这是完整视频总结。'}
           </div>
           <VideoKnowledgePanel
             knowledge={knowledge}
@@ -882,6 +893,7 @@ function summaryStatusLabel(status: CurrentVideoSummaryResult['status']): string
 }
 
 function summaryConfidenceLabel(confidence: CurrentVideoSummaryResult['confidence']): string {
+  if (confidence === 'high') return '高';
   return confidence === 'medium' ? '中' : '低';
 }
 
@@ -899,6 +911,8 @@ function aiStatusLabel(status: CurrentVideoSummaryResult['ai']['status']): strin
       return '失败';
     case 'low_confidence':
       return '低置信';
+    case 'invalid_output':
+      return '越界已回退';
     default:
       return '未知状态';
   }

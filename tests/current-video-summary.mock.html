@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Current Video Summary Mock QA</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+      background: #161824;
+      color: #f4f7fb;
+    }
+
+    main {
+      width: 360px;
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    section {
+      border: 1px solid rgba(251, 114, 153, 0.26);
+      border-radius: 8px;
+      background: rgba(251, 114, 153, 0.08);
+      padding: 12px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 6px;
+      border-radius: 6px;
+      background: rgba(251, 114, 153, 0.16);
+      color: #ffd6e2;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .meta {
+      color: #aeb4c4;
+      font-size: 11px;
+      margin-left: 6px;
+    }
+
+    p {
+      font-size: 12px;
+      line-height: 1.55;
+      margin: 8px 0 0;
+    }
+
+    .evidence {
+      color: #c8e6ff;
+      font-size: 11px;
+      line-height: 1.45;
+      margin-top: 6px;
+    }
+
+    .limit {
+      color: #ffcf8a;
+      font-size: 11px;
+      margin-top: 6px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section data-testid="transcript-summary">
+      <span class="badge">字幕正文摘要</span><span class="meta">本地结果 / 证据强度 中</span>
+      <p>基于本地缓存的字幕正文证据，《Current Video Title》在 0:00-0:19 的可引用片段中主要围绕：第一段字幕正文提出问题。</p>
+      <div class="evidence">证据片段 0:00-0:19：第一段字幕正文提出问题，第二段字幕正文解释方法。</div>
+      <div class="limit">本结果基于当前视频本地缓存的字幕正文证据，不包含弹幕、评论、画面识别或完整本地账本。</div>
+    </section>
+
+    <section data-testid="fallback-summary">
+      <span class="badge">简介摘要</span><span class="meta">本地结果 / 证据强度 中</span>
+      <p>基于可见简介和元数据，《Current Video Title》大致围绕：A visible description for the current video.</p>
+      <div class="limit">当前没有可引用的字幕正文；本助手不会声称这是完整视频总结。</div>
+    </section>
+  </main>
+</body>
+</html>

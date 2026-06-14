@@ -69,7 +69,10 @@ import {
   markDynamicBillItemsConsumedByBvid,
   setDynamicBillFilterPreference,
 } from '../storage/dynamic-bill-repo';
-import { getCurrentVideoTranscriptEvidenceState } from '../storage/current-video-transcript-repo';
+import {
+  getCurrentVideoTranscriptEvidenceState,
+  getCurrentVideoTranscriptSegments,
+} from '../storage/current-video-transcript-repo';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
 const SUBTITLE_PROBE_CACHE_MS = 5 * 60 * 1000;
@@ -299,8 +302,11 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       return { success: true, data: await probeSubtitleSourceForActiveTab() as T };
     case 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE':
       return { success: true, data: await getTranscriptEvidenceForActiveTab(request.params) as T };
-    case 'GET_CURRENT_VIDEO_SUMMARY':
-      return { success: true, data: await generateCurrentVideoSummary(await getCurrentVideoContextForActiveTab()) as T };
+    case 'GET_CURRENT_VIDEO_SUMMARY': {
+      const context = await getCurrentVideoContextForActiveTab();
+      const transcriptSegments = await getSummaryTranscriptSegments(context);
+      return { success: true, data: await generateCurrentVideoSummary(context, { transcriptSegments }) as T };
+    }
     case 'GET_VIDEO_KNOWLEDGE':
       return { success: true, data: buildVideoKnowledgeResult(await getCurrentVideoContextForActiveTab()) as T };
     case 'REQUEST_VIDEO_KNOWLEDGE_JUMP':
@@ -532,7 +538,7 @@ async function enrichCurrentVideoContextWithTranscriptEvidence(
       },
       now: Date.now(),
       reason: 'missing_cid',
-      message: '当前视频缺少 CID，无法读取本地 transcript 证据状态。',
+      message: '当前视频缺少 CID，无法读取本地字幕正文证据状态。',
       warnings: ['cid_unknown'],
     }));
   }
@@ -543,6 +549,26 @@ async function enrichCurrentVideoContextWithTranscriptEvidence(
     page: context.currentPart.page,
   });
   return withTranscriptEvidenceState(context, state);
+}
+
+async function getSummaryTranscriptSegments(
+  context: CurrentVideoContextResult,
+) {
+  if (
+    context.kind !== 'video'
+    || !context.cid
+    || context.transcriptEvidence?.active !== true
+  ) {
+    return [];
+  }
+
+  return await getCurrentVideoTranscriptSegments({
+    bvid: context.bvid,
+    cid: context.cid,
+    page: context.currentPart.page,
+    language: context.transcriptEvidence.language,
+    sourceHash: context.transcriptEvidence.sourceHash,
+  });
 }
 
 function subtitleProbeCacheKey(context: CurrentVideoContext): string {

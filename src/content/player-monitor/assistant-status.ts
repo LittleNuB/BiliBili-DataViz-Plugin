@@ -124,7 +124,7 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
       aiNote: '页面悬浮卡只显示本地证据；启用后可在 Popup 查看 AI 摘要。',
     });
     appendText(card, 'div', 'bdc-assistant-video', context.title ?? context.bvid);
-    appendText(card, 'div', 'bdc-assistant-tier', `${summary.sourceTierLabel} / 证据强度 ${summary.confidence === 'medium' ? '中' : '低'}`);
+    appendText(card, 'div', 'bdc-assistant-tier', `${summary.sourceTierLabel} / 证据强度 ${summaryConfidenceLabel(summary.confidence)}`);
     appendText(card, 'div', 'bdc-assistant-summary', summary.summary);
     appendText(card, 'div', 'bdc-assistant-row', `BVID ${context.bvid} / CID ${context.cid ?? '未知'}`);
     appendText(
@@ -213,6 +213,12 @@ function availabilityLabel(value: string): string {
     default:
       return '未知';
   }
+}
+
+function summaryConfidenceLabel(value: 'low' | 'medium' | 'high'): string {
+  if (value === 'high') return '高';
+  if (value === 'medium') return '中';
+  return '低';
 }
 
 function subtitleStatusMessage(context: CurrentVideoContext): string {
