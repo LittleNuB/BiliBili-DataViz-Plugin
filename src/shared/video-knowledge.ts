@@ -50,16 +50,12 @@ export function buildVideoKnowledgeResult(
       description: context.sources.description === 'available',
       pages: context.sources.pages === 'available',
       chapters: context.sources.chapters === 'available',
-      transcript: false,
+      transcript: context.sources.transcript === 'available',
       contentText: false,
     },
     nodes,
-    warnings: Array.from(new Set([...context.warnings, 'transcript_unavailable'])),
-    limitations: [
-      '没有可用字幕，因此元数据和简介节点不代表完整视频理解。',
-      '元数据和简介节点不会生成推测时间戳。',
-      '跳转动作是手动预览动作，改变播放位置前必须由用户明确确认。',
-    ],
+    warnings: buildVideoKnowledgeWarnings(context),
+    limitations: buildVideoKnowledgeLimitations(context),
   };
 }
 
@@ -178,6 +174,33 @@ function buildChapterNodes(context: CurrentVideoContext, now: number): VideoKnow
         now,
       });
     });
+}
+
+function buildVideoKnowledgeWarnings(context: CurrentVideoContext): string[] {
+  const warnings = new Set(context.warnings);
+  if (context.sources.transcript === 'available') {
+    warnings.add('transcript_source_available');
+    warnings.add('transcript_nodes_not_generated');
+  } else if (context.sources.transcript === 'unknown') {
+    warnings.add('transcript_probe_pending');
+  } else {
+    warnings.add('transcript_unavailable');
+  }
+  return Array.from(warnings);
+}
+
+function buildVideoKnowledgeLimitations(context: CurrentVideoContext): string[] {
+  const transcriptLimitation = context.sources.transcript === 'available'
+    ? '已探测到字幕来源，但当前版本只记录来源状态，尚未生成 transcript 节点或完整视频总结。'
+    : context.sources.transcript === 'unknown'
+      ? '字幕来源尚未完成探测；当前节点只基于元数据、简介、分 P 或章节。'
+      : '没有可用字幕，因此元数据和简介节点不代表完整视频理解。';
+
+  return [
+    transcriptLimitation,
+    '元数据和简介节点不会生成推测时间戳。',
+    '跳转动作是手动预览动作，改变播放位置前必须由用户明确确认。',
+  ];
 }
 
 function node(input: {

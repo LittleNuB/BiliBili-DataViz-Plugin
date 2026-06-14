@@ -215,7 +215,8 @@ export function buildCurrentVideoSummaryAiPayload(
     sourceTier: payloadSourceTierLabel(tier),
     warnings: Array.from(new Set(context.warnings)).slice(0, 12),
     safetyRules: [
-      'Do not claim a full-video summary because transcript and content text are unavailable.',
+      'Do not claim a full-video summary because this payload does not contain transcript segments or content text.',
+      'If availableSources.transcript is available, treat it only as source availability metadata; no transcript text was provided.',
       'Do not infer body content beyond visible metadata, description, page titles, or chapter titles.',
       'Return the same source tier provided in sourceTier.',
     ],
@@ -308,14 +309,27 @@ function buildEvidence(
     label: '来源边界',
     value: '简介和正文文本是不同来源层级；当前正文文本不可用。',
   });
+  if (context.subtitleProbe) {
+    evidence.push({
+      source: 'local_fallback',
+      label: '字幕来源探测',
+      value: context.subtitleProbe.message,
+    });
+  }
   return evidence;
 }
 
 function buildMissingSources(context: CurrentVideoContext): string[] {
   const missing: string[] = [];
   if (context.sources.description !== 'available') missing.push('简介');
-  if (context.sources.transcript !== 'available') missing.push('字幕');
-  if (context.sources.contentText !== 'available') missing.push('正文文本');
+  if (context.sources.transcript === 'unknown') {
+    missing.push('字幕来源探测');
+  } else if (context.sources.transcript !== 'available') {
+    missing.push('字幕');
+  }
+  if (context.sources.contentText !== 'available') {
+    missing.push(context.sources.transcript === 'available' ? '字幕正文/正文文本' : '正文文本');
+  }
   if (context.sources.pages !== 'available') missing.push('分 P 标题');
   if (context.sources.chapters !== 'available') missing.push('章节');
   return missing;
@@ -326,7 +340,7 @@ function buildLimitations(
   tier: CurrentVideoSummarySourceTier,
 ): string[] {
   const limitations = [
-    '没有可用字幕，因此这不是完整视频总结，也不会声称理解了完整视频正文。',
+    transcriptLimitation(context),
     '完整正文文本不可用；简介不会被当作正文内容。',
   ];
   if (tier === 'metadata_summary') {
@@ -338,6 +352,22 @@ function buildLimitations(
     limitations.push('章节标题只能说明结构，不会被扩展成正文内容判断。');
   }
   return limitations;
+}
+
+function transcriptLimitation(context: CurrentVideoContext): string {
+  if (context.sources.transcript === 'available') {
+    return '已探测到字幕来源，但当前版本只记录来源状态，尚未读取、缓存或总结 transcript 正文；因此这仍不是完整视频总结。';
+  }
+
+  if (context.sources.transcript === 'unknown') {
+    return '字幕来源尚未完成探测；当前只能使用元数据/简介 fallback，不能做完整视频总结。';
+  }
+
+  if (context.subtitleProbe?.message) {
+    return `${context.subtitleProbe.message} 因此这不是完整视频总结，也不会声称理解了完整视频正文。`;
+  }
+
+  return '没有可用字幕，因此这不是完整视频总结，也不会声称理解了完整视频正文。';
 }
 
 function buildNextQuestions(tier: CurrentVideoSummarySourceTier): string[] {

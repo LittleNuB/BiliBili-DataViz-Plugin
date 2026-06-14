@@ -37,6 +37,58 @@ test('builds description helper without jump target', () => {
   assert.ok(description.evidence?.textSpan?.includes('visible description'));
 });
 
+test('exposes available subtitle source state without generating transcript nodes', () => {
+  const context = videoContext({
+    descriptionText: 'Description fallback remains visible.',
+    parts: [],
+    chapters: [],
+  });
+  context.sources.transcript = 'available';
+  context.subtitleProbe = {
+    status: 'available',
+    available: true,
+    checkedAt: 1000,
+    bvid: context.bvid,
+    cid: context.cid,
+    page: context.currentPart.page,
+    sourceType: 'bilibili_player_wbi_v2',
+    sourceDomain: 'api.bilibili.com',
+    sourcePath: '/x/player/wbi/v2',
+    trackCount: 1,
+    segmentCount: null,
+    coverageStartSeconds: null,
+    coverageEndSeconds: null,
+    languages: ['zh-CN'],
+    tracks: [],
+    reason: 'subtitle_tracks_available',
+    message: '已探测到 1 条字幕 track；本版本只记录来源状态，不缓存字幕正文，也不会据此生成完整视频总结。',
+    warnings: ['transcript_source_available', 'transcript_text_not_cached'],
+  };
+
+  const result = buildVideoKnowledgeResult(context, 1000);
+
+  assert.equal(result.sourceState.transcript, true);
+  assert.equal(result.sourceState.contentText, false);
+  assert.equal(result.nodes.some(node => node.source === 'transcript'), false);
+  assert.ok(result.warnings.includes('transcript_nodes_not_generated'));
+  assert.ok(result.limitations.some(item => item.includes('尚未生成 transcript 节点')));
+});
+
+test('marks pending subtitle probe as unknown source state', () => {
+  const context = videoContext({
+    descriptionText: null,
+    parts: [],
+    chapters: [],
+  });
+  context.sources.transcript = 'unknown';
+  context.warnings = ['transcript_probe_pending'];
+  const result = buildVideoKnowledgeResult(context, 1000);
+
+  assert.equal(result.sourceState.transcript, false);
+  assert.ok(result.warnings.includes('transcript_probe_pending'));
+  assert.ok(result.limitations.some(item => item.includes('字幕来源尚未完成探测')));
+});
+
 test('builds page and chapter nodes with confirmed manual jump previews', () => {
   const result = buildVideoKnowledgeResult(videoContext({
     descriptionText: null,

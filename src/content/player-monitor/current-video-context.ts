@@ -78,7 +78,7 @@ export function collectCurrentVideoContext(): CurrentVideoContext | CurrentVideo
   if (!authorName && !authorMid) warnings.push('author_unknown');
   if (!durationSeconds) warnings.push('duration_unknown');
   if (!descriptionText) warnings.push('description_unavailable');
-  warnings.push('transcript_unavailable');
+  warnings.push('transcript_probe_pending');
 
   return {
     kind: 'video',
@@ -107,9 +107,10 @@ export function collectCurrentVideoContext(): CurrentVideoContext | CurrentVideo
       description: descriptionAvailability,
       pages: pagesAvailability,
       chapters: chaptersAvailability,
-      transcript: 'unavailable',
+      transcript: 'unknown',
       contentText: 'unavailable',
     },
+    subtitleProbe: null,
     warnings,
   };
 }

@@ -1,6 +1,11 @@
 import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse, PlayerActionPayload, PlayerHeartbeatPayload, SyncNowResult } from '../../shared/types/messages';
 import type { HistorySyncStatus } from '../../shared/types/history-sync';
-import type { CurrentVideoContextResult, CurrentVideoNoContext } from '../../shared/types/current-video-context';
+import type {
+  CurrentVideoContext,
+  CurrentVideoContextResult,
+  CurrentVideoNoContext,
+  CurrentVideoSubtitleSourceState,
+} from '../../shared/types/current-video-context';
 import type { VideoKnowledgeJumpResponse } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import { normalizePageLimit, runInitialBackfill } from '../sync/initial-backfill';
@@ -19,6 +24,10 @@ import {
 import { db } from '../storage/db';
 import type { UserConfig } from '../../shared/types/config';
 import { generateCurrentVideoSummary } from '../current-video-summary';
+import {
+  probeCurrentVideoSubtitleSource,
+  withSubtitleSourceState,
+} from '../current-video-subtitle-probe';
 import { buildVideoKnowledgeResult, findVideoKnowledgeNode } from '../../shared/video-knowledge';
 import {
   getQuickStats,
@@ -56,7 +65,9 @@ import {
 } from '../storage/dynamic-bill-repo';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
+const SUBTITLE_PROBE_CACHE_MS = 5 * 60 * 1000;
 const currentVideoContexts = new Map<number, CurrentVideoContextResult>();
+const currentVideoSubtitleProbes = new Map<string, CurrentVideoSubtitleSourceState>();
 
 export function setupMessageHandlers(): void {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -276,6 +287,8 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     }
     case 'GET_CURRENT_VIDEO_CONTEXT':
       return { success: true, data: await getCurrentVideoContextForActiveTab() as T };
+    case 'PROBE_CURRENT_VIDEO_SUBTITLE_SOURCE':
+      return { success: true, data: await probeSubtitleSourceForActiveTab() as T };
     case 'GET_CURRENT_VIDEO_SUMMARY':
       return { success: true, data: await generateCurrentVideoSummary(await getCurrentVideoContextForActiveTab()) as T };
     case 'GET_VIDEO_KNOWLEDGE':
@@ -428,6 +441,12 @@ async function markConsumedFromPlayerEvent(
 }
 
 async function getCurrentVideoContextForActiveTab(): Promise<CurrentVideoContextResult> {
+  const context = await getRawCurrentVideoContextForActiveTab();
+  if (context.kind !== 'video') return context;
+  return await enrichCurrentVideoContextWithSubtitleProbe(context);
+}
+
+async function getRawCurrentVideoContextForActiveTab(): Promise<CurrentVideoContextResult> {
   const { tab, context } = await resolveCurrentVideoLookupState();
   const url = tab?.url ?? null;
 
@@ -440,6 +459,41 @@ async function getCurrentVideoContextForActiveTab(): Promise<CurrentVideoContext
   }
 
   return buildNoContext(url, 'video_context_unavailable', 'video');
+}
+
+async function probeSubtitleSourceForActiveTab(): Promise<CurrentVideoSubtitleSourceState> {
+  const context = await getCurrentVideoContextForActiveTab();
+  if (context.kind === 'video' && context.subtitleProbe) {
+    return context.subtitleProbe;
+  }
+  return await probeCurrentVideoSubtitleSource(context);
+}
+
+async function enrichCurrentVideoContextWithSubtitleProbe(
+  context: CurrentVideoContext,
+): Promise<CurrentVideoContext> {
+  const existing = context.subtitleProbe;
+  if (existing && Date.now() - existing.checkedAt < SUBTITLE_PROBE_CACHE_MS) {
+    return withSubtitleSourceState(context, existing);
+  }
+
+  const cacheKey = subtitleProbeCacheKey(context);
+  const cached = currentVideoSubtitleProbes.get(cacheKey);
+  if (cached && Date.now() - cached.checkedAt < SUBTITLE_PROBE_CACHE_MS) {
+    return withSubtitleSourceState(context, cached);
+  }
+
+  const probe = await probeCurrentVideoSubtitleSource(context);
+  currentVideoSubtitleProbes.set(cacheKey, probe);
+  return withSubtitleSourceState(context, probe);
+}
+
+function subtitleProbeCacheKey(context: CurrentVideoContext): string {
+  return [
+    context.bvid,
+    context.cid ?? 'cid-unknown',
+    context.currentPart.page,
+  ].join(':');
 }
 
 async function resolveCurrentVideoLookupState(): Promise<{
