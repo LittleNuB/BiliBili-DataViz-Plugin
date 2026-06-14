@@ -39,6 +39,7 @@ import {
   withTranscriptEvidenceState,
 } from '../../shared/current-video-transcript-cache';
 import { searchCurrentVideoSegments } from '../../shared/current-video-segment-retrieval';
+import { searchCurrentVideoSegmentsWithAiRerank } from '../current-video-segment-rerank';
 import {
   blockedTimestampJumpResponse,
   blockedTimestampReturnResponse,
@@ -329,7 +330,7 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       const videoKnowledge = buildVideoKnowledgeResult(context, { transcriptSegments });
       return {
         success: true,
-        data: searchCurrentVideoSegments(context, {
+        data: await searchCurrentVideoSegmentsWithAiRerank(context, {
           query,
           transcriptSegments,
           videoKnowledge,

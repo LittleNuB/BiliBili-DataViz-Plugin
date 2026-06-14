@@ -11,6 +11,7 @@ import type {
 } from '../src/shared/types/current-video-context';
 import type { CurrentVideoTranscriptEvidenceState } from '../src/shared/types/current-video-transcript';
 import type {
+  CurrentVideoSegmentRerankExplanation,
   CurrentVideoSegmentRetrievalCandidate,
   CurrentVideoSegmentRetrievalResult,
   CurrentVideoTimestampJumpResponse,
@@ -811,6 +812,9 @@ function CurrentVideoSegmentRetrievalPanel({
   onReturn: () => void;
 }) {
   const previewCandidate = result?.candidates.find(candidate => candidate.id === previewCandidateId) ?? null;
+  const aiExplanations = new Map(
+    (result?.aiRerank.explanations ?? []).map(explanation => [explanation.candidateId, explanation]),
+  );
   return (
     <div style={{
       marginTop: '8px',
@@ -875,6 +879,9 @@ function CurrentVideoSegmentRetrievalPanel({
           <div style={{ color: retrievalStatusColor(result), fontSize: '10px', lineHeight: 1.45 }}>
             {retrievalStatusMessage(result)}
           </div>
+          <div style={{ color: segmentAiRerankColor(result.aiRerank.status), fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
+            AI 重排：{segmentAiRerankStatusLabel(result.aiRerank.status)}。{result.aiRerank.note}
+          </div>
           {result.candidates.length === 0 ? (
             <div style={{ color: '#A0A0B0', fontSize: '10px', lineHeight: 1.45, marginTop: '5px' }}>
               {result.limitations[0]}
@@ -886,6 +893,7 @@ function CurrentVideoSegmentRetrievalPanel({
                 candidate={candidate}
                 index={index}
                 selected={candidate.id === previewCandidateId}
+                aiExplanation={aiExplanations.get(candidate.id) ?? null}
                 onPreview={onPreviewCandidate}
               />
             ))
@@ -932,11 +940,13 @@ function SegmentCandidateCard({
   candidate,
   index,
   selected,
+  aiExplanation,
   onPreview,
 }: {
   candidate: CurrentVideoSegmentRetrievalCandidate;
   index: number;
   selected: boolean;
+  aiExplanation: CurrentVideoSegmentRerankExplanation | null;
   onPreview: (candidateId: string | null) => void;
 }) {
   const canJump = candidate.jumpPreview.canJump;
@@ -971,6 +981,13 @@ function SegmentCandidateCard({
       {candidate.note && (
         <div style={{ color: '#FFCF8A', fontSize: '9px', lineHeight: 1.4, marginTop: '3px' }}>
           {candidate.note}
+        </div>
+      )}
+      {aiExplanation && (
+        <div style={{ color: '#D8F5FF', fontSize: '9px', lineHeight: 1.45, marginTop: '3px' }}>
+          AI 解释：{aiExplanation.explanation}（{Math.round(aiExplanation.confidence * 100)}%）
+          <br />
+          排序理由：{aiExplanation.reason}
         </div>
       )}
       <div style={{ color: canJump ? '#A0E7A0' : '#FFCF8A', fontSize: '9px', lineHeight: 1.4, marginTop: '3px' }}>
@@ -1327,6 +1344,33 @@ function retrievalStatusColor(result: CurrentVideoSegmentRetrievalResult): strin
   if (result.status === 'ready') return '#A0E7A0';
   if (result.status === 'metadata_only' || result.status === 'low_confidence') return '#FFCF8A';
   return '#A0A0B0';
+}
+
+function segmentAiRerankStatusLabel(status: CurrentVideoSegmentRetrievalResult['aiRerank']['status']): string {
+  switch (status) {
+    case 'generated':
+      return '已采用';
+    case 'disabled':
+      return '未启用';
+    case 'not_configured':
+      return '未配置';
+    case 'failed':
+      return '请求失败已回退';
+    case 'rejected':
+      return '结果未采用';
+    case 'low_confidence':
+      return '低置信已回退';
+    case 'not_requested':
+      return '未请求';
+    default:
+      return '本地顺序';
+  }
+}
+
+function segmentAiRerankColor(status: CurrentVideoSegmentRetrievalResult['aiRerank']['status']): string {
+  if (status === 'generated') return '#A0E7A0';
+  if (status === 'disabled' || status === 'not_requested') return '#A0A0B0';
+  return '#FFCF8A';
 }
 
 function formatNodeTimeRange(node: VideoKnowledgeNode): string {

@@ -30,6 +30,7 @@ export function SmartFavoritesPage() {
   const [assistantConfig, setAssistantConfig] = useState<AssistantConfig>({
     aiSummariesEnabled: false,
     smartFavoritesQaAiEnabled: false,
+    currentVideoSegmentRerankAiEnabled: false,
   });
   const [query, setQuery] = useState('');
   const [question, setQuestion] = useState('');
@@ -313,7 +314,7 @@ export function SmartFavoritesPage() {
           <TextInput value={config.baseURL} onInput={value => setConfig({ ...config, baseURL: value })} placeholder="Base URL" />
           <TextInput value={config.chatModel} onInput={value => setConfig({ ...config, chatModel: value })} placeholder="模型" />
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto', gap: '8px', alignItems: 'center' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto auto', gap: '8px', alignItems: 'center' }}>
           <TextInput value={config.apiKey} onInput={value => setConfig({ ...config, apiKey: value })} placeholder="API Key" password />
           <label style={{
             display: 'flex',
@@ -348,6 +349,23 @@ export function SmartFavoritesPage() {
               })}
             />
             收藏问答 AI
+          </label>
+          <label style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            color: '#C8C8D8',
+            fontSize: '11px',
+          }}>
+            <input
+              type="checkbox"
+              checked={assistantConfig.currentVideoSegmentRerankAiEnabled}
+              onChange={(event) => setAssistantConfig({
+                ...assistantConfig,
+                currentVideoSegmentRerankAiEnabled: (event.currentTarget as HTMLInputElement).checked,
+              })}
+            />
+            片段重排 AI
           </label>
           <ActionButton label={busy === 'save' ? '保存中...' : '保存'} onClick={saveAiConfig} disabled={!!busy} />
         </div>

@@ -500,6 +500,7 @@ function userConfig(overrides: {
     assistant: {
       aiSummariesEnabled: overrides.aiSummariesEnabled,
       smartFavoritesQaAiEnabled: false,
+      currentVideoSegmentRerankAiEnabled: false,
     },
     dynamicBill: {
       aiExplanationsEnabled: false,

@@ -403,6 +403,7 @@ function makeConfig(overrides: {
     assistant: {
       aiSummariesEnabled: false,
       smartFavoritesQaAiEnabled: overrides.smartFavoritesQaAiEnabled,
+      currentVideoSegmentRerankAiEnabled: false,
     },
     dynamicBill: {
       aiExplanationsEnabled: false,
