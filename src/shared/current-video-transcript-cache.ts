@@ -386,7 +386,6 @@ export function withTranscriptEvidenceState(
   if (transcriptEvidence.active) {
     warnings.delete('transcript_text_not_cached');
     warnings.add('transcript_evidence_cached');
-    warnings.add('transcript_summary_not_generated');
   } else if (transcriptEvidence.status !== 'missing') {
     warnings.add(`transcript_evidence_${transcriptEvidence.status}`);
   }

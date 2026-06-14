@@ -6,6 +6,7 @@ import type {
   CurrentVideoTranscriptEvidenceState,
   CurrentVideoTranscriptEvidenceWrite,
   CurrentVideoTranscriptIdentity,
+  CurrentVideoTranscriptSegment,
 } from '../../shared/types/current-video-transcript';
 import { db } from './db';
 
@@ -55,4 +56,27 @@ export async function getCurrentVideoTranscriptEvidenceState(
   ]);
 
   return buildTranscriptEvidenceStateFromCache(identity, sources, segments, now);
+}
+
+export async function getCurrentVideoTranscriptSegments(
+  identity: CurrentVideoTranscriptIdentity & { sourceHash?: string | null },
+): Promise<CurrentVideoTranscriptSegment[]> {
+  const rows = await db.currentVideoTranscriptSegments
+    .where('[bvid+cid+page]')
+    .equals([identity.bvid, identity.cid, identity.page])
+    .toArray();
+  const expectedLanguage = languageKey(identity.language);
+  const expectedSourceHash = identity.sourceHash ?? null;
+
+  return rows
+    .filter(segment =>
+      !segment.stale
+      && (!identity.language || languageKey(segment.language) === expectedLanguage)
+      && (!expectedSourceHash || segment.sourceHash === expectedSourceHash),
+    )
+    .sort((a, b) => a.startSeconds - b.startSeconds || a.endSeconds - b.endSeconds);
+}
+
+function languageKey(value: string | null | undefined): string {
+  return (value ?? 'unknown').trim().toLowerCase() || 'unknown';
 }
