@@ -30,8 +30,9 @@ test('collects Bilibili video metadata and source availability from page runtime
   assert.equal(context.sources.metadata, 'available');
   assert.equal(context.sources.description, 'available');
   assert.equal(context.sources.pages, 'available');
-  assert.equal(context.sources.transcript, 'unavailable');
+  assert.equal(context.sources.transcript, 'unknown');
   assert.equal(context.sources.contentText, 'unavailable');
+  assert.equal(context.subtitleProbe, null);
   assert.equal(context.description.text, 'Visible description text');
 });
 
@@ -49,9 +50,9 @@ test('marks missing description and transcript as unavailable without summary cl
   assert.equal(context.kind, 'video');
   assert.equal(context.sources.description, 'unavailable');
   assert.equal(context.sources.contentText, 'unavailable');
-  assert.equal(context.sources.transcript, 'unavailable');
+  assert.equal(context.sources.transcript, 'unknown');
   assert.equal(context.description.text, null);
-  assert.deepEqual(context.warnings.includes('transcript_unavailable'), true);
+  assert.deepEqual(context.warnings.includes('transcript_probe_pending'), true);
 });
 
 test('returns no-context fallback outside Bilibili video pages', () => {

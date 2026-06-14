@@ -1,4 +1,17 @@
 export type CurrentVideoAvailability = 'available' | 'unavailable' | 'unknown';
+export type CurrentVideoSubtitleSourceStatus =
+  | 'available'
+  | 'unavailable'
+  | 'login_required'
+  | 'endpoint_failed'
+  | 'malformed'
+  | 'unsupported';
+
+export type CurrentVideoSubtitleSourceType =
+  | 'bilibili_player_wbi_v2'
+  | 'bilibili_player_v2'
+  | 'none'
+  | 'unknown';
 
 export interface CurrentVideoPart {
   page: number;
@@ -19,6 +32,38 @@ export interface CurrentVideoSourceAvailability {
   chapters: CurrentVideoAvailability;
   transcript: CurrentVideoAvailability;
   contentText: CurrentVideoAvailability;
+}
+
+export interface CurrentVideoSubtitleTrackDiagnostic {
+  id: string | null;
+  language: string | null;
+  languageLabel: string | null;
+  sourceType: CurrentVideoSubtitleSourceType;
+  urlHost: string | null;
+  segmentCount: number | null;
+  coverageStartSeconds: number | null;
+  coverageEndSeconds: number | null;
+}
+
+export interface CurrentVideoSubtitleSourceState {
+  status: CurrentVideoSubtitleSourceStatus;
+  available: boolean;
+  checkedAt: number;
+  bvid: string | null;
+  cid: number | null;
+  page: number | null;
+  sourceType: CurrentVideoSubtitleSourceType;
+  sourceDomain: string | null;
+  sourcePath: string | null;
+  trackCount: number;
+  segmentCount: number | null;
+  coverageStartSeconds: number | null;
+  coverageEndSeconds: number | null;
+  languages: string[];
+  tracks: CurrentVideoSubtitleTrackDiagnostic[];
+  reason: string;
+  message: string;
+  warnings: string[];
 }
 
 export interface CurrentVideoContext {
@@ -44,6 +89,7 @@ export interface CurrentVideoContext {
     length: number | null;
   };
   sources: CurrentVideoSourceAvailability;
+  subtitleProbe?: CurrentVideoSubtitleSourceState | null;
   warnings: string[];
 }
 

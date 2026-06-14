@@ -5,7 +5,10 @@ import type { QuickStats } from '../src/shared/types/analytics';
 import type { SyncNowResult } from '../src/shared/types/messages';
 import type { HistoryTailProbeReport } from '../src/shared/types/history-tail-probe';
 import type { HistorySyncProgress, HistorySyncStatus } from '../src/shared/types/history-sync';
-import type { CurrentVideoContextResult } from '../src/shared/types/current-video-context';
+import type {
+  CurrentVideoContextResult,
+  CurrentVideoSubtitleSourceState,
+} from '../src/shared/types/current-video-context';
 import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary';
 import type { VideoKnowledgeJumpResponse, VideoKnowledgeNode, VideoKnowledgeResult } from '../src/shared/types/video-knowledge';
 import { cancelledCurrentVideoSummary, loadingCurrentVideoSummary } from '../src/shared/current-video-summary';
@@ -551,6 +554,12 @@ function CurrentVideoAssistantStatus({
             BVID {context.bvid} / CID {context.cid ?? '未知'}
             <br />
             简介 {availabilityLabel(context.sources.description)}；字幕 {availabilityLabel(context.sources.transcript)}；正文文本 {availabilityLabel(context.sources.contentText)}
+            {context.subtitleProbe && (
+              <>
+                <br />
+                {subtitleProbeDetail(context.subtitleProbe)}
+              </>
+            )}
           </div>
           {summary && (
             <div style={{
@@ -825,6 +834,22 @@ function availabilityLabel(value: string): string {
     default:
       return '未知';
   }
+}
+
+function subtitleProbeDetail(probe: CurrentVideoSubtitleSourceState): string {
+  if (!probe.available) return probe.message;
+  const languages = probe.languages.length > 0 ? `；语言 ${probe.languages.join(', ')}` : '';
+  const coverage = typeof probe.coverageEndSeconds === 'number'
+    ? `；覆盖至 ${formatSeconds(probe.coverageEndSeconds)}`
+    : '';
+  return `${probe.message}（track ${probe.trackCount}${languages}${coverage}）`;
+}
+
+function formatSeconds(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safe / 60);
+  const rest = safe % 60;
+  return `${minutes}:${String(rest).padStart(2, '0')}`;
 }
 
 function summaryStatusLabel(status: CurrentVideoSummaryResult['status']): string {

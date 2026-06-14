@@ -43,6 +43,45 @@ test('builds description summary while keeping contentText unavailable', () => {
   assert.ok(summary.limitations.some(item => item.includes('简介不会被当作正文内容')));
 });
 
+test('keeps available subtitle source state separate from transcript summary', () => {
+  const context = videoContext({
+    descriptionText: 'This description is still the only text supplied to the summary payload.',
+    descriptionAvailable: true,
+  });
+  context.sources.transcript = 'available';
+  context.subtitleProbe = {
+    status: 'available',
+    available: true,
+    checkedAt: 1000,
+    bvid: context.bvid,
+    cid: context.cid,
+    page: context.currentPart.page,
+    sourceType: 'bilibili_player_wbi_v2',
+    sourceDomain: 'api.bilibili.com',
+    sourcePath: '/x/player/wbi/v2',
+    trackCount: 1,
+    segmentCount: null,
+    coverageStartSeconds: null,
+    coverageEndSeconds: null,
+    languages: ['zh-CN'],
+    tracks: [],
+    reason: 'subtitle_tracks_available',
+    message: '已探测到 1 条字幕 track；本版本只记录来源状态，不缓存字幕正文，也不会据此生成完整视频总结。',
+    warnings: ['transcript_source_available', 'transcript_text_not_cached'],
+  };
+
+  const summary = buildLocalCurrentVideoSummary(context);
+  const payload = buildCurrentVideoSummaryAiPayload(context);
+
+  assert.equal(summary.sourceTier, 'description_summary');
+  assert.equal(payload.sourceTier, 'description summary');
+  assert.equal(payload.availableSources.transcript, 'available');
+  assert.equal(payload.availableSources.contentText, 'unavailable');
+  assert.ok(summary.missingSources.includes('字幕正文/正文文本'));
+  assert.ok(summary.limitations.some(item => item.includes('只记录来源状态')));
+  assert.doesNotMatch(JSON.stringify(payload), /subtitleProbe|track|aisubtitle|subtitle_url/i);
+});
+
 test('marks AI disabled fallback without changing source tier', () => {
   const summary = buildLocalCurrentVideoSummary(videoContext({}), {
     aiStatus: 'disabled',

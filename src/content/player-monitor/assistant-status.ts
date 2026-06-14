@@ -1,4 +1,7 @@
-import type { CurrentVideoContextResult } from '../../shared/types/current-video-context';
+import type {
+  CurrentVideoContext,
+  CurrentVideoContextResult,
+} from '../../shared/types/current-video-context';
 import { buildLocalCurrentVideoSummary } from '../../shared/current-video-summary';
 
 const CARD_ID = 'bdc-current-video-assistant';
@@ -152,9 +155,7 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
       card,
       'div',
       'bdc-assistant-warning',
-      context.sources.description === 'available'
-        ? '简介可用，但字幕和完整正文文本不可用；这不是完整视频总结。'
-        : '当前没有可用字幕、简介或完整正文文本；这不是完整视频总结。',
+      subtitleStatusMessage(context),
     );
   } else {
     appendText(card, 'div', 'bdc-assistant-video', '没有当前视频上下文');
@@ -212,4 +213,15 @@ function availabilityLabel(value: string): string {
     default:
       return '未知';
   }
+}
+
+function subtitleStatusMessage(context: CurrentVideoContext): string {
+  if (context.subtitleProbe) return context.subtitleProbe.message;
+  if (context.sources.transcript === 'unknown') {
+    return '字幕来源等待后台探测；当前只使用元数据/简介 fallback，不能做完整视频总结。';
+  }
+  if (context.sources.description === 'available') {
+    return '简介可用，但字幕和完整正文文本不可用；这不是完整视频总结。';
+  }
+  return '当前没有可用字幕、简介或完整正文文本；这不是完整视频总结。';
 }
