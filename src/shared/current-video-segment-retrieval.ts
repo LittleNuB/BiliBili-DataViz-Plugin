@@ -577,6 +577,16 @@ function result(input: {
       metadataHintAvailable: evidenceState.metadataHintAvailable,
       contextFresh: input.contextFresh,
     },
+    aiRerank: {
+      status: 'not_requested',
+      model: null,
+      note: '本次仅使用本地候选排序，没有请求 AI 重排。',
+      error: null,
+      generatedAt: input.now,
+      payloadCandidateCount: 0,
+      appliedCandidateIds: [],
+      explanations: [],
+    },
   };
 }
 

@@ -72,6 +72,33 @@ export interface CurrentVideoSegmentRetrievalEvidenceState {
   contextFresh: boolean;
 }
 
+export type CurrentVideoSegmentRerankAiStatus =
+  | 'not_requested'
+  | 'disabled'
+  | 'not_configured'
+  | 'generated'
+  | 'failed'
+  | 'rejected'
+  | 'low_confidence';
+
+export interface CurrentVideoSegmentRerankExplanation {
+  candidateId: string;
+  explanation: string;
+  reason: string;
+  confidence: number;
+}
+
+export interface CurrentVideoSegmentRerankAiState {
+  status: CurrentVideoSegmentRerankAiStatus;
+  model: string | null;
+  note: string;
+  error: string | null;
+  generatedAt: number;
+  payloadCandidateCount: number;
+  appliedCandidateIds: string[];
+  explanations: CurrentVideoSegmentRerankExplanation[];
+}
+
 export interface CurrentVideoSegmentRetrievalResult {
   status: CurrentVideoSegmentRetrievalStatus;
   query: string;
@@ -82,6 +109,7 @@ export interface CurrentVideoSegmentRetrievalResult {
   summary: string;
   limitations: string[];
   evidenceState: CurrentVideoSegmentRetrievalEvidenceState;
+  aiRerank: CurrentVideoSegmentRerankAiState;
 }
 
 export interface CurrentVideoTimestampJumpContentPayload {
