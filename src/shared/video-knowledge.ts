@@ -1,4 +1,5 @@
 import type { CurrentVideoContext, CurrentVideoContextResult, CurrentVideoPart } from './types/current-video-context';
+import type { CurrentVideoTranscriptSegment } from './types/current-video-transcript';
 import type {
   VideoKnowledgeEvidence,
   VideoKnowledgeJumpAction,
@@ -9,12 +10,22 @@ import type {
 } from './types/video-knowledge';
 
 const DESCRIPTION_EVIDENCE_LIMIT = 280;
+const TRANSCRIPT_EVIDENCE_LIMIT = 220;
+const TRANSCRIPT_NODE_LIMIT = 6;
 const NODE_LIMIT = 16;
+
+export interface BuildVideoKnowledgeOptions {
+  now?: number;
+  transcriptSegments?: CurrentVideoTranscriptSegment[];
+}
 
 export function buildVideoKnowledgeResult(
   context: CurrentVideoContextResult,
-  now = Date.now(),
+  options: BuildVideoKnowledgeOptions | number = {},
 ): VideoKnowledgeResult {
+  const now = typeof options === 'number' ? options : options.now ?? Date.now();
+  const transcriptSegments = typeof options === 'number' ? undefined : options.transcriptSegments;
+
   if (context.kind !== 'video') {
     return {
       status: 'no_context',
@@ -36,7 +47,9 @@ export function buildVideoKnowledgeResult(
     };
   }
 
+  const transcriptNodes = buildTranscriptNodes(context, transcriptSegments, now);
   const nodes: VideoKnowledgeNode[] = [
+    ...transcriptNodes,
     buildMetadataNode(context, now),
     ...buildDescriptionNodes(context, now),
     ...buildPageNodes(context, now),
@@ -58,8 +71,8 @@ export function buildVideoKnowledgeResult(
     },
     transcriptEvidence: context.transcriptEvidence ?? null,
     nodes,
-    warnings: buildVideoKnowledgeWarnings(context),
-    limitations: buildVideoKnowledgeLimitations(context),
+    warnings: buildVideoKnowledgeWarnings(context, transcriptNodes.length),
+    limitations: buildVideoKnowledgeLimitations(context, transcriptNodes.length),
   };
 }
 
@@ -180,8 +193,137 @@ function buildChapterNodes(context: CurrentVideoContext, now: number): VideoKnow
     });
 }
 
-function buildVideoKnowledgeWarnings(context: CurrentVideoContext): string[] {
+function buildTranscriptNodes(
+  context: CurrentVideoContext,
+  segments: CurrentVideoTranscriptSegment[] | undefined,
+  now: number,
+): VideoKnowledgeNode[] {
+  const evidenceState = context.transcriptEvidence;
+  if (
+    !context.cid
+    || evidenceState?.active !== true
+    || !segments?.length
+    || evidenceState.bvid !== context.bvid
+    || evidenceState.cid !== context.cid
+    || evidenceState.page !== context.currentPart.page
+    || !evidenceState.sourceHash
+  ) {
+    return [];
+  }
+
+  const expectedLanguage = languageKey(evidenceState.language);
+  const rows = segments
+    .filter(segment =>
+      segment.bvid === context.bvid
+      && segment.cid === context.cid
+      && segment.page === context.currentPart.page
+      && !segment.stale
+      && segment.sourceHash === evidenceState.sourceHash
+      && (!evidenceState.language || languageKey(segment.language) === expectedLanguage)
+      && Number.isFinite(segment.startSeconds)
+      && Number.isFinite(segment.endSeconds)
+      && segment.endSeconds > segment.startSeconds
+      && Boolean(normalizeText(segment.text)),
+    )
+    .sort((a, b) => a.startSeconds - b.startSeconds || a.endSeconds - b.endSeconds);
+
+  if (rows.length === 0) return [];
+
+  return selectTranscriptNodeSegments(rows).map((segment, index) => {
+    const text = limitText(segment.text, TRANSCRIPT_EVIDENCE_LIMIT);
+    return node({
+      id: `node:${segment.segmentId}`,
+      context,
+      page: context.currentPart.page,
+      cid: segment.cid,
+      timestamp: segment.startSeconds,
+      endTimestamp: segment.endSeconds,
+      title: transcriptNodeTitle(segment, text),
+      reason: transcriptNodeReason(index, rows.length),
+      source: 'transcript',
+      confidence: transcriptConfidence(evidenceState, segment, rows.length),
+      evidence: {
+        textSpan: text,
+        startChar: 0,
+        endChar: text.length,
+        language: segment.language,
+        sourceId: segment.segmentId,
+        segmentId: segment.segmentId,
+        startSeconds: segment.startSeconds,
+        endSeconds: segment.endSeconds,
+        sourceHash: segment.sourceHash,
+        sourceStatus: 'active',
+      },
+      jumpAction: null,
+      safetyFlags: ['transcript_grounded', 'bounded_current_video', 'auto_jump_disabled'],
+      now,
+    });
+  });
+}
+
+function selectTranscriptNodeSegments(
+  rows: CurrentVideoTranscriptSegment[],
+): CurrentVideoTranscriptSegment[] {
+  if (rows.length <= TRANSCRIPT_NODE_LIMIT) return rows;
+  const selectedIndexes = new Set<number>();
+  for (let index = 0; index < TRANSCRIPT_NODE_LIMIT; index += 1) {
+    selectedIndexes.add(Math.round(index * (rows.length - 1) / (TRANSCRIPT_NODE_LIMIT - 1)));
+  }
+  return Array.from(selectedIndexes)
+    .sort((a, b) => a - b)
+    .map(index => rows[index])
+    .filter((segment): segment is CurrentVideoTranscriptSegment => Boolean(segment));
+}
+
+function transcriptNodeTitle(
+  segment: CurrentVideoTranscriptSegment,
+  text: string,
+): string {
+  const lead = transcriptLead(text);
+  return lead
+    ? `字幕节点 ${formatDuration(segment.startSeconds)}-${formatDuration(segment.endSeconds)}：${lead}`
+    : `字幕节点 ${formatDuration(segment.startSeconds)}-${formatDuration(segment.endSeconds)}`;
+}
+
+function transcriptNodeReason(index: number, total: number): string {
+  const ordinal = total > 1 ? `第 ${index + 1} 个` : '当前';
+  return `${ordinal}字幕证据片段可作为关键节点候选；时间范围、证据编号和文字片段都来自当前视频本地缓存的有效字幕，不从简介或元数据推断时间点。`;
+}
+
+function transcriptConfidence(
+  evidenceState: NonNullable<CurrentVideoContext['transcriptEvidence']>,
+  segment: CurrentVideoTranscriptSegment,
+  matchingSegmentCount: number,
+): number {
+  const textLength = normalizeText(segment.text).length;
+  const duration = segment.endSeconds - segment.startSeconds;
+  const coverage = typeof evidenceState.coverageStartSeconds === 'number'
+    && typeof evidenceState.coverageEndSeconds === 'number'
+    ? evidenceState.coverageEndSeconds - evidenceState.coverageStartSeconds
+    : 0;
+
+  let score = 0.62;
+  if (textLength >= 24) score += 0.08;
+  if (textLength >= 60) score += 0.05;
+  if (duration >= 1 && duration <= 20) score += 0.05;
+  if (matchingSegmentCount >= 6) score += 0.06;
+  else if (matchingSegmentCount <= 2) score -= 0.08;
+  if (coverage >= 120) score += 0.06;
+  else if (coverage >= 30) score += 0.03;
+  if (evidenceState.staleSegmentCount === 0) score += 0.04;
+  else score -= 0.08;
+  if (evidenceState.warnings.length > 0) score -= 0.04;
+
+  return Math.round(Math.max(0.48, Math.min(0.92, score)) * 100) / 100;
+}
+
+function buildVideoKnowledgeWarnings(context: CurrentVideoContext, transcriptNodeCount: number): string[] {
   const warnings = new Set(context.warnings);
+  if (transcriptNodeCount > 0) {
+    warnings.add('transcript_nodes_generated');
+    return Array.from(warnings);
+  }
+
   if (context.sources.transcript === 'available') {
     warnings.add('transcript_source_available');
     warnings.add('transcript_nodes_not_generated');
@@ -192,16 +334,24 @@ function buildVideoKnowledgeWarnings(context: CurrentVideoContext): string[] {
   }
   if (context.transcriptEvidence?.active) {
     warnings.add('transcript_evidence_cached');
-    warnings.add('transcript_evidence_not_used_for_nodes');
+    warnings.add('transcript_evidence_segments_not_available_for_nodes');
   }
   return Array.from(warnings);
 }
 
-function buildVideoKnowledgeLimitations(context: CurrentVideoContext): string[] {
+function buildVideoKnowledgeLimitations(context: CurrentVideoContext, transcriptNodeCount: number): string[] {
+  if (transcriptNodeCount > 0) {
+    return [
+      '已基于当前视频本地缓存的有效字幕生成关键节点候选；每个时间范围只来自真实字幕片段。',
+      '字幕节点目前只展示证据和时间范围，不新增自动跳转或新的时间点跳转能力。',
+      '证据强度只反映字幕片段的完整度、匹配状态和本地证据质量，不代表视频质量。',
+    ];
+  }
+
   const transcriptLimitation = context.transcriptEvidence?.active
-    ? '已缓存本地字幕正文证据，但当前版本仍不生成字幕正文节点、关键节点、模糊检索或完整视频总结。'
+    ? '已缓存本地字幕正文证据，但当前没有可用于生成节点的匹配字幕片段；已回退到元数据、简介、分 P 或章节节点。'
     : context.sources.transcript === 'available'
-    ? '已探测到字幕来源，但当前版本只记录来源状态，尚未生成字幕正文节点或完整视频总结。'
+    ? '已探测到字幕来源，但当前没有可引用的本地字幕正文片段；节点只使用元数据、简介、分 P 或章节。'
     : context.sources.transcript === 'unknown'
       ? '字幕来源尚未完成探测；当前节点只基于元数据、简介、分 P 或章节。'
       : '没有可用字幕，因此元数据和简介节点不代表完整视频理解。';
@@ -219,6 +369,7 @@ function node(input: {
   page: number;
   cid?: number | null;
   timestamp?: number | null;
+  endTimestamp?: number | null;
   title: string;
   reason: string;
   source: VideoKnowledgeSource;
@@ -234,7 +385,7 @@ function node(input: {
     cid: input.cid ?? input.context.cid,
     page: input.page,
     timestamp: input.timestamp ?? null,
-    endTimestamp: null,
+    endTimestamp: input.endTimestamp ?? null,
     title: limitText(input.title, 140),
     reason: limitText(input.reason, 260),
     source: input.source,
@@ -297,6 +448,17 @@ function limitText(value: string, maxLength: number): string {
   if (normalized.length <= maxLength) return normalized;
   if (maxLength <= 3) return normalized.slice(0, maxLength);
   return `${normalized.slice(0, maxLength - 3)}...`;
+}
+
+function transcriptLead(text: string): string {
+  const normalized = normalizeText(text);
+  if (!normalized) return '';
+  const sentence = normalized.split(/(?<=[.!?。！？])\s*/u)[0] ?? normalized;
+  return limitText(sentence, 42);
+}
+
+function languageKey(value: string | null | undefined): string {
+  return (value ?? 'unknown').trim().toLowerCase() || 'unknown';
 }
 
 export function formatVideoKnowledgeTime(seconds: number): string {
