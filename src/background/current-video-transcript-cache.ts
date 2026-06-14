@@ -49,7 +49,7 @@ export async function cacheCurrentVideoTranscriptEvidence(
       target: { bvid: null, cid: null, page: null, language: options.requestedLanguage ?? null },
       now,
       reason: 'no_current_video_context',
-      message: '当前没有可缓存 transcript 的 B 站视频上下文；仍使用元数据/简介 fallback。',
+      message: '当前没有可缓存字幕正文证据的 B 站视频上下文；仍使用元数据和简介作为本地证据结果。',
       warnings: ['no_current_video_context'],
     });
   }
@@ -65,7 +65,7 @@ export async function cacheCurrentVideoTranscriptEvidence(
       },
       now,
       reason: 'missing_cid',
-      message: '当前视频缺少 CID，无法读取字幕正文证据；仍使用元数据/简介 fallback。',
+      message: '当前视频缺少 CID，无法读取字幕正文证据；仍使用元数据和简介作为本地证据结果。',
       warnings: ['cid_unknown'],
     });
   }
@@ -137,7 +137,7 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
           now: options.now,
           sourceType: attempt.sourceType,
           reason: 'requested_language_not_found',
-          message: '当前字幕来源没有匹配请求语言的 track；不会把其他语言字幕缓存为 active 证据。',
+          message: '当前字幕来源没有匹配请求语言的字幕轨道；不会把其他语言字幕缓存为当前有效证据。',
           warnings: ['transcript_language_mismatch'],
         });
       }
@@ -150,7 +150,7 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
           now: options.now,
           sourceType: attempt.sourceType,
           reason: 'subtitle_url_host_unsupported',
-          message: '字幕 track 地址不可用或不属于受限的 B 站字幕域名；未读取正文。',
+          message: '字幕轨道地址不可用或不属于受限的 B 站字幕域名；未读取正文。',
           warnings: ['subtitle_track_url_unavailable'],
         });
       }
@@ -189,7 +189,7 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
       now: options.now,
       sourceType: 'bilibili_player_v2',
       reason: 'login_required',
-      message: 'B 站字幕正文接口需要当前浏览器会话权限；未读取本地 Cookie 或登录态文件，当前仍使用元数据/简介 fallback。',
+      message: 'B 站字幕正文接口需要当前浏览器会话权限；未读取本地 Cookie 或登录态文件，当前仍使用元数据和简介作为本地证据结果。',
       warnings: ['transcript_login_required'],
     });
   }
@@ -200,7 +200,7 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
     now: options.now,
     sourceType: 'bilibili_player_v2',
     reason: lastError ?? 'endpoint_failed',
-    message: 'B 站字幕正文请求失败；当前仍使用元数据/简介 fallback。',
+    message: 'B 站字幕正文请求失败；当前仍使用元数据和简介作为本地证据结果。',
     warnings: ['transcript_endpoint_failed'],
   });
 }
@@ -282,7 +282,7 @@ function extractSubtitleTrackCandidates(
     return {
       status: 'unsupported',
       reason: 'subtitle_field_missing',
-      message: '播放器接口没有返回字幕字段；无法缓存 transcript 证据。',
+      message: '播放器接口没有返回字幕字段；无法缓存字幕正文证据。',
       warnings: ['subtitle_field_missing'],
     };
   }
@@ -291,7 +291,7 @@ function extractSubtitleTrackCandidates(
     return {
       status: 'malformed',
       reason: 'subtitle_tracks_not_array',
-      message: '播放器字幕列表结构异常；未读取或缓存 transcript 证据。',
+      message: '播放器字幕列表结构异常；未读取或缓存字幕正文证据。',
       warnings: ['subtitle_malformed'],
     };
   }
@@ -300,7 +300,7 @@ function extractSubtitleTrackCandidates(
     return {
       status: 'track_unavailable',
       reason: 'subtitle_tracks_empty',
-      message: '当前视频没有可用字幕 track；仍使用元数据/简介 fallback。',
+      message: '当前视频没有可用字幕轨道；仍使用元数据和简介作为本地证据结果。',
       warnings: ['transcript_unavailable'],
     };
   }
@@ -325,7 +325,7 @@ function extractSubtitleTrackCandidates(
     return {
       status: 'track_unavailable',
       reason: 'subtitle_track_url_missing',
-      message: '播放器返回了字幕 track，但没有可读取的字幕正文地址；未缓存 transcript 证据。',
+      message: '播放器返回了字幕轨道，但没有可读取的字幕正文地址；未缓存字幕正文证据。',
       warnings: ['subtitle_track_url_unavailable'],
     };
   }

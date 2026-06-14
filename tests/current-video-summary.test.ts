@@ -66,7 +66,7 @@ test('keeps available subtitle source state separate from transcript summary', (
     languages: ['zh-CN'],
     tracks: [],
     reason: 'subtitle_tracks_available',
-    message: '已探测到 1 条字幕 track；本版本只记录来源状态，不缓存字幕正文，也不会据此生成完整视频总结。',
+    message: '已探测到 1 条字幕轨道；本版本只记录来源状态，不缓存字幕正文，也不会据此生成完整视频总结。',
     warnings: ['transcript_source_available', 'transcript_text_not_cached'],
   };
 
@@ -106,7 +106,7 @@ test('keeps cached transcript evidence out of current video summary AI payload',
     fetchedAt: 2000,
     updatedAt: 2000,
     reason: 'transcript_segments_cached',
-    message: 'cached transcript evidence only',
+    message: '已缓存字幕正文证据，仅作为本地证据状态展示。',
     warnings: [],
   };
 
@@ -117,9 +117,9 @@ test('keeps cached transcript evidence out of current video summary AI payload',
   assert.equal(summary.sourceTier, 'description_summary');
   assert.equal(payload.availableSources.transcript, 'available');
   assert.equal(payload.availableSources.contentText, 'unavailable');
-  assert.ok(summary.evidence.some(item => item.label === 'Transcript evidence cache'));
-  assert.ok(summary.limitations.some(item => item.includes('当前摘要 slice')));
-  assert.doesNotMatch(rawPayload, /sourceHash|segmentId|cached transcript evidence|SECRET TRANSCRIPT|watchHistory|Cookie|Key\.txt/i);
+  assert.ok(summary.evidence.some(item => item.label === '字幕正文证据缓存'));
+  assert.ok(summary.limitations.some(item => item.includes('当前版本')));
+  assert.doesNotMatch(rawPayload, /sourceHash|segmentId|已缓存字幕正文证据|SECRET TRANSCRIPT|watchHistory|Cookie|Key\.txt/i);
 });
 
 test('marks AI disabled fallback without changing source tier', () => {

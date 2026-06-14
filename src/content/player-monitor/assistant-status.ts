@@ -222,7 +222,7 @@ function subtitleStatusMessage(context: CurrentVideoContext): string {
   }
   if (context.subtitleProbe) return context.subtitleProbe.message;
   if (context.sources.transcript === 'unknown') {
-    return '字幕来源等待后台探测；当前只使用元数据/简介 fallback，不能做完整视频总结。';
+    return '字幕来源等待后台探测；当前只使用元数据和简介作为本地证据兜底，不能做完整视频总结。';
   }
   if (context.sources.description === 'available') {
     return '简介可用，但字幕和完整正文文本不可用；这不是完整视频总结。';

@@ -71,7 +71,7 @@ export function normalizeBilibiliTranscriptEvidence(
         coverageStartSeconds: null,
         coverageEndSeconds: null,
         reason: 'subtitle_body_not_array',
-        message: '字幕正文返回结构异常，未写入可引用 transcript 片段；当前仍使用元数据/简介 fallback。',
+        message: '字幕正文返回结构异常，未写入可引用字幕片段；当前仍使用元数据和简介作为本地证据结果。',
         warnings: ['transcript_malformed'],
       }),
       segments: [],
@@ -103,7 +103,7 @@ export function normalizeBilibiliTranscriptEvidence(
         coverageStartSeconds: null,
         coverageEndSeconds: null,
         reason: 'subtitle_body_empty',
-        message: '字幕 track 可读取，但没有返回正文片段；当前仍使用元数据/简介 fallback。',
+        message: '字幕轨道可读取，但没有返回正文片段；当前仍使用元数据和简介作为本地证据结果。',
         warnings: ['transcript_empty'],
       }),
       segments: [],
@@ -120,7 +120,7 @@ export function normalizeBilibiliTranscriptEvidence(
         coverageStartSeconds: null,
         coverageEndSeconds: null,
         reason: 'subtitle_segments_unusable',
-        message: '字幕正文片段缺少有效时间轴或文本，未作为 transcript 证据缓存。',
+        message: '字幕正文片段缺少有效时间轴或文本，未作为字幕正文证据缓存。',
         warnings: ['transcript_malformed'],
       }),
       segments: [],
@@ -306,7 +306,7 @@ export function buildTranscriptEvidenceStateFromCache(
       target: identity,
       now,
       reason: 'language_not_cached',
-      message: '本地 transcript 证据没有匹配当前请求的字幕语言；不会把其他语言当作 active 证据。',
+      message: '本地字幕正文证据没有匹配当前请求的字幕语言；不会把其他语言当作当前有效证据。',
       warnings: ['transcript_language_mismatch'],
     });
   }
@@ -319,7 +319,7 @@ export function buildTranscriptEvidenceStateFromCache(
       now,
       staleSegmentCount,
       reason: 'current_video_identity_changed',
-      message: '本地 transcript 证据与当前 CID、分 P 或语言不匹配；不会作为当前视频 active 证据。',
+      message: '本地字幕正文证据与当前 CID、分 P 或语言不匹配；不会作为当前视频的当前有效证据。',
       warnings: ['transcript_cache_stale'],
     });
   }
@@ -329,7 +329,7 @@ export function buildTranscriptEvidenceStateFromCache(
     target: identity,
     now,
     reason: 'transcript_not_cached',
-    message: '尚未缓存当前视频的字幕正文证据；当前仍使用元数据/简介 fallback。',
+    message: '尚未缓存当前视频的字幕正文证据；当前仍使用元数据和简介作为本地证据结果。',
     warnings: ['transcript_not_cached'],
   });
 }

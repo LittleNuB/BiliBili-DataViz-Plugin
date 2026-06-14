@@ -199,9 +199,9 @@ function buildVideoKnowledgeWarnings(context: CurrentVideoContext): string[] {
 
 function buildVideoKnowledgeLimitations(context: CurrentVideoContext): string[] {
   const transcriptLimitation = context.transcriptEvidence?.active
-    ? '已缓存本地 transcript 证据，但当前 slice 仍不生成 transcript 节点、key nodes、模糊检索或完整视频总结。'
+    ? '已缓存本地字幕正文证据，但当前版本仍不生成字幕正文节点、关键节点、模糊检索或完整视频总结。'
     : context.sources.transcript === 'available'
-    ? '已探测到字幕来源，但当前版本只记录来源状态，尚未生成 transcript 节点或完整视频总结。'
+    ? '已探测到字幕来源，但当前版本只记录来源状态，尚未生成字幕正文节点或完整视频总结。'
     : context.sources.transcript === 'unknown'
       ? '字幕来源尚未完成探测；当前节点只基于元数据、简介、分 P 或章节。'
       : '没有可用字幕，因此元数据和简介节点不代表完整视频理解。';

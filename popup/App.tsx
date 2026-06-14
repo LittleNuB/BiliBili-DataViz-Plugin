@@ -851,7 +851,7 @@ function subtitleProbeDetail(probe: CurrentVideoSubtitleSourceState): string {
   const coverage = typeof probe.coverageEndSeconds === 'number'
     ? `；覆盖至 ${formatSeconds(probe.coverageEndSeconds)}`
     : '';
-  return `${probe.message}（track ${probe.trackCount}${languages}${coverage}）`;
+  return `${probe.message}（字幕轨道 ${probe.trackCount}${languages}${coverage}）`;
 }
 
 function transcriptEvidenceDetail(evidence: CurrentVideoTranscriptEvidenceState): string {
