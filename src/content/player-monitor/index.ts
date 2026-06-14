@@ -2,8 +2,18 @@ import { renderCurrentVideoAssistant } from './assistant-status';
 import { collectCurrentVideoContext, isVideoPage, withVideoElementDuration } from './current-video-context';
 import { attachEventListeners, type VideoContext } from './event-capture';
 import { startHeartbeat } from './heartbeat';
+import {
+  performConfirmedTimestampJump,
+  performTimestampReturn,
+  type CurrentVideoTimestampReturnPoint,
+} from './timestamp-jump';
 import { detectVideo } from './video-detector';
 import type { BiliVizContentMessage } from '../../shared/types/messages';
+import type {
+  CurrentVideoTimestampJumpContentPayload,
+  CurrentVideoTimestampJumpResponse,
+  CurrentVideoTimestampReturnResponse,
+} from '../../shared/types/current-video-segment-retrieval';
 import type { CurrentVideoContextResult } from '../../shared/types/current-video-context';
 import type { VideoKnowledgeJumpResponse, VideoKnowledgeNode } from '../../shared/types/video-knowledge';
 
@@ -11,6 +21,7 @@ let cleanup: (() => void) | null = null;
 let lastContextKey = '';
 let retryTimer: number | null = null;
 let latestContext: CurrentVideoContextResult | null = null;
+let currentVideoTimestampReturnPoint: CurrentVideoTimestampReturnPoint | null = null;
 
 const RETURN_TOAST_ID = 'bdc-video-knowledge-return';
 const PAGE_RETURN_KEY = 'bdc-video-knowledge-return-point';
@@ -90,19 +101,50 @@ async function initializeMonitor(): Promise<void> {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.action !== 'VIDEO_KNOWLEDGE_MANUAL_JUMP') return false;
+  if (message?.action === 'VIDEO_KNOWLEDGE_MANUAL_JUMP') {
+    handleVideoKnowledgeManualJump(message.payload).then(sendResponse).catch((error) => {
+      sendResponse({
+        ok: false,
+        message: error instanceof Error ? error.message : String(error),
+        nodeId: String(message.payload?.node?.id ?? ''),
+        previousPositionSeconds: null,
+        targetSeconds: null,
+        targetPage: null,
+      } satisfies VideoKnowledgeJumpResponse);
+    });
+    return true;
+  }
 
-  handleVideoKnowledgeManualJump(message.payload).then(sendResponse).catch((error) => {
-    sendResponse({
-      ok: false,
-      message: error instanceof Error ? error.message : String(error),
-      nodeId: String(message.payload?.node?.id ?? ''),
-      previousPositionSeconds: null,
-      targetSeconds: null,
-      targetPage: null,
-    } satisfies VideoKnowledgeJumpResponse);
-  });
-  return true;
+  if (message?.action === 'CURRENT_VIDEO_TIMESTAMP_JUMP') {
+    handleCurrentVideoTimestampJump(message.payload).then(sendResponse).catch((error) => {
+      sendResponse({
+        ok: false,
+        message: error instanceof Error ? error.message : String(error),
+        candidateId: String(message.payload?.candidateId ?? ''),
+        targetSeconds: null,
+        targetTimeLabel: null,
+        returnPointSeconds: null,
+        sourceLabel: null,
+        confidence: null,
+      } satisfies CurrentVideoTimestampJumpResponse);
+    });
+    return true;
+  }
+
+  if (message?.action === 'CURRENT_VIDEO_TIMESTAMP_RETURN') {
+    handleCurrentVideoTimestampReturn().then(sendResponse).catch((error) => {
+      sendResponse({
+        ok: false,
+        message: error instanceof Error ? error.message : String(error),
+        candidateId: null,
+        returnPointSeconds: null,
+        targetSeconds: null,
+      } satisfies CurrentVideoTimestampReturnResponse);
+    });
+    return true;
+  }
+
+  return false;
 });
 
 async function handleVideoKnowledgeManualJump(payload: {
@@ -157,8 +199,41 @@ async function handleVideoKnowledgeManualJump(payload: {
   };
 }
 
+async function handleCurrentVideoTimestampJump(
+  payload: CurrentVideoTimestampJumpContentPayload,
+): Promise<CurrentVideoTimestampJumpResponse> {
+  const result = await performConfirmedTimestampJump({
+    payload,
+    latestContext,
+    video: currentUsableVideoElement(),
+  });
+  if (result.returnPoint) {
+    currentVideoTimestampReturnPoint = result.returnPoint;
+    showReturnToast(result.response.returnPointSeconds, undefined, handleCurrentVideoTimestampReturn);
+  }
+  return result.response;
+}
+
+async function handleCurrentVideoTimestampReturn(): Promise<CurrentVideoTimestampReturnResponse> {
+  const result = await performTimestampReturn({
+    returnPoint: currentVideoTimestampReturnPoint,
+    latestContext,
+    video: currentUsableVideoElement(),
+  });
+  if (result.clearReturnPoint) {
+    currentVideoTimestampReturnPoint = null;
+  }
+  return result.response;
+}
+
 function currentVideoElement(): HTMLVideoElement | null {
   return document.querySelector('video');
+}
+
+function currentUsableVideoElement(): HTMLVideoElement | null {
+  const video = currentVideoElement();
+  if (!video) return null;
+  return video;
 }
 
 function urlForPage(page: number): string {
@@ -195,7 +270,11 @@ function showStoredPageReturnIfAvailable(context: CurrentVideoContextResult): vo
   }
 }
 
-function showReturnToast(seconds: number | null, url?: string): void {
+function showReturnToast(
+  seconds: number | null,
+  url?: string,
+  onReturn?: () => Promise<CurrentVideoTimestampReturnResponse>,
+): void {
   const existing = document.getElementById(RETURN_TOAST_ID);
   existing?.remove();
 
@@ -234,6 +313,11 @@ function showReturnToast(seconds: number | null, url?: string): void {
       location.assign(url);
       return;
     }
+    if (onReturn) {
+      await onReturn();
+      toast.remove();
+      return;
+    }
     if (seconds !== null) {
       const video = await detectVideo();
       video.currentTime = Math.max(0, seconds);
@@ -243,7 +327,7 @@ function showReturnToast(seconds: number | null, url?: string): void {
 
   const dismiss = document.createElement('button');
   dismiss.type = 'button';
-  dismiss.textContent = 'Dismiss';
+  dismiss.textContent = '关闭';
   dismiss.style.cssText = 'border:1px solid rgba(255,255,255,0.16);border-radius:6px;background:transparent;color:#c8c8d8;font-size:12px;padding:6px 8px;cursor:pointer';
   dismiss.addEventListener('click', () => toast.remove());
   actions.append(back, dismiss);

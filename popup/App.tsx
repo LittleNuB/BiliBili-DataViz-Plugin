@@ -13,6 +13,8 @@ import type { CurrentVideoTranscriptEvidenceState } from '../src/shared/types/cu
 import type {
   CurrentVideoSegmentRetrievalCandidate,
   CurrentVideoSegmentRetrievalResult,
+  CurrentVideoTimestampJumpResponse,
+  CurrentVideoTimestampReturnResponse,
 } from '../src/shared/types/current-video-segment-retrieval';
 import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary';
 import type { VideoKnowledgeJumpResponse, VideoKnowledgeNode, VideoKnowledgeResult } from '../src/shared/types/video-knowledge';
@@ -539,17 +541,26 @@ function CurrentVideoAssistantStatus({
   const [segmentResult, setSegmentResult] = useState<CurrentVideoSegmentRetrievalResult | null>(null);
   const [segmentLoading, setSegmentLoading] = useState(false);
   const [segmentError, setSegmentError] = useState<string | null>(null);
+  const [segmentPreviewCandidateId, setSegmentPreviewCandidateId] = useState<string | null>(null);
+  const [segmentJumpStatus, setSegmentJumpStatus] = useState<string | null>(null);
+  const [segmentReturnAvailable, setSegmentReturnAvailable] = useState(false);
 
   async function searchCurrentVideoSegments() {
     const query = segmentQuery.trim();
     if (!query) {
       setSegmentError('请输入想查找的片段内容。');
       setSegmentResult(null);
+      setSegmentPreviewCandidateId(null);
+      setSegmentJumpStatus(null);
+      setSegmentReturnAvailable(false);
       return;
     }
 
     setSegmentLoading(true);
     setSegmentError(null);
+    setSegmentPreviewCandidateId(null);
+    setSegmentJumpStatus(null);
+    setSegmentReturnAvailable(false);
     try {
       const result = await requestSW<CurrentVideoSegmentRetrievalResult>('SEARCH_CURRENT_VIDEO_SEGMENTS', {
         query,
@@ -560,6 +571,39 @@ function CurrentVideoAssistantStatus({
       setSegmentResult(null);
     } finally {
       setSegmentLoading(false);
+    }
+  }
+
+  async function confirmSegmentJump(candidate: CurrentVideoSegmentRetrievalCandidate) {
+    if (!segmentResult) return;
+    if (!candidate.jumpPreview.canJump) {
+      setSegmentJumpStatus(candidate.jumpPreview.message);
+      return;
+    }
+
+    setSegmentJumpStatus('正在确认跳转...');
+    try {
+      const result = await requestSW<CurrentVideoTimestampJumpResponse>('REQUEST_CURRENT_VIDEO_SEGMENT_JUMP', {
+        query: segmentResult.query,
+        candidateId: candidate.id,
+        confirmed: true,
+      });
+      setSegmentJumpStatus(result.message);
+      setSegmentReturnAvailable(result.ok && result.returnPointSeconds !== null);
+    } catch (e) {
+      setSegmentJumpStatus((e as Error).message);
+      setSegmentReturnAvailable(false);
+    }
+  }
+
+  async function returnSegmentJump() {
+    setSegmentJumpStatus('正在返回原位置...');
+    try {
+      const result = await requestSW<CurrentVideoTimestampReturnResponse>('RETURN_CURRENT_VIDEO_SEGMENT_JUMP');
+      setSegmentJumpStatus(result.message);
+      if (result.ok) setSegmentReturnAvailable(false);
+    } catch (e) {
+      setSegmentJumpStatus((e as Error).message);
     }
   }
 
@@ -677,8 +721,14 @@ function CurrentVideoAssistantStatus({
             result={segmentResult}
             loading={segmentLoading}
             error={segmentError}
+            previewCandidateId={segmentPreviewCandidateId}
+            jumpStatus={segmentJumpStatus}
+            returnAvailable={segmentReturnAvailable}
             onQueryChange={setSegmentQuery}
             onSearch={searchCurrentVideoSegments}
+            onPreviewCandidate={setSegmentPreviewCandidateId}
+            onConfirmJump={confirmSegmentJump}
+            onReturn={returnSegmentJump}
           />
           <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
             <button
@@ -738,16 +788,29 @@ function CurrentVideoSegmentRetrievalPanel({
   result,
   loading,
   error,
+  previewCandidateId,
+  jumpStatus,
+  returnAvailable,
   onQueryChange,
   onSearch,
+  onPreviewCandidate,
+  onConfirmJump,
+  onReturn,
 }: {
   query: string;
   result: CurrentVideoSegmentRetrievalResult | null;
   loading: boolean;
   error: string | null;
+  previewCandidateId: string | null;
+  jumpStatus: string | null;
+  returnAvailable: boolean;
   onQueryChange: (query: string) => void;
   onSearch: () => void;
+  onPreviewCandidate: (candidateId: string | null) => void;
+  onConfirmJump: (candidate: CurrentVideoSegmentRetrievalCandidate) => void;
+  onReturn: () => void;
 }) {
+  const previewCandidate = result?.candidates.find(candidate => candidate.id === previewCandidateId) ?? null;
   return (
     <div style={{
       marginTop: '8px',
@@ -800,7 +863,7 @@ function CurrentVideoSegmentRetrievalPanel({
         </button>
       </form>
       <div style={{ color: '#A0A0B0', fontSize: '9px', lineHeight: 1.45, marginTop: '5px' }}>
-        只查当前视频本地已有证据；结果只展示候选时间和证据，不提供跳转。
+        只查当前视频本地已有证据；候选必须预览并确认后才会跳转，不会自动改变播放位置。
       </div>
       {error && (
         <div style={{ color: '#FFB347', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
@@ -818,8 +881,46 @@ function CurrentVideoSegmentRetrievalPanel({
             </div>
           ) : (
             result.candidates.map((candidate, index) => (
-              <SegmentCandidateCard key={candidate.id} candidate={candidate} index={index} />
+              <SegmentCandidateCard
+                key={candidate.id}
+                candidate={candidate}
+                index={index}
+                selected={candidate.id === previewCandidateId}
+                onPreview={onPreviewCandidate}
+              />
             ))
+          )}
+          {previewCandidate && (
+            <SegmentJumpPreview
+              candidate={previewCandidate}
+              onConfirm={onConfirmJump}
+              onCancel={() => onPreviewCandidate(null)}
+            />
+          )}
+          {jumpStatus && (
+            <div style={{ color: jumpStatus.includes('不能') || jumpStatus.includes('不可') || jumpStatus.includes('过期') ? '#FFCF8A' : '#A0E7A0', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
+              {jumpStatus}
+            </div>
+          )}
+          {returnAvailable && (
+            <button
+              type="button"
+              onClick={onReturn}
+              style={{
+                marginTop: '6px',
+                width: '100%',
+                background: 'rgba(255, 179, 71, 0.18)',
+                color: '#FFCF8A',
+                border: '1px solid rgba(255, 179, 71, 0.34)',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '10px',
+                fontWeight: 700,
+                padding: '5px 7px',
+              }}
+            >
+              返回原位置
+            </button>
           )}
         </div>
       )}
@@ -830,10 +931,15 @@ function CurrentVideoSegmentRetrievalPanel({
 function SegmentCandidateCard({
   candidate,
   index,
+  selected,
+  onPreview,
 }: {
   candidate: CurrentVideoSegmentRetrievalCandidate;
   index: number;
+  selected: boolean;
+  onPreview: (candidateId: string | null) => void;
 }) {
+  const canJump = candidate.jumpPreview.canJump;
   return (
     <div style={{
       marginTop: '6px',
@@ -867,6 +973,99 @@ function SegmentCandidateCard({
           {candidate.note}
         </div>
       )}
+      <div style={{ color: canJump ? '#A0E7A0' : '#FFCF8A', fontSize: '9px', lineHeight: 1.4, marginTop: '3px' }}>
+        {candidate.jumpPreview.message}
+      </div>
+      <button
+        type="button"
+        disabled={!canJump}
+        onClick={() => onPreview(selected ? null : candidate.id)}
+        style={{
+          marginTop: '5px',
+          background: canJump ? 'rgba(0, 161, 214, 0.20)' : 'rgba(255, 255, 255, 0.06)',
+          color: canJump ? '#C8E6FF' : '#9090A0',
+          border: canJump ? '1px solid rgba(127, 219, 255, 0.32)' : '1px solid rgba(255,255,255,0.10)',
+          borderRadius: '6px',
+          cursor: canJump ? 'pointer' : 'default',
+          fontSize: '10px',
+          padding: '4px 7px',
+          opacity: canJump ? 1 : 0.75,
+        }}
+      >
+        {canJump ? (selected ? '收起预览' : '预览跳转') : '不可跳转'}
+      </button>
+    </div>
+  );
+}
+
+function SegmentJumpPreview({
+  candidate,
+  onConfirm,
+  onCancel,
+}: {
+  candidate: CurrentVideoSegmentRetrievalCandidate;
+  onConfirm: (candidate: CurrentVideoSegmentRetrievalCandidate) => void;
+  onCancel: () => void;
+}) {
+  const preview = candidate.jumpPreview;
+  return (
+    <div style={{
+      marginTop: '8px',
+      padding: '8px',
+      border: '1px solid rgba(255,179,71,0.28)',
+      borderRadius: '6px',
+      background: 'rgba(255,179,71,0.08)',
+    }}>
+      <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45, fontWeight: 700 }}>
+        确认跳转前预览
+      </div>
+      <div style={{ color: '#E8E8F2', fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
+        目标时间：{preview.targetTimeLabel ?? candidate.timeRangeLabel}
+      </div>
+      <div style={{ color: '#A0A0B0', fontSize: '9px', lineHeight: 1.45, marginTop: '2px' }}>
+        来源：{preview.sourceLabel}；置信度：{preview.confidenceLabel} {Math.round(preview.confidence * 100)}%
+      </div>
+      <div style={{ color: '#C8E6FF', fontSize: '9px', lineHeight: 1.45, marginTop: '3px' }}>
+        证据预览：{preview.evidencePreview || '暂无可展示文本'}
+      </div>
+      <div style={{ color: preview.canJump ? '#A0E7A0' : '#FFCF8A', fontSize: '9px', lineHeight: 1.45, marginTop: '3px' }}>
+        {preview.message}
+      </div>
+      <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+        <button
+          type="button"
+          disabled={!preview.canJump}
+          onClick={() => onConfirm(candidate)}
+          style={{
+            flex: 1,
+            background: preview.canJump ? '#FFB347' : 'rgba(255,255,255,0.08)',
+            color: preview.canJump ? '#1A1A2E' : '#9090A0',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: preview.canJump ? 'pointer' : 'default',
+            fontSize: '10px',
+            fontWeight: 700,
+            padding: '5px 7px',
+          }}
+        >
+          确认跳转
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          style={{
+            background: 'transparent',
+            color: '#C8C8D8',
+            border: '1px solid rgba(255,255,255,0.14)',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '10px',
+            padding: '5px 7px',
+          }}
+        >
+          取消
+        </button>
+      </div>
     </div>
   );
 }

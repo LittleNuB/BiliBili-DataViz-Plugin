@@ -8,6 +8,7 @@ import type {
   CurrentVideoSegmentRetrievalStatus,
 } from './types/current-video-segment-retrieval';
 import type { VideoKnowledgeNode, VideoKnowledgeResult } from './types/video-knowledge';
+import { buildCurrentVideoTimestampJumpPreview } from './current-video-timestamp-jump.ts';
 
 const DEFAULT_CONTEXT_MAX_AGE_MS = 10 * 60 * 1000;
 const DEFAULT_LIMIT = 5;
@@ -150,7 +151,7 @@ export function searchCurrentVideoSegments(
         : '只找到低置信候选，请把问题写得更接近字幕原文或章节标题。',
       limitations: [
         '候选时间只来自当前视频已有字幕片段或本地关键节点，不会推测新时间点。',
-        '当前结果只展示证据和时间范围，不提供播放器跳转。',
+        '候选必须预览并确认后才会请求播放器跳转，默认不会自动改变播放位置。',
       ],
       evidenceState,
       contextFresh,
@@ -515,6 +516,18 @@ function candidate(input: {
     confidence,
     confidenceLabel: confidenceLabel(confidence),
     note: input.note ?? (confidence < LOW_CONFIDENCE_THRESHOLD ? '匹配较弱，建议换成更具体的关键词。' : null),
+    jumpPreview: {
+      canJump: false,
+      requiresConfirmation: true,
+      disabledReason: 'candidate_not_found',
+      message: '候选需要重新验证后才能跳转。',
+      targetSeconds: null,
+      targetTimeLabel: null,
+      sourceLabel: sourceLabel(input.source),
+      confidence,
+      confidenceLabel: confidenceLabel(confidence),
+      evidencePreview: limitText(input.evidenceText, 140),
+    },
   };
 }
 
@@ -550,7 +563,12 @@ function result(input: {
     normalizedQuery: input.profile.normalized,
     title: videoContext?.title ?? videoContext?.bvid ?? '当前视频',
     generatedAt: input.now,
-    candidates: input.candidates,
+    candidates: input.candidates.map(candidate => ({
+      ...candidate,
+      jumpPreview: buildCurrentVideoTimestampJumpPreview(input.context, candidate, {
+        now: input.now,
+      }),
+    })),
     summary: input.summary,
     limitations: input.limitations,
     evidenceState: {

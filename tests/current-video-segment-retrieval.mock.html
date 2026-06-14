@@ -101,10 +101,55 @@
     .reason {
       color: #cfd3df;
     }
+
+    button {
+      margin-top: 8px;
+      border: 1px solid rgba(127, 219, 255, 0.32);
+      border-radius: 6px;
+      background: rgba(0, 161, 214, 0.2);
+      color: var(--blue);
+      cursor: pointer;
+      font-size: 11px;
+      padding: 6px 8px;
+    }
+
+    button:disabled {
+      border-color: rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.06);
+      color: #858a99;
+      cursor: default;
+    }
+
+    .preview {
+      display: none;
+      margin-top: 10px;
+      padding: 10px;
+      border: 1px solid rgba(255, 179, 71, 0.3);
+      border-radius: 6px;
+      background: rgba(255, 179, 71, 0.08);
+    }
+
+    .preview.active {
+      display: block;
+    }
+
+    .confirm {
+      background: #ffb347;
+      color: #1a1a2e;
+      border: 0;
+      font-weight: 700;
+    }
   </style>
 </head>
 <body>
   <main>
+    <section data-testid="mock-player">
+      <h1>模拟播放器</h1>
+      <div class="status" data-testid="player-position">当前位置 0:12</div>
+      <div class="reason" data-testid="jump-status">尚未跳转</div>
+      <button type="button" data-testid="return-button" disabled>返回原位置</button>
+    </section>
+
     <section data-testid="retrieval-ready">
       <h1>本地片段检索</h1>
       <div class="status">找到 2 个基于当前视频本地证据的候选片段。</div>
@@ -116,7 +161,17 @@
         <div class="meta">来源 可定位字幕证据</div>
         <div class="evidence">证据片段：接下来讲模型的整体架构，包括专家路由和参数组织。</div>
         <div class="reason">匹配原因：和问题词有重叠：模型、架构；中文短语有连续重叠</div>
+        <div class="status">确认后会跳到 0:24，并记录当前播放位置用于返回。</div>
+        <button type="button" data-testid="preview-jump">预览跳转</button>
       </article>
+      <div class="preview" data-testid="jump-preview">
+        <h1>确认跳转前预览</h1>
+        <div class="reason">目标时间：0:24</div>
+        <div class="reason">来源：可定位字幕证据；置信度：高 86%</div>
+        <div class="evidence">证据预览：接下来讲模型的整体架构，包括专家路由和参数组织。</div>
+        <button type="button" class="confirm" data-testid="confirm-jump">确认跳转</button>
+        <button type="button" data-testid="cancel-jump">取消</button>
+      </div>
       <article class="candidate" data-testid="node-card">
         <div class="row">
           <div class="title">候选 2 · 2:00</div>
@@ -140,6 +195,7 @@
         <div class="evidence">证据片段：最后补充一点模型之外的部署注意事项。</div>
         <div class="reason">匹配原因：和问题词有重叠：模型</div>
         <div class="warning">匹配较弱，建议换成更具体的关键词。</div>
+        <button type="button" data-testid="low-confidence-jump" disabled>不可跳转</button>
       </article>
     </section>
 
@@ -160,8 +216,41 @@
         <div class="meta">来源 视频信息弱提示</div>
         <div class="evidence">证据片段：DeepSeek V3.2 发布会重点回顾</div>
         <div class="reason">匹配原因：这只是视频信息中的弱提示</div>
+        <button type="button" data-testid="metadata-jump" disabled>不可跳转</button>
       </article>
     </section>
   </main>
+  <script>
+    const preview = document.querySelector('[data-testid="jump-preview"]');
+    const status = document.querySelector('[data-testid="jump-status"]');
+    const position = document.querySelector('[data-testid="player-position"]');
+    const returnButton = document.querySelector('[data-testid="return-button"]');
+    let returnPoint = null;
+
+    document.querySelector('[data-testid="preview-jump"]').addEventListener('click', () => {
+      preview.classList.add('active');
+      status.textContent = '已展示目标时间、来源、置信度和证据预览，等待确认。';
+    });
+
+    document.querySelector('[data-testid="cancel-jump"]').addEventListener('click', () => {
+      preview.classList.remove('active');
+      status.textContent = '已取消，播放位置未改变。';
+    });
+
+    document.querySelector('[data-testid="confirm-jump"]').addEventListener('click', () => {
+      returnPoint = '0:12';
+      position.textContent = '当前位置 0:24';
+      status.textContent = '已确认跳转到 0:24，可返回 0:12。';
+      returnButton.disabled = false;
+    });
+
+    returnButton.addEventListener('click', () => {
+      if (!returnPoint) return;
+      position.textContent = `当前位置 ${returnPoint}`;
+      status.textContent = `已返回 ${returnPoint}。`;
+      returnPoint = null;
+      returnButton.disabled = true;
+    });
+  </script>
 </body>
 </html>

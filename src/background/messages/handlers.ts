@@ -7,6 +7,10 @@ import type {
   CurrentVideoSubtitleSourceState,
 } from '../../shared/types/current-video-context';
 import type { CurrentVideoTranscriptEvidenceState } from '../../shared/types/current-video-transcript';
+import type {
+  CurrentVideoTimestampJumpResponse,
+  CurrentVideoTimestampReturnResponse,
+} from '../../shared/types/current-video-segment-retrieval';
 import type { VideoKnowledgeJumpResponse } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import { normalizePageLimit, runInitialBackfill } from '../sync/initial-backfill';
@@ -35,6 +39,11 @@ import {
   withTranscriptEvidenceState,
 } from '../../shared/current-video-transcript-cache';
 import { searchCurrentVideoSegments } from '../../shared/current-video-segment-retrieval';
+import {
+  blockedTimestampJumpResponse,
+  blockedTimestampReturnResponse,
+  formatTimestampJumpFailureReason,
+} from '../../shared/current-video-timestamp-jump';
 import { buildVideoKnowledgeResult, findVideoKnowledgeNode } from '../../shared/video-knowledge';
 import {
   getQuickStats,
@@ -327,6 +336,10 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
         }) as T,
       };
     }
+    case 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP':
+      return { success: true, data: await requestCurrentVideoSegmentJump(request.params) as T };
+    case 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP':
+      return { success: true, data: await returnCurrentVideoSegmentJump() as T };
     case 'REQUEST_VIDEO_KNOWLEDGE_JUMP':
       return { success: true, data: await requestVideoKnowledgeJump(request.params) as T };
     case 'GET_SMART_FAVORITES':
@@ -465,6 +478,113 @@ async function requestVideoKnowledgeJump(params: Record<string, unknown> | undef
       confirmed: true,
     },
   });
+}
+
+async function requestCurrentVideoSegmentJump(
+  params: Record<string, unknown> | undefined,
+): Promise<CurrentVideoTimestampJumpResponse> {
+  const candidateId = requireStringParam(params?.candidateId, 'candidateId');
+  const query = requireStringParam(params?.query, 'query');
+  const confirmed = params?.confirmed === true;
+  if (!confirmed) {
+    return blockedTimestampJumpResponse(
+      candidateId,
+      'confirmation_required',
+      formatTimestampJumpFailureReason('confirmation_required'),
+    );
+  }
+
+  const target = await resolveCurrentVideoLookupState();
+  const tabId = target.tab?.id ?? 0;
+  if (!target.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(target.tab.url)) {
+    return blockedTimestampJumpResponse(
+      candidateId,
+      'no_context',
+      formatTimestampJumpFailureReason('no_context'),
+    );
+  }
+
+  const context = await getCurrentVideoContextForActiveTab();
+  if (context.kind !== 'video') {
+    return blockedTimestampJumpResponse(
+      candidateId,
+      'no_context',
+      formatTimestampJumpFailureReason('no_context'),
+    );
+  }
+
+  const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
+  const videoKnowledge = buildVideoKnowledgeResult(context, { transcriptSegments });
+  const result = searchCurrentVideoSegments(context, {
+    query,
+    transcriptSegments,
+    videoKnowledge,
+  });
+  const candidate = result.candidates.find(item => item.id === candidateId);
+  if (!candidate) {
+    const reason = result.status === 'stale_context'
+      ? 'stale_context'
+      : result.status === 'no_context'
+        ? 'no_context'
+        : 'candidate_not_found';
+    return blockedTimestampJumpResponse(
+      candidateId,
+      reason,
+      formatTimestampJumpFailureReason(reason),
+    );
+  }
+
+  const preview = candidate.jumpPreview;
+  if (!preview.canJump || preview.targetSeconds === null || preview.targetTimeLabel === null) {
+    const reason = preview.disabledReason ?? 'invalid_timestamp';
+    return blockedTimestampJumpResponse(candidateId, reason, preview.message);
+  }
+
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, {
+      action: 'CURRENT_VIDEO_TIMESTAMP_JUMP',
+      payload: {
+        candidateId,
+        confirmed: true,
+        contextBvid: context.bvid,
+        contextCid: context.cid,
+        contextPage: context.currentPart.page,
+        contextUrl: context.url,
+        contextCollectedAt: context.collectedAt,
+        targetSeconds: preview.targetSeconds,
+        targetTimeLabel: preview.targetTimeLabel,
+        sourceLabel: preview.sourceLabel,
+        confidence: preview.confidence,
+        confidenceLabel: preview.confidenceLabel,
+        evidencePreview: preview.evidencePreview,
+      },
+    });
+    return response as CurrentVideoTimestampJumpResponse;
+  } catch {
+    return blockedTimestampJumpResponse(
+      candidateId,
+      'player_unavailable',
+      formatTimestampJumpFailureReason('player_unavailable'),
+    );
+  }
+}
+
+async function returnCurrentVideoSegmentJump(): Promise<CurrentVideoTimestampReturnResponse> {
+  const target = await resolveCurrentVideoLookupState();
+  const tabId = target.tab?.id ?? 0;
+  if (!target.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(target.tab.url)) {
+    return blockedTimestampReturnResponse(formatTimestampJumpFailureReason('no_context'));
+  }
+
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, {
+      action: 'CURRENT_VIDEO_TIMESTAMP_RETURN',
+      payload: {},
+    });
+    return response as CurrentVideoTimestampReturnResponse;
+  } catch {
+    return blockedTimestampReturnResponse(formatTimestampJumpFailureReason('player_unavailable'));
+  }
 }
 
 async function markConsumedFromPlayerEvent(
