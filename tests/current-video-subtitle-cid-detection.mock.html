@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bili-Bill 当前视频字幕检测 Mock</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #10131f;
+        color: #f2f4f8;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+      }
+
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+      }
+
+      h1 {
+        font-size: 18px;
+        margin: 0 0 16px;
+      }
+
+      .panel {
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.06);
+        padding: 14px 16px;
+        margin-top: 12px;
+      }
+
+      .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 8px;
+        font-size: 14px;
+      }
+
+      .muted {
+        color: #a9b0c3;
+      }
+
+      .warn {
+        color: #ffcf8a;
+      }
+
+      .ok {
+        color: #9be7b0;
+      }
+
+      button {
+        margin-top: 14px;
+        border: 0;
+        border-radius: 6px;
+        background: #fb7299;
+        color: white;
+        padding: 8px 12px;
+        cursor: pointer;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Bili-Bill 当前视频字幕检测 Mock</h1>
+      <section class="panel">
+        <strong>B 站播放器状态</strong>
+        <div class="row">
+          <span>当前视频</span>
+          <span>BV1MockSubtitle9 / 第 2 P</span>
+        </div>
+        <div class="row">
+          <span>播放器字幕</span>
+          <span class="ok" data-testid="player-subtitle">中文 AI 已开启</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <strong>重新检测前</strong>
+        <div class="row">
+          <span>Bili-Bill 上下文</span>
+          <span class="warn" data-testid="before-context">CID 未知 / 字幕不可用</span>
+        </div>
+        <div class="muted">
+          旧状态来自页面初次加载时的缺失 CID 快照，不能作为字幕探测目标。
+        </div>
+      </section>
+
+      <section class="panel">
+        <strong>重新检测后</strong>
+        <div class="muted">
+          如需使用 B 站 AI 字幕，请先在播放器里手动开启中文 AI 字幕，开启后重新检测。
+        </div>
+        <button type="button" data-testid="reprobe-button">重新检测字幕</button>
+        <div class="row">
+          <span>Bili-Bill 上下文</span>
+          <span data-testid="resolved-context">等待检测</span>
+        </div>
+        <div class="row">
+          <span>字幕轨道</span>
+          <span data-testid="resolved-subtitle">等待检测</span>
+        </div>
+        <div class="row">
+          <span>诊断</span>
+          <span data-testid="resolved-diagnostic">等待检测</span>
+        </div>
+      </section>
+    </main>
+    <script>
+      const button = document.querySelector('[data-testid="reprobe-button"]');
+      button.addEventListener('click', () => {
+        document.querySelector('[data-testid="resolved-context"]').textContent =
+          'BV1MockSubtitle9 / CID 2202 / 第 2 P';
+        document.querySelector('[data-testid="resolved-subtitle"]').textContent =
+          '中文 AI；AI 状态 1；AI 类型 0；字幕地址已返回但不展示原始链接';
+        document.querySelector('[data-testid="resolved-diagnostic"]').textContent =
+          '先用 /x/player/wbi/v2 探测，未返回轨道后回退 /x/player/v2，并检测到 1 条字幕轨道。';
+      });
+    </script>
+  </body>
+</html>

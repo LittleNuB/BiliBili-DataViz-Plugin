@@ -11,6 +11,7 @@ const BILIBILI_API_BASE = "https://api.bilibili.com";
 
 interface SubtitleProbeTarget {
   bvid: string | null;
+  aid?: number | null;
   cid: number | null;
   page: number | null;
 }
@@ -21,7 +22,7 @@ export interface PlayerInfoFetchOptions {
 }
 
 export type CurrentVideoSubtitlePlayerInfoFetcher = (
-  target: { bvid: string; cid: number; page: number | null },
+  target: { bvid: string; aid?: number | null; cid: number; page: number | null },
   options: PlayerInfoFetchOptions,
 ) => Promise<unknown>;
 
@@ -36,14 +37,14 @@ export async function probeCurrentVideoSubtitleSourceWithFetcher(
       target: { bvid: null, cid: null, page: null },
       now,
       reason: "no_current_video_context",
-      message:
-        "当前没有可探测的 B 站视频上下文；只能保留元数据和简介作为本地证据结果。",
+      message: "当前没有可检测的 B 站视频上下文；只能保留元数据和简介作为本地证据。",
       warnings: ["no_current_video_context"],
     });
   }
 
   const target = {
     bvid: context.bvid,
+    aid: context.aid ?? null,
     cid: context.cid,
     page: context.currentPart.page,
   };
@@ -54,14 +55,14 @@ export async function probeCurrentVideoSubtitleSourceWithFetcher(
       target,
       now,
       reason: "missing_cid",
-      message:
-        "当前视频缺少 CID，暂时无法探测 B 站字幕来源；只能保留元数据和简介作为本地证据结果。",
+      message: "当前视频 CID 未知，暂时无法检测 B 站字幕来源。请在 B 站播放器里手动开启中文 AI 字幕后，重新检测字幕。",
       warnings: ["cid_unknown"],
     });
   }
 
   let sawLoginRequired = false;
   let lastError: string | null = null;
+  let fallbackState: CurrentVideoSubtitleSourceState | null = null;
 
   for (const attempt of [
     {
@@ -74,17 +75,21 @@ export async function probeCurrentVideoSubtitleSourceWithFetcher(
       const data = await fetchPlayerInfo(
         {
           bvid: context.bvid,
+          aid: context.aid ?? null,
           cid: context.cid,
           page: context.currentPart.page,
         },
         attempt,
       );
-      return normalizeBilibiliSubtitleSourceState(data, {
+      const state = normalizeBilibiliSubtitleSourceState(data, {
         target,
         now,
         sourceType: attempt.sourceType,
         sourcePath: attempt.sourcePath,
       });
+      if (state.available) return state;
+      if (state.status === "login_required") sawLoginRequired = true;
+      fallbackState ??= state;
     } catch (error) {
       const message = errorMessage(error);
       lastError = message;
@@ -98,7 +103,7 @@ export async function probeCurrentVideoSubtitleSourceWithFetcher(
     }
   }
 
-  if (sawLoginRequired) {
+  if (sawLoginRequired && (!fallbackState || fallbackState.status === "unsupported")) {
     return buildCurrentVideoSubtitleSourceState({
       status: "login_required",
       target,
@@ -106,11 +111,12 @@ export async function probeCurrentVideoSubtitleSourceWithFetcher(
       sourceType: "bilibili_player_v2",
       sourcePath: "/x/player/v2",
       reason: "login_required",
-      message:
-        "B 站字幕接口要求当前浏览器会话具备访问权限；当前只能保留元数据和简介作为本地证据结果。",
+      message: "B 站字幕接口要求当前浏览器会话具备访问权限；当前只能保留元数据和简介作为本地证据。",
       warnings: ["subtitle_login_required"],
     });
   }
+
+  if (fallbackState) return fallbackState;
 
   return buildCurrentVideoSubtitleSourceState({
     status: "endpoint_failed",
@@ -119,7 +125,7 @@ export async function probeCurrentVideoSubtitleSourceWithFetcher(
     sourceType: "bilibili_player_v2",
     sourcePath: "/x/player/v2",
     reason: lastError ?? "endpoint_failed",
-    message: "B 站字幕接口请求失败；当前只能保留元数据和简介作为本地证据结果。",
+    message: "B 站字幕接口请求失败；当前只能保留元数据和简介作为本地证据。",
     warnings: ["subtitle_endpoint_failed"],
   });
 }
@@ -165,6 +171,7 @@ export function normalizeBilibiliSubtitleSourceState(
 ): CurrentVideoSubtitleSourceState {
   const root = asRecord(data);
   const subtitle = asRecord(root?.subtitle);
+  const needLoginSubtitle = normalizeBoolean(root?.need_login_subtitle ?? subtitle?.need_login_subtitle);
 
   if (!subtitle) {
     return buildCurrentVideoSubtitleSourceState({
@@ -173,9 +180,9 @@ export function normalizeBilibiliSubtitleSourceState(
       now: options.now,
       sourceType: options.sourceType,
       sourcePath: options.sourcePath,
+      needLoginSubtitle,
       reason: "subtitle_field_missing",
-      message:
-        "B 站播放器接口没有返回字幕字段；当前只能保留元数据和简介作为本地证据结果。",
+      message: "B 站播放器接口没有返回字幕字段；当前只能保留元数据和简介作为本地证据。",
       warnings: ["subtitle_field_missing"],
     });
   }
@@ -188,6 +195,7 @@ export function normalizeBilibiliSubtitleSourceState(
       now: options.now,
       sourceType: options.sourceType,
       sourcePath: options.sourcePath,
+      needLoginSubtitle,
       reason: "subtitle_tracks_not_array",
       message: "B 站字幕接口返回结构异常；当前不会把它当作可用字幕正文证据。",
       warnings: ["subtitle_malformed"],
@@ -196,15 +204,17 @@ export function normalizeBilibiliSubtitleSourceState(
 
   if (rawTracks.length === 0) {
     return buildCurrentVideoSubtitleSourceState({
-      status: "unavailable",
+      status: needLoginSubtitle ? "login_required" : "unavailable",
       target: options.target,
       now: options.now,
       sourceType: options.sourceType,
       sourcePath: options.sourcePath,
-      reason: "subtitle_tracks_empty",
-      message:
-        "当前视频没有可用字幕来源；只能基于元数据/简介，不能做完整视频总结。",
-      warnings: ["transcript_unavailable"],
+      needLoginSubtitle,
+      reason: needLoginSubtitle ? "need_login_subtitle" : "subtitle_tracks_empty",
+      message: needLoginSubtitle
+        ? "B 站提示字幕需要登录或访问权限；请确认浏览器已登录并已在播放器里手动开启中文 AI 字幕，然后重新检测字幕。"
+        : "当前接口没有返回可用字幕轨道；请先在 B 站播放器里手动开启中文 AI 字幕，开启后重新检测字幕。",
+      warnings: needLoginSubtitle ? ["subtitle_login_required"] : ["transcript_unavailable"],
     });
   }
 
@@ -221,9 +231,9 @@ export function normalizeBilibiliSubtitleSourceState(
       now: options.now,
       sourceType: options.sourceType,
       sourcePath: options.sourcePath,
+      needLoginSubtitle,
       reason: "subtitle_tracks_unusable",
-      message:
-        "B 站字幕接口返回了字幕列表，但没有可识别的语言或字幕轨道信息；当前不会把它当作可用字幕正文证据。",
+      message: "B 站字幕接口返回了字幕列表，但没有可识别的语言或轨道信息；当前不会把它当作可用字幕正文证据。",
       warnings: ["subtitle_malformed"],
     });
   }
@@ -251,8 +261,9 @@ export function normalizeBilibiliSubtitleSourceState(
     now: options.now,
     sourceType: options.sourceType,
     sourcePath: options.sourcePath,
+    needLoginSubtitle,
     reason: "subtitle_tracks_available",
-    message: `已探测到 ${tracks.length} 条字幕轨道；本版本只记录来源状态，不缓存字幕正文，也不会据此生成完整视频总结。`,
+    message: `已检测到 ${tracks.length} 条字幕轨道；本次只记录来源状态，不缓存字幕正文，也不会据此生成完整视频总结。`,
     warnings: ["transcript_source_available", "transcript_text_not_cached"],
     tracks,
     trackCount: tracks.length,
@@ -280,6 +291,7 @@ export function buildCurrentVideoSubtitleSourceState(input: {
   coverageStartSeconds?: number | null;
   coverageEndSeconds?: number | null;
   languages?: string[];
+  needLoginSubtitle?: boolean | null;
 }): CurrentVideoSubtitleSourceState {
   const sourcePath = input.sourcePath ?? null;
   return {
@@ -294,6 +306,7 @@ export function buildCurrentVideoSubtitleSourceState(input: {
       ? new URL(sourcePath, BILIBILI_API_BASE).hostname
       : null,
     sourcePath,
+    needLoginSubtitle: input.needLoginSubtitle ?? null,
     trackCount: input.trackCount ?? input.tracks?.length ?? 0,
     segmentCount: input.segmentCount ?? null,
     coverageStartSeconds: input.coverageStartSeconds ?? null,
@@ -318,9 +331,10 @@ function normalizeSubtitleTrack(
     track.lan_doc ?? track.language_label ?? track.label,
   );
   const id = normalizeString(track.id ?? track.ai_type ?? track.type);
-  const urlHost = subtitleUrlHost(
-    normalizeString(track.subtitle_url ?? track.url),
-  );
+  const subtitleUrl = normalizeString(track.subtitle_url ?? track.url);
+  const urlHost = subtitleUrlHost(subtitleUrl);
+  const aiStatus = normalizeNullableInteger(track.ai_status);
+  const aiType = normalizeNullableInteger(track.ai_type);
   const segments = Array.isArray(track.body)
     ? track.body.map(asRecord).filter(Boolean)
     : [];
@@ -341,6 +355,9 @@ function normalizeSubtitleTrack(
     id,
     language,
     languageLabel,
+    aiStatus,
+    aiType,
+    hasSubtitleUrl: Boolean(subtitleUrl),
     sourceType,
     urlHost,
     segmentCount: segments.length > 0 ? segments.length : null,
@@ -375,6 +392,20 @@ function normalizeNonNegativeNumber(value: unknown): number | null {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric < 0) return null;
   return Math.round(numeric * 1000) / 1000;
+}
+
+function normalizeNullableInteger(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.floor(numeric);
+}
+
+function normalizeBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (value === 1 || value === "1" || value === "true") return true;
+  if (value === 0 || value === "0" || value === "false") return false;
+  return null;
 }
 
 function subtitleUrlHost(value: string | null): string | null {

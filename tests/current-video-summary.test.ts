@@ -62,6 +62,7 @@ test('keeps available subtitle source state separate from transcript summary', (
     sourceType: 'bilibili_player_wbi_v2',
     sourceDomain: 'api.bilibili.com',
     sourcePath: '/x/player/wbi/v2',
+    needLoginSubtitle: null,
     trackCount: 1,
     segmentCount: null,
     coverageStartSeconds: null,

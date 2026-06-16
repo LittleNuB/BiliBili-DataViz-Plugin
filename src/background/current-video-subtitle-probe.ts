@@ -27,12 +27,17 @@ const fetchBilibiliPlayerInfo: CurrentVideoSubtitlePlayerInfoFetcher = async (
   target,
   options,
 ) => {
+  const params: Record<string, string> = {
+    bvid: target.bvid,
+    cid: String(target.cid),
+  };
+  if (target.aid) {
+    params.aid = String(target.aid);
+  }
+
   return await biliGet<unknown>(
     options.sourcePath,
-    {
-      bvid: target.bvid,
-      cid: String(target.cid),
-    },
+    params,
     2,
     options.sourceType === "bilibili_player_wbi_v2",
   );
