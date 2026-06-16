@@ -110,6 +110,7 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
       const data = await fetchPlayerInfo(
         {
           bvid: context.bvid,
+          aid: context.aid ?? null,
           cid: context.cid as number,
           page: context.currentPart.page,
         },
@@ -149,9 +150,9 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
           target,
           now: options.now,
           sourceType: attempt.sourceType,
-          reason: 'subtitle_url_host_unsupported',
+          reason: 'subtitle_host_unsupported',
           message: '字幕轨道地址不可用或不属于受限的 B 站字幕域名；未读取正文。',
-          warnings: ['subtitle_track_url_unavailable'],
+          warnings: ['subtitle_track_host_unsupported'],
         });
       }
 
@@ -387,7 +388,11 @@ function normalizeLanguage(value: unknown): string | null {
 }
 
 function isLoginRequiredError(message: string): boolean {
-  return message === 'NOT_LOGGED_IN' || /-101/.test(message);
+  return message === 'NOT_LOGGED_IN'
+    || /-101/.test(message)
+    || /-403/.test(message)
+    || /SUBTITLE_HTTP_40[13]/.test(message)
+    || /\b40[13]\b/.test(message);
 }
 
 function errorMessage(error: unknown): string {

@@ -12,7 +12,12 @@ import {
   auditAssistantPayload,
   currentVideoSummaryPayloadContract,
 } from '../src/shared/assistant-payload-audit.ts';
-import { buildCurrentVideoSummaryAiPayload } from '../src/shared/current-video-summary.ts';
+import {
+  buildCurrentVideoSummaryAiPayload,
+  buildLocalCurrentVideoSummary,
+} from '../src/shared/current-video-summary.ts';
+import { searchCurrentVideoSegments } from '../src/shared/current-video-segment-retrieval.ts';
+import { buildVideoKnowledgeResult } from '../src/shared/video-knowledge.ts';
 import type { CurrentVideoContext } from '../src/shared/types/current-video-context.ts';
 import type {
   CurrentVideoTranscriptEvidenceState,
@@ -159,20 +164,24 @@ test('records empty and malformed transcript states without active segments', ()
 test('background cache fetch keeps raw subtitle URL internal and reports language/track diagnostics', async () => {
   const store = memoryStore();
   let fetchedUrl = '';
+  const fetchTargets: Array<{ bvid: string; aid?: number | null; cid: number; page: number | null }> = [];
   const state = await cacheCurrentVideoTranscriptEvidence(videoContext(), {
     now: 5000,
-    fetchPlayerInfo: async () => ({
-      subtitle: {
-        subtitles: [
-          {
-            id: 7,
-            lan: 'zh-CN',
-            lan_doc: 'Chinese',
-            subtitle_url: '//aisubtitle.hdslb.com/bfs/ai_subtitle/private-track.json?token=secret',
-          },
-        ],
-      },
-    }),
+    fetchPlayerInfo: async (target) => {
+      fetchTargets.push(target);
+      return {
+        subtitle: {
+          subtitles: [
+            {
+              id: 7,
+              lan: 'zh-CN',
+              lan_doc: 'Chinese',
+              subtitle_url: '//aisubtitle.hdslb.com/bfs/ai_subtitle/private-track.json?token=secret',
+            },
+          ],
+        },
+      };
+    },
     fetchSubtitleJson: async (url) => {
       fetchedUrl = url;
       return { body: [{ from: 0, to: 2, content: 'background fetched text' }] };
@@ -183,8 +192,78 @@ test('background cache fetch keeps raw subtitle URL internal and reports languag
   assert.equal(state.status, 'cached');
   assert.equal(state.language, 'zh-CN');
   assert.equal(state.segmentCount, 1);
+  assert.deepEqual(fetchTargets[0], { bvid: 'BV1Transcript00', aid: 8800, cid: 101, page: 1 });
   assert.match(fetchedUrl, /^https:\/\/aisubtitle\.hdslb\.com\//);
   assert.doesNotMatch(JSON.stringify(state), /private-track|subtitle_url|token=secret|SESSDATA|Key\.txt/i);
+});
+
+test('background cache blocks unsupported subtitle hosts before fetching body', async () => {
+  let fetched = false;
+  const state = await cacheCurrentVideoTranscriptEvidence(videoContext(), {
+    now: 5100,
+    fetchPlayerInfo: async () => ({
+      subtitle: {
+        subtitles: [
+          {
+            id: 7,
+            lan: 'zh-CN',
+            subtitle_url: 'https://evil.example.invalid/private-track.json?token=secret',
+          },
+        ],
+      },
+    }),
+    fetchSubtitleJson: async () => {
+      fetched = true;
+      return { body: [{ from: 0, to: 2, content: 'should not fetch' }] };
+    },
+  });
+
+  assert.equal(state.status, 'track_unavailable');
+  assert.equal(state.reason, 'subtitle_host_unsupported');
+  assert.equal(fetched, false);
+  assert.doesNotMatch(JSON.stringify(state), /evil\.example|private-track|token=secret|subtitle_url/i);
+});
+
+test('background cache distinguishes fetch failure from subtitle access failure', async () => {
+  const endpointFailed = await cacheCurrentVideoTranscriptEvidence(videoContext(), {
+    now: 5200,
+    fetchPlayerInfo: async () => ({
+      subtitle: {
+        subtitles: [
+          {
+            lan: 'zh-CN',
+            subtitle_url: '//aisubtitle.hdslb.com/bfs/ai_subtitle/zh.json',
+          },
+        ],
+      },
+    }),
+    fetchSubtitleJson: async () => {
+      throw new Error('NETWORK_DOWN');
+    },
+  });
+  assert.equal(endpointFailed.status, 'endpoint_failed');
+  assert.equal(endpointFailed.active, false);
+  assert.ok(endpointFailed.warnings.includes('transcript_endpoint_failed'));
+
+  const accessFailure = await cacheCurrentVideoTranscriptEvidence(videoContext(), {
+    now: 5300,
+    fetchPlayerInfo: async () => ({
+      subtitle: {
+        subtitles: [
+          {
+            lan: 'zh-CN',
+            subtitle_url: '//aisubtitle.hdslb.com/bfs/ai_subtitle/private.json',
+          },
+        ],
+      },
+    }),
+    fetchSubtitleJson: async () => {
+      throw new Error('SUBTITLE_HTTP_403');
+    },
+  });
+  assert.equal(accessFailure.status, 'login_required');
+  assert.equal(accessFailure.active, false);
+  assert.ok(accessFailure.warnings.includes('transcript_login_required'));
 });
 
 test('background cache reports language mismatch and unavailable track states', async () => {
@@ -239,6 +318,44 @@ test('privacy audit keeps cached transcript text out of current video AI payload
     rawPayload,
     /SECRET TRANSCRIPT BODY|segmentId|sourceHash|watchHistory|favorites|following|feedback|Cookie|Key\.txt|Chrome\\User Data/i,
   );
+});
+
+test('cached subtitle body becomes active evidence for summary, video knowledge, and segment search', () => {
+  const store = memoryStore();
+  const state = store.upsert(normalizeBilibiliTranscriptEvidence(
+    {
+      body: [
+        { from: 0, to: 4, content: '模型架构从这里开始，介绍专家路由。' },
+        { from: 4, to: 8, content: '这一段说明缓存后的字幕正文会作为本地证据。' },
+      ],
+    },
+    baseNormalizeOptions(),
+  ));
+  const context = withTranscriptEvidenceState(videoContext(), state);
+  context.sources.transcript = 'available';
+  const summary = buildLocalCurrentVideoSummary(context, {
+    transcriptSegments: store.segments,
+    now: 8000,
+  });
+  const knowledge = buildVideoKnowledgeResult(context, {
+    transcriptSegments: store.segments,
+    now: 8000,
+  });
+  const search = searchCurrentVideoSegments(context, {
+    query: '专家路由',
+    transcriptSegments: store.segments,
+    videoKnowledge: knowledge,
+    now: 8000,
+  });
+  const raw = JSON.stringify({ summary, knowledge, search });
+
+  assert.equal(context.transcriptEvidence?.active, true);
+  assert.equal(summary.sourceTier, 'transcript_summary');
+  assert.equal(knowledge.sourceState.transcriptEvidence, true);
+  assert.ok(knowledge.nodes.some(node => node.source === 'transcript'));
+  assert.equal(search.status, 'ready');
+  assert.equal(search.candidates[0].binding.kind, 'transcript_segment');
+  assert.doesNotMatch(raw, /subtitle_url|raw subtitle|watchHistory|favorites|following|feedback|Cookie|Key\.txt|Chrome\\User Data/i);
 });
 
 function baseNormalizeOptions(overrides: Partial<Parameters<typeof normalizeBilibiliTranscriptEvidence>[1]> = {}) {
@@ -304,6 +421,7 @@ function videoContext(): CurrentVideoContext {
     url: 'https://www.bilibili.com/video/BV1Transcript00?p=1',
     collectedAt: 1000,
     bvid: 'BV1Transcript00',
+    aid: 8800,
     cid: 101,
     title: 'Transcript cache video',
     authorName: 'Cache UP',
