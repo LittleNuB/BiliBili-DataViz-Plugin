@@ -36,6 +36,12 @@
   "content_scripts": [
     {
       "matches": ["*://www.bilibili.com/video/*"],
+      "js": ["content/page-runtime-bridge.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://www.bilibili.com/video/*"],
       "js": ["content/player-monitor.js"],
       "run_at": "document_idle"
     },

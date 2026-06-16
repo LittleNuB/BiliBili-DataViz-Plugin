@@ -55,6 +55,7 @@ test('exposes available subtitle source state without generating transcript node
     sourceType: 'bilibili_player_wbi_v2',
     sourceDomain: 'api.bilibili.com',
     sourcePath: '/x/player/wbi/v2',
+    needLoginSubtitle: null,
     trackCount: 1,
     segmentCount: null,
     coverageStartSeconds: null,

@@ -31,6 +31,8 @@ export function App() {
   const [jumpPreviewNodeId, setJumpPreviewNodeId] = useState<string | null>(null);
   const [jumpStatus, setJumpStatus] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [subtitleProbeLoading, setSubtitleProbeLoading] = useState(false);
+  const [subtitleProbeStatus, setSubtitleProbeStatus] = useState<string | null>(null);
   const [tailProbeReport, setTailProbeReport] = useState<HistoryTailProbeReport | null>(null);
   const [tailProbeLoading, setTailProbeLoading] = useState(false);
   const [tailProbeError, setTailProbeError] = useState<string | null>(null);
@@ -117,6 +119,28 @@ export function App() {
         warnings: ['video_knowledge_request_failed'],
         limitations: [(e as Error).message],
       });
+    }
+  }
+
+  async function reprobeCurrentVideoSubtitle() {
+    setSubtitleProbeLoading(true);
+    setSubtitleProbeStatus(null);
+    try {
+      const context = await requestSW<CurrentVideoContextResult>('GET_CURRENT_VIDEO_CONTEXT', {
+        forceContextRefresh: true,
+        forceSubtitleProbe: true,
+      });
+      setCurrentVideoContext(context);
+      setSubtitleProbeStatus(
+        context.kind === 'video' && context.subtitleProbe
+          ? context.subtitleProbe.message
+          : '已重新检测当前视频上下文。',
+      );
+      await fetchVideoKnowledge();
+    } catch (e) {
+      setSubtitleProbeStatus((e as Error).message);
+    } finally {
+      setSubtitleProbeLoading(false);
     }
   }
 
@@ -337,8 +361,11 @@ export function App() {
         previewNodeId={jumpPreviewNodeId}
         jumpStatus={jumpStatus}
         loading={summaryLoading}
+        subtitleProbeLoading={subtitleProbeLoading}
+        subtitleProbeStatus={subtitleProbeStatus}
         onRefresh={fetchCurrentVideoSummary}
         onCancel={cancelCurrentVideoSummary}
+        onReprobeSubtitle={reprobeCurrentVideoSubtitle}
         onRefreshKnowledge={fetchVideoKnowledge}
         onPreviewNode={setJumpPreviewNodeId}
         onConfirmJump={confirmVideoKnowledgeJump}
@@ -518,8 +545,11 @@ function CurrentVideoAssistantStatus({
   previewNodeId,
   jumpStatus,
   loading,
+  subtitleProbeLoading,
+  subtitleProbeStatus,
   onRefresh,
   onCancel,
+  onReprobeSubtitle,
   onRefreshKnowledge,
   onPreviewNode,
   onConfirmJump,
@@ -530,8 +560,11 @@ function CurrentVideoAssistantStatus({
   previewNodeId: string | null;
   jumpStatus: string | null;
   loading: boolean;
+  subtitleProbeLoading: boolean;
+  subtitleProbeStatus: string | null;
   onRefresh: () => void;
   onCancel: () => void;
+  onReprobeSubtitle: () => void;
   onRefreshKnowledge: () => void;
   onPreviewNode: (nodeId: string | null) => void;
   onConfirmJump: (node: VideoKnowledgeNode) => void;
@@ -644,6 +677,39 @@ function CurrentVideoAssistantStatus({
                 <br />
                 {transcriptEvidenceDetail(context.transcriptEvidence)}
               </>
+            )}
+          </div>
+          <div style={{
+            marginTop: '6px',
+            padding: '7px 8px',
+            border: '1px solid rgba(255,179,71,0.24)',
+            borderRadius: '6px',
+            background: 'rgba(255,179,71,0.08)',
+          }}>
+            <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45 }}>
+              如需使用 B 站 AI 字幕，请先在播放器里手动开启中文 AI 字幕，开启后重新检测。
+            </div>
+            <button
+              type="button"
+              onClick={onReprobeSubtitle}
+              disabled={subtitleProbeLoading}
+              style={{
+                marginTop: '6px',
+                background: subtitleProbeLoading ? 'rgba(255,255,255,0.08)' : 'rgba(255,179,71,0.18)',
+                color: subtitleProbeLoading ? '#9090A0' : '#FFCF8A',
+                border: '1px solid rgba(255,179,71,0.32)',
+                borderRadius: '6px',
+                cursor: subtitleProbeLoading ? 'default' : 'pointer',
+                fontSize: '10px',
+                padding: '4px 7px',
+              }}
+            >
+              {subtitleProbeLoading ? '检测中...' : '重新检测字幕'}
+            </button>
+            {subtitleProbeStatus && (
+              <div style={{ color: '#C8E6FF', fontSize: '9px', lineHeight: 1.45, marginTop: '5px' }}>
+                {subtitleProbeStatus}
+              </div>
             )}
           </div>
           {summary && (

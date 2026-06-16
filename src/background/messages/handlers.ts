@@ -91,6 +91,11 @@ const currentVideoContexts = new Map<number, CurrentVideoContextResult>();
 const currentVideoSubtitleProbes = new Map<string, CurrentVideoSubtitleSourceState>();
 const currentVideoSubtitleProbeRequests = new Map<string, Promise<CurrentVideoSubtitleSourceState>>();
 
+interface CurrentVideoLookupOptions {
+  forceContextRefresh?: boolean;
+  forceSubtitleProbe?: boolean;
+}
+
 export function setupMessageHandlers(): void {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Handle content script messages
@@ -308,9 +313,9 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       };
     }
     case 'GET_CURRENT_VIDEO_CONTEXT':
-      return { success: true, data: await getCurrentVideoContextForActiveTab() as T };
+      return { success: true, data: await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(request.params)) as T };
     case 'PROBE_CURRENT_VIDEO_SUBTITLE_SOURCE':
-      return { success: true, data: await probeSubtitleSourceForActiveTab() as T };
+      return { success: true, data: await probeSubtitleSourceForActiveTab(request.params) as T };
     case 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE':
       return { success: true, data: await getTranscriptEvidenceForActiveTab(request.params) as T };
     case 'GET_CURRENT_VIDEO_SUMMARY': {
@@ -595,19 +600,28 @@ async function markConsumedFromPlayerEvent(
   await markDynamicBillItemsConsumedByBvid(payload.bvid, Date.now());
 }
 
-async function getCurrentVideoContextForActiveTab(): Promise<CurrentVideoContextResult> {
-  const context = await getRawCurrentVideoContextForActiveTab();
+async function getCurrentVideoContextForActiveTab(
+  options: CurrentVideoLookupOptions = {},
+): Promise<CurrentVideoContextResult> {
+  const context = await getRawCurrentVideoContextForActiveTab(options);
   if (context.kind !== 'video') return context;
-  const withSubtitle = await enrichCurrentVideoContextWithSubtitleProbe(context);
+  const withSubtitle = await enrichCurrentVideoContextWithSubtitleProbe(context, options);
   return await enrichCurrentVideoContextWithTranscriptEvidence(withSubtitle);
 }
 
-async function getRawCurrentVideoContextForActiveTab(): Promise<CurrentVideoContextResult> {
+async function getRawCurrentVideoContextForActiveTab(
+  options: CurrentVideoLookupOptions = {},
+): Promise<CurrentVideoContextResult> {
   const { tab, context } = await resolveCurrentVideoLookupState();
   const url = tab?.url ?? null;
 
   if (!url || !isBilibiliVideoUrl(url)) {
     return buildNoContext(url, 'non_video_page', 'non_video');
+  }
+
+  if (tab?.id && (options.forceContextRefresh || context?.kind !== 'video')) {
+    const refreshed = await requestFreshCurrentVideoContext(tab.id, url);
+    if (refreshed) return refreshed;
   }
 
   if (context?.kind === 'video') {
@@ -617,8 +631,15 @@ async function getRawCurrentVideoContextForActiveTab(): Promise<CurrentVideoCont
   return buildNoContext(url, 'video_context_unavailable', 'video');
 }
 
-async function probeSubtitleSourceForActiveTab(): Promise<CurrentVideoSubtitleSourceState> {
-  const context = await getCurrentVideoContextForActiveTab();
+async function probeSubtitleSourceForActiveTab(
+  params: Record<string, unknown> | undefined,
+): Promise<CurrentVideoSubtitleSourceState> {
+  const options = currentVideoLookupOptions({
+    ...params,
+    forceSubtitleProbe: params?.force === true || params?.forceSubtitleProbe === true,
+    forceContextRefresh: params?.force === true || params?.forceContextRefresh === true,
+  });
+  const context = await getCurrentVideoContextForActiveTab(options);
   if (context.kind === 'video' && context.subtitleProbe) {
     return context.subtitleProbe;
   }
@@ -637,20 +658,25 @@ async function getTranscriptEvidenceForActiveTab(
 
 async function enrichCurrentVideoContextWithSubtitleProbe(
   context: CurrentVideoContext,
+  options: CurrentVideoLookupOptions = {},
 ): Promise<CurrentVideoContext> {
+  const cacheKey = subtitleProbeCacheKey(context);
+  if (options.forceSubtitleProbe) {
+    currentVideoSubtitleProbes.delete(cacheKey);
+  }
+
   const existing = context.subtitleProbe;
-  if (existing && Date.now() - existing.checkedAt < SUBTITLE_PROBE_CACHE_MS) {
+  if (!options.forceSubtitleProbe && existing && Date.now() - existing.checkedAt < SUBTITLE_PROBE_CACHE_MS) {
     return withSubtitleSourceState(context, existing);
   }
 
-  const cacheKey = subtitleProbeCacheKey(context);
   const cached = currentVideoSubtitleProbes.get(cacheKey);
-  if (cached && Date.now() - cached.checkedAt < SUBTITLE_PROBE_CACHE_MS) {
+  if (!options.forceSubtitleProbe && cached && Date.now() - cached.checkedAt < SUBTITLE_PROBE_CACHE_MS) {
     return withSubtitleSourceState(context, cached);
   }
 
   const existingRequest = currentVideoSubtitleProbeRequests.get(cacheKey);
-  if (existingRequest) {
+  if (!options.forceSubtitleProbe && existingRequest) {
     const probe = await existingRequest;
     return withSubtitleSourceState(context, probe);
   }
@@ -716,6 +742,33 @@ function subtitleProbeCacheKey(context: CurrentVideoContext): string {
     context.cid ?? 'cid-unknown',
     context.currentPart.page,
   ].join(':');
+}
+
+async function requestFreshCurrentVideoContext(
+  tabId: number,
+  tabUrl: string,
+): Promise<CurrentVideoContextResult | null> {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, {
+      action: 'COLLECT_CURRENT_VIDEO_CONTEXT',
+      payload: {},
+    }) as CurrentVideoContextResult;
+    if (response?.kind !== 'video') return response ?? null;
+    if (extractBvidFromUrl(tabUrl) !== response.bvid) return null;
+    currentVideoContexts.set(tabId, response);
+    return response;
+  } catch {
+    return null;
+  }
+}
+
+function currentVideoLookupOptions(
+  params: Record<string, unknown> | undefined,
+): CurrentVideoLookupOptions {
+  return {
+    forceContextRefresh: params?.forceContextRefresh === true,
+    forceSubtitleProbe: params?.forceSubtitleProbe === true,
+  };
 }
 
 async function resolveCurrentVideoLookupState(): Promise<{

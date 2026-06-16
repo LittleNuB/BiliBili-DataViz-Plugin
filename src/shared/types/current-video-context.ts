@@ -40,6 +40,9 @@ export interface CurrentVideoSubtitleTrackDiagnostic {
   id: string | null;
   language: string | null;
   languageLabel: string | null;
+  aiStatus: number | null;
+  aiType: number | null;
+  hasSubtitleUrl: boolean;
   sourceType: CurrentVideoSubtitleSourceType;
   urlHost: string | null;
   segmentCount: number | null;
@@ -57,6 +60,7 @@ export interface CurrentVideoSubtitleSourceState {
   sourceType: CurrentVideoSubtitleSourceType;
   sourceDomain: string | null;
   sourcePath: string | null;
+  needLoginSubtitle: boolean | null;
   trackCount: number;
   segmentCount: number | null;
   coverageStartSeconds: number | null;
@@ -73,6 +77,7 @@ export interface CurrentVideoContext {
   url: string;
   collectedAt: number;
   bvid: string;
+  aid?: number | null;
   cid: number | null;
   title: string | null;
   authorName: string | null;

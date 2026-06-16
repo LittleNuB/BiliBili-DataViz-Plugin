@@ -24,7 +24,9 @@ test("normalizes available Bilibili subtitle metadata without storing raw track 
           {
             id: 101,
             lan: "zh-CN",
-            lan_doc: "中文（自动生成）",
+            lan_doc: "中文（AI）",
+            ai_status: 1,
+            ai_type: 2,
             subtitle_url:
               "//aisubtitle.hdslb.com/bfs/ai_subtitle/mock-track.json?token=redacted",
           },
@@ -52,7 +54,11 @@ test("normalizes available Bilibili subtitle metadata without storing raw track 
   assert.deepEqual(probe.languages, ["zh-CN", "en-US"]);
   assert.equal(probe.sourceDomain, "api.bilibili.com");
   assert.equal(probe.sourcePath, "/x/player/wbi/v2");
+  assert.equal(probe.needLoginSubtitle, null);
   assert.equal(probe.tracks[0].urlHost, "aisubtitle.hdslb.com");
+  assert.equal(probe.tracks[0].aiStatus, 1);
+  assert.equal(probe.tracks[0].aiType, 2);
+  assert.equal(probe.tracks[0].hasSubtitleUrl, true);
   assert.equal(probe.segmentCount, null);
   assert.equal(probe.coverageEndSeconds, null);
   assert.doesNotMatch(
@@ -98,7 +104,42 @@ test("reports unavailable when player subtitle track list is empty", async () =>
   assert.equal(probe.status, "unavailable");
   assert.equal(probe.available, false);
   assert.equal(probe.trackCount, 0);
-  assert.match(probe.message, /没有可用字幕来源/);
+  assert.match(probe.message, /手动开启中文 AI 字幕/);
+});
+
+test("falls back from WBI player endpoint to v2 when WBI returns no tracks", async () => {
+  const calls: string[] = [];
+  const probe = await probeCurrentVideoSubtitleSource(
+    videoContext(),
+    async (_target, options) => {
+      calls.push(options.sourcePath);
+      if (options.sourcePath === "/x/player/wbi/v2") {
+        return { subtitle: { subtitles: [] } };
+      }
+      return {
+        subtitle: {
+          subtitles: [
+            {
+              lan: "zh-CN",
+              lan_doc: "中文 AI",
+              ai_status: 1,
+              ai_type: 0,
+              subtitle_url: "//aisubtitle.hdslb.com/bfs/ai_subtitle/zh.json",
+            },
+          ],
+        },
+      };
+    },
+    3500,
+  );
+
+  assert.deepEqual(calls, ["/x/player/wbi/v2", "/x/player/v2"]);
+  assert.equal(probe.status, "available");
+  assert.equal(probe.sourceType, "bilibili_player_v2");
+  assert.equal(probe.tracks[0].languageLabel, "中文 AI");
+  assert.equal(probe.tracks[0].aiStatus, 1);
+  assert.equal(probe.tracks[0].aiType, 0);
+  assert.equal(probe.tracks[0].hasSubtitleUrl, true);
 });
 
 test("reports endpoint failure after player subtitle endpoints fail", async () => {
@@ -133,6 +174,19 @@ test("reports login required only when both player endpoints require session acc
   assert.ok(probe.warnings.includes("subtitle_login_required"));
 });
 
+test("reports need-login subtitle diagnostic from player response", async () => {
+  const probe = await probeCurrentVideoSubtitleSource(
+    videoContext(),
+    async () => ({ subtitle: { need_login_subtitle: true, subtitles: [] } }),
+    5500,
+  );
+
+  assert.equal(probe.status, "login_required");
+  assert.equal(probe.reason, "need_login_subtitle");
+  assert.equal(probe.needLoginSubtitle, true);
+  assert.ok(probe.warnings.includes("subtitle_login_required"));
+});
+
 test("reports malformed player subtitle response without treating it as transcript evidence", async () => {
   const probe = await probeCurrentVideoSubtitleSource(
     videoContext(),
@@ -143,7 +197,7 @@ test("reports malformed player subtitle response without treating it as transcri
   assert.equal(probe.status, "malformed");
   assert.equal(probe.available, false);
   assert.equal(probe.trackCount, 0);
-  assert.match(probe.message, /返回结构异常/);
+  assert.match(probe.message, /结构异常/);
 });
 
 test("reports unsupported when there is no current video context", async () => {
@@ -165,6 +219,23 @@ test("reports unsupported when there is no current video context", async () => {
   assert.equal(probe.status, "unsupported");
   assert.equal(probe.available, false);
   assert.equal(probe.reason, "no_current_video_context");
+});
+
+test("does not call player subtitle endpoints when CID is missing", async () => {
+  let called = false;
+  const probe = await probeCurrentVideoSubtitleSource(
+    { ...videoContext(), cid: null },
+    async () => {
+      called = true;
+      return { subtitle: { subtitles: [] } };
+    },
+    7500,
+  );
+
+  assert.equal(called, false);
+  assert.equal(probe.status, "unsupported");
+  assert.equal(probe.reason, "missing_cid");
+  assert.match(probe.message, /CID 未知/);
 });
 
 test("keeps subtitle source diagnostics out of current video AI payload", async () => {
@@ -208,6 +279,7 @@ function videoContext(): CurrentVideoContext {
     url: "https://www.bilibili.com/video/BV1Subtitle99?p=1",
     collectedAt: 1000,
     bvid: "BV1Subtitle99",
+    aid: 8800,
     cid: 9901,
     title: "Subtitle probe video",
     authorName: "Probe UP",

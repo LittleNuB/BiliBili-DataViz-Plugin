@@ -39,10 +39,7 @@ function scheduleInitialize(delay = 0): void {
 }
 
 async function initializeMonitor(): Promise<void> {
-  const context = collectCurrentVideoContext();
-  latestContext = context;
-  renderCurrentVideoAssistant(context);
-  sendCurrentVideoContext(context);
+  const context = await collectAndPublishCurrentVideoContext();
 
   if (!isVideoPage()) {
     cleanupMonitor();
@@ -144,8 +141,29 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message?.action === 'COLLECT_CURRENT_VIDEO_CONTEXT') {
+    collectAndPublishCurrentVideoContext().then(sendResponse).catch((error) => {
+      sendResponse({
+        kind: 'no_context',
+        url: location.href,
+        collectedAt: Date.now(),
+        reason: error instanceof Error ? 'video_context_unavailable' : 'unknown',
+        pageType: isVideoPage() ? 'video' : 'non_video',
+      } satisfies CurrentVideoContextResult);
+    });
+    return true;
+  }
+
   return false;
 });
+
+async function collectAndPublishCurrentVideoContext(): Promise<CurrentVideoContextResult> {
+  const context = await collectCurrentVideoContext();
+  latestContext = context;
+  renderCurrentVideoAssistant(context);
+  sendCurrentVideoContext(context);
+  return context;
+}
 
 async function handleVideoKnowledgeManualJump(payload: {
   node?: VideoKnowledgeNode;
