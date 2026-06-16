@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "test:experiments": "node --test tests/experiment-blind-boxes.test.ts",
     "test:favorites": "node --test tests/favorite-sync-audit.test.ts tests/favorite-folder-gap-probe.test.ts tests/favorite-itemkey-persistence.test.ts tests/smart-favorite-index.test.ts tests/smart-favorites-qa.test.ts",
-    "test:current-video-transcript": "node --test tests/current-video-transcript-cache.test.ts",
+    "test:current-video-transcript": "node --test tests/current-video-transcript-cache.test.ts tests/current-video-subtitle-diagnostics.test.ts",
     "test:current-video-summary": "node --test tests/current-video-summary.test.ts",
     "test:video-knowledge": "node --test tests/video-knowledge.test.ts"
   },

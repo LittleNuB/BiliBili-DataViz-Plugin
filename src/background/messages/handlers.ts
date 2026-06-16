@@ -649,7 +649,7 @@ async function probeSubtitleSourceForActiveTab(
 async function getTranscriptEvidenceForActiveTab(
   params: Record<string, unknown> | undefined,
 ): Promise<CurrentVideoTranscriptEvidenceState> {
-  const context = await getCurrentVideoContextForActiveTab();
+  const context = await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(params));
   const requestedLanguage = typeof params?.language === 'string'
     ? params.language
     : null;
