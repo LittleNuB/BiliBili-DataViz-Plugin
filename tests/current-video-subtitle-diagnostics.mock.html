@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bili-Bill 当前视频字幕诊断 Mock</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #10131f;
+        color: #f2f4f8;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+      }
+
+      main {
+        max-width: 780px;
+        margin: 0 auto;
+      }
+
+      h1 {
+        font-size: 18px;
+        margin: 0 0 14px;
+      }
+
+      .panel {
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.06);
+        padding: 14px 16px;
+        margin-top: 12px;
+      }
+
+      .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        margin-top: 8px;
+        font-size: 14px;
+      }
+
+      .muted {
+        color: #a9b0c3;
+      }
+
+      .ok {
+        color: #9be7b0;
+      }
+
+      .warn {
+        color: #ffcf8a;
+      }
+
+      .bad {
+        color: #ff9b9b;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .gate {
+        border: 1px solid rgba(255, 179, 71, 0.24);
+        border-radius: 6px;
+        padding: 8px;
+        color: #ffcf8a;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .gate.ok {
+        border-color: rgba(155, 231, 176, 0.28);
+      }
+
+      button {
+        margin-top: 10px;
+        margin-right: 8px;
+        border: 0;
+        border-radius: 6px;
+        background: #fb7299;
+        color: white;
+        padding: 8px 12px;
+        cursor: pointer;
+        font-weight: 700;
+      }
+
+      button.secondary {
+        background: rgba(255, 255, 255, 0.14);
+        color: #f2f4f8;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Bili-Bill 当前视频字幕诊断 Mock</h1>
+
+      <section class="panel">
+        <strong>当前视频</strong>
+        <div class="row">
+          <span>身份</span>
+          <span data-testid="identity">BV1MockSubtitle9 / CID 2202 / 第 2 P</span>
+        </div>
+        <div class="row">
+          <span>播放器字幕</span>
+          <span class="warn" data-testid="player-subtitle">尚未手动开启中文 AI 字幕</span>
+        </div>
+        <button type="button" data-testid="enable-subtitle">在播放器里开启中文 AI 字幕</button>
+        <button type="button" data-testid="redetect">重新检测字幕</button>
+      </section>
+
+      <section class="panel">
+        <strong data-testid="status-title">请先开启中文 AI 字幕</strong>
+        <p class="warn" data-testid="status-message">
+          当前还没有可用字幕正文。B 站视频通常需要先在播放器里手动开启“中文 AI”字幕，插件才有机会检测到字幕来源。
+        </p>
+        <p class="muted" data-testid="status-action">在播放器字幕菜单中开启中文 AI 字幕后，点击重新检测字幕。</p>
+        <p class="muted" data-testid="status-detail">这不是 DeepSeek 或模型失败；当前缺少的是可引用的当前视频字幕正文。</p>
+        <div class="grid" data-testid="feature-gates">
+          <div class="gate" data-testid="summary-gate">摘要：不可用：没有字幕正文时只能展示元数据或简介说明，不能完整总结。</div>
+          <div class="gate" data-testid="knowledge-gate">知识节点：不可用：没有字幕正文时不会生成推测时间点。</div>
+          <div class="gate" data-testid="search-gate">片段检索：不可用：没有字幕正文时不能定位具体片段。</div>
+          <div class="gate" data-testid="jump-gate">手动跳转：不可用：没有可定位片段时不会提供跳转目标。</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <strong>错误态</strong>
+        <div>
+          <button class="secondary" type="button" data-error="missing-cid">缺少 CID</button>
+          <button class="secondary" type="button" data-error="no-track">没有返回字幕轨道</button>
+          <button class="secondary" type="button" data-error="login">需要登录或访问权限</button>
+          <button class="secondary" type="button" data-error="fetch">字幕正文拉取失败</button>
+          <button class="secondary" type="button" data-error="empty">字幕正文为空</button>
+          <button class="secondary" type="button" data-error="malformed">字幕正文结构异常</button>
+          <button class="secondary" type="button" data-error="language">字幕语言不匹配</button>
+          <button class="secondary" type="button" data-error="host">字幕来源不受支持</button>
+          <button class="secondary" type="button" data-error="stale">本地字幕证据不匹配</button>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      let enabled = false;
+
+      const states = {
+        found: {
+          title: "已发现字幕轨道",
+          message: "已检测到当前视频字幕轨道 1 条，但还没有可引用的字幕正文缓存。",
+          action: "点击重新检测字幕，继续读取并缓存字幕正文。",
+          detail: "只有字幕正文缓存成功后，摘要、片段检索和手动跳转才会解除限制。",
+          tone: "warn",
+          available: false,
+        },
+        reading: {
+          title: "正在读取字幕正文",
+          message: "正在刷新当前视频上下文、重新检测字幕来源，并尝试把 B 站字幕正文缓存为本地证据。",
+          action: "请保持当前 B 站视频页打开；如果刚开启中文 AI 字幕，等待检测完成即可。",
+          detail: "这个过程只使用当前页面和 B 站字幕接口，不会读取浏览器本地敏感文件或账号资料。",
+          tone: "warn",
+          available: false,
+        },
+        cached: {
+          title: "已缓存字幕正文",
+          message: "已缓存当前视频字幕正文证据 2 条，摘要、知识节点、片段检索和手动跳转会使用这些本地字幕片段。",
+          action: "如果刚切换分 P 或重新开启字幕，可以再次重新检测字幕以刷新证据。",
+          detail: "可引用时间范围：0:00-0:08。普通界面不会展示原始字幕地址、内部片段编号或校验信息。",
+          tone: "ok",
+          available: true,
+        },
+        "missing-cid": {
+          title: "缺少 CID，暂时不能检测字幕",
+          message: "Bili-Bill 还没有拿到当前分 P 的 CID，因此不能安全请求 B 站字幕来源或读取字幕正文。",
+          action: "请确认视频页加载完成；如果播放器里已经开启中文 AI 字幕，请点击重新检测字幕。",
+          detail: "CID 仍未知时，摘要只能使用标题、UP 主、简介、分 P 或章节等元数据兜底。",
+          tone: "bad",
+          available: false,
+        },
+        "no-track": {
+          title: "没有返回字幕轨道",
+          message: "B 站播放器接口没有返回可用字幕轨道。最常见原因是还没有在播放器里手动开启中文 AI 字幕。",
+          action: "请先在播放器字幕菜单中开启中文 AI 字幕，开启后点击重新检测字幕。",
+          detail: "这不是 DeepSeek 或模型失败；当前缺少的是可引用的当前视频字幕正文。",
+          tone: "warn",
+          available: false,
+        },
+        login: {
+          title: "字幕需要登录或访问权限",
+          message: "B 站字幕正文接口要求当前浏览器会话具备访问权限。Bili-Bill 不会读取浏览器本地敏感文件。",
+          action: "请在浏览器里确认 B 站已登录且播放器字幕可见，然后重新检测字幕。",
+          detail: "这不是模型失败；当前缺少的是 B 站允许读取的字幕正文。",
+          tone: "bad",
+          available: false,
+        },
+        fetch: {
+          title: "字幕正文拉取失败",
+          message: "已尝试读取字幕正文，但请求失败；当前仍只能使用元数据或简介作为本地证据。",
+          action: "请稍后重试，或确认当前视频页仍然打开且字幕已在播放器里开启。",
+          detail: "这不是 DeepSeek 或模型失败；当前缺少的是可引用的当前视频字幕正文。",
+          tone: "warn",
+          available: false,
+        },
+        empty: {
+          title: "字幕正文为空",
+          message: "已找到可读取的字幕来源，但 B 站没有返回有效正文片段。",
+          action: "请确认播放器里开启的是中文 AI 字幕；如果刚开启，请稍后重新检测字幕。",
+          detail: "这不是 DeepSeek 或模型失败；当前缺少的是可引用的当前视频字幕正文。",
+          tone: "warn",
+          available: false,
+        },
+        malformed: {
+          title: "字幕正文结构异常",
+          message: "B 站返回的字幕正文结构无法稳定解析，Bili-Bill 不会把它当作可引用字幕证据。",
+          action: "可以稍后重新检测字幕；在结构恢复前，摘要和定位功能只能使用元数据或简介兜底。",
+          detail: "这不是 DeepSeek 或模型失败；当前缺少的是可引用的当前视频字幕正文。",
+          tone: "warn",
+          available: false,
+        },
+        language: {
+          title: "字幕语言不匹配",
+          message: "当前可读字幕不是本次需要的中文 AI 字幕，因此不会作为当前视频正文证据。",
+          action: "请在 B 站播放器里切换到中文 AI 字幕后，再点击重新检测字幕。",
+          detail: "这不是 DeepSeek 或模型失败；当前缺少的是可引用的当前视频字幕正文。",
+          tone: "warn",
+          available: false,
+        },
+        host: {
+          title: "字幕来源不受支持",
+          message: "字幕正文地址不属于受限的 B 站或 hdslb 字幕域名，Bili-Bill 已拒绝读取。",
+          action: "请在播放器里重新选择中文 AI 字幕后，再点击重新检测字幕。",
+          detail: "普通界面不会展示原始字幕地址，也不会向其他服务上传字幕。",
+          tone: "warn",
+          available: false,
+        },
+        stale: {
+          title: "本地字幕证据与当前视频不匹配",
+          message: "本地缓存的字幕正文不属于当前 BVID、CID、分 P 或语言，已经停止作为当前视频证据使用。",
+          action: "点击重新检测字幕，重新读取当前视频的字幕正文。",
+          detail: "为了避免把旧视频片段当作当前视频证据，摘要、检索和跳转会继续使用元数据或简介兜底。",
+          tone: "warn",
+          available: false,
+        },
+      };
+
+      function setState(state) {
+        document.querySelector('[data-testid="status-title"]').textContent = state.title;
+        document.querySelector('[data-testid="status-message"]').textContent = state.message;
+        document.querySelector('[data-testid="status-message"]').className = state.tone;
+        document.querySelector('[data-testid="status-action"]').textContent = state.action;
+        document.querySelector('[data-testid="status-detail"]').textContent = state.detail;
+
+        const gateText = state.available
+          ? [
+              "摘要：可用：可基于本地字幕正文生成摘要。",
+              "知识节点：可用：可生成带时间范围的字幕节点。",
+              "片段检索：可用：可搜索当前视频字幕片段。",
+              "手动跳转：可用：命中片段后可预览并手动确认跳转。",
+            ]
+          : [
+              "摘要：不可用：没有字幕正文时只能展示元数据或简介说明，不能完整总结。",
+              "知识节点：不可用：没有字幕正文时不会生成推测时间点。",
+              "片段检索：不可用：没有字幕正文时不能定位具体片段。",
+              "手动跳转：不可用：没有可定位片段时不会提供跳转目标。",
+            ];
+
+        for (const [index, selector] of ["summary", "knowledge", "search", "jump"].entries()) {
+          const node = document.querySelector(`[data-testid="${selector}-gate"]`);
+          node.textContent = gateText[index];
+          node.className = state.available ? "gate ok" : "gate";
+        }
+      }
+
+      document.querySelector('[data-testid="enable-subtitle"]').addEventListener("click", () => {
+        enabled = true;
+        const label = document.querySelector('[data-testid="player-subtitle"]');
+        label.textContent = "播放器已开启中文 AI 字幕";
+        label.className = "ok";
+        setState(states.found);
+      });
+
+      document.querySelector('[data-testid="redetect"]').addEventListener("click", () => {
+        if (!enabled) {
+          setState(states["no-track"]);
+          return;
+        }
+        setState(states.reading);
+        window.setTimeout(() => setState(states.cached), 80);
+      });
+
+      for (const button of document.querySelectorAll("[data-error]")) {
+        button.addEventListener("click", () => {
+          setState(states[button.dataset.error]);
+        });
+      }
+    </script>
+  </body>
+</html>

@@ -1,8 +1,13 @@
 import type {
-  CurrentVideoContext,
   CurrentVideoContextResult,
 } from '../../shared/types/current-video-context';
+import type { BiliVizResponse, RequestAction } from '../../shared/types/messages';
+import type { CurrentVideoTranscriptEvidenceState } from '../../shared/types/current-video-transcript';
 import { buildLocalCurrentVideoSummary } from '../../shared/current-video-summary';
+import {
+  buildCurrentVideoSubtitleDiagnostics,
+  type CurrentVideoSubtitleDiagnostics,
+} from '../../shared/current-video-subtitle-diagnostics';
 
 const CARD_ID = 'bdc-current-video-assistant';
 const STYLE_ID = 'bdc-current-video-assistant-style';
@@ -67,6 +72,56 @@ const CSS = `
   font-size: 12px;
   line-height: 1.45;
 }
+#${CARD_ID} .bdc-assistant-subtitle-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+#${CARD_ID} .bdc-assistant-subtitle-detail {
+  color: #a0a0b0;
+  font-size: 11px;
+  line-height: 1.45;
+  margin-top: 4px;
+}
+#${CARD_ID} .bdc-assistant-gates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  margin-top: 8px;
+}
+#${CARD_ID} .bdc-assistant-gate {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 5px;
+  color: #c8c8d8;
+  font-size: 11px;
+  line-height: 1.35;
+}
+#${CARD_ID} .bdc-assistant-gate-ready {
+  border-color: rgba(160, 231, 160, 0.28);
+  color: #a0e7a0;
+}
+#${CARD_ID} .bdc-assistant-action {
+  margin-top: 8px;
+  border: 1px solid rgba(255, 179, 71, 0.32);
+  border-radius: 6px;
+  background: rgba(255, 179, 71, 0.18);
+  color: #ffcf8a;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 8px;
+}
+#${CARD_ID} .bdc-assistant-action:disabled {
+  background: rgba(255, 255, 255, 0.08);
+  color: #9090a0;
+  cursor: default;
+}
+#${CARD_ID} .bdc-assistant-status {
+  color: #c8e6ff;
+  font-size: 11px;
+  line-height: 1.45;
+  margin-top: 6px;
+}
 #${CARD_ID} .bdc-assistant-tier {
   display: inline-block;
   margin: 4px 0 6px;
@@ -123,6 +178,7 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
       aiStatus: 'not_requested',
       aiNote: '页面悬浮卡只显示本地证据；启用后可在 Popup 查看 AI 摘要。',
     });
+    const subtitleDiagnostics = buildCurrentVideoSubtitleDiagnostics(context);
     appendText(card, 'div', 'bdc-assistant-video', context.title ?? context.bvid);
     appendText(card, 'div', 'bdc-assistant-tier', `${summary.sourceTierLabel} / 证据强度 ${summaryConfidenceLabel(summary.confidence)}`);
     appendText(card, 'div', 'bdc-assistant-summary', summary.summary);
@@ -151,12 +207,7 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
       'bdc-assistant-row bdc-assistant-muted',
       `字幕 ${availabilityLabel(context.sources.transcript)}；正文文本 ${availabilityLabel(context.sources.contentText)}`,
     );
-    appendText(
-      card,
-      'div',
-      'bdc-assistant-warning',
-      subtitleStatusMessage(context),
-    );
+    appendSubtitleDiagnostics(card, subtitleDiagnostics);
   } else {
     appendText(card, 'div', 'bdc-assistant-video', '没有当前视频上下文');
     appendText(
@@ -178,6 +229,90 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
   if (!existing) {
     document.body.appendChild(card);
   }
+}
+
+function appendSubtitleDiagnostics(parent: HTMLElement, diagnostics: CurrentVideoSubtitleDiagnostics): void {
+  const panel = document.createElement('div');
+  panel.className = 'bdc-assistant-warning';
+  panel.style.border = `1px solid ${subtitleDiagnosticsBorder(diagnostics)}`;
+  panel.style.background = subtitleDiagnosticsBackground(diagnostics);
+
+  const title = document.createElement('div');
+  title.className = 'bdc-assistant-subtitle-title';
+  title.style.color = subtitleDiagnosticsColor(diagnostics);
+  title.textContent = diagnostics.title;
+  panel.appendChild(title);
+
+  appendText(panel, 'div', 'bdc-assistant-row', diagnostics.message);
+  appendText(panel, 'div', 'bdc-assistant-row', diagnostics.action);
+
+  for (const line of diagnostics.detailLines.slice(0, 2)) {
+    appendText(panel, 'div', 'bdc-assistant-subtitle-detail', line);
+  }
+
+  const gates = document.createElement('div');
+  gates.className = 'bdc-assistant-gates';
+  for (const gate of diagnostics.featureGates) {
+    const item = document.createElement('div');
+    item.className = gate.available
+      ? 'bdc-assistant-gate bdc-assistant-gate-ready'
+      : 'bdc-assistant-gate';
+    item.textContent = `${gate.label}：${gate.message}`;
+    gates.appendChild(item);
+  }
+  panel.appendChild(gates);
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'bdc-assistant-action';
+  button.disabled = !diagnostics.canRetry;
+  button.textContent = '重新检测字幕';
+  const status = document.createElement('div');
+  status.className = 'bdc-assistant-status';
+  button.addEventListener('click', () => {
+    void refreshSubtitleEvidenceFromPage(button, status);
+  });
+  panel.append(button, status);
+  parent.appendChild(panel);
+}
+
+async function refreshSubtitleEvidenceFromPage(
+  button: HTMLButtonElement,
+  status: HTMLElement,
+): Promise<void> {
+  button.disabled = true;
+  button.textContent = '检测中...';
+  status.textContent = '正在刷新当前视频字幕状态，并尝试读取字幕正文。';
+
+  try {
+    const transcriptEvidence = await sendRuntimeRequest<CurrentVideoTranscriptEvidenceState>(
+      'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE',
+      {
+        forceContextRefresh: true,
+        forceSubtitleProbe: true,
+      },
+    );
+    const context = await sendRuntimeRequest<CurrentVideoContextResult>('GET_CURRENT_VIDEO_CONTEXT');
+    const nextContext = context.kind === 'video'
+      ? { ...context, transcriptEvidence }
+      : context;
+    renderCurrentVideoAssistant(nextContext);
+  } catch {
+    status.textContent = '重新检测失败：请确认当前 B 站视频页仍然打开，并在播放器里开启中文 AI 字幕后重试。';
+    button.disabled = false;
+    button.textContent = '重新检测字幕';
+  }
+}
+
+async function sendRuntimeRequest<T>(
+  action: RequestAction,
+  params?: Record<string, unknown>,
+): Promise<T> {
+  const response = await chrome.runtime.sendMessage({ action, params }) as BiliVizResponse<T>;
+  if (!response?.success || response.data === undefined) {
+    throw new Error('REQUEST_FAILED');
+  }
+  return response.data;
 }
 
 function appendText(parent: HTMLElement, tag: 'div' | 'p', className: string, text: string): void {
@@ -215,23 +350,29 @@ function availabilityLabel(value: string): string {
   }
 }
 
+function subtitleDiagnosticsColor(state: CurrentVideoSubtitleDiagnostics): string {
+  if (state.tone === 'ready') return '#a0e7a0';
+  if (state.tone === 'info') return '#c8e6ff';
+  if (state.tone === 'blocked') return '#ff8a8a';
+  return '#ffcf8a';
+}
+
+function subtitleDiagnosticsBorder(state: CurrentVideoSubtitleDiagnostics): string {
+  if (state.tone === 'ready') return 'rgba(160,231,160,0.28)';
+  if (state.tone === 'info') return 'rgba(127,219,255,0.28)';
+  if (state.tone === 'blocked') return 'rgba(255,138,138,0.28)';
+  return 'rgba(255,179,71,0.24)';
+}
+
+function subtitleDiagnosticsBackground(state: CurrentVideoSubtitleDiagnostics): string {
+  if (state.tone === 'ready') return 'rgba(160,231,160,0.08)';
+  if (state.tone === 'info') return 'rgba(127,219,255,0.08)';
+  if (state.tone === 'blocked') return 'rgba(255,138,138,0.08)';
+  return 'rgba(255,179,71,0.08)';
+}
+
 function summaryConfidenceLabel(value: 'low' | 'medium' | 'high'): string {
   if (value === 'high') return '高';
   if (value === 'medium') return '中';
   return '低';
-}
-
-function subtitleStatusMessage(context: CurrentVideoContext): string {
-  if (context.transcriptEvidence?.active) return context.transcriptEvidence.message;
-  if (context.transcriptEvidence && context.transcriptEvidence.status !== 'missing') {
-    return context.transcriptEvidence.message;
-  }
-  if (context.subtitleProbe) return context.subtitleProbe.message;
-  if (context.sources.transcript === 'unknown') {
-    return '字幕来源等待后台探测；当前只使用元数据和简介作为本地证据兜底，不能做完整视频总结。';
-  }
-  if (context.sources.description === 'available') {
-    return '简介可用，但字幕和完整正文文本不可用；这不是完整视频总结。';
-  }
-  return '当前没有可用字幕、简介或完整正文文本；这不是完整视频总结。';
 }

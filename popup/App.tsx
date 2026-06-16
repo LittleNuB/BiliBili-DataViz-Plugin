@@ -7,7 +7,6 @@ import type { HistoryTailProbeReport } from '../src/shared/types/history-tail-pr
 import type { HistorySyncProgress, HistorySyncStatus } from '../src/shared/types/history-sync';
 import type {
   CurrentVideoContextResult,
-  CurrentVideoSubtitleSourceState,
 } from '../src/shared/types/current-video-context';
 import type { CurrentVideoTranscriptEvidenceState } from '../src/shared/types/current-video-transcript';
 import type {
@@ -20,6 +19,10 @@ import type {
 import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary';
 import type { VideoKnowledgeJumpResponse, VideoKnowledgeNode, VideoKnowledgeResult } from '../src/shared/types/video-knowledge';
 import { cancelledCurrentVideoSummary, loadingCurrentVideoSummary } from '../src/shared/current-video-summary';
+import {
+  buildCurrentVideoSubtitleDiagnostics,
+  type CurrentVideoSubtitleDiagnostics,
+} from '../src/shared/current-video-subtitle-diagnostics';
 import { ProgressRing } from './components/ProgressRing';
 import { QuickStats as QuickStatsPanel } from './components/QuickStats';
 import { OpenDashboard } from './components/OpenDashboard';
@@ -126,19 +129,29 @@ export function App() {
     setSubtitleProbeLoading(true);
     setSubtitleProbeStatus(null);
     try {
-      const context = await requestSW<CurrentVideoContextResult>('GET_CURRENT_VIDEO_CONTEXT', {
+      const firstContext = await requestSW<CurrentVideoContextResult>('GET_CURRENT_VIDEO_CONTEXT', {
         forceContextRefresh: true,
         forceSubtitleProbe: true,
       });
-      setCurrentVideoContext(context);
-      setSubtitleProbeStatus(
-        context.kind === 'video' && context.subtitleProbe
-          ? context.subtitleProbe.message
-          : '已重新检测当前视频上下文。',
-      );
-      await fetchVideoKnowledge();
-    } catch (e) {
-      setSubtitleProbeStatus((e as Error).message);
+      setCurrentVideoContext(firstContext);
+
+      const transcriptEvidence = await requestSW<CurrentVideoTranscriptEvidenceState>('GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE', {
+        forceContextRefresh: true,
+        forceSubtitleProbe: true,
+      });
+      const refreshedContext = await requestSW<CurrentVideoContextResult>('GET_CURRENT_VIDEO_CONTEXT');
+      const contextWithEvidence = refreshedContext.kind === 'video'
+        ? { ...refreshedContext, transcriptEvidence }
+        : refreshedContext;
+      setCurrentVideoContext(contextWithEvidence);
+      const diagnostics = buildCurrentVideoSubtitleDiagnostics(contextWithEvidence);
+      setSubtitleProbeStatus(`${diagnostics.title}：${diagnostics.message}`);
+      await Promise.all([
+        fetchCurrentVideoSummary(),
+        fetchVideoKnowledge(),
+      ]);
+    } catch {
+      setSubtitleProbeStatus('重新检测失败：请确认当前 B 站视频页仍然打开，并在播放器里开启中文 AI 字幕后重试。');
     } finally {
       setSubtitleProbeLoading(false);
     }
@@ -578,6 +591,9 @@ function CurrentVideoAssistantStatus({
   const [segmentPreviewCandidateId, setSegmentPreviewCandidateId] = useState<string | null>(null);
   const [segmentJumpStatus, setSegmentJumpStatus] = useState<string | null>(null);
   const [segmentReturnAvailable, setSegmentReturnAvailable] = useState(false);
+  const subtitleDiagnostics = buildCurrentVideoSubtitleDiagnostics(context, {
+    refreshing: subtitleProbeLoading,
+  });
 
   async function searchCurrentVideoSegments() {
     const query = segmentQuery.trim();
@@ -666,40 +682,58 @@ function CurrentVideoAssistantStatus({
             BVID {context.bvid} / CID {context.cid ?? '未知'}
             <br />
             简介 {availabilityLabel(context.sources.description)}；字幕 {availabilityLabel(context.sources.transcript)}；正文文本 {availabilityLabel(context.sources.contentText)}
-            {context.subtitleProbe && (
-              <>
-                <br />
-                {subtitleProbeDetail(context.subtitleProbe)}
-              </>
-            )}
-            {context.transcriptEvidence && context.transcriptEvidence.status !== 'missing' && (
-              <>
-                <br />
-                {transcriptEvidenceDetail(context.transcriptEvidence)}
-              </>
-            )}
+            <br />
+            字幕状态：{subtitleDiagnostics.title}
           </div>
           <div style={{
             marginTop: '6px',
             padding: '7px 8px',
-            border: '1px solid rgba(255,179,71,0.24)',
+            border: `1px solid ${subtitleDiagnosticsBorder(subtitleDiagnostics)}`,
             borderRadius: '6px',
-            background: 'rgba(255,179,71,0.08)',
+            background: subtitleDiagnosticsBackground(subtitleDiagnostics),
           }}>
-            <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45 }}>
-              如需使用 B 站 AI 字幕，请先在播放器里手动开启中文 AI 字幕，开启后重新检测。
+            <div style={{ color: subtitleDiagnosticsColor(subtitleDiagnostics), fontSize: '10px', lineHeight: 1.45, fontWeight: 700 }}>
+              {subtitleDiagnostics.title}
+            </div>
+            <div style={{ color: '#E8E8F2', fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
+              {subtitleDiagnostics.message}
+            </div>
+            <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
+              {subtitleDiagnostics.action}
+            </div>
+            {subtitleDiagnostics.detailLines.slice(0, 2).map(line => (
+              <div key={line} style={{ color: '#A0A0B0', fontSize: '9px', lineHeight: 1.45, marginTop: '3px' }}>
+                {line}
+              </div>
+            ))}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', marginTop: '6px' }}>
+              {subtitleDiagnostics.featureGates.map(item => (
+                <div
+                  key={item.label}
+                  style={{
+                    border: `1px solid ${item.available ? 'rgba(160,231,160,0.25)' : 'rgba(255,179,71,0.22)'}`,
+                    borderRadius: '6px',
+                    padding: '4px 5px',
+                    color: item.available ? '#A0E7A0' : '#FFCF8A',
+                    fontSize: '9px',
+                    lineHeight: 1.35,
+                  }}
+                >
+                  <strong>{item.label}</strong> {item.message}
+                </div>
+              ))}
             </div>
             <button
               type="button"
               onClick={onReprobeSubtitle}
-              disabled={subtitleProbeLoading}
+              disabled={subtitleProbeLoading || !subtitleDiagnostics.canRetry}
               style={{
                 marginTop: '6px',
-                background: subtitleProbeLoading ? 'rgba(255,255,255,0.08)' : 'rgba(255,179,71,0.18)',
-                color: subtitleProbeLoading ? '#9090A0' : '#FFCF8A',
+                background: subtitleProbeLoading || !subtitleDiagnostics.canRetry ? 'rgba(255,255,255,0.08)' : 'rgba(255,179,71,0.18)',
+                color: subtitleProbeLoading || !subtitleDiagnostics.canRetry ? '#9090A0' : '#FFCF8A',
                 border: '1px solid rgba(255,179,71,0.32)',
                 borderRadius: '6px',
-                cursor: subtitleProbeLoading ? 'default' : 'pointer',
+                cursor: subtitleProbeLoading || !subtitleDiagnostics.canRetry ? 'default' : 'pointer',
                 fontSize: '10px',
                 padding: '4px 7px',
               }}
@@ -784,6 +818,7 @@ function CurrentVideoAssistantStatus({
             onConfirm={onConfirmJump}
           />
           <CurrentVideoSegmentRetrievalPanel
+            subtitleDiagnostics={subtitleDiagnostics}
             query={segmentQuery}
             result={segmentResult}
             loading={segmentLoading}
@@ -851,6 +886,7 @@ function CurrentVideoAssistantStatus({
 }
 
 function CurrentVideoSegmentRetrievalPanel({
+  subtitleDiagnostics,
   query,
   result,
   loading,
@@ -864,6 +900,7 @@ function CurrentVideoSegmentRetrievalPanel({
   onConfirmJump,
   onReturn,
 }: {
+  subtitleDiagnostics: CurrentVideoSubtitleDiagnostics;
   query: string;
   result: CurrentVideoSegmentRetrievalResult | null;
   loading: boolean;
@@ -881,6 +918,8 @@ function CurrentVideoSegmentRetrievalPanel({
   const aiExplanations = new Map(
     (result?.aiRerank.explanations ?? []).map(explanation => [explanation.candidateId, explanation]),
   );
+  const searchGate = subtitleDiagnostics.featureGates.find(item => item.label === '片段检索');
+  const jumpGate = subtitleDiagnostics.featureGates.find(item => item.label === '手动跳转');
   return (
     <div style={{
       marginTop: '8px',
@@ -933,7 +972,7 @@ function CurrentVideoSegmentRetrievalPanel({
         </button>
       </form>
       <div style={{ color: '#A0A0B0', fontSize: '9px', lineHeight: 1.45, marginTop: '5px' }}>
-        只查当前视频本地已有证据；候选必须预览并确认后才会跳转，不会自动改变播放位置。
+        {searchGate?.message} {jumpGate?.message}
       </div>
       {error && (
         <div style={{ color: '#FFB347', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
@@ -1327,18 +1366,25 @@ function availabilityLabel(value: string): string {
   }
 }
 
-function subtitleProbeDetail(probe: CurrentVideoSubtitleSourceState): string {
-  if (!probe.available) return probe.message;
-  const languages = probe.languages.length > 0 ? `；语言 ${probe.languages.join(', ')}` : '';
-  const coverage = typeof probe.coverageEndSeconds === 'number'
-    ? `；覆盖至 ${formatSeconds(probe.coverageEndSeconds)}`
-    : '';
-  return `${probe.message}（字幕轨道 ${probe.trackCount}${languages}${coverage}）`;
+function subtitleDiagnosticsColor(state: CurrentVideoSubtitleDiagnostics): string {
+  if (state.tone === 'ready') return '#A0E7A0';
+  if (state.tone === 'info') return '#C8E6FF';
+  if (state.tone === 'blocked') return '#FF8A8A';
+  return '#FFCF8A';
 }
 
-function transcriptEvidenceDetail(evidence: CurrentVideoTranscriptEvidenceState): string {
-  if (!evidence.active) return evidence.message;
-  return `${evidence.message} 已缓存片段=${evidence.segmentCount}`;
+function subtitleDiagnosticsBorder(state: CurrentVideoSubtitleDiagnostics): string {
+  if (state.tone === 'ready') return 'rgba(160,231,160,0.28)';
+  if (state.tone === 'info') return 'rgba(127,219,255,0.28)';
+  if (state.tone === 'blocked') return 'rgba(255,138,138,0.28)';
+  return 'rgba(255,179,71,0.24)';
+}
+
+function subtitleDiagnosticsBackground(state: CurrentVideoSubtitleDiagnostics): string {
+  if (state.tone === 'ready') return 'rgba(160,231,160,0.08)';
+  if (state.tone === 'info') return 'rgba(127,219,255,0.08)';
+  if (state.tone === 'blocked') return 'rgba(255,138,138,0.08)';
+  return 'rgba(255,179,71,0.08)';
 }
 
 function videoKnowledgeNotice(knowledge: VideoKnowledgeResult | null, transcriptNodeCount: number): string {
