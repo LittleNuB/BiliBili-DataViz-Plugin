@@ -8,6 +8,8 @@ import type { CurrentVideoTranscriptEvidenceState } from '../../shared/types/cur
 import type {
   CurrentVideoSegmentRetrievalCandidate,
   CurrentVideoSegmentRetrievalResult,
+  CurrentVideoTimestampJumpResponse,
+  CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
 import {
   buildCurrentVideoSubtitleDiagnostics,
@@ -337,6 +339,41 @@ const CSS = `
 #${CARD_ID} .bdc-assistant-candidate-reasons li {
   margin-top: 3px;
 }
+#${CARD_ID} .bdc-assistant-jump-status {
+  margin-top: 8px;
+  border: 1px solid rgba(127, 219, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(127, 219, 255, 0.07);
+  color: #c8e6ff;
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 8px;
+  overflow-wrap: anywhere;
+}
+#${CARD_ID} .bdc-assistant-jump-preview {
+  margin-top: 8px;
+  border: 1px solid rgba(255, 179, 71, 0.30);
+  border-radius: 8px;
+  background: rgba(255, 179, 71, 0.08);
+  padding: 8px;
+}
+#${CARD_ID} .bdc-assistant-jump-preview-title {
+  color: #ffcf8a;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+#${CARD_ID} .bdc-assistant-jump-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+#${CARD_ID} .bdc-assistant-button-warn {
+  border-color: rgba(255, 179, 71, 0.42);
+  background: #ffb347;
+  color: #1f2433;
+}
 #${CARD_ID} .bdc-assistant-summary-meta {
   display: flex;
   flex-wrap: wrap;
@@ -410,6 +447,11 @@ interface AssistantState {
   segmentLoading: boolean;
   segmentError: string | null;
   segmentRequestId: number;
+  segmentPreviewCandidateId: string | null;
+  segmentJumpStatus: string | null;
+  segmentJumpLoading: boolean;
+  segmentReturnAvailable: boolean;
+  segmentReturnLoading: boolean;
   subtitleRefreshing: boolean;
   subtitleStatus: string | null;
   subtitleRequestId: number;
@@ -430,6 +472,11 @@ const assistantState: AssistantState = {
   segmentLoading: false,
   segmentError: null,
   segmentRequestId: 0,
+  segmentPreviewCandidateId: null,
+  segmentJumpStatus: null,
+  segmentJumpLoading: false,
+  segmentReturnAvailable: false,
+  segmentReturnLoading: false,
   subtitleRefreshing: false,
   subtitleStatus: null,
   subtitleRequestId: 0,
@@ -459,6 +506,11 @@ function updateAssistantContext(context: CurrentVideoContextResult): void {
     assistantState.segmentResult = null;
     assistantState.segmentContextKey = '';
     assistantState.segmentError = null;
+    assistantState.segmentPreviewCandidateId = null;
+    assistantState.segmentJumpStatus = null;
+    assistantState.segmentJumpLoading = false;
+    assistantState.segmentReturnAvailable = false;
+    assistantState.segmentReturnLoading = false;
     assistantState.subtitleStatus = null;
   }
   assistantState.context = context;
@@ -728,6 +780,8 @@ function appendSegmentRetrievalResult(
   appendBadge(meta, result.evidenceState.contextFresh ? '当前视频上下文有效' : '上下文需刷新');
   parent.appendChild(meta);
 
+  appendSegmentJumpStatus(parent);
+
   if (result.candidates.length === 0) {
     appendSegmentLimitations(parent, result);
     return;
@@ -784,7 +838,130 @@ function segmentCandidateCard(
     appendText(card, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(candidate.note));
   }
 
+  appendSegmentJumpControls(card, candidate, result);
+
   return card;
+}
+
+function appendSegmentJumpStatus(parent: HTMLElement): void {
+  if (!assistantState.segmentJumpStatus && !assistantState.segmentReturnAvailable) return;
+
+  const status = document.createElement('div');
+  status.className = 'bdc-assistant-jump-status';
+  appendText(
+    status,
+    'div',
+    '',
+    safeVisibleText(assistantState.segmentJumpStatus ?? '已记录跳转前位置，可返回原位置。'),
+  );
+
+  if (assistantState.segmentReturnAvailable) {
+    const actions = document.createElement('div');
+    actions.className = 'bdc-assistant-jump-actions';
+    actions.appendChild(button(
+      assistantState.segmentReturnLoading ? '返回中...' : '返回原位置',
+      'bdc-assistant-button bdc-assistant-button-warn',
+      () => {
+        void returnCurrentVideoSegmentJumpFromPage();
+      },
+      assistantState.segmentReturnLoading,
+    ));
+    status.appendChild(actions);
+  }
+
+  parent.appendChild(status);
+}
+
+function appendSegmentJumpControls(
+  parent: HTMLElement,
+  candidate: CurrentVideoSegmentRetrievalCandidate,
+  result: CurrentVideoSegmentRetrievalResult,
+): void {
+  const preview = candidate.jumpPreview;
+  const selected = assistantState.segmentPreviewCandidateId === candidate.id;
+  const controls = document.createElement('div');
+  controls.className = 'bdc-assistant-jump-actions';
+
+  controls.appendChild(button(
+    preview.canJump ? (selected ? '收起预览' : '预览跳转') : '不可跳转',
+    preview.canJump
+      ? 'bdc-assistant-button bdc-assistant-button-quiet'
+      : 'bdc-assistant-button bdc-assistant-button-quiet',
+    () => {
+      if (!preview.canJump) return;
+      assistantState.segmentPreviewCandidateId = selected ? null : candidate.id;
+      assistantState.segmentJumpStatus = selected ? assistantState.segmentJumpStatus : null;
+      renderAssistantShell();
+    },
+    !preview.canJump,
+  ));
+  parent.appendChild(controls);
+
+  if (!preview.canJump) {
+    appendText(parent, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(preview.message));
+    return;
+  }
+
+  appendText(
+    parent,
+    'div',
+    'bdc-assistant-subtitle-detail',
+    `可预览目标时间 ${safeVisibleText(preview.targetTimeLabel ?? candidate.timeRangeLabel)}；预览不会改变播放位置。`,
+  );
+
+  if (selected) {
+    parent.appendChild(segmentJumpPreviewPanel(candidate, result));
+  }
+}
+
+function segmentJumpPreviewPanel(
+  candidate: CurrentVideoSegmentRetrievalCandidate,
+  result: CurrentVideoSegmentRetrievalResult,
+): HTMLElement {
+  const preview = candidate.jumpPreview;
+  const panel = document.createElement('div');
+  panel.className = 'bdc-assistant-jump-preview';
+  appendText(panel, 'div', 'bdc-assistant-jump-preview-title', '确认跳转前预览');
+  appendText(
+    panel,
+    'div',
+    'bdc-assistant-candidate-evidence',
+    `目标时间：${safeVisibleText(preview.targetTimeLabel ?? candidate.timeRangeLabel)}`,
+  );
+  appendText(
+    panel,
+    'div',
+    'bdc-assistant-subtitle-detail',
+    `来源：${safeVisibleText(preview.sourceLabel)}；证据强度 ${preview.confidenceLabel} ${formatPercent(preview.confidence)}`,
+  );
+  appendText(
+    panel,
+    'div',
+    'bdc-assistant-candidate-evidence',
+    `证据预览：${safeVisibleText(preview.evidencePreview || candidate.evidenceText)}`,
+  );
+  appendText(panel, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(preview.message));
+
+  const actions = document.createElement('div');
+  actions.className = 'bdc-assistant-jump-actions';
+  actions.appendChild(button(
+    assistantState.segmentJumpLoading ? '确认中...' : '确认跳转',
+    'bdc-assistant-button bdc-assistant-button-warn',
+    () => {
+      void confirmCurrentVideoSegmentJumpFromPage(candidate, result);
+    },
+    assistantState.segmentJumpLoading || !preview.canJump,
+  ));
+  actions.appendChild(button(
+    '取消',
+    'bdc-assistant-button bdc-assistant-button-quiet',
+    () => {
+      assistantState.segmentPreviewCandidateId = null;
+      renderAssistantShell();
+    },
+  ));
+  panel.appendChild(actions);
+  return panel;
 }
 
 function appendSegmentLimitations(
@@ -886,11 +1063,18 @@ async function searchCurrentVideoSegmentsFromPage(): Promise<void> {
 
   const requestId = assistantState.segmentRequestId + 1;
   const contextKey = assistantState.contextKey;
+  const returnAvailable = assistantState.segmentReturnAvailable;
+  const returnStatus = returnAvailable ? assistantState.segmentJumpStatus : null;
   assistantState.segmentRequestId = requestId;
   assistantState.segmentLoading = true;
   assistantState.segmentError = null;
   assistantState.segmentResult = null;
   assistantState.segmentContextKey = contextKey;
+  assistantState.segmentPreviewCandidateId = null;
+  assistantState.segmentJumpStatus = returnStatus;
+  assistantState.segmentJumpLoading = false;
+  assistantState.segmentReturnAvailable = returnAvailable;
+  assistantState.segmentReturnLoading = false;
   renderAssistantShell();
 
   try {
@@ -908,6 +1092,71 @@ async function searchCurrentVideoSegmentsFromPage(): Promise<void> {
       assistantState.segmentLoading = false;
       renderAssistantShell();
     }
+  }
+}
+
+async function confirmCurrentVideoSegmentJumpFromPage(
+  candidate: CurrentVideoSegmentRetrievalCandidate,
+  result: CurrentVideoSegmentRetrievalResult,
+): Promise<void> {
+  if (assistantState.segmentJumpLoading) return;
+
+  const preview = candidate.jumpPreview;
+  if (!preview.canJump) {
+    assistantState.segmentJumpStatus = safeVisibleText(preview.message);
+    assistantState.segmentReturnAvailable = false;
+    renderAssistantShell();
+    return;
+  }
+
+  assistantState.segmentJumpLoading = true;
+  assistantState.segmentJumpStatus = '正在确认跳转...';
+  assistantState.segmentReturnAvailable = false;
+  renderAssistantShell();
+
+  try {
+    const response = await sendRuntimeRequest<CurrentVideoTimestampJumpResponse>(
+      'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP',
+      {
+        query: result.query,
+        candidateId: candidate.id,
+        confirmed: true,
+      },
+    );
+    assistantState.segmentJumpStatus = safeVisibleText(response.message);
+    assistantState.segmentReturnAvailable = response.ok && response.returnPointSeconds !== null;
+    if (response.ok) {
+      assistantState.segmentPreviewCandidateId = null;
+    }
+  } catch {
+    assistantState.segmentJumpStatus = '跳转失败：请确认当前 B 站视频页仍然打开，并稍后重试。';
+    assistantState.segmentReturnAvailable = false;
+  } finally {
+    assistantState.segmentJumpLoading = false;
+    renderAssistantShell();
+  }
+}
+
+async function returnCurrentVideoSegmentJumpFromPage(): Promise<void> {
+  if (assistantState.segmentReturnLoading) return;
+
+  assistantState.segmentReturnLoading = true;
+  assistantState.segmentJumpStatus = '正在返回原位置...';
+  renderAssistantShell();
+
+  try {
+    const response = await sendRuntimeRequest<CurrentVideoTimestampReturnResponse>(
+      'RETURN_CURRENT_VIDEO_SEGMENT_JUMP',
+    );
+    assistantState.segmentJumpStatus = safeVisibleText(response.message);
+    if (response.ok) {
+      assistantState.segmentReturnAvailable = false;
+    }
+  } catch {
+    assistantState.segmentJumpStatus = '返回失败：请确认当前 B 站视频页仍然打开，并稍后重试。';
+  } finally {
+    assistantState.segmentReturnLoading = false;
+    renderAssistantShell();
   }
 }
 
