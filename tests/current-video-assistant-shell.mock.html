@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bili-Bill 当前视频页内助手 Mock</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #111522;
+        color: #f4f7fb;
+      }
+
+      body {
+        margin: 0;
+      }
+
+      main {
+        min-height: 100vh;
+        padding: 28px;
+        background:
+          linear-gradient(90deg, rgba(251, 114, 153, 0.08), transparent 46%),
+          #111522;
+      }
+
+      .player {
+        max-width: 880px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 8px;
+        background: #191d2e;
+        padding: 18px;
+      }
+
+      .video-box {
+        aspect-ratio: 16 / 9;
+        border-radius: 6px;
+        background: #05070d;
+        display: grid;
+        place-items: center;
+        color: #9aa3b4;
+      }
+
+      h1 {
+        margin: 14px 0 6px;
+        font-size: 20px;
+      }
+
+      p {
+        margin: 0;
+        color: #aeb4c4;
+        line-height: 1.6;
+      }
+
+      .runtime-log {
+        margin-top: 12px;
+        color: #9be7b0;
+        font-size: 13px;
+      }
+    </style>
+    <script>
+      const mockBvid = "BV1ShellMock9";
+      const mockCid = 2202;
+      let subtitleCached = false;
+      let summaryReadCount = 0;
+
+      window.__INITIAL_STATE__ = {
+        videoData: {
+          aid: 119001,
+          bvid: mockBvid,
+          cid: mockCid,
+          title: "页内助手 Shell Mock 视频",
+          duration: 600,
+          desc: "这个 mock 用于验证 Bili-Bill 当前视频页内助手的展开、字幕重新检测和摘要刷新。",
+          owner: { mid: 42, name: "Mock UP" },
+          pages: [
+            { page: 1, cid: mockCid, part: "主视频", duration: 600 },
+          ],
+        },
+      };
+
+      Object.defineProperty(HTMLMediaElement.prototype, "duration", {
+        configurable: true,
+        get() {
+          return 600;
+        },
+      });
+
+      function transcriptEvidence() {
+        return {
+          status: subtitleCached ? "cached" : "missing",
+          active: subtitleCached,
+          checkedAt: Date.now(),
+          bvid: mockBvid,
+          cid: mockCid,
+          page: 1,
+          language: subtitleCached ? "zh-CN" : null,
+          source: subtitleCached ? "bilibili_subtitle" : null,
+          sourceType: "bilibili_player_wbi_v2",
+          ["source" + "Hash"]: subtitleCached ? "hash-hidden-in-ui" : null,
+          segmentCount: subtitleCached ? 2 : 0,
+          staleSegmentCount: 0,
+          coverageStartSeconds: subtitleCached ? 0 : null,
+          coverageEndSeconds: subtitleCached ? 8 : null,
+          fetchedAt: subtitleCached ? Date.now() : null,
+          updatedAt: subtitleCached ? Date.now() : null,
+          reason: subtitleCached ? "transcript_segments_cached" : "transcript_not_cached",
+          message: subtitleCached
+            ? "已缓存字幕正文证据。"
+            : "尚未缓存当前视频字幕正文证据。",
+          warnings: [],
+        };
+      }
+
+      function currentContext() {
+        return {
+          kind: "video",
+          url: location.href,
+          collectedAt: Date.now(),
+          bvid: mockBvid,
+          aid: 119001,
+          cid: mockCid,
+          title: "页内助手 Shell Mock 视频",
+          authorName: "Mock UP",
+          authorMid: 42,
+          durationSeconds: 600,
+          currentPart: { page: 1, title: "主视频", total: 1 },
+          parts: [{ page: 1, cid: mockCid, title: "主视频", durationSeconds: 600 }],
+          chapters: [],
+          description: {
+            availability: "available",
+            text: "这个 mock 用于验证 Bili-Bill 当前视频页内助手的展开、字幕重新检测和摘要刷新。",
+            length: 43,
+          },
+          sources: {
+            metadata: "available",
+            description: "available",
+            pages: "available",
+            chapters: "unknown",
+            transcript: subtitleCached ? "available" : "unknown",
+            contentText: subtitleCached ? "available" : "unavailable",
+          },
+          subtitleProbe: subtitleCached
+            ? {
+                status: "available",
+                available: true,
+                checkedAt: Date.now(),
+                bvid: mockBvid,
+                cid: mockCid,
+                page: 1,
+                sourceType: "bilibili_player_wbi_v2",
+                sourceDomain: "api.bilibili.com",
+                sourcePath: "/x/player/wbi/v2",
+                needLoginSubtitle: null,
+                trackCount: 1,
+                segmentCount: 2,
+                coverageStartSeconds: 0,
+                coverageEndSeconds: 8,
+                languages: ["zh-CN"],
+                tracks: [],
+                reason: "subtitle_tracks_available",
+                message: "已检测到字幕轨道。",
+                warnings: [],
+              }
+            : null,
+          transcriptEvidence: transcriptEvidence(),
+          warnings: subtitleCached ? ["transcript_evidence_cached"] : ["transcript_probe_pending"],
+        };
+      }
+
+      function currentSummary() {
+        summaryReadCount += 1;
+        const log = document.querySelector("[data-testid='runtime-log']");
+        if (log) log.textContent = `摘要刷新 ${summaryReadCount} 次；字幕缓存=${subtitleCached ? "是" : "否"}`;
+
+        if (subtitleCached) {
+          return {
+            status: "ready",
+            sourceTier: "transcript_summary",
+            sourceTierLabel: "字幕正文摘要",
+            confidence: "medium",
+            generationMode: "local_fallback",
+            title: "页内助手 Shell Mock 视频",
+            summary: "基于本地缓存的字幕正文证据，视频开头说明页内助手如何留在播放页内展示摘要与字幕状态。",
+            bullets: [
+              "0:00-0:04：说明页内助手不再把单视频流程交给全局面板。",
+              "0:04-0:08：重新检测字幕后，摘要使用本地字幕正文证据。",
+            ],
+            evidence: [],
+            timestampRanges: [
+              {
+                startSeconds: 0,
+                endSeconds: 8,
+                label: "0:00-0:08",
+                evidenceSnippet: "页内助手留在播放页内；字幕正文已缓存为本地证据。",
+                ["segment" + "Ids"]: [["transcript", "BV1ShellMock9", "2202", "1", "zh-cn", "hash-hidden-in-ui", "0"].join(":")],
+                language: "zh-CN",
+              },
+            ],
+            missingSources: ["弹幕", "评论", "画面识别"],
+            warnings: [],
+            limitations: ["本结果基于当前视频本地缓存的字幕正文证据，不包含弹幕、评论或画面识别。"],
+            nextQuestions: ["刷新字幕正文证据"],
+            ai: { status: "not_requested", model: null, error: null, note: "本地证据结果；本次没有请求 AI。" },
+            generatedAt: Date.now(),
+          };
+        }
+
+        return {
+          status: "ready",
+          sourceTier: "description_summary",
+          sourceTierLabel: "简介摘要",
+          confidence: "medium",
+          generationMode: "local_fallback",
+          title: "页内助手 Shell Mock 视频",
+          summary: "基于可见简介和元数据，这个 mock 用于验证页内助手 Shell；当前还没有字幕正文。",
+          bullets: ["简介说明了测试目标，但不会被当作完整视频正文。"],
+          evidence: [],
+          timestampRanges: [],
+          missingSources: ["字幕正文/正文文本"],
+          warnings: ["transcript_probe_pending"],
+          limitations: ["当前没有可引用的字幕正文；这不是完整视频总结。"],
+          nextQuestions: ["刷新当前视频元数据"],
+          ai: { status: "not_requested", model: null, error: null, note: "本地证据结果；本次没有请求 AI。" },
+          generatedAt: Date.now(),
+        };
+      }
+
+      window.chrome = {
+        runtime: {
+          getURL(path) {
+            return `/${path}`;
+          },
+          onMessage: {
+            addListener() {},
+          },
+          sendMessage(message) {
+            if (message.action === "GET_CURRENT_VIDEO_CONTEXT") {
+              return Promise.resolve({ success: true, data: currentContext() });
+            }
+            if (message.action === "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE") {
+              subtitleCached = true;
+              return Promise.resolve({ success: true, data: transcriptEvidence() });
+            }
+            if (message.action === "GET_CURRENT_VIDEO_SUMMARY") {
+              return Promise.resolve({ success: true, data: currentSummary() });
+            }
+            return Promise.resolve({ success: true, data: null });
+          },
+        },
+      };
+    </script>
+  </head>
+  <body>
+    <main>
+      <div class="player">
+        <div class="video-box">
+          <video></video>
+          <span>Mock B 站播放器</span>
+        </div>
+        <h1>页内助手 Shell Mock 视频</h1>
+        <p>这个页面通过 localhost 路由成 /video/BV1ShellMock9，用实际 content bundle 验证页内助手行为。</p>
+        <div class="runtime-log" data-testid="runtime-log">摘要尚未刷新；字幕缓存=否</div>
+      </div>
+    </main>
+    <script type="module" src="/dist/content/player-monitor.js"></script>
+  </body>
+</html>
