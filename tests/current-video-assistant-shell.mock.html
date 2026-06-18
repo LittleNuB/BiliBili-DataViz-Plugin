@@ -64,6 +64,9 @@
       let subtitleCached = false;
       let summaryReadCount = 0;
       let searchReadCount = 0;
+      let playbackPosition = 12;
+      let returnPointSeconds = null;
+      let lastSearchResult = null;
 
       window.__INITIAL_STATE__ = {
         videoData: {
@@ -84,6 +87,16 @@
         configurable: true,
         get() {
           return 600;
+        },
+      });
+      Object.defineProperty(HTMLMediaElement.prototype, "currentTime", {
+        configurable: true,
+        get() {
+          return playbackPosition;
+        },
+        set(value) {
+          const next = Number(value);
+          playbackPosition = Number.isFinite(next) ? Math.max(0, next) : playbackPosition;
         },
       });
 
@@ -256,14 +269,29 @@
         };
       }
 
+      function formatMockTime(seconds) {
+        const safe = Math.max(0, Math.floor(seconds));
+        const minutes = Math.floor(safe / 60);
+        const rest = safe % 60;
+        return `${minutes}:${String(rest).padStart(2, "0")}`;
+      }
+
+      function writeRuntimeLog(text) {
+        const log = document.querySelector("[data-testid='runtime-log']");
+        const video = document.querySelector("video");
+        if (video) video.setAttribute("data-current-time", String(playbackPosition));
+        if (log) log.textContent = `${text}；播放位置=${formatMockTime(playbackPosition)}`;
+      }
+
+      window.__assistantMockPlaybackPosition = () => playbackPosition;
+
       function searchCurrentVideoSegmentsResult(query) {
         searchReadCount += 1;
         const normalized = String(query || "").trim();
-        const log = document.querySelector("[data-testid='runtime-log']");
-        if (log) log.textContent = `检索 ${searchReadCount} 次；字幕缓存=${subtitleCached ? "是" : "否"}`;
+        writeRuntimeLog(`检索 ${searchReadCount} 次；字幕缓存=${subtitleCached ? "是" : "否"}`);
 
         if (!normalized) {
-          return {
+          lastSearchResult = {
             status: "empty_query",
             query: normalized,
             normalizedQuery: normalized,
@@ -280,10 +308,11 @@
             },
             aiRerank: segmentAiState(),
           };
+          return lastSearchResult;
         }
 
         if (!subtitleCached) {
-          return {
+          lastSearchResult = {
             status: "no_evidence",
             query: normalized,
             normalizedQuery: normalized,
@@ -303,13 +332,61 @@
             },
             aiRerank: segmentAiState(),
           };
+          return lastSearchResult;
+        }
+
+        const metadataOnly = normalized.includes("简介") || normalized.toLowerCase().includes("metadata");
+        if (metadataOnly) {
+          lastSearchResult = {
+            status: "metadata_only",
+            query: normalized,
+            normalizedQuery: normalized.toLowerCase(),
+            title: "页内助手 Shell Mock 视频",
+            generatedAt: Date.now(),
+            candidates: [
+              {
+                id: ["candidate", "metadata", mockBvid, "0"].join(":"),
+                binding: { kind: "metadata_hint" },
+                source: "metadata_hint",
+                sourceLabel: "视频信息弱提示",
+                startSeconds: null,
+                endSeconds: null,
+                timeRangeLabel: "无法定位具体时间",
+                evidenceText: "简介里提到页内助手，但没有字幕时间点。",
+                matchReasons: ["只命中视频简介"],
+                confidence: 0.32,
+                confidenceLabel: "低",
+                note: "仅能说明当前视频信息相关，无法定位到具体时间。",
+                jumpPreview: segmentJumpPreview({
+                  canJump: false,
+                  disabledReason: "metadata_only",
+                  targetSeconds: null,
+                  targetTimeLabel: null,
+                  sourceLabel: "视频信息弱提示",
+                  confidence: 0.32,
+                  confidenceLabel: "低",
+                  message: "该候选只来自视频信息或简介，无法定位到具体播放时间。",
+                }),
+              },
+            ],
+            summary: "只找到视频信息或简介里的弱提示，当前无法定位到具体时间。",
+            limitations: ["仅视频信息或简介弱提示不能定位时间，需要字幕正文或本地节点证据。"],
+            evidenceState: {
+              transcriptSegmentCount: 3,
+              timedKnowledgeNodeCount: 0,
+              metadataHintAvailable: true,
+              contextFresh: true,
+            },
+            aiRerank: segmentAiState(),
+          };
+          return lastSearchResult;
         }
 
         const lowConfidence = normalized.includes("低置信") || normalized.includes("不确定");
         const confidence = lowConfidence ? 0.32 : 0.86;
         const confidenceLabel = lowConfidence ? "低" : "高";
         const status = lowConfidence ? "low_confidence" : "ready";
-        return {
+        lastSearchResult = {
           status,
           query: normalized,
           normalizedQuery: normalized.toLowerCase(),
@@ -386,6 +463,85 @@
           },
           aiRerank: segmentAiState(),
         };
+        return lastSearchResult;
+      }
+
+      function requestCurrentVideoSegmentJump(params) {
+        const candidate = lastSearchResult?.candidates?.find(item => item.id === params?.candidateId);
+        if (params?.confirmed !== true) {
+          return {
+            ok: false,
+            message: "需要先确认跳转。",
+            candidateId: String(params?.candidateId ?? ""),
+            targetSeconds: null,
+            targetTimeLabel: null,
+            returnPointSeconds: null,
+            sourceLabel: null,
+            confidence: null,
+          };
+        }
+        if (!candidate) {
+          return {
+            ok: false,
+            message: "候选已变化，请重新检索后再跳转。",
+            candidateId: String(params?.candidateId ?? ""),
+            targetSeconds: null,
+            targetTimeLabel: null,
+            returnPointSeconds: null,
+            sourceLabel: null,
+            confidence: null,
+          };
+        }
+        if (!candidate.jumpPreview.canJump || candidate.jumpPreview.targetSeconds === null) {
+          return {
+            ok: false,
+            message: candidate.jumpPreview.message,
+            candidateId: candidate.id,
+            targetSeconds: null,
+            targetTimeLabel: null,
+            returnPointSeconds: null,
+            sourceLabel: candidate.jumpPreview.sourceLabel,
+            confidence: candidate.jumpPreview.confidence,
+          };
+        }
+
+        returnPointSeconds = playbackPosition;
+        playbackPosition = candidate.jumpPreview.targetSeconds;
+        writeRuntimeLog(`确认跳转到 ${candidate.jumpPreview.targetTimeLabel}`);
+        return {
+          ok: true,
+          message: `已跳到 ${candidate.jumpPreview.targetTimeLabel}，可返回 ${formatMockTime(returnPointSeconds)}。`,
+          candidateId: candidate.id,
+          targetSeconds: candidate.jumpPreview.targetSeconds,
+          targetTimeLabel: candidate.jumpPreview.targetTimeLabel,
+          returnPointSeconds,
+          sourceLabel: candidate.jumpPreview.sourceLabel,
+          confidence: candidate.jumpPreview.confidence,
+        };
+      }
+
+      function returnCurrentVideoSegmentJump() {
+        if (returnPointSeconds === null) {
+          return {
+            ok: false,
+            message: "没有可返回的播放位置。",
+            candidateId: null,
+            returnPointSeconds: null,
+            targetSeconds: null,
+          };
+        }
+        const previous = returnPointSeconds;
+        const targetSeconds = playbackPosition;
+        playbackPosition = previous;
+        returnPointSeconds = null;
+        writeRuntimeLog(`返回原位置 ${formatMockTime(previous)}`);
+        return {
+          ok: true,
+          message: `已返回 ${formatMockTime(previous)}。`,
+          candidateId: null,
+          returnPointSeconds: previous,
+          targetSeconds,
+        };
       }
 
       window.chrome = {
@@ -411,6 +567,18 @@
               return Promise.resolve({
                 success: true,
                 data: searchCurrentVideoSegmentsResult(message.params?.query),
+              });
+            }
+            if (message.action === "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP") {
+              return Promise.resolve({
+                success: true,
+                data: requestCurrentVideoSegmentJump(message.params),
+              });
+            }
+            if (message.action === "RETURN_CURRENT_VIDEO_SEGMENT_JUMP") {
+              return Promise.resolve({
+                success: true,
+                data: returnCurrentVideoSegmentJump(),
               });
             }
             return Promise.resolve({ success: true, data: null });
