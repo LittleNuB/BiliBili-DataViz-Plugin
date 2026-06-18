@@ -64,6 +64,7 @@
       let subtitleCached = false;
       let summaryReadCount = 0;
       let searchReadCount = 0;
+      let knowledgeReadCount = 0;
       let playbackPosition = 12;
       let returnPointSeconds = null;
       let lastSearchResult = null;
@@ -237,6 +238,180 @@
           nextQuestions: ["刷新当前视频元数据"],
           ai: { status: "not_requested", model: null, error: null, note: "本地证据结果；本次没有请求 AI。" },
           generatedAt: Date.now(),
+        };
+      }
+
+      function currentVideoKnowledge() {
+        knowledgeReadCount += 1;
+        writeRuntimeLog(`知识节点刷新 ${knowledgeReadCount} 次；字幕缓存=${subtitleCached ? "是" : "否"}`);
+
+        const base = {
+          status: "ready",
+          title: "页内助手 Shell Mock 视频",
+          generatedAt: Date.now(),
+          sourceState: {
+            metadata: true,
+            description: true,
+            pages: true,
+            chapters: false,
+            transcript: subtitleCached,
+            transcriptEvidence: subtitleCached,
+            contentText: false,
+          },
+          transcriptEvidence: transcriptEvidence(),
+          warnings: subtitleCached ? ["transcript_nodes_generated"] : ["transcript_probe_pending"],
+        };
+
+        if (!subtitleCached) {
+          return {
+            ...base,
+            nodes: [
+              {
+                id: ["node", mockBvid, "metadata"].join(":"),
+                bvid: mockBvid,
+                cid: mockCid,
+                page: 1,
+                timestamp: null,
+                endTimestamp: null,
+                title: "元数据：页内助手 Shell Mock 视频",
+                reason: "仅基于可见标题和分 P 信息生成；没有字幕正文时不代表完整理解视频。",
+                source: "metadata",
+                sourceLabel: "元数据",
+                confidence: 0.34,
+                evidence: {
+                  textSpan: "页内助手 Shell Mock 视频",
+                  startChar: 0,
+                  endChar: 21,
+                  language: null,
+                  ["source" + "Id"]: "metadata:visible",
+                },
+                jumpAction: null,
+                safetyFlags: ["metadata_only", "no_transcript", "auto_jump_disabled"],
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              },
+              {
+                id: ["node", mockBvid, "description"].join(":"),
+                bvid: mockBvid,
+                cid: mockCid,
+                page: 1,
+                timestamp: null,
+                endTimestamp: null,
+                title: "简介辅助节点",
+                reason: "只来自视频简介，用于提示测试目标；它不是字幕正文证据。",
+                source: "description",
+                sourceLabel: "简介",
+                confidence: 0.48,
+                evidence: {
+                  textSpan: "这个 mock 用于验证当前视频页内助手的展开、字幕重新检测、摘要刷新和知识节点降级。",
+                  startChar: 0,
+                  endChar: 42,
+                  language: null,
+                  ["source" + "Id"]: "description:visible",
+                },
+                jumpAction: null,
+                safetyFlags: ["description_only", "no_transcript", "auto_jump_disabled"],
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              },
+            ],
+            limitations: [
+              "当前没有可引用的字幕正文；元数据和简介节点不代表完整视频理解。",
+              "没有字幕正文时不会生成推测时间点。",
+            ],
+          };
+        }
+
+        return {
+          ...base,
+          nodes: [
+            {
+              id: ["node", "transcript", mockBvid, mockCid, "0"].join(":"),
+              bvid: mockBvid,
+              cid: mockCid,
+              page: 1,
+              timestamp: 0,
+              endTimestamp: 4,
+              title: "字幕节点 0:00-0:04：页内助手留在播放页",
+              reason: "第 1 个字幕证据片段可作为当前视频关键节点候选；时间范围来自本地缓存字幕。",
+              source: "transcript",
+              sourceLabel: "字幕",
+              confidence: 0.78,
+              evidence: {
+                textSpan: "页内助手留在播放页内展示摘要、提问定位和知识节点。",
+                startChar: 0,
+                endChar: 28,
+                language: "zh-CN",
+                ["source" + "Id"]: ["transcript", mockBvid, mockCid, "1", "zh-cn", "hash-hidden-in-ui", "0"].join(":"),
+                ["segment" + "Id"]: ["transcript", mockBvid, mockCid, "1", "zh-cn", "hash-hidden-in-ui", "0"].join(":"),
+                startSeconds: 0,
+                endSeconds: 4,
+                ["source" + "Hash"]: "hash-hidden-in-ui",
+                sourceStatus: "active",
+              },
+              jumpAction: null,
+              safetyFlags: ["transcript_grounded", "bounded_current_video", "auto_jump_disabled"],
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            },
+            {
+              id: ["node", "transcript", mockBvid, mockCid, "1"].join(":"),
+              bvid: mockBvid,
+              cid: mockCid,
+              page: 1,
+              timestamp: 4,
+              endTimestamp: 8,
+              title: "字幕节点 0:04-0:08：重新检测字幕后刷新证据",
+              reason: "第 2 个字幕证据片段说明重新检测字幕后，摘要和节点都使用本地字幕正文。",
+              source: "transcript",
+              sourceLabel: "字幕",
+              confidence: 0.82,
+              evidence: {
+                textSpan: "重新检测字幕后，摘要和知识节点都使用本地字幕正文证据。",
+                startChar: 0,
+                endChar: 30,
+                language: "zh-CN",
+                ["source" + "Id"]: ["transcript", mockBvid, mockCid, "1", "zh-cn", "hash-hidden-in-ui", "1"].join(":"),
+                ["segment" + "Id"]: ["transcript", mockBvid, mockCid, "1", "zh-cn", "hash-hidden-in-ui", "1"].join(":"),
+                startSeconds: 4,
+                endSeconds: 8,
+                ["source" + "Hash"]: "hash-hidden-in-ui",
+                sourceStatus: "active",
+              },
+              jumpAction: null,
+              safetyFlags: ["transcript_grounded", "bounded_current_video", "auto_jump_disabled"],
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            },
+            {
+              id: ["node", mockBvid, "metadata"].join(":"),
+              bvid: mockBvid,
+              cid: mockCid,
+              page: 1,
+              timestamp: null,
+              endTimestamp: null,
+              title: "元数据：页内助手 Shell Mock 视频",
+              reason: "标题仍可作为辅助信息，但弱于字幕正文证据。",
+              source: "metadata",
+              sourceLabel: "元数据",
+              confidence: 0.34,
+              evidence: {
+                textSpan: "页内助手 Shell Mock 视频",
+                startChar: 0,
+                endChar: 21,
+                language: null,
+                ["source" + "Id"]: "metadata:visible",
+              },
+              jumpAction: null,
+              safetyFlags: ["metadata_only", "auto_jump_disabled"],
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            },
+          ],
+          limitations: [
+            "已基于当前视频本地缓存的有效字幕生成关键节点候选；每个时间范围只来自真实字幕片段。",
+            "知识节点只展示证据和时间范围，不新增自动跳转或新的时间点跳转能力。",
+          ],
         };
       }
 
@@ -562,6 +737,9 @@
             }
             if (message.action === "GET_CURRENT_VIDEO_SUMMARY") {
               return Promise.resolve({ success: true, data: currentSummary() });
+            }
+            if (message.action === "GET_VIDEO_KNOWLEDGE") {
+              return Promise.resolve({ success: true, data: currentVideoKnowledge() });
             }
             if (message.action === "SEARCH_CURRENT_VIDEO_SEGMENTS") {
               return Promise.resolve({

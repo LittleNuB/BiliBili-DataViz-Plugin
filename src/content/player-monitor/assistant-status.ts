@@ -11,6 +11,11 @@ import type {
   CurrentVideoTimestampJumpResponse,
   CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
+import type {
+  VideoKnowledgeEvidenceSourceStatus,
+  VideoKnowledgeNode,
+  VideoKnowledgeResult,
+} from '../../shared/types/video-knowledge';
 import {
   buildCurrentVideoSubtitleDiagnostics,
   type CurrentVideoSubtitleDiagnostics,
@@ -27,6 +32,9 @@ const RAW_FIELD_PATTERN = new RegExp(
     ['segment', 'Ids'],
     ['candidate', 'Id'],
     ['candidate', ' id'],
+    ['node', 'Id'],
+    ['node', ' id'],
+    ['source', 'Id'],
     ['to', 'ken'],
     ['endpoint', ' path'],
     ['Coo', 'kie'],
@@ -42,6 +50,10 @@ const CANDIDATE_ID_PATTERN = new RegExp(
 );
 const TRANSCRIPT_ID_PATTERN = new RegExp(
   `${escapeRegExp(['transcript', ':'].join(''))}[A-Za-z0-9:._-]+`,
+  'g',
+);
+const NODE_ID_PATTERN = new RegExp(
+  `${escapeRegExp(['node', ':'].join(''))}[A-Za-z0-9:._-]+`,
   'g',
 );
 const PLAYER_ENDPOINT_PATTERN = new RegExp(
@@ -441,6 +453,11 @@ interface AssistantState {
   summaryLoading: boolean;
   summaryError: string | null;
   summaryRequestId: number;
+  knowledge: VideoKnowledgeResult | null;
+  knowledgeContextKey: string;
+  knowledgeLoading: boolean;
+  knowledgeError: string | null;
+  knowledgeRequestId: number;
   segmentQuery: string;
   segmentResult: CurrentVideoSegmentRetrievalResult | null;
   segmentContextKey: string;
@@ -466,6 +483,11 @@ const assistantState: AssistantState = {
   summaryLoading: false,
   summaryError: null,
   summaryRequestId: 0,
+  knowledge: null,
+  knowledgeContextKey: '',
+  knowledgeLoading: false,
+  knowledgeError: null,
+  knowledgeRequestId: 0,
   segmentQuery: '',
   segmentResult: null,
   segmentContextKey: '',
@@ -495,6 +517,14 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
   ) {
     void loadCurrentVideoSummary(false);
   }
+  if (
+    assistantState.expanded
+    && context.kind === 'video'
+    && !assistantState.knowledge
+    && !assistantState.knowledgeLoading
+  ) {
+    void loadCurrentVideoKnowledge(false);
+  }
 }
 
 function updateAssistantContext(context: CurrentVideoContextResult): void {
@@ -503,6 +533,10 @@ function updateAssistantContext(context: CurrentVideoContextResult): void {
     assistantState.summary = null;
     assistantState.summaryContextKey = '';
     assistantState.summaryError = null;
+    assistantState.knowledge = null;
+    assistantState.knowledgeContextKey = '';
+    assistantState.knowledgeError = null;
+    assistantState.knowledgeLoading = false;
     assistantState.segmentResult = null;
     assistantState.segmentContextKey = '';
     assistantState.segmentError = null;
@@ -557,6 +591,7 @@ function renderCollapsedCard(root: HTMLElement): void {
     assistantState.expanded = true;
     renderAssistantShell();
     void loadCurrentVideoSummary(false);
+    void loadCurrentVideoKnowledge(false);
   });
   actions.appendChild(expand);
   header.appendChild(actions);
@@ -567,7 +602,7 @@ function renderCollapsedCard(root: HTMLElement): void {
   if (assistantState.context?.kind === 'video') {
     appendText(status, 'div', 'bdc-assistant-video-title', assistantState.context.title ?? '当前视频');
   }
-  appendText(status, 'div', 'bdc-assistant-muted', '在当前视频页内查看摘要、字幕状态和提问定位。');
+  appendText(status, 'div', 'bdc-assistant-muted', '在当前视频页内查看摘要、字幕状态、提问定位和知识节点。');
   const globalLink = dashboardLink('全局总览');
   globalLink.className = 'bdc-assistant-link bdc-assistant-button-quiet';
   status.appendChild(globalLink);
@@ -584,7 +619,7 @@ function renderExpandedPanel(root: HTMLElement): void {
   const brand = document.createElement('div');
   brand.className = 'bdc-assistant-brand';
   appendText(brand, 'div', 'bdc-assistant-kicker', '当前视频助手');
-  appendText(brand, 'div', 'bdc-assistant-subtitle', '摘要、字幕与提问定位留在当前播放页');
+  appendText(brand, 'div', 'bdc-assistant-subtitle', '摘要、提问定位与知识节点留在当前播放页');
   header.appendChild(brand);
 
   const actions = document.createElement('div');
@@ -606,8 +641,9 @@ function renderExpandedPanel(root: HTMLElement): void {
   if (context?.kind === 'video') {
     appendVideoIdentity(body, context);
     appendSubtitleDiagnostics(body, context);
-    appendSegmentSearch(body, context);
     appendSummary(body);
+    appendSegmentSearch(body, context);
+    appendVideoKnowledge(body, context);
   } else {
     const empty = section('当前视频');
     appendText(empty, 'div', 'bdc-assistant-video-title', '没有当前视频上下文');
@@ -1044,6 +1080,128 @@ function appendSummary(parent: HTMLElement): void {
   parent.appendChild(block);
 }
 
+function appendVideoKnowledge(parent: HTMLElement, context: CurrentVideoContext): void {
+  const block = section('知识节点');
+  const head = block.querySelector('.bdc-assistant-section-head');
+  head?.appendChild(button(
+    assistantState.knowledgeLoading ? '刷新中...' : '刷新节点',
+    'bdc-assistant-button bdc-assistant-button-quiet',
+    () => {
+      void loadCurrentVideoKnowledge(true);
+    },
+    assistantState.knowledgeLoading || !context.bvid,
+  ));
+
+  if (assistantState.knowledgeLoading) {
+    appendText(block, 'div', 'bdc-assistant-muted', '正在读取当前视频知识节点...');
+    parent.appendChild(block);
+    return;
+  }
+
+  if (assistantState.knowledgeError) {
+    appendText(block, 'div', 'bdc-assistant-subtitle-text', assistantState.knowledgeError);
+    parent.appendChild(block);
+    return;
+  }
+
+  const knowledge = assistantState.knowledge;
+  if (!knowledge || assistantState.knowledgeContextKey !== assistantState.contextKey) {
+    appendText(block, 'div', 'bdc-assistant-muted', '展开后会读取当前视频知识节点。');
+    parent.appendChild(block);
+    return;
+  }
+
+  const transcriptNodeCount = knowledge.nodes.filter(node => node.source === 'transcript').length;
+  const status = appendText(
+    block,
+    'div',
+    'bdc-assistant-retrieval-status',
+    safeVisibleText(videoKnowledgeNotice(knowledge, transcriptNodeCount)),
+  );
+  status.style.color = transcriptNodeCount > 0 ? '#a0e7a0' : '#ffcf8a';
+
+  const meta = document.createElement('div');
+  meta.className = 'bdc-assistant-candidate-meta';
+  appendBadge(meta, transcriptNodeCount > 0 ? `字幕节点 ${transcriptNodeCount} 条` : '暂无字幕节点');
+  appendBadge(meta, knowledge.sourceState.transcriptEvidence ? '字幕正文已缓存' : '字幕正文未缓存');
+  if (knowledge.sourceState.description) appendBadge(meta, '简介辅助');
+  if (knowledge.sourceState.pages || knowledge.sourceState.chapters) appendBadge(meta, '分 P / 章节辅助');
+  block.appendChild(meta);
+
+  const nodes = knowledge.nodes.slice(0, 5);
+  if (nodes.length === 0) {
+    appendText(block, 'div', 'bdc-assistant-subtitle-detail', '当前没有足够安全的当前视频知识节点候选。');
+    appendVideoKnowledgeLimitations(block, knowledge);
+    parent.appendChild(block);
+    return;
+  }
+
+  const list = document.createElement('div');
+  list.className = 'bdc-assistant-candidate-list';
+  for (const [index, node] of nodes.entries()) {
+    list.appendChild(videoKnowledgeNodeCard(node, index));
+  }
+  block.appendChild(list);
+  appendVideoKnowledgeLimitations(block, knowledge);
+  parent.appendChild(block);
+}
+
+function videoKnowledgeNodeCard(node: VideoKnowledgeNode, index: number): HTMLElement {
+  const card = document.createElement('article');
+  card.className = 'bdc-assistant-candidate-card';
+
+  const head = document.createElement('div');
+  head.className = 'bdc-assistant-candidate-head';
+  appendText(head, 'div', 'bdc-assistant-candidate-title', `节点 ${index + 1} · ${videoKnowledgeTimeRange(node)}`);
+  appendText(
+    head,
+    'div',
+    'bdc-assistant-candidate-strength',
+    `证据强度 ${formatPercent(node.confidence)}`,
+  );
+  card.appendChild(head);
+
+  const meta = document.createElement('div');
+  meta.className = 'bdc-assistant-candidate-meta';
+  appendBadge(meta, safeVisibleText(node.sourceLabel));
+  appendBadge(meta, videoKnowledgeSourceStatus(node));
+  if (node.evidence?.sourceStatus) {
+    appendBadge(meta, `来源状态 ${videoKnowledgeEvidenceStatusLabel(node.evidence.sourceStatus)}`);
+  }
+  card.appendChild(meta);
+
+  appendText(card, 'div', 'bdc-assistant-candidate-evidence', safeVisibleText(node.title));
+  appendText(card, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(node.reason));
+
+  if (node.evidence?.textSpan) {
+    const label = node.source === 'transcript'
+      ? `字幕证据 ${videoKnowledgeTimeRange(node)}：`
+      : '证据片段：';
+    appendText(
+      card,
+      'div',
+      'bdc-assistant-evidence',
+      `${label}${safeVisibleText(node.evidence.textSpan)}`,
+    );
+  }
+
+  appendText(
+    card,
+    'div',
+    'bdc-assistant-subtitle-detail',
+    videoKnowledgeNodePositionHint(node),
+  );
+
+  return card;
+}
+
+function appendVideoKnowledgeLimitations(parent: HTMLElement, knowledge: VideoKnowledgeResult): void {
+  const limitations = knowledge.limitations.slice(0, 2).map(safeVisibleText).join(' ');
+  if (limitations) {
+    appendText(parent, 'div', 'bdc-assistant-subtitle-detail', limitations);
+  }
+}
+
 async function searchCurrentVideoSegmentsFromPage(): Promise<void> {
   if (assistantState.segmentLoading) return;
 
@@ -1196,6 +1354,7 @@ async function refreshSubtitleEvidenceFromPage(): Promise<void> {
 
     if (nextContext.kind === 'video') {
       await loadCurrentVideoSummary(true);
+      await loadCurrentVideoKnowledge(true);
     }
   } catch {
     if (assistantState.subtitleRequestId !== requestId) return;
@@ -1234,6 +1393,40 @@ async function loadCurrentVideoSummary(force: boolean): Promise<void> {
   } finally {
     if (assistantState.summaryRequestId === requestId) {
       assistantState.summaryLoading = false;
+      renderAssistantShell();
+    }
+  }
+}
+
+async function loadCurrentVideoKnowledge(force: boolean): Promise<void> {
+  if (assistantState.context?.kind !== 'video') return;
+  if (assistantState.knowledgeLoading) return;
+  if (
+    !force
+    && assistantState.knowledge
+    && assistantState.knowledgeContextKey === assistantState.contextKey
+  ) {
+    return;
+  }
+
+  const requestId = assistantState.knowledgeRequestId + 1;
+  const contextKey = assistantState.contextKey;
+  assistantState.knowledgeRequestId = requestId;
+  assistantState.knowledgeLoading = true;
+  assistantState.knowledgeError = null;
+  renderAssistantShell();
+
+  try {
+    const knowledge = await sendRuntimeRequest<VideoKnowledgeResult>('GET_VIDEO_KNOWLEDGE');
+    if (assistantState.knowledgeRequestId !== requestId || assistantState.contextKey !== contextKey) return;
+    assistantState.knowledge = knowledge;
+    assistantState.knowledgeContextKey = contextKey;
+  } catch {
+    if (assistantState.knowledgeRequestId !== requestId) return;
+    assistantState.knowledgeError = '知识节点刷新失败：请确认当前 B 站视频页仍然打开，并稍后重试。';
+  } finally {
+    if (assistantState.knowledgeRequestId === requestId) {
+      assistantState.knowledgeLoading = false;
       renderAssistantShell();
     }
   }
@@ -1456,10 +1649,92 @@ function coverageText(evidence: CurrentVideoTranscriptEvidenceState): string {
   return `可引用范围：${formatDuration(evidence.coverageStartSeconds)}-${formatDuration(evidence.coverageEndSeconds)}。`;
 }
 
+function videoKnowledgeNotice(knowledge: VideoKnowledgeResult, transcriptNodeCount: number): string {
+  if (knowledge.status === 'no_context') {
+    return '当前没有可用于知识节点的视频上下文，请在 B 站视频页内使用。';
+  }
+  if (transcriptNodeCount > 0) {
+    return `已用当前视频本地字幕证据生成 ${transcriptNodeCount} 个知识节点；时间范围只来自字幕片段。`;
+  }
+
+  const evidence = knowledge.transcriptEvidence;
+  if (!evidence) {
+    return '当前没有可引用的字幕正文；知识节点只使用元数据、简介、分 P 或章节辅助提示，不会推测时间点。';
+  }
+  if (evidence.status === 'stale') {
+    return '本地字幕证据与当前视频或分 P 不匹配，已降级为弱证据节点。';
+  }
+  if (evidence.status === 'language_mismatch') {
+    return '本地字幕语言与当前请求不匹配，暂不生成字幕节点。';
+  }
+  if (evidence.status === 'empty') {
+    return '已检测到字幕来源，但没有可用正文片段，暂不生成字幕节点。';
+  }
+  if (evidence.status === 'malformed') {
+    return '字幕正文结构异常，暂不作为知识节点证据。';
+  }
+  if (evidence.active) {
+    return '已检测到本地字幕证据，但当前没有匹配到可展示的字幕节点，已保留辅助节点。';
+  }
+  return evidence.message || '当前没有可引用的字幕正文；不会生成推测时间点。';
+}
+
+function videoKnowledgeTimeRange(node: VideoKnowledgeNode): string {
+  if (node.timestamp === null) return '无时间点';
+  if (typeof node.endTimestamp === 'number' && node.endTimestamp > node.timestamp) {
+    return `${formatDuration(node.timestamp)}-${formatDuration(node.endTimestamp)}`;
+  }
+  return formatDuration(node.timestamp);
+}
+
+function videoKnowledgeSourceStatus(node: VideoKnowledgeNode): string {
+  switch (node.source) {
+    case 'transcript':
+      return '当前视频字幕证据';
+    case 'metadata':
+    case 'description':
+      return '弱证据辅助提示';
+    case 'page':
+    case 'chapter':
+      return '结构化辅助提示';
+    default:
+      return '当前视频本地节点';
+  }
+}
+
+function videoKnowledgeEvidenceStatusLabel(status: VideoKnowledgeEvidenceSourceStatus): string {
+  switch (status) {
+    case 'active':
+      return '当前匹配';
+    case 'stale':
+      return '已过期';
+    case 'mismatch':
+      return '不匹配';
+    case 'unavailable':
+      return '不可用';
+    default:
+      return '未知';
+  }
+}
+
+function videoKnowledgeNodePositionHint(node: VideoKnowledgeNode): string {
+  if (node.source === 'metadata' || node.source === 'description') {
+    return '该节点只是弱证据辅助提示，不能说明已经完整理解视频，也不会生成时间点。';
+  }
+  if (node.timestamp === null) {
+    return '该节点没有可定位时间点，不会伪造播放位置。';
+  }
+  if (node.jumpAction) {
+    return '该节点包含定位信息；如需跳转，请在提问定位中检索候选，并按预览、确认流程操作。';
+  }
+  return '该节点包含字幕时间范围；如需跳转，请在提问定位中检索候选，并按预览、确认流程操作。';
+}
+
 function safeVisibleText(value: string): string {
   return value
     .replace(CANDIDATE_ID_PATTERN, '候选片段')
     .replace(TRANSCRIPT_ID_PATTERN, '字幕片段')
+    .replace(NODE_ID_PATTERN, '知识节点')
     .replace(/https?:\/\/\S+/g, '链接已隐藏')
     .replace(PLAYER_ENDPOINT_PATTERN, '接口路径已隐藏')
     .replace(RAW_FIELD_PATTERN, '内部字段');
