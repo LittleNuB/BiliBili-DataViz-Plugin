@@ -805,6 +805,16 @@ function appendSegmentRetrievalResult(
   );
   status.style.color = segmentRetrievalStatusColor(result);
 
+  if (needsAiSettingsLink(result.aiRerank.status)) {
+    appendText(
+      parent,
+      'div',
+      'bdc-assistant-subtitle-detail',
+      safeVisibleText(`AI 排序：${result.aiRerank.note}`),
+    );
+    parent.appendChild(dashboardLink('前往设置', '#settings'));
+  }
+
   const meta = document.createElement('div');
   meta.className = 'bdc-assistant-candidate-meta';
   appendBadge(meta, result.evidenceState.transcriptSegmentCount > 0
@@ -1075,6 +1085,11 @@ function appendSummary(parent: HTMLElement): void {
       'bdc-assistant-subtitle-detail',
       summary.limitations.slice(0, 2).map(safeVisibleText).join(' '),
     );
+  }
+
+  if (needsAiSettingsLink(summary.ai.status)) {
+    appendText(block, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(summary.ai.note));
+    block.appendChild(dashboardLink('前往设置', '#settings'));
   }
 
   parent.appendChild(block);
@@ -1468,14 +1483,18 @@ function button(
   return element;
 }
 
-function dashboardLink(text: string): HTMLAnchorElement {
+function dashboardLink(text: string, hash = ''): HTMLAnchorElement {
   const link = document.createElement('a');
   link.className = 'bdc-assistant-link';
-  link.href = chrome.runtime.getURL('dashboard/index.html');
+  link.href = chrome.runtime.getURL(`dashboard/index.html${hash}`);
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
   link.textContent = text;
   return link;
+}
+
+function needsAiSettingsLink(status: string): boolean {
+  return status === 'disabled' || status === 'not_configured';
 }
 
 function appendRow(parent: HTMLElement, label: string, value: string): void {

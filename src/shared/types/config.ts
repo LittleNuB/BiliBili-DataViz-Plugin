@@ -17,6 +17,13 @@ export interface AiConfig {
   chatModel: string;
 }
 
+export interface AiConnectionTestResult {
+  ok: true;
+  model: string;
+  checkedAt: number;
+  latencyMs: number;
+}
+
 export interface AssistantConfig {
   aiSummariesEnabled: boolean;
   smartFavoritesQaAiEnabled: boolean;

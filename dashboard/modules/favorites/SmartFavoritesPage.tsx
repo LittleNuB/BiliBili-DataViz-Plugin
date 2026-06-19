@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { requestSW } from '../../utils/messaging';
 import { BILI_BLUE, BILI_PINK } from '../../../src/shared/constants';
-import type { AiConfig, AssistantConfig, UserConfig } from '../../../src/shared/types/config';
+import type { AssistantConfig, UserConfig } from '../../../src/shared/types/config';
 import type {
   FavoriteFolderGapProbeResult,
   FavoriteFolderSyncDiagnostic,
@@ -26,12 +26,12 @@ const CARD = {
 
 export function SmartFavoritesPage() {
   const [overview, setOverview] = useState<SmartFavoriteOverview | null>(null);
-  const [config, setConfig] = useState<AiConfig>({ baseURL: 'https://api.deepseek.com', apiKey: '', chatModel: 'deepseek-v4-flash' });
   const [assistantConfig, setAssistantConfig] = useState<AssistantConfig>({
     aiSummariesEnabled: false,
     smartFavoritesQaAiEnabled: false,
     currentVideoSegmentRerankAiEnabled: false,
   });
+  const [aiStatus, setAiStatus] = useState({ hasApiKey: false, model: '' });
   const [query, setQuery] = useState('');
   const [question, setQuestion] = useState('');
   const [search, setSearch] = useState<SmartFavoriteSearchResponse | null>(null);
@@ -58,8 +58,11 @@ export function SmartFavoritesPage() {
         requestSW<UserConfig>('GET_CONFIG'),
         requestSW<SmartFavoriteOverview>('GET_SMART_FAVORITES'),
       ]);
-      setConfig(cfg.ai);
       setAssistantConfig(cfg.assistant);
+      setAiStatus({
+        hasApiKey: Boolean(cfg.ai.apiKey.trim()),
+        model: cfg.ai.chatModel,
+      });
       setOverview(data);
       if (selectedPath.length > 0) {
         setPathResults(await requestSW<SmartFavoriteResult[]>('GET_SMART_FAVORITES_BY_PATH', { path: selectedPath, limit: 200 }));
@@ -68,20 +71,6 @@ export function SmartFavoritesPage() {
       setError((e as Error).message);
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function saveAiConfig() {
-    setBusy('save');
-    setError(null);
-    try {
-      await ensureAiHostPermission(config.baseURL);
-      await requestSW('UPDATE_CONFIG', { ai: config, assistant: assistantConfig });
-      setNotice('AI 配置已保存');
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy('');
     }
   }
 
@@ -256,6 +245,10 @@ export function SmartFavoritesPage() {
     setExpandedTree(new Set());
   }
 
+  function openSettings() {
+    window.location.hash = 'settings';
+  }
+
   if (loading) return <div style={{ padding: '16px' }}><LoadingSkeleton height={420} /></div>;
 
   return (
@@ -309,65 +302,20 @@ export function SmartFavoritesPage() {
       </section>
 
       <section style={CARD}>
-        <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>AI 配置</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '8px', marginBottom: '8px' }}>
-          <TextInput value={config.baseURL} onInput={value => setConfig({ ...config, baseURL: value })} placeholder="Base URL" />
-          <TextInput value={config.chatModel} onInput={value => setConfig({ ...config, chatModel: value })} placeholder="模型" />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '10px', alignItems: 'center' }}>
+          <div>
+            <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '6px' }}>AI 状态</div>
+            <div style={{ color: '#9090A0', fontSize: '12px', lineHeight: 1.55 }}>
+              AI 服务地址、模型名、API Key 和功能开关已迁移到全局设置。智能收藏页只显示当前状态，并在 AI 未启用或未配置时继续返回本地引用结果。
+            </div>
+          </div>
+          <ActionButton label="前往设置" onClick={openSettings} disabled={!!busy} />
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto auto auto', gap: '8px', alignItems: 'center' }}>
-          <TextInput value={config.apiKey} onInput={value => setConfig({ ...config, apiKey: value })} placeholder="API Key" password />
-          <label style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            color: '#C8C8D8',
-            fontSize: '11px',
-          }}>
-            <input
-              type="checkbox"
-              checked={assistantConfig.aiSummariesEnabled}
-              onChange={(event) => setAssistantConfig({
-                ...assistantConfig,
-                aiSummariesEnabled: (event.currentTarget as HTMLInputElement).checked,
-              })}
-            />
-            当前视频摘要
-          </label>
-          <label style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            color: '#C8C8D8',
-            fontSize: '11px',
-          }}>
-            <input
-              type="checkbox"
-              checked={assistantConfig.smartFavoritesQaAiEnabled}
-              onChange={(event) => setAssistantConfig({
-                ...assistantConfig,
-                smartFavoritesQaAiEnabled: (event.currentTarget as HTMLInputElement).checked,
-              })}
-            />
-            收藏问答 AI
-          </label>
-          <label style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            color: '#C8C8D8',
-            fontSize: '11px',
-          }}>
-            <input
-              type="checkbox"
-              checked={assistantConfig.currentVideoSegmentRerankAiEnabled}
-              onChange={(event) => setAssistantConfig({
-                ...assistantConfig,
-                currentVideoSegmentRerankAiEnabled: (event.currentTarget as HTMLInputElement).checked,
-              })}
-            />
-            片段重排 AI
-          </label>
-          <ActionButton label={busy === 'save' ? '保存中...' : '保存'} onClick={saveAiConfig} disabled={!!busy} />
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '10px' }}>
+          <Badge text={aiStatus.hasApiKey ? 'AI 服务：已配置' : 'AI 服务：未配置'} color={aiStatus.hasApiKey ? '#00D4AA' : '#FFB347'} />
+          <Badge text={`模型：${aiStatus.model || '未设置'}`} color="#9090A0" />
+          <Badge text={assistantConfig.smartFavoritesQaAiEnabled ? '收藏问答：已启用' : '收藏问答：未启用'} color={assistantConfig.smartFavoritesQaAiEnabled ? '#00D4AA' : '#9090A0'} />
+          <Badge text={assistantConfig.currentVideoSegmentRerankAiEnabled ? '当前视频片段排序：已启用' : '当前视频片段排序：未启用'} color={assistantConfig.currentVideoSegmentRerankAiEnabled ? '#00D4AA' : '#9090A0'} />
         </div>
       </section>
 
@@ -700,10 +648,10 @@ function qaSynthesisStatusLabel(status: NonNullable<SmartFavoriteQaResponse['syn
 function qaSynthesisMessage(synthesis: NonNullable<SmartFavoriteQaResponse['synthesis']>): string {
   const reason = synthesis.reason ?? '';
   if (synthesis.status === 'disabled') {
-    return 'AI 综合未启用，当前显示本地引用结果。';
+    return 'AI 综合未在设置中启用，当前显示本地引用结果。';
   }
   if (synthesis.status === 'not_configured') {
-    return 'AI 综合尚未配置 API Key，当前显示本地引用结果。';
+    return 'AI 综合尚未在设置中配置 API Key，当前显示本地引用结果。';
   }
   if (synthesis.status === 'local_fallback') {
     return '没有可引用视频时不会请求 AI，当前显示本地检索结果。';
@@ -712,7 +660,7 @@ function qaSynthesisMessage(synthesis: NonNullable<SmartFavoriteQaResponse['synt
     return `AI 综合结果未通过引用边界检查，已显示本地引用结果。${qaGuardReasonLabel(reason)}`;
   }
   if (synthesis.status === 'failed') {
-    return `AI 综合失败，已显示本地引用结果。${reason ? `诊断：${reason}` : ''}`;
+    return 'AI 综合暂时不可用，已显示本地引用结果。';
   }
   return '当前显示本地引用结果。';
 }
@@ -724,7 +672,7 @@ function qaGuardReasonLabel(reason: string): string {
   if (reason.startsWith('AI_OUTSIDE_TITLE_REFERENCE')) return '原因：AI 提到了引用列表外的视频标题。';
   if (reason === 'AI_EMPTY_ANSWER') return '原因：AI 没有返回可用回答。';
   if (reason === 'AI_MISSING_CITED_VIDEO_REFS') return '原因：AI 没有标注引用视频。';
-  return `诊断：${reason}`;
+  return '原因：AI 返回内容不符合引用边界。';
 }
 
 function formatQaSourceFields(fields: string[]): string {
@@ -1333,42 +1281,4 @@ function collectExpandablePathKeys(nodes: SmartFavoriteTreeNode[]): string[] {
 
 function pathKey(path: string[]): string {
   return path.join('\u0001');
-}
-
-async function ensureAiHostPermission(baseURL: string): Promise<void> {
-  const pattern = getOriginPattern(baseURL);
-  const granted = await new Promise<boolean>(resolve => {
-    chrome.permissions.contains({ origins: [pattern] }, resolve);
-  });
-  if (granted) return;
-
-  const approved = await new Promise<boolean>(resolve => {
-    chrome.permissions.request({ origins: [pattern] }, resolve);
-  });
-  if (!approved) {
-    throw new Error(`缺少 AI 服务访问权限：${pattern}`);
-  }
-}
-
-function getOriginPattern(baseURL: string): string {
-  let url: URL;
-  try {
-    url = new URL(baseURL);
-  } catch {
-    throw new Error('AI Base URL 格式不正确');
-  }
-  if (!['https:', 'http:'].includes(url.protocol)) {
-    throw new Error('AI Base URL 只支持 http 或 https');
-  }
-
-  const hostname = url.hostname.toLowerCase();
-  if (url.protocol === 'http:' && !isLocalHttpHost(hostname)) {
-    throw new Error('HTTP AI Base URL 只支持 localhost 或 127.0.0.1');
-  }
-
-  return `${url.protocol}//${hostname}/*`;
-}
-
-function isLocalHttpHost(hostname: string): boolean {
-  return hostname === 'localhost' || hostname === '127.0.0.1';
 }

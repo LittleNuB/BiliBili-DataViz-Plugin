@@ -263,25 +263,6 @@ export function DynamicBillPage() {
     }
   }
 
-  async function handleToggleAiExplanations() {
-    const current = userConfig ?? await requestSW<UserConfig>("GET_CONFIG");
-    const nextEnabled = !current.dynamicBill.aiExplanationsEnabled;
-    setNotice("");
-    try {
-      await requestSW("UPDATE_CONFIG", {
-        dynamicBill: {
-          aiExplanationsEnabled: nextEnabled,
-        },
-      });
-      await refreshConfig();
-      setNotice(nextEnabled
-        ? "已启用动态账单 AI 解释；生成时只会发送已入选账单项的必要视频元数据和紧凑证据事实。"
-        : "已关闭动态账单 AI 解释；页面继续显示本地证据结果。");
-    } catch (error) {
-      setNotice(`更新 AI 解释开关失败：${describeError(error)}`);
-    }
-  }
-
   async function handleBuildExplanations() {
     setExplaining(true);
     setNotice("");
@@ -364,6 +345,10 @@ export function DynamicBillPage() {
     }
   }
 
+  function openSettings() {
+    window.location.hash = "settings";
+  }
+
   return (
     <div className="dynamic-bill-page">
       <header className="dynamic-bill-hero">
@@ -377,7 +362,10 @@ export function DynamicBillPage() {
         <div className="dynamic-bill-scope">
           <strong>解释数据范围</strong>
           <span>
-            AI 只接收已入选账单项的新视频标题/简介、UP 名、分区/标签、发布时间、时长和紧凑证据事实；不发送完整历史、完整关注列表、Cookie、用户 mid、个人资料或反馈记录。
+            AI 只接收已入选账单项的新视频标题/简介、UP 名、分区/标签、发布时间、时长和紧凑证据事实；不发送完整历史、完整关注列表、Cookie、用户账号标识、个人资料或反馈记录。
+          </span>
+          <span>
+            {dynamicBillAiSettingsCopy(isAiEnabled, isAiConfigured)}
           </span>
           <div className="dynamic-bill-scope-actions">
             <button
@@ -408,9 +396,9 @@ export function DynamicBillPage() {
               type="button"
               className="dynamic-bill-sync-button is-ghost"
               disabled={isSyncing || generating || explaining}
-              onClick={handleToggleAiExplanations}
+              onClick={openSettings}
             >
-              {isAiEnabled ? "关闭 AI 解释" : "启用 AI 解释"}
+              前往设置
             </button>
           </div>
         </div>
@@ -886,7 +874,7 @@ function describeExplanationResult(result: DynamicBillExplanationResult): string
     return `AI 解释未启用，已为 ${result.fallback} 个账单项展示本地证据结果。`;
   }
   if (result.status === "not_configured") {
-    return `AI 未配置 API Key，已为 ${result.fallback} 个账单项展示本地证据结果。`;
+    return `AI 尚未在设置中配置 API Key，已为 ${result.fallback} 个账单项展示本地证据结果。`;
   }
   const pending = result.pending > 0 ? `，剩余 ${result.pending} 个待处理` : "";
   return `AI 解释处理 ${result.processed} 项：成功 ${result.generated} 项，失败 ${result.failed} 项，跳过 ${result.skipped} 项${pending}；失败项仍展示本地证据结果。`;
@@ -999,12 +987,18 @@ function explanationStateCopy(
     return `AI 生成失败：${explanation.error ?? "未知错误"}；以下使用本地规则事实解释。`;
   }
   if (explanation?.status === "not_configured" || (aiAvailability.enabled && !aiAvailability.configured)) {
-    return "AI 未配置 API Key；以下使用本地规则事实解释。";
+    return "AI 尚未在设置中配置 API Key；以下使用本地规则事实解释。";
   }
   if (explanation?.status === "disabled" || !aiAvailability.enabled) {
-    return "AI 解释未启用；以下使用本地规则事实解释。";
+    return "AI 解释未在设置中启用；以下使用本地规则事实解释。";
   }
   return "尚未生成 AI 解释；以下使用本地规则事实解释。";
+}
+
+function dynamicBillAiSettingsCopy(enabled: boolean, configured: boolean): string {
+  if (!enabled) return "AI 解释未在设置中启用；生成解释时会直接写入本地证据说明。";
+  if (!configured) return "AI 解释已启用但尚未在设置中配置 API Key；生成解释时会回退到本地证据说明。";
+  return "AI 解释已在设置中启用；生成时只整理已入选账单项的必要证据。";
 }
 
 function localFallbackSummary(item: DynamicBillItem): string {

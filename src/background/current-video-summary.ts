@@ -34,7 +34,7 @@ export async function generateCurrentVideoSummary(
   const local = buildLocalCurrentVideoSummary(context, {
     aiStatus: 'disabled',
     aiModel: config.ai.chatModel,
-    aiNote: 'AI 摘要未启用，当前显示本地证据结果。',
+    aiNote: 'AI 摘要未在设置中启用，当前显示本地证据结果。',
     transcriptSegments: options.transcriptSegments,
     now,
   });
@@ -57,7 +57,7 @@ export async function generateCurrentVideoSummary(
     return buildLocalCurrentVideoSummary(context, {
       aiStatus: 'not_configured',
       aiModel: config.ai.chatModel,
-      aiNote: 'AI 摘要已启用但没有配置 API Key，当前显示本地证据结果。',
+      aiNote: 'AI 摘要已启用但尚未在设置中配置 API Key，当前显示本地证据结果。',
       transcriptSegments: options.transcriptSegments,
       now,
     });
