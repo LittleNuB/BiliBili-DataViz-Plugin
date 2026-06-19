@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bili-Bill 设置页 MVP Mock</title>
+  <style>
+    :root {
+      --pink: #fb7299;
+      --blue: #00a1d6;
+      --mint: #14b8a6;
+      --bg: #f5f7fb;
+      --panel: #222244;
+      --border: #333355;
+      --muted: #a0a0b0;
+      --ink: #202633;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Arial, sans-serif;
+    }
+    .app {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    .nav {
+      padding: 18px;
+      border-right: 1px solid #dde4ee;
+      background: #fff;
+    }
+    .nav button {
+      display: block;
+      width: 100%;
+      margin-bottom: 8px;
+      padding: 10px;
+      border: 1px solid #dde4ee;
+      border-radius: 8px;
+      background: #fff;
+      color: #344054;
+      cursor: pointer;
+      font-weight: 700;
+      text-align: left;
+    }
+    .nav button.active {
+      border-color: var(--pink);
+      background: #fde7ef;
+      color: #111827;
+    }
+    .page {
+      padding: 22px;
+    }
+    .hidden {
+      display: none;
+    }
+    .panel {
+      margin-bottom: 12px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      color: #fff;
+    }
+    .panel h1,
+    .panel h2 {
+      margin: 0 0 8px;
+      line-height: 1.2;
+    }
+    .muted {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .field {
+      display: grid;
+      gap: 6px;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .field input {
+      min-height: 38px;
+      padding: 9px 10px;
+      border: 1px solid #3b3b62;
+      border-radius: 7px;
+      background: #18182b;
+      color: #fff;
+    }
+    .wide {
+      grid-column: 1 / -1;
+    }
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    .actions button,
+    .link-button {
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgba(0, 161, 214, 0.45);
+      border-radius: 7px;
+      background: var(--blue);
+      color: #fff;
+      cursor: pointer;
+      font-weight: 750;
+    }
+    .toggle {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      margin-top: 8px;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #1a1a2e;
+      cursor: pointer;
+    }
+    .ok { color: #a8fff0; }
+    .warn { color: #ffcf8a; }
+    @media (max-width: 720px) {
+      .app { display: block; }
+      .grid { grid-template-columns: 1fr; }
+      .page { padding: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="nav" aria-label="Bili-Bill 面板导航">
+      <button id="nav-overview" type="button">总览</button>
+      <button id="nav-smart" type="button">智能收藏</button>
+      <button id="nav-settings" class="active" type="button">设置</button>
+    </aside>
+    <main class="page">
+      <section id="settings-page">
+        <div class="panel">
+          <span class="muted">全局配置</span>
+          <h1>设置</h1>
+          <p class="muted">在这里统一管理 AI 服务、功能开关和隐私边界。当前视频、智能收藏和动态账单会共用这套配置；未启用或未配置时继续展示本地证据结果。</p>
+          <strong id="save-state">有未保存更改</strong>
+        </div>
+        <div class="panel">
+          <h2>AI 服务</h2>
+          <div class="grid">
+            <label class="field">服务地址<input id="base" value="https://api.deepseek.com" /></label>
+            <label class="field">模型名<input id="model" value="deepseek-v4-flash" /></label>
+            <label class="field wide">API Key<input id="key" type="password" placeholder="留空则沿用已保存在本地的 Key" /></label>
+          </div>
+          <div class="actions">
+            <button id="test" type="button">测试连接</button>
+            <button id="save" type="button">保存设置</button>
+            <span id="status" class="warn">Key 未保存</span>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>AI 功能开关</h2>
+          <label class="toggle"><input id="current" type="checkbox" /> <span>当前视频摘要<br /><small class="muted">关闭后显示本地证据结果。</small></span></label>
+          <label class="toggle"><input id="smart" type="checkbox" /> <span>智能收藏问答<br /><small class="muted">关闭后显示本地引用结果。</small></span></label>
+          <label class="toggle"><input id="dynamic" type="checkbox" /> <span>动态账单解释<br /><small class="muted">关闭后写入本地证据说明。</small></span></label>
+        </div>
+        <div class="panel">
+          <h2>隐私边界</h2>
+          <p class="muted">API Key 只保存在本地浏览器扩展存储中，不上传完整观看历史、完整收藏、完整关注或反馈记录，不读取 Cookie 文件、浏览器用户资料目录、Bilibili 登录态文件或本地密钥文件。</p>
+        </div>
+      </section>
+      <section id="smart-page" class="hidden">
+        <div class="panel">
+          <h1>智能收藏</h1>
+          <p class="muted">AI 服务地址、模型名、API Key 和功能开关已迁移到全局设置。当前显示本地引用结果。</p>
+          <button id="smart-settings" class="link-button" type="button">前往设置</button>
+        </div>
+      </section>
+      <section id="prompts-page" class="hidden">
+        <div class="panel">
+          <h1>未配置提示</h1>
+          <p id="current-prompt" class="warn">当前视频 AI 摘要已启用但尚未在设置中配置 API Key，当前显示本地证据结果。</p>
+          <button id="current-settings" class="link-button" type="button">前往设置</button>
+          <p id="dynamic-prompt" class="warn">动态账单 AI 解释已启用但尚未在设置中配置 API Key，生成解释时会回退到本地证据说明。</p>
+          <button id="dynamic-settings" class="link-button" type="button">前往设置</button>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script>
+    const pages = {
+      settings: document.getElementById('settings-page'),
+      smart: document.getElementById('smart-page'),
+      prompts: document.getElementById('prompts-page'),
+    };
+    function show(name) {
+      for (const [key, page] of Object.entries(pages)) {
+        page.classList.toggle('hidden', key !== name);
+      }
+      document.querySelectorAll('.nav button').forEach(button => button.classList.remove('active'));
+      if (name === 'settings') document.getElementById('nav-settings').classList.add('active');
+      if (name === 'smart') document.getElementById('nav-smart').classList.add('active');
+      if (name === 'prompts') document.getElementById('nav-overview').classList.add('active');
+      location.hash = name;
+    }
+    document.getElementById('nav-settings').addEventListener('click', () => show('settings'));
+    document.getElementById('nav-smart').addEventListener('click', () => show('smart'));
+    document.getElementById('nav-overview').addEventListener('click', () => show('prompts'));
+    document.getElementById('smart-settings').addEventListener('click', () => show('settings'));
+    document.getElementById('current-settings').addEventListener('click', () => show('settings'));
+    document.getElementById('dynamic-settings').addEventListener('click', () => show('settings'));
+    document.getElementById('test').addEventListener('click', () => {
+      const status = document.getElementById('status');
+      status.textContent = `连接测试通过：模型 ${document.getElementById('model').value} 已响应`;
+      status.className = 'ok';
+    });
+    document.getElementById('save').addEventListener('click', () => {
+      document.getElementById('save-state').textContent = '设置已保存';
+      document.getElementById('status').textContent = 'API Key 已保存在本地，不会在输入框中回显完整值。';
+      document.getElementById('status').className = 'ok';
+      document.getElementById('key').value = '';
+    });
+  </script>
+</body>
+</html>

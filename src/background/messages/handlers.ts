@@ -84,6 +84,7 @@ import {
   getCurrentVideoTranscriptEvidenceState,
   getCurrentVideoTranscriptSegments,
 } from '../storage/current-video-transcript-repo';
+import { testAiConnection } from '../ai/openai-compatible';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
 const SUBTITLE_PROBE_CACHE_MS = 5 * 60 * 1000;
@@ -312,6 +313,8 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
         }) as T,
       };
     }
+    case 'TEST_AI_CONNECTION':
+      return { success: true, data: await testAiConnection(normalizeAiConfigParam(request.params?.ai)) as T };
     case 'GET_CURRENT_VIDEO_CONTEXT':
       return { success: true, data: await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(request.params)) as T };
     case 'PROBE_CURRENT_VIDEO_SUBTITLE_SOURCE':
@@ -834,6 +837,18 @@ function normalizeDynamicBillFeedbackScope(value: unknown): DynamicBillFeedbackS
 function requireStringParam(value: unknown, name: string): string {
   if (typeof value === 'string' && value.trim()) return value;
   throw new Error(`MISSING_${name.toUpperCase()}`);
+}
+
+function normalizeAiConfigParam(value: unknown): UserConfig['ai'] {
+  if (!value || typeof value !== 'object') {
+    throw new Error('MISSING_AI_CONFIG');
+  }
+  const raw = value as Record<string, unknown>;
+  return {
+    baseURL: typeof raw.baseURL === 'string' ? raw.baseURL.trim() : '',
+    apiKey: typeof raw.apiKey === 'string' ? raw.apiKey : '',
+    chatModel: typeof raw.chatModel === 'string' ? raw.chatModel.trim() : '',
+  };
 }
 
 function videoUrl(bvid: string): string {

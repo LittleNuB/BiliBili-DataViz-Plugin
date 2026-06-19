@@ -177,6 +177,10 @@ export function App() {
     setCurrentVideoSummary(cancelledCurrentVideoSummary(currentVideoContext));
   }
 
+  function openSettings() {
+    chrome.tabs.create({ url: chrome.runtime.getURL('dashboard/index.html#settings') });
+  }
+
   async function fetchStats(forceSync = true) {
     loading.value = quickStats.value === null;
     error.value = null;
@@ -382,6 +386,7 @@ export function App() {
         onRefreshKnowledge={fetchVideoKnowledge}
         onPreviewNode={setJumpPreviewNodeId}
         onConfirmJump={confirmVideoKnowledgeJump}
+        onOpenSettings={openSettings}
       />
 
       {loading.value && (
@@ -566,6 +571,7 @@ function CurrentVideoAssistantStatus({
   onRefreshKnowledge,
   onPreviewNode,
   onConfirmJump,
+  onOpenSettings,
 }: {
   context: CurrentVideoContextResult | null;
   summary: CurrentVideoSummaryResult | null;
@@ -581,6 +587,7 @@ function CurrentVideoAssistantStatus({
   onRefreshKnowledge: () => void;
   onPreviewNode: (nodeId: string | null) => void;
   onConfirmJump: (node: VideoKnowledgeNode) => void;
+  onOpenSettings: () => void;
 }) {
   const isVideo = context?.kind === 'video';
   const previewNode = knowledge?.nodes.find(node => node.id === previewNodeId) ?? null;
@@ -797,6 +804,9 @@ function CurrentVideoAssistantStatus({
               <div style={{ color: '#9090A0', fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
                 AI 状态：{aiStatusLabel(summary.ai.status)}。{summary.ai.note}
               </div>
+              {needsAiSettingsLink(summary.ai.status) && (
+                <SettingsInlineButton onClick={onOpenSettings} />
+              )}
             </div>
           )}
           <div style={{
@@ -831,6 +841,7 @@ function CurrentVideoAssistantStatus({
             onPreviewCandidate={setSegmentPreviewCandidateId}
             onConfirmJump={confirmSegmentJump}
             onReturn={returnSegmentJump}
+            onOpenSettings={onOpenSettings}
           />
           <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
             <button
@@ -899,6 +910,7 @@ function CurrentVideoSegmentRetrievalPanel({
   onPreviewCandidate,
   onConfirmJump,
   onReturn,
+  onOpenSettings,
 }: {
   subtitleDiagnostics: CurrentVideoSubtitleDiagnostics;
   query: string;
@@ -913,6 +925,7 @@ function CurrentVideoSegmentRetrievalPanel({
   onPreviewCandidate: (candidateId: string | null) => void;
   onConfirmJump: (candidate: CurrentVideoSegmentRetrievalCandidate) => void;
   onReturn: () => void;
+  onOpenSettings: () => void;
 }) {
   const previewCandidate = result?.candidates.find(candidate => candidate.id === previewCandidateId) ?? null;
   const aiExplanations = new Map(
@@ -987,6 +1000,9 @@ function CurrentVideoSegmentRetrievalPanel({
           <div style={{ color: segmentAiRerankColor(result.aiRerank.status), fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
             AI 重排：{segmentAiRerankStatusLabel(result.aiRerank.status)}。{result.aiRerank.note}
           </div>
+          {needsAiSettingsLink(result.aiRerank.status) && (
+            <SettingsInlineButton onClick={onOpenSettings} />
+          )}
           {result.candidates.length === 0 ? (
             <div style={{ color: '#A0A0B0', fontSize: '10px', lineHeight: 1.45, marginTop: '5px' }}>
               {result.limitations[0]}
@@ -1483,6 +1499,31 @@ function segmentAiRerankColor(status: CurrentVideoSegmentRetrievalResult['aiRera
   if (status === 'generated') return '#A0E7A0';
   if (status === 'disabled' || status === 'not_requested') return '#A0A0B0';
   return '#FFCF8A';
+}
+
+function SettingsInlineButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        marginTop: '6px',
+        background: 'rgba(0, 161, 214, 0.18)',
+        color: '#C8E6FF',
+        border: '1px solid rgba(127, 219, 255, 0.32)',
+        borderRadius: '6px',
+        cursor: 'pointer',
+        fontSize: '10px',
+        padding: '4px 7px',
+      }}
+    >
+      前往设置
+    </button>
+  );
+}
+
+function needsAiSettingsLink(status: string): boolean {
+  return status === 'disabled' || status === 'not_configured';
 }
 
 function formatNodeTimeRange(node: VideoKnowledgeNode): string {

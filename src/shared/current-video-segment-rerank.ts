@@ -142,7 +142,7 @@ export async function rerankCurrentVideoSegmentCandidates(
     return withAiRerank(local, aiState({
       status: 'disabled',
       model,
-      note: 'AI 重排未启用，当前显示本地候选顺序。',
+      note: 'AI 重排未在设置中启用，当前显示本地候选顺序。',
       now,
     }));
   }
@@ -151,7 +151,7 @@ export async function rerankCurrentVideoSegmentCandidates(
     return withAiRerank(local, aiState({
       status: 'not_configured',
       model,
-      note: 'AI 重排已启用但没有配置 API Key，当前显示本地候选顺序。',
+      note: 'AI 重排已启用但尚未在设置中配置 API Key，当前显示本地候选顺序。',
       now,
     }));
   }

@@ -10,6 +10,7 @@ import { CreatorPage } from './modules/creator/CreatorPage';
 import { BehaviorPage } from './modules/behavior/BehaviorPage';
 import { ExperimentsPage } from './modules/experiments/ExperimentsPage';
 import { SmartFavoritesPage } from './modules/favorites/SmartFavoritesPage';
+import { SettingsPage } from './modules/settings/SettingsPage';
 import type { WatchHistoryRecord } from '../src/shared/types/watch-event';
 import type { HistorySyncStatus } from '../src/shared/types/history-sync';
 
@@ -21,6 +22,7 @@ const NAV_ITEMS = [
   { id: 'behavior', label: '行为', caption: '节奏与时段', shortLabel: '行' },
   { id: 'experiments', label: '盲盒', caption: '视频盲盒', shortLabel: '盒' },
   { id: 'smart-favorites', label: '智能收藏', caption: '收藏夹整理', shortLabel: '藏' },
+  { id: 'settings', label: '设置', caption: 'AI 与隐私', shortLabel: '设' },
 ];
 
 const PAGES = [
@@ -31,6 +33,7 @@ const PAGES = [
   BehaviorPage,
   ExperimentsPage,
   SmartFavoritesPage,
+  SettingsPage,
 ];
 
 const EXPORT_PAGE_SIZE = 500;

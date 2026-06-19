@@ -38,6 +38,7 @@ import type { CurrentVideoSummaryResult } from './current-video-summary';
 import type { VideoKnowledgeJumpResponse, VideoKnowledgeResult } from './video-knowledge';
 import type { HistoryTailProbeReport } from './history-tail-probe';
 import type { HistorySyncCursorSnapshot, HistorySyncMode } from './history-sync';
+import type { AiConnectionTestResult } from './config';
 
 // 弹窗 / 面板 → Service Worker
 export type RequestAction =
@@ -52,6 +53,7 @@ export type RequestAction =
   | 'CANCEL_SYNC'
   | 'GET_CONFIG'
   | 'UPDATE_CONFIG'
+  | 'TEST_AI_CONNECTION'
   | 'EXPORT_DATA'
   | 'EXPORT_DATA_PAGE'
   | 'GET_SYNC_STATUS'
@@ -198,3 +200,4 @@ export type DynamicBillItemResponse = BiliVizResponse<DynamicBillItem | null>;
 export type DynamicBillFilterResponse = BiliVizResponse<DynamicBillFilterPreference>;
 export type DynamicBillFeedbackResponse = BiliVizResponse<DynamicBillFeedbackResult>;
 export type HistoryTailProbeResponse = BiliVizResponse<HistoryTailProbeReport>;
+export type AiConnectionTestResponse = BiliVizResponse<AiConnectionTestResult>;

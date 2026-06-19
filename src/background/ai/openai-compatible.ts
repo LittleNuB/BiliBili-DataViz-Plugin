@@ -1,4 +1,4 @@
-import type { AiConfig } from '../../shared/types/config.ts';
+import type { AiConfig, AiConnectionTestResult } from '../../shared/types/config.ts';
 
 interface ChatMessage {
   role: 'system' | 'user';
@@ -23,7 +23,7 @@ export async function chatJson<T>(
     throw new Error('AI_API_KEY_MISSING');
   }
 
-  const endpoint = `${config.baseURL.replace(/\/+$/, '')}/chat/completions`;
+  const endpoint = `${config.baseURL.trim().replace(/\/+$/, '')}/chat/completions`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
   let response: Response;
@@ -59,6 +59,34 @@ export async function chatJson<T>(
   const json: ChatResponse = await response.json();
   const content = json.choices?.[0]?.message?.content ?? '';
   return parseJsonContent<T>(content);
+}
+
+export async function testAiConnection(config: AiConfig): Promise<AiConnectionTestResult> {
+  const baseURL = config.baseURL.trim();
+  const chatModel = config.chatModel.trim();
+  const apiKey = config.apiKey.trim();
+  if (!baseURL) throw new Error('AI_BASE_URL_MISSING');
+  if (!chatModel) throw new Error('AI_MODEL_MISSING');
+  if (!apiKey) throw new Error('AI_API_KEY_MISSING');
+
+  const startedAt = Date.now();
+  await chatJson<{ ok?: unknown }>({ baseURL, chatModel, apiKey }, [
+    {
+      role: 'system',
+      content: 'Return JSON only. The response schema is {"ok": true}.',
+    },
+    {
+      role: 'user',
+      content: '请返回 {"ok": true}，不要包含其他字段。',
+    },
+  ]);
+
+  return {
+    ok: true,
+    model: chatModel,
+    checkedAt: Date.now(),
+    latencyMs: Date.now() - startedAt,
+  };
 }
 
 function parseJsonContent<T>(content: string): T {

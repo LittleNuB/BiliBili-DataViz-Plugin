@@ -849,9 +849,9 @@ function languageKey(value: string | null | undefined): string {
 function localAiNote(status?: CurrentVideoSummaryAiStatus): string {
   switch (status) {
     case 'disabled':
-      return 'AI 摘要未启用，因此当前显示本地证据结果。';
+      return 'AI 摘要未在设置中启用，因此当前显示本地证据结果。';
     case 'not_configured':
-      return 'AI 摘要已启用但没有配置 API Key，因此当前显示本地证据结果。';
+      return 'AI 摘要已启用但尚未在设置中配置 API Key，因此当前显示本地证据结果。';
     case 'failed':
       return 'AI 生成失败，当前显示本地证据结果。';
     case 'low_confidence':
