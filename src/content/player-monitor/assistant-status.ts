@@ -296,6 +296,37 @@ const CSS = `
   margin-top: 8px;
   overflow-wrap: anywhere;
 }
+#${CARD_ID} .bdc-assistant-answer-card {
+  margin-top: 8px;
+  border: 1px solid rgba(160, 231, 160, 0.20);
+  border-radius: 8px;
+  background: rgba(160, 231, 160, 0.07);
+  padding: 9px;
+}
+#${CARD_ID} .bdc-assistant-answer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #a0e7a0;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+#${CARD_ID} .bdc-assistant-answer-text {
+  margin-top: 6px;
+  color: #f1f5ff;
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+#${CARD_ID} .bdc-assistant-citation-title {
+  margin-top: 10px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
 #${CARD_ID} .bdc-assistant-candidate-list {
   display: flex;
   flex-direction: column;
@@ -602,7 +633,7 @@ function renderCollapsedCard(root: HTMLElement): void {
   if (assistantState.context?.kind === 'video') {
     appendText(status, 'div', 'bdc-assistant-video-title', assistantState.context.title ?? '当前视频');
   }
-  appendText(status, 'div', 'bdc-assistant-muted', '在当前视频页内查看摘要、字幕状态、提问定位和知识节点。');
+  appendText(status, 'div', 'bdc-assistant-muted', '在当前视频页内查看摘要、字幕状态、问答引用和知识节点。');
   const globalLink = dashboardLink('全局总览');
   globalLink.className = 'bdc-assistant-link bdc-assistant-button-quiet';
   status.appendChild(globalLink);
@@ -619,7 +650,7 @@ function renderExpandedPanel(root: HTMLElement): void {
   const brand = document.createElement('div');
   brand.className = 'bdc-assistant-brand';
   appendText(brand, 'div', 'bdc-assistant-kicker', '当前视频助手');
-  appendText(brand, 'div', 'bdc-assistant-subtitle', '摘要、提问定位与知识节点留在当前播放页');
+  appendText(brand, 'div', 'bdc-assistant-subtitle', '摘要、问答引用与知识节点留在当前播放页');
   header.appendChild(brand);
 
   const actions = document.createElement('div');
@@ -724,12 +755,12 @@ function appendSubtitleDiagnostics(parent: HTMLElement, context: CurrentVideoCon
 }
 
 function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext): void {
-  const block = section('提问定位');
+  const block = section('当前视频问答');
   appendText(
     block,
     'div',
     'bdc-assistant-muted',
-    '输入关键词或一句话描述，只检索当前视频已缓存的字幕正文和本地节点。',
+    '输入一个问题，先基于当前视频证据回答，再给可预览、可确认跳转的引用片段。',
   );
 
   const form = document.createElement('div');
@@ -739,9 +770,9 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
   input.className = 'bdc-assistant-search-input';
   input.rows = 2;
   input.maxLength = 120;
-  input.placeholder = '例如：100万上下文 / 讲工具调用的地方';
+  input.placeholder = '例如：有没有关于 subagent 的介绍？';
   input.value = assistantState.segmentQuery;
-  input.setAttribute('aria-label', '输入想定位的当前视频内容');
+  input.setAttribute('aria-label', '输入想询问的当前视频问题');
   input.addEventListener('input', () => {
     assistantState.segmentQuery = input.value;
   });
@@ -754,7 +785,7 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
   form.appendChild(input);
 
   form.appendChild(button(
-    assistantState.segmentLoading ? '检索中...' : '检索片段',
+    assistantState.segmentLoading ? '回答中...' : '回答问题',
     'bdc-assistant-button bdc-assistant-button-primary',
     () => {
       void searchCurrentVideoSegmentsFromPage();
@@ -768,7 +799,7 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
       block,
       'div',
       'bdc-assistant-subtitle-detail',
-      '提示：要定位到具体时间，通常需要先开启或重新检测字幕正文；没有本地证据时不会猜时间点。',
+      '提示：要回答完整视频问题，通常需要先开启或重新检测字幕正文；没有本地证据时不会猜答案或时间点。',
     );
   }
 
@@ -778,7 +809,7 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
   }
 
   if (assistantState.segmentLoading) {
-    const loading = appendText(block, 'div', 'bdc-assistant-retrieval-status', '正在检索当前视频本地证据...');
+    const loading = appendText(block, 'div', 'bdc-assistant-retrieval-status', '正在基于当前视频本地证据回答...');
     loading.style.color = '#c8e6ff';
   }
 
@@ -797,6 +828,10 @@ function appendSegmentRetrievalResult(
   result: CurrentVideoSegmentRetrievalResult,
   context: CurrentVideoContext,
 ): void {
+  const queryRewrite = result.queryRewrite ?? {
+    expanded: false,
+    visibleExpandedTerms: [],
+  };
   const status = appendText(
     parent,
     'div',
@@ -804,6 +839,8 @@ function appendSegmentRetrievalResult(
     safeVisibleText(segmentRetrievalStatusMessage(result, context)),
   );
   status.style.color = segmentRetrievalStatusColor(result);
+
+  appendCurrentVideoQaAnswer(parent, result);
 
   if (needsAiSettingsLink(result.aiRerank.status)) {
     appendText(
@@ -824,17 +861,17 @@ function appendSegmentRetrievalResult(
     appendBadge(meta, `本地节点 ${result.evidenceState.timedKnowledgeNodeCount} 条`);
   }
   appendBadge(meta, result.evidenceState.contextFresh ? '当前视频上下文有效' : '上下文需刷新');
-  if (result.queryRewrite.expanded) {
+  if (queryRewrite.expanded) {
     appendBadge(meta, '已扩展相关表达');
   }
   parent.appendChild(meta);
 
-  if (result.queryRewrite.expanded && result.queryRewrite.visibleExpandedTerms.length > 0) {
+  if (queryRewrite.expanded && queryRewrite.visibleExpandedTerms.length > 0) {
     appendText(
       parent,
       'div',
       'bdc-assistant-muted',
-      safeVisibleText(`已扩展相关表达：${result.queryRewrite.visibleExpandedTerms.slice(0, 6).join('、')}`),
+      safeVisibleText(`已扩展相关表达：${queryRewrite.visibleExpandedTerms.slice(0, 6).join('、')}`),
     );
   }
 
@@ -845,26 +882,77 @@ function appendSegmentRetrievalResult(
     return;
   }
 
+  const citedCandidateIds = new Set(result.qa.citedSegments.map(segment => segment.candidateId));
+  const displayCandidates = citedCandidateIds.size > 0
+    ? result.candidates.filter(candidate => citedCandidateIds.has(candidate.id))
+    : result.candidates;
+  appendText(
+    parent,
+    'div',
+    'bdc-assistant-citation-title',
+    citedCandidateIds.size > 0 ? '引用片段' : '候选片段',
+  );
   const list = document.createElement('div');
   list.className = 'bdc-assistant-candidate-list';
-  for (const [index, candidate] of result.candidates.slice(0, 5).entries()) {
-    list.appendChild(segmentCandidateCard(candidate, index, result));
+  for (const [index, candidate] of displayCandidates.slice(0, 5).entries()) {
+    list.appendChild(segmentCandidateCard(
+      candidate,
+      index,
+      result,
+      citedCandidateIds.size > 0 ? '引用' : '候选',
+    ));
   }
   parent.appendChild(list);
   appendSegmentLimitations(parent, result);
+}
+
+function appendCurrentVideoQaAnswer(
+  parent: HTMLElement,
+  result: CurrentVideoSegmentRetrievalResult,
+): void {
+  const card = document.createElement('div');
+  card.className = 'bdc-assistant-answer-card';
+  card.style.borderColor = qaStatusColor(result.qa.status);
+
+  const head = document.createElement('div');
+  head.className = 'bdc-assistant-answer-head';
+  head.style.color = qaStatusColor(result.qa.status);
+  appendText(head, 'span', '', `回答：${qaStatusLabel(result.qa.status)}`);
+  appendText(head, 'span', '', `证据强度 ${result.qa.confidenceLabel} ${formatPercent(result.qa.confidence)}`);
+  card.appendChild(head);
+
+  appendText(card, 'div', 'bdc-assistant-answer-text', safeVisibleText(result.qa.answer));
+
+  const meta = document.createElement('div');
+  meta.className = 'bdc-assistant-candidate-meta';
+  appendBadge(meta, qaSourceStateLabel(result));
+  appendBadge(meta, `引用片段 ${result.qa.citedSegments.length} 条`);
+  appendBadge(meta, `AI 回答 ${qaAiStatusLabel(result.qa.aiState.status)}`);
+  card.appendChild(meta);
+
+  appendText(card, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(result.qa.aiState.note));
+  if (result.qa.citedSegments.length === 0 && result.qa.limitations.length > 0) {
+    appendText(card, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(result.qa.limitations[0]));
+  }
+  if (needsAiSettingsLink(result.qa.aiState.status)) {
+    card.appendChild(dashboardLink('前往设置', '#settings'));
+  }
+
+  parent.appendChild(card);
 }
 
 function segmentCandidateCard(
   candidate: CurrentVideoSegmentRetrievalCandidate,
   index: number,
   result: CurrentVideoSegmentRetrievalResult,
+  titlePrefix = '候选',
 ): HTMLElement {
   const card = document.createElement('article');
   card.className = 'bdc-assistant-candidate-card';
 
   const head = document.createElement('div');
   head.className = 'bdc-assistant-candidate-head';
-  appendText(head, 'div', 'bdc-assistant-candidate-title', `候选 ${index + 1} · ${safeVisibleText(candidate.timeRangeLabel)}`);
+  appendText(head, 'div', 'bdc-assistant-candidate-title', `${titlePrefix} ${index + 1} · ${safeVisibleText(candidate.timeRangeLabel)}`);
   appendText(
     head,
     'div',
@@ -1234,7 +1322,7 @@ async function searchCurrentVideoSegmentsFromPage(): Promise<void> {
 
   const query = assistantState.segmentQuery.trim();
   if (!query) {
-    assistantState.segmentError = '请输入想定位的内容，例如“讲工具调用的地方”。';
+    assistantState.segmentError = '请输入想询问的当前视频问题，例如“有没有关于 subagent 的介绍？”。';
     assistantState.segmentResult = null;
     renderAssistantShell();
     return;
@@ -1271,7 +1359,7 @@ async function searchCurrentVideoSegmentsFromPage(): Promise<void> {
     assistantState.segmentContextKey = contextKey;
   } catch {
     if (assistantState.segmentRequestId !== requestId) return;
-    assistantState.segmentError = '检索失败：请确认当前 B 站视频页仍然打开，并稍后重试。';
+    assistantState.segmentError = '回答失败：请确认当前 B 站视频页仍然打开，并稍后重试。';
   } finally {
     if (assistantState.segmentRequestId === requestId) {
       assistantState.segmentLoading = false;
@@ -1756,9 +1844,9 @@ function videoKnowledgeNodePositionHint(node: VideoKnowledgeNode): string {
     return '该节点没有可定位时间点，不会伪造播放位置。';
   }
   if (node.jumpAction) {
-    return '该节点包含定位信息；如需跳转，请在提问定位中检索候选，并按预览、确认流程操作。';
+    return '该节点包含定位信息；如需跳转，请在当前视频问答中检索引用片段，并按预览、确认流程操作。';
   }
-  return '该节点包含字幕时间范围；如需跳转，请在提问定位中检索候选，并按预览、确认流程操作。';
+  return '该节点包含字幕时间范围；如需跳转，请在当前视频问答中检索引用片段，并按预览、确认流程操作。';
 }
 
 function safeVisibleText(value: string): string {
@@ -1769,6 +1857,67 @@ function safeVisibleText(value: string): string {
     .replace(/https?:\/\/\S+/g, '链接已隐藏')
     .replace(PLAYER_ENDPOINT_PATTERN, '接口路径已隐藏')
     .replace(RAW_FIELD_PATTERN, '内部字段');
+}
+
+function qaStatusLabel(status: CurrentVideoSegmentRetrievalResult['qa']['status']): string {
+  switch (status) {
+    case 'answered':
+      return '有证据';
+    case 'not_found':
+      return '没有找到';
+    case 'no_transcript':
+      return '证据不足';
+    case 'low_confidence':
+      return '证据较弱';
+    case 'no_context':
+      return '没有当前视频';
+    case 'insufficient_evidence':
+    default:
+      return '证据不足';
+  }
+}
+
+function qaStatusColor(status: CurrentVideoSegmentRetrievalResult['qa']['status']): string {
+  switch (status) {
+    case 'answered':
+      return '#a0e7a0';
+    case 'not_found':
+      return '#c8e6ff';
+    case 'low_confidence':
+    case 'no_transcript':
+    case 'insufficient_evidence':
+      return '#ffcf8a';
+    case 'no_context':
+    default:
+      return '#ff8a8a';
+  }
+}
+
+function qaAiStatusLabel(status: CurrentVideoSegmentRetrievalResult['qa']['aiState']['status']): string {
+  switch (status) {
+    case 'generated':
+      return '已整理';
+    case 'disabled':
+      return '未启用';
+    case 'not_configured':
+      return '未配置';
+    case 'failed':
+      return '请求失败';
+    case 'rejected':
+      return '已拒绝';
+    case 'low_confidence':
+      return '低置信';
+    case 'not_requested':
+    default:
+      return '未请求';
+  }
+}
+
+function qaSourceStateLabel(result: CurrentVideoSegmentRetrievalResult): string {
+  if (result.qa.sourceState.hasCitableEvidence) return '当前视频证据';
+  if (result.qa.sourceState.hasOnlyMetadataHints) return '仅弱提示';
+  if (!result.qa.sourceState.contextFresh) return '上下文需刷新';
+  return '缺少字幕正文';
 }
 
 function escapeRegExp(value: string): string {

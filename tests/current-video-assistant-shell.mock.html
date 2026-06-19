@@ -426,7 +426,7 @@
           sourceLabel: "可定位字幕证据",
           confidence: 0.86,
           confidenceLabel: "高",
-          evidencePreview: "这里说明工具调用、上下文扩展和 Agent 能力提升。",
+          evidencePreview: "这里说明子代理如何把任务拆开处理，以及 subagent 问法如何对应中文字幕证据。",
           ...overrides,
         };
       }
@@ -442,6 +442,79 @@
           appliedCandidateIds: [],
           explanations: [],
         };
+      }
+
+      function segmentQaAiState() {
+        return {
+          status: "not_requested",
+          model: null,
+          note: "当前显示本地证据回答；本次没有请求 AI 整理回答。",
+          error: null,
+          generatedAt: Date.now(),
+          payloadCandidateCount: 0,
+          citedCandidateIds: [],
+        };
+      }
+
+      function withQa(result) {
+        const citable = (result.candidates || [])
+          .filter(candidate => ["transcript_segment", "transcript_node", "chapter_node", "page_node"].includes(candidate.source))
+          .slice(0, 5);
+        const noTranscript = !subtitleCached || result.status === "metadata_only";
+        const lowConfidence = result.status === "low_confidence";
+        const status = result.status === "ready"
+          ? "answered"
+          : lowConfidence
+            ? "low_confidence"
+            : noTranscript
+              ? "no_transcript"
+              : result.status === "empty_query"
+                ? "insufficient_evidence"
+                : "not_found";
+        const confidence = status === "answered"
+          ? 0.86
+          : status === "not_found"
+            ? 0.55
+            : status === "low_confidence"
+              ? 0.32
+              : 0.2;
+        result.qa = {
+          status,
+          answer: status === "answered"
+            ? "有。当前视频证据提到“子代理”，可作为 subagent 问题的回答依据；下面的字幕或本地节点可用于核对答案。"
+            : status === "not_found"
+              ? "没有。在当前已缓存的字幕正文或本地节点里，没有找到能回答这个问题的证据。"
+              : status === "low_confidence"
+                ? "证据不足。当前只找到弱相关片段，建议把问题改得更接近字幕原文后再试。"
+                : "证据不足。当前没有可引用的字幕正文或本地节点，不能生成完整视频回答。",
+          confidence,
+          confidenceLabel: confidence >= 0.78 ? "高" : confidence >= 0.62 ? "中" : "低",
+          citedSegments: citable.map(candidate => ({
+            candidateId: candidate.id,
+            source: candidate.source,
+            sourceLabel: candidate.sourceLabel,
+            timeRangeLabel: candidate.timeRangeLabel,
+            evidenceText: candidate.evidenceText,
+            confidence: candidate.confidence,
+            confidenceLabel: candidate.confidenceLabel,
+            startSeconds: candidate.startSeconds,
+            endSeconds: candidate.endSeconds,
+          })),
+          sourceState: {
+            transcriptSegmentCount: result.evidenceState.transcriptSegmentCount,
+            timedKnowledgeNodeCount: result.evidenceState.timedKnowledgeNodeCount,
+            metadataHintAvailable: result.evidenceState.metadataHintAvailable,
+            contextFresh: result.evidenceState.contextFresh,
+            hasCitableEvidence: citable.length > 0,
+            hasOnlyMetadataHints: citable.length === 0 && (result.candidates || []).length > 0,
+          },
+          aiState: segmentQaAiState(),
+          limitations: [
+            "回答只基于当前视频字幕正文或当前视频本地节点，不使用收藏、历史、关注或外部资料。",
+            "没有字幕正文或本地节点时，只提示证据不足，不能生成完整视频回答。",
+          ],
+        };
+        return result;
       }
 
       function formatMockTime(seconds) {
@@ -483,7 +556,7 @@
             },
             aiRerank: segmentAiState(),
           };
-          return lastSearchResult;
+          return withQa(lastSearchResult);
         }
 
         if (!subtitleCached) {
@@ -507,7 +580,7 @@
             },
             aiRerank: segmentAiState(),
           };
-          return lastSearchResult;
+          return withQa(lastSearchResult);
         }
 
         const metadataOnly = normalized.includes("简介") || normalized.toLowerCase().includes("metadata");
@@ -554,7 +627,7 @@
             },
             aiRerank: segmentAiState(),
           };
-          return lastSearchResult;
+          return withQa(lastSearchResult);
         }
 
         const lowConfidence = normalized.includes("低置信") || normalized.includes("不确定");
@@ -579,10 +652,10 @@
               startSeconds: 42,
               endSeconds: 55,
               timeRangeLabel: "0:42-0:55",
-              evidenceText: "这里说明 100 万上下文里的工具调用方式，以及 Agent 能力提升为什么需要本地证据。",
+              evidenceText: "这里说明子代理会把任务拆给更小的代理执行，也说明 subagent 问法可以对应到中文字幕里的子代理证据。",
               matchReasons: [
+                "英文 subagent 已扩展为中文“子代理”",
                 "证据文本包含用户输入的关键词",
-                "和问题词有重合：工具、调用、上下文",
               ],
               confidence,
               confidenceLabel,
@@ -607,7 +680,7 @@
               startSeconds: 96,
               endSeconds: 120,
               timeRangeLabel: "1:36-2:00",
-              evidenceText: "章节标题提到 Agent 能力提升，但证据弱于字幕正文。",
+              evidenceText: "章节标题提到子代理协作，但证据弱于字幕正文。",
               matchReasons: ["命中当前视频章节标题"],
               confidence: 0.58,
               confidenceLabel: "低",
@@ -636,9 +709,22 @@
             metadataHintAvailable: true,
             contextFresh: true,
           },
+          queryRewrite: {
+            originalQuery: normalized,
+            normalizedQuery: normalized.toLowerCase(),
+            expanded: normalized.toLowerCase().includes("subagent"),
+            expandedTerms: ["subagent", "子代理", "分工代理", "多代理协作"],
+            visibleExpandedTerms: normalized.toLowerCase().includes("subagent")
+              ? ["子代理", "分工代理", "多代理协作"]
+              : [],
+            reasons: normalized.toLowerCase().includes("subagent")
+              ? ["英文 subagent 命中当前视频中文表达扩展"]
+              : [],
+            aiRewriteEnabled: false,
+          },
           aiRerank: segmentAiState(),
         };
-        return lastSearchResult;
+        return withQa(lastSearchResult);
       }
 
       function requestCurrentVideoSegmentJump(params) {

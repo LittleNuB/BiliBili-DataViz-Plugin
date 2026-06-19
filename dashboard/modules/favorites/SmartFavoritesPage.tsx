@@ -30,6 +30,7 @@ export function SmartFavoritesPage() {
     aiSummariesEnabled: false,
     smartFavoritesQaAiEnabled: false,
     currentVideoSegmentRerankAiEnabled: false,
+    currentVideoQaAiEnabled: false,
   });
   const [aiStatus, setAiStatus] = useState({ hasApiKey: false, model: '' });
   const [query, setQuery] = useState('');

@@ -502,6 +502,7 @@ function userConfig(overrides: {
       aiSummariesEnabled: overrides.aiSummariesEnabled,
       smartFavoritesQaAiEnabled: false,
       currentVideoSegmentRerankAiEnabled: false,
+      currentVideoQaAiEnabled: false,
     },
     dynamicBill: {
       aiExplanationsEnabled: false,

@@ -10,6 +10,7 @@ import type {
 } from './types/current-video-segment-retrieval';
 import type { VideoKnowledgeNode, VideoKnowledgeResult } from './types/video-knowledge';
 import { buildCurrentVideoTimestampJumpPreview } from './current-video-timestamp-jump.ts';
+import { buildLocalCurrentVideoQaResult } from './current-video-qa.ts';
 
 const DEFAULT_CONTEXT_MAX_AGE_MS = 10 * 60 * 1000;
 const DEFAULT_LIMIT = 5;
@@ -638,7 +639,7 @@ function result(input: {
   };
   const evidenceState = input.evidenceState ?? fallbackEvidenceState;
 
-  return {
+  const base: Omit<CurrentVideoSegmentRetrievalResult, 'qa'> = {
     status: input.status,
     query: input.profile.original,
     normalizedQuery: input.profile.normalized,
@@ -669,6 +670,12 @@ function result(input: {
       appliedCandidateIds: [],
       explanations: [],
     },
+  };
+  return {
+    ...base,
+    qa: buildLocalCurrentVideoQaResult(input.context, base, {
+      now: input.now,
+    }),
   };
 }
 
