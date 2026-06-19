@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { AiConfig, UserConfig } from '../src/shared/types/config.ts';
 import type { FavoriteFolder, FavoriteFolderSyncDiagnostic, FavoriteItem, SmartFavoriteIndex } from '../src/shared/types/favorite.ts';
+import type { CurrentVideoContext } from '../src/shared/types/current-video-context.ts';
 import {
   assertAssistantPayloadAudit,
   auditAssistantPayload,
   smartFavoriteQaPayloadContract,
 } from '../src/shared/assistant-payload-audit.ts';
 import { buildSmartFavoriteQaResponse } from '../src/background/favorites/qa-core.ts';
+import { buildCurrentVideoRelatedFavoritesHint } from '../src/shared/current-video-related-favorites.ts';
 import {
   buildSmartFavoriteQaAiPayload,
   synthesizeSmartFavoriteQaAnswerFromLocal,
@@ -115,6 +117,44 @@ test('scopes answers to currently synced data when sync diagnostics are incomple
   assert.equal(response.status.syncCoverage.problemFolders, 1);
   assert.match(response.answer, /当前已同步收藏中/);
   assert.match(response.status.notes.join(' '), /索引覆盖：B站报告 20 条，本地保存 1 条，已索引 0 条，失败 0 条，待索引 1 条/);
+});
+
+test('current-video related favorites hints retrieve cited videos from currently synced favorites only', () => {
+  const context = makeCurrentVideoContext({
+    title: 'Subagent workflow demo',
+    authorName: 'Agent Lab',
+    descriptionText: 'A visible intro about agent orchestration and project handoff.',
+  });
+  const hint = buildCurrentVideoRelatedFavoritesHint(context, {
+    question: 'Find related subagent favorites',
+  });
+  const item = makeFavoriteItem(1, {
+    title: 'Subagent workflow guide',
+    folderTitle: 'Agent research',
+    authorName: 'Agent Lab',
+    intro: 'Project handoff and agent orchestration notes.',
+    tags: ['agent', 'workflow'],
+  });
+  const response = buildSmartFavoriteQaResponse({
+    query: hint.query,
+    items: [item],
+    indexes: new Map([[item.itemKey, makeIndex(item, {
+      keywords: ['subagent', 'handoff'],
+      summary: 'Agent orchestration and handoff guide.',
+    })]]),
+    folders: [makeFolder({ lastSyncDiagnostic: makeIncompleteDiagnostic() })],
+  });
+  const rawHint = JSON.stringify(hint);
+
+  assert.match(hint.query, /Subagent workflow demo/);
+  assert.match(hint.query, /Agent Lab/);
+  assert.match(hint.query, /Find related subagent favorites/);
+  assert.deepEqual(hint.sourceLabels.slice(0, 3), ['你的问题', '当前视频标题', 'UP 名称']);
+  assert.doesNotMatch(rawHint, /authorMid|mediaId|Cookie|Key\.txt|BV1RelatedCurrent/i);
+  assert.equal(response.status.kind, 'incomplete_sync');
+  assert.equal(response.status.syncCoverage.complete, false);
+  assert.equal(response.citedVideos.length, 1);
+  assert.equal(response.citedVideos[0].bvid, item.bvid);
 });
 
 test('reports index coverage counts for Bilibili reported, locally stored, indexed, failed, and pending items', () => {
@@ -409,6 +449,49 @@ function makeConfig(overrides: {
     dynamicBill: {
       aiExplanationsEnabled: false,
     },
+  };
+}
+
+function makeCurrentVideoContext(overrides: {
+  title?: string;
+  authorName?: string;
+  descriptionText?: string | null;
+} = {}): CurrentVideoContext {
+  const descriptionText = 'descriptionText' in overrides
+    ? overrides.descriptionText
+    : 'A visible current-video intro.';
+  return {
+    kind: 'video',
+    url: 'https://www.bilibili.com/video/BV1RelatedCurrent',
+    collectedAt: 1_000,
+    bvid: 'BV1RelatedCurrent',
+    aid: 123,
+    cid: 456,
+    title: overrides.title ?? 'Current related video',
+    authorName: overrides.authorName ?? 'Current UP',
+    authorMid: 789,
+    durationSeconds: 600,
+    currentPart: {
+      page: 1,
+      title: 'Main part',
+      total: 1,
+    },
+    parts: [{ page: 1, cid: 456, title: 'Main part', durationSeconds: 600 }],
+    chapters: [],
+    description: {
+      availability: descriptionText ? 'available' : 'unavailable',
+      text: descriptionText,
+      length: descriptionText?.length ?? null,
+    },
+    sources: {
+      metadata: 'available',
+      description: descriptionText ? 'available' : 'unavailable',
+      pages: 'available',
+      chapters: 'unknown',
+      transcript: 'unavailable',
+      contentText: 'unavailable',
+    },
+    warnings: [],
   };
 }
 

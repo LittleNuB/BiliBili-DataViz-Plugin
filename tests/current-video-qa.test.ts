@@ -8,6 +8,7 @@ import {
   answerCurrentVideoQuestion,
   buildCurrentVideoQaAiPayload,
 } from '../src/shared/current-video-qa.ts';
+import { buildCurrentVideoRelatedFavoritesHint } from '../src/shared/current-video-related-favorites.ts';
 import { searchCurrentVideoSegments } from '../src/shared/current-video-segment-retrieval.ts';
 import type { CurrentVideoContext } from '../src/shared/types/current-video-context.ts';
 import type { CurrentVideoTranscriptSegment } from '../src/shared/types/current-video-transcript.ts';
@@ -210,6 +211,26 @@ test('audits current-video QA AI payload allowlist and rejects sensitive fields'
   assert.match(report, /\$\.video\.authorMid/);
   assert.match(report, /Cookie\/login token/);
   assert.match(report, /C:\\Users\\LittleNub\\Desktop\\Key\.txt/);
+});
+
+test('keeps related favorites hints separate from current-video answer payload', () => {
+  const context = withTranscriptEvidence(videoContext({
+    title: 'Subagent workflow demo',
+    descriptionText: 'Visible description about agent handoff and saved learning videos.',
+  }));
+  const local = localQaResult(context);
+  const relatedHint = buildCurrentVideoRelatedFavoritesHint(context, {
+    question: 'Find related saved subagent videos',
+  });
+  const built = buildCurrentVideoQaAiPayload(context, local);
+  const rawPayload = JSON.stringify(built.payload);
+
+  assert.match(relatedHint.query, /Find related saved subagent videos/);
+  assert.match(relatedHint.query, /Subagent workflow demo/);
+  assert.equal('relatedFavorites' in built.payload, false);
+  assert.equal('citedVideos' in built.payload, false);
+  assert.doesNotMatch(rawPayload, /saved learning videos|related saved|favorite|favorites|收藏|itemKey|mediaId/i);
+  assert.equal(rawPayload.includes(relatedHint.query), false);
 });
 
 function localQaResult(context: CurrentVideoContext) {

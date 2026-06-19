@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Current Video Related Favorites Mock QA</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --panel: rgba(255, 255, 255, 0.055);
+      --line: rgba(255, 255, 255, 0.12);
+      --text: #f4f7fb;
+      --muted: #aeb4c4;
+      --green: #a0e7a0;
+      --blue: #c8e6ff;
+      --warn: #ffcf8a;
+      --pink: #fb7299;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      width: 390px;
+      background: #181a2b;
+      color: var(--text);
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+    }
+
+    main {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+    }
+
+    section,
+    article {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 10px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      color: #ffd6e2;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .muted,
+    .detail {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .status {
+      color: var(--green);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .status.warn {
+      color: var(--warn);
+    }
+
+    .answer {
+      margin-top: 6px;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 7px;
+    }
+
+    .badge {
+      border-radius: 6px;
+      background: rgba(251, 114, 153, 0.16);
+      color: #ffd6e2;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 6px;
+    }
+
+    .cards {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .title-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .title {
+      min-width: 0;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.35;
+    }
+
+    .strength {
+      flex: 0 0 auto;
+      color: var(--green);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .evidence {
+      margin-top: 7px;
+      color: var(--blue);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    a {
+      display: inline-flex;
+      margin-top: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 6px;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 6px 9px;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section data-testid="current-video-answer">
+      <h1>当前视频问答</h1>
+      <div class="status">回答：有证据 · 证据强度 高 86%</div>
+      <p class="answer">有。当前视频证据里找到 1 个可引用片段，回答只基于当前视频字幕证据。</p>
+      <div class="badges">
+        <span class="badge">当前视频证据</span>
+        <span class="badge">引用片段 1 条</span>
+        <span class="badge">AI 回答 本地引用</span>
+      </div>
+    </section>
+
+    <section data-testid="related-favorites">
+      <h1>相关收藏</h1>
+      <p class="muted">来自当前已同步收藏，只作为延伸阅读；上方当前视频回答仍只引用当前视频字幕或本地节点证据。</p>
+      <div class="status warn">收藏同步可能不完整，结果只覆盖当前已同步收藏。</div>
+      <div class="badges">
+        <span class="badge">来源：当前已同步收藏</span>
+        <span class="badge">引用收藏 2 条</span>
+        <span class="badge">线索：当前视频标题、UP 名称、你的问题</span>
+      </div>
+      <div class="cards">
+        <article>
+          <div class="title-row">
+            <div class="title">收藏 1 · Subagent workflow guide</div>
+            <div class="strength">证据强度 高</div>
+          </div>
+          <div class="detail">UP Agent Lab · 收藏夹 Agent research · 智能路径 AI / Workflow</div>
+          <div class="evidence">本地词项命中标题、智能关键词：subagent、handoff。</div>
+          <a href="https://www.bilibili.com/video/BV1RelatedFav01" target="_blank" rel="noopener noreferrer">打开收藏视频</a>
+        </article>
+        <article>
+          <div class="title-row">
+            <div class="title">收藏 2 · Agent handoff checklist</div>
+            <div class="strength">证据强度 中</div>
+          </div>
+          <div class="detail">UP Local Notes · 收藏夹 Agent research</div>
+          <div class="evidence">本地词项命中简介和标签：workflow、handoff。</div>
+          <a href="https://www.bilibili.com/video/BV1RelatedFav02" target="_blank" rel="noopener noreferrer">打开收藏视频</a>
+        </article>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
