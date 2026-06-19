@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bili-Bill 本地数据与隐私 Mock</title>
+  <style>
+    :root {
+      --pink: #fb7299;
+      --blue: #00a1d6;
+      --mint: #14b8a6;
+      --bg: #f5f7fb;
+      --panel: #222244;
+      --panel-strong: #1a1a2e;
+      --border: #333355;
+      --muted: #a0a0b0;
+      --danger: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Arial, sans-serif;
+    }
+    main {
+      display: grid;
+      gap: 14px;
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 22px;
+    }
+    .panel {
+      display: grid;
+      gap: 14px;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+    }
+    h1,
+    h2,
+    p {
+      margin: 0;
+    }
+    p,
+    small,
+    li {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .pill {
+      flex: none;
+      padding: 5px 9px;
+      border: 1px solid rgba(20, 184, 166, 0.32);
+      border-radius: 999px;
+      color: #a8fff0;
+      background: rgba(20, 184, 166, 0.12);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .card,
+    .stat,
+    .danger-box,
+    .notice {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-strong);
+    }
+    .card {
+      display: grid;
+      gap: 6px;
+      min-height: 138px;
+      padding: 12px;
+    }
+    .card span,
+    .stat span {
+      color: #8fddf6;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .card strong {
+      font-size: 22px;
+    }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .stat {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 42px;
+      padding: 10px 12px;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    button {
+      min-height: 36px;
+      padding: 0 12px;
+      border: 1px solid #3b3b62;
+      border-radius: 7px;
+      color: #d8d8e8;
+      background: var(--panel-strong);
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 750;
+    }
+    button.primary {
+      border-color: rgba(0, 161, 214, 0.5);
+      color: #fff;
+      background: var(--blue);
+    }
+    button.danger {
+      border-color: rgba(255, 107, 107, 0.48);
+      color: #fff;
+      background: rgba(255, 107, 107, 0.2);
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+    .notice {
+      display: none;
+      padding: 11px 12px;
+      border-color: rgba(20, 184, 166, 0.34);
+      color: #c7fff5;
+      background: rgba(20, 184, 166, 0.12);
+      font-size: 13px;
+    }
+    .notice.show {
+      display: block;
+    }
+    .danger-box {
+      display: none;
+      gap: 12px;
+      padding: 14px;
+      border-color: rgba(255, 107, 107, 0.36);
+      background: rgba(255, 107, 107, 0.08);
+    }
+    .danger-box.show {
+      display: grid;
+    }
+    .danger-box strong {
+      color: #ffd0d0;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    input {
+      min-height: 38px;
+      padding: 8px 10px;
+      border: 1px solid #3b3b62;
+      border-radius: 7px;
+      color: #fff;
+      background: #18182b;
+      font: inherit;
+    }
+    @media (max-width: 900px) {
+      .grid,
+      .stat-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+    @media (max-width: 620px) {
+      main {
+        padding: 12px;
+      }
+      .head {
+        display: grid;
+      }
+      .grid,
+      .stat-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <div class="head">
+        <div>
+          <h1>设置</h1>
+          <p>AI 与本地数据。这里展示本地数据摘要，并提供缓存清理、索引重建和危险清理入口。</p>
+        </div>
+        <span class="pill">状态已读取</span>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="本地数据与隐私管理">
+      <div class="head">
+        <div>
+          <h2>本地数据与隐私管理</h2>
+          <p>这里只展示数量、覆盖范围和最近时间，不展示完整记录、敏感标识或本地文件路径。</p>
+        </div>
+      </div>
+
+      <div id="notice" class="notice" role="status"></div>
+
+      <div class="grid">
+        <article class="card">
+          <span>观看历史</span>
+          <strong id="history-count">128 条</strong>
+          <p>覆盖 2026/05/20 10:30 至 2026/06/19 09:10</p>
+          <small>最近同步：2026/06/19 09:15</small>
+        </article>
+        <article class="card">
+          <span>收藏与智能索引</span>
+          <strong id="favorite-count">24 条</strong>
+          <p id="favorite-detail">B 站报告 28 条，本地保存 24 条，已索引 21 条。</p>
+          <small>最近同步：2026/06/18 22:10</small>
+        </article>
+        <article class="card">
+          <span>当前视频字幕缓存</span>
+          <strong id="subtitle-count">42 段</strong>
+          <p id="subtitle-detail">已缓存 2 个视频的字幕正文证据。</p>
+          <small id="subtitle-time">最近缓存：2026/06/19 08:40</small>
+        </article>
+        <article class="card">
+          <span>动态账单</span>
+          <strong id="dynamic-count">6 项</strong>
+          <p>关注快照 12 位，近期待处理视频 8 条。</p>
+          <small>最近生成：2026/06/19 09:05</small>
+        </article>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat"><span>待索引收藏</span><strong id="pending-index">2</strong></div>
+        <div class="stat"><span>索引失败</span><strong id="failed-index">1</strong></div>
+        <div class="stat"><span>过期字幕片段</span><strong id="stale-subtitle">4</strong></div>
+        <div class="stat"><span>动态反馈</span><strong id="dynamic-feedback">3</strong></div>
+      </div>
+
+      <div class="actions">
+        <button id="refresh" type="button">刷新状态</button>
+        <button id="clear-subtitles" type="button">清理字幕缓存</button>
+        <button id="rebuild-index" class="primary" type="button">重建智能收藏索引</button>
+        <button id="show-danger" class="danger" type="button">清理本地数据</button>
+      </div>
+
+      <div id="danger-box" class="danger-box">
+        <div>
+          <strong>确认清理本地数据</strong>
+          <p>这会删除 Bili-Bill 保存在浏览器扩展里的本地内容数据和本地设置，不会修改 B 站账号、关注关系、收藏夹或视频数据。</p>
+        </div>
+        <ul>
+          <li>观看历史、播放器事件和统计聚合。</li>
+          <li>收藏夹快照、智能收藏索引和收藏问答本地依据。</li>
+          <li>当前视频字幕缓存、动态账单记录、动态账单反馈和解释。</li>
+          <li>本地 AI 服务设置、API Key 保存状态和功能开关。</li>
+        </ul>
+        <label>
+          输入“清理本地数据”确认
+          <input id="confirm-text" autocomplete="off" />
+        </label>
+        <div class="actions">
+          <button id="confirm-clear" class="danger" type="button" disabled>确认清理</button>
+          <button id="cancel-clear" type="button">取消</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const notice = document.getElementById('notice');
+    const dangerBox = document.getElementById('danger-box');
+    const confirmText = document.getElementById('confirm-text');
+    const confirmClear = document.getElementById('confirm-clear');
+
+    function showNotice(text) {
+      notice.textContent = text;
+      notice.classList.add('show');
+    }
+
+    document.getElementById('refresh').addEventListener('click', () => {
+      showNotice('本地数据状态已刷新。');
+    });
+
+    document.getElementById('clear-subtitles').addEventListener('click', () => {
+      document.getElementById('subtitle-count').textContent = '0 段';
+      document.getElementById('subtitle-detail').textContent = '还没有缓存的字幕正文。';
+      document.getElementById('subtitle-time').textContent = '最近缓存：暂无记录';
+      document.getElementById('stale-subtitle').textContent = '0';
+      document.getElementById('clear-subtitles').disabled = true;
+      showNotice('已清理当前视频字幕缓存：移除 3 条来源记录和 42 段字幕正文。');
+    });
+
+    document.getElementById('rebuild-index').addEventListener('click', () => {
+      document.getElementById('favorite-detail').textContent = 'B 站报告 28 条，本地保存 24 条，已索引 24 条。';
+      document.getElementById('pending-index').textContent = '0';
+      document.getElementById('failed-index').textContent = '0';
+      showNotice('智能收藏索引已重新生成：本地收藏 24 条，处理 24 条，成功 24 条，失败 0 条，跳过 0 条。');
+    });
+
+    document.getElementById('show-danger').addEventListener('click', () => {
+      dangerBox.classList.add('show');
+      confirmText.focus();
+    });
+
+    confirmText.addEventListener('input', () => {
+      confirmClear.disabled = confirmText.value.trim() !== '清理本地数据';
+    });
+
+    document.getElementById('cancel-clear').addEventListener('click', () => {
+      dangerBox.classList.remove('show');
+      confirmText.value = '';
+      confirmClear.disabled = true;
+    });
+
+    confirmClear.addEventListener('click', () => {
+      document.getElementById('history-count').textContent = '0 条';
+      document.getElementById('favorite-count').textContent = '0 条';
+      document.getElementById('dynamic-count').textContent = '0 项';
+      document.getElementById('favorite-detail').textContent = 'B 站报告 0 条，本地保存 0 条，已索引 0 条。';
+      document.getElementById('pending-index').textContent = '0';
+      document.getElementById('failed-index').textContent = '0';
+      document.getElementById('dynamic-feedback').textContent = '0';
+      dangerBox.classList.remove('show');
+      showNotice('已清理本地数据：观看历史 128 条、收藏 24 条、字幕正文 0 段、动态账单 6 项。本地 AI 设置和功能开关也已恢复为默认状态。');
+    });
+  </script>
+</body>
+</html>

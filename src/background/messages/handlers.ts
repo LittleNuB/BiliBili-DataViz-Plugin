@@ -13,6 +13,8 @@ import type {
 } from '../../shared/types/current-video-segment-retrieval';
 import type { VideoKnowledgeJumpResponse } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
+import type { SmartIndexResult } from '../../shared/types/favorite';
+import type { SmartFavoriteIndexRebuildResult } from '../../shared/types/local-data-privacy';
 import { normalizePageLimit, runInitialBackfill } from '../sync/initial-backfill';
 import { probeHistoryTailCoverage } from '../sync/history-tail-probe';
 import {
@@ -71,6 +73,15 @@ import {
   resolveCurrentVideoTabState,
   type CurrentVideoTabSnapshot,
 } from '../current-video-context-resolver';
+import {
+  clearSmartFavoriteIndex,
+  countFavoriteItems,
+} from '../storage/favorite-repo';
+import {
+  clearAllLocalData,
+  clearCurrentVideoSubtitleCache,
+  getLocalDataPrivacySummary,
+} from '../storage/local-data-privacy-repo';
 import {
   getDynamicBillFilterPreference,
   getDynamicBillItems,
@@ -315,6 +326,14 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     }
     case 'TEST_AI_CONNECTION':
       return { success: true, data: await testAiConnection(normalizeAiConfigParam(request.params?.ai)) as T };
+    case 'GET_LOCAL_DATA_PRIVACY_SUMMARY':
+      return { success: true, data: await getLocalDataPrivacySummary() as T };
+    case 'CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE':
+      return { success: true, data: await clearCurrentVideoSubtitleCache() as T };
+    case 'REBUILD_SMART_FAVORITE_INDEX':
+      return { success: true, data: await rebuildSmartFavoriteIndex(request.params) as T };
+    case 'CLEAR_ALL_LOCAL_DATA':
+      return { success: true, data: await clearAllLocalData(request.params?.confirmation) as T };
     case 'GET_CURRENT_VIDEO_CONTEXT':
       return { success: true, data: await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(request.params)) as T };
     case 'PROBE_CURRENT_VIDEO_SUBTITLE_SOURCE':
@@ -849,6 +868,47 @@ function normalizeAiConfigParam(value: unknown): UserConfig['ai'] {
     apiKey: typeof raw.apiKey === 'string' ? raw.apiKey : '',
     chatModel: typeof raw.chatModel === 'string' ? raw.chatModel.trim() : '',
   };
+}
+
+async function rebuildSmartFavoriteIndex(
+  params: Record<string, unknown> | undefined,
+): Promise<SmartFavoriteIndexRebuildResult> {
+  const batchSize = Math.min(normalizePositiveInteger(params?.batchSize, 25), 100);
+  const totalItems = await countFavoriteItems();
+  const clearedIndexes = await clearSmartFavoriteIndex();
+  const result: SmartIndexResult = {
+    processed: 0,
+    indexed: 0,
+    failed: 0,
+    skipped: 0,
+    notes: [],
+  };
+  let guard = Math.ceil(totalItems / batchSize) + 2;
+
+  while (result.processed < totalItems && guard-- > 0) {
+    const batch = await buildSmartFavoriteIndex(batchSize, { includeFailed: false });
+    mergeSmartIndexResult(result, batch);
+    if (batch.processed === 0) break;
+  }
+
+  return {
+    totalItems,
+    clearedIndexes,
+    ...result,
+    completedAt: Date.now(),
+  };
+}
+
+function mergeSmartIndexResult(target: SmartIndexResult, batch: SmartIndexResult): void {
+  target.processed += batch.processed;
+  target.indexed += batch.indexed;
+  target.failed += batch.failed;
+  target.skipped += batch.skipped;
+  for (const note of batch.notes) {
+    if (!target.notes.includes(note)) {
+      target.notes.push(note);
+    }
+  }
 }
 
 function videoUrl(bvid: string): string {
