@@ -11,6 +11,7 @@ import type {
   CurrentVideoTimestampJumpResponse,
   CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
+import type { CurrentVideoRelatedFavoritesResponse } from '../../shared/types/current-video-related-favorites';
 import type { VideoKnowledgeJumpResponse } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import type { SmartIndexResult } from '../../shared/types/favorite';
@@ -42,6 +43,10 @@ import {
 } from '../../shared/current-video-transcript-cache';
 import { searchCurrentVideoSegments } from '../../shared/current-video-segment-retrieval';
 import { searchCurrentVideoSegmentsWithAiRerank } from '../current-video-segment-rerank';
+import {
+  buildCurrentVideoRelatedFavoritesHint,
+  emptyCurrentVideoRelatedFavoritesResponse,
+} from '../../shared/current-video-related-favorites';
 import {
   blockedTimestampJumpResponse,
   blockedTimestampReturnResponse,
@@ -364,6 +369,13 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
         }) as T,
       };
     }
+    case 'GET_CURRENT_VIDEO_RELATED_FAVORITES': {
+      const context = await getCurrentVideoContextForActiveTab();
+      return {
+        success: true,
+        data: await getCurrentVideoRelatedFavorites(context, request.params) as T,
+      };
+    }
     case 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP':
       return { success: true, data: await requestCurrentVideoSegmentJump(request.params) as T };
     case 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP':
@@ -467,6 +479,41 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     default:
       return { success: false, error: `Unknown action: ${request.action}` };
   }
+}
+
+async function getCurrentVideoRelatedFavorites(
+  context: CurrentVideoContextResult,
+  params?: Record<string, unknown>,
+): Promise<CurrentVideoRelatedFavoritesResponse> {
+  const now = Date.now();
+  if (context.kind !== 'video') {
+    return emptyCurrentVideoRelatedFavoritesResponse(context, now);
+  }
+
+  const hint = buildCurrentVideoRelatedFavoritesHint(context, {
+    question: typeof params?.question === 'string' ? params.question : null,
+    summaryHint: typeof params?.summaryHint === 'string' ? params.summaryHint : null,
+  });
+
+  if (!hint.query) {
+    return emptyCurrentVideoRelatedFavoritesResponse(context, now);
+  }
+
+  const requestedLimit = Number(params?.limit);
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(Math.floor(requestedLimit), 8))
+    : 5;
+  const favorites = await answerSmartFavoriteQuestion(hint.query, limit);
+
+  return {
+    status: 'ready',
+    contextTitle: context.title,
+    query: hint.query,
+    hintSourceLabels: hint.sourceLabels,
+    favorites,
+    generatedAt: now,
+    limitations: hint.limitations,
+  };
 }
 
 async function requestVideoKnowledgeJump(params: Record<string, unknown> | undefined): Promise<VideoKnowledgeJumpResponse> {

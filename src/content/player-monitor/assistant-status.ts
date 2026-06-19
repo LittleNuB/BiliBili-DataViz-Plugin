@@ -11,6 +11,12 @@ import type {
   CurrentVideoTimestampJumpResponse,
   CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
+import type { CurrentVideoRelatedFavoritesResponse } from '../../shared/types/current-video-related-favorites';
+import type {
+  SmartFavoriteQaCitedVideo,
+  SmartFavoriteQaResponse,
+  SmartFavoriteQaSynthesisStatus,
+} from '../../shared/types/favorite';
 import type {
   VideoKnowledgeEvidenceSourceStatus,
   VideoKnowledgeNode,
@@ -534,6 +540,11 @@ interface AssistantState {
   segmentJumpLoading: boolean;
   segmentReturnAvailable: boolean;
   segmentReturnLoading: boolean;
+  relatedFavorites: CurrentVideoRelatedFavoritesResponse | null;
+  relatedFavoritesContextKey: string;
+  relatedFavoritesLoading: boolean;
+  relatedFavoritesError: string | null;
+  relatedFavoritesRequestId: number;
   subtitleRefreshing: boolean;
   subtitleStatus: string | null;
   subtitleRequestId: number;
@@ -564,6 +575,11 @@ const assistantState: AssistantState = {
   segmentJumpLoading: false,
   segmentReturnAvailable: false,
   segmentReturnLoading: false,
+  relatedFavorites: null,
+  relatedFavoritesContextKey: '',
+  relatedFavoritesLoading: false,
+  relatedFavoritesError: null,
+  relatedFavoritesRequestId: 0,
   subtitleRefreshing: false,
   subtitleStatus: null,
   subtitleRequestId: 0,
@@ -610,6 +626,10 @@ function updateAssistantContext(context: CurrentVideoContextResult): void {
     assistantState.segmentJumpLoading = false;
     assistantState.segmentReturnAvailable = false;
     assistantState.segmentReturnLoading = false;
+    assistantState.relatedFavorites = null;
+    assistantState.relatedFavoritesContextKey = '';
+    assistantState.relatedFavoritesError = null;
+    assistantState.relatedFavoritesLoading = false;
     assistantState.subtitleStatus = null;
   }
   assistantState.context = context;
@@ -703,6 +723,7 @@ function renderExpandedPanel(root: HTMLElement): void {
   if (context?.kind === 'video') {
     appendSegmentSearch(body, context);
     appendSummary(body);
+    appendRelatedFavorites(body, context);
     appendVideoKnowledge(body, context);
     appendSubtitleDiagnostics(body, context);
     appendVideoIdentity(body, context);
@@ -854,6 +875,179 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
   }
 
   parent.appendChild(block);
+}
+
+function appendRelatedFavorites(parent: HTMLElement, context: CurrentVideoContext): void {
+  const block = section('相关收藏');
+  const head = block.querySelector('.bdc-assistant-section-head');
+  const hasFreshResult = Boolean(
+    assistantState.relatedFavorites
+    && assistantState.relatedFavoritesContextKey === assistantState.contextKey,
+  );
+  head?.appendChild(button(
+    assistantState.relatedFavoritesLoading
+      ? '查找中...'
+      : hasFreshResult
+        ? '刷新相关收藏'
+        : '查找相关收藏',
+    hasFreshResult
+      ? 'bdc-assistant-button bdc-assistant-button-quiet'
+      : 'bdc-assistant-button bdc-assistant-button-primary',
+    () => {
+      void loadCurrentVideoRelatedFavoritesFromPage(true);
+    },
+    assistantState.relatedFavoritesLoading || !context.bvid,
+  ));
+
+  appendText(
+    block,
+    'div',
+    'bdc-assistant-muted',
+    '来自当前已同步收藏，只作为延伸阅读；上方当前视频回答仍只引用当前视频字幕或本地节点证据。',
+  );
+
+  if (assistantState.relatedFavoritesError) {
+    const error = appendText(block, 'div', 'bdc-assistant-retrieval-status', assistantState.relatedFavoritesError);
+    error.style.color = '#ffcf8a';
+  }
+
+  if (assistantState.relatedFavoritesLoading) {
+    const loading = appendText(block, 'div', 'bdc-assistant-retrieval-status', '正在用当前视频线索查找已同步收藏...');
+    loading.style.color = '#c8e6ff';
+  }
+
+  if (!hasFreshResult) {
+    appendText(
+      block,
+      'div',
+      'bdc-assistant-subtitle-detail',
+      '会使用当前视频标题、UP、简介摘要，以及你在上方输入的问题作为线索；不会读取完整收藏库、历史、关注或本地敏感文件。',
+    );
+    parent.appendChild(block);
+    return;
+  }
+
+  appendRelatedFavoritesResult(block, assistantState.relatedFavorites as CurrentVideoRelatedFavoritesResponse);
+  parent.appendChild(block);
+}
+
+function appendRelatedFavoritesResult(
+  parent: HTMLElement,
+  result: CurrentVideoRelatedFavoritesResponse,
+): void {
+  const qa = result.favorites;
+  if (result.status !== 'ready' || !qa) {
+    const status = appendText(parent, 'div', 'bdc-assistant-retrieval-status', safeVisibleText(result.limitations[0] ?? '当前没有可用的相关收藏线索。'));
+    status.style.color = '#ffcf8a';
+    return;
+  }
+
+  const status = appendText(
+    parent,
+    'div',
+    'bdc-assistant-retrieval-status',
+    safeVisibleText(relatedFavoritesNotice(qa)),
+  );
+  status.style.color = relatedFavoritesStatusColor(qa);
+
+  const meta = document.createElement('div');
+  meta.className = 'bdc-assistant-candidate-meta';
+  appendBadge(meta, '来源：当前已同步收藏');
+  appendBadge(meta, `引用收藏 ${qa.citedVideos.length} 条`);
+  if (result.hintSourceLabels.length > 0) {
+    appendBadge(meta, `线索：${result.hintSourceLabels.slice(0, 3).join('、')}`);
+  }
+  appendBadge(meta, `AI ${relatedFavoritesAiStatusLabel(qa.synthesis?.status)}`);
+  parent.appendChild(meta);
+
+  const coverage = relatedFavoritesCoverageNotice(qa);
+  if (coverage) {
+    appendText(parent, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(coverage));
+  }
+
+  if (qa.citedVideos.length === 0) {
+    appendText(parent, 'div', 'bdc-assistant-answer-text', safeVisibleText(qa.answer));
+    appendRelatedFavoritesLimitations(parent, result, qa);
+    appendRelatedFavoritesSettingsLink(parent, qa);
+    return;
+  }
+
+  const list = document.createElement('div');
+  list.className = 'bdc-assistant-candidate-list';
+  for (const [index, video] of qa.citedVideos.slice(0, 5).entries()) {
+    list.appendChild(relatedFavoriteCard(video, index));
+  }
+  parent.appendChild(list);
+  appendRelatedFavoritesLimitations(parent, result, qa);
+  appendRelatedFavoritesSettingsLink(parent, qa);
+}
+
+function relatedFavoriteCard(video: SmartFavoriteQaCitedVideo, index: number): HTMLElement {
+  const card = document.createElement('article');
+  card.className = 'bdc-assistant-candidate-card';
+
+  const head = document.createElement('div');
+  head.className = 'bdc-assistant-candidate-head';
+  appendText(head, 'div', 'bdc-assistant-candidate-title', `收藏 ${index + 1} · ${safeVisibleText(video.title)}`);
+  appendText(
+    head,
+    'div',
+    'bdc-assistant-candidate-strength',
+    `证据强度 ${relatedFavoriteConfidenceLabel(video.confidence)}`,
+  );
+  card.appendChild(head);
+
+  const meta = document.createElement('div');
+  meta.className = 'bdc-assistant-candidate-meta';
+  if (video.authorName) appendBadge(meta, `UP ${safeVisibleText(video.authorName)}`);
+  if (video.folderTitle) appendBadge(meta, `收藏夹 ${safeVisibleText(video.folderTitle)}`);
+  if (video.smartPath.length > 0) appendBadge(meta, `智能路径 ${safeVisibleText(video.smartPath.slice(0, 3).join(' / '))}`);
+  card.appendChild(meta);
+
+  appendText(card, 'div', 'bdc-assistant-candidate-evidence', safeVisibleText(video.evidence));
+
+  if (video.matchReasons.length > 0) {
+    const reasons = document.createElement('ul');
+    reasons.className = 'bdc-assistant-candidate-reasons';
+    for (const reason of video.matchReasons.slice(0, 3)) {
+      const item = document.createElement('li');
+      item.textContent = safeVisibleText(reason);
+      reasons.appendChild(item);
+    }
+    card.appendChild(reasons);
+  }
+
+  if (video.link) {
+    const link = document.createElement('a');
+    link.className = 'bdc-assistant-link bdc-assistant-button-quiet';
+    link.href = video.link;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = '打开收藏视频';
+    card.appendChild(link);
+  }
+
+  return card;
+}
+
+function appendRelatedFavoritesLimitations(
+  parent: HTMLElement,
+  result: CurrentVideoRelatedFavoritesResponse,
+  qa: SmartFavoriteQaResponse,
+): void {
+  const notes = [
+    ...result.limitations,
+    ...qa.status.notes.slice(0, 2),
+  ].map(safeVisibleText);
+  if (notes.length > 0) {
+    appendText(parent, 'div', 'bdc-assistant-subtitle-detail', notes.join(' '));
+  }
+}
+
+function appendRelatedFavoritesSettingsLink(parent: HTMLElement, qa: SmartFavoriteQaResponse): void {
+  if (needsAiSettingsLink(qa.synthesis?.status ?? '')) {
+    parent.appendChild(dashboardLink('前往设置', '#settings'));
+  }
 }
 
 function appendSegmentRetrievalResult(
@@ -1342,6 +1536,49 @@ function appendVideoKnowledgeLimitations(parent: HTMLElement, knowledge: VideoKn
   const limitations = knowledge.limitations.slice(0, 2).map(safeVisibleText).join(' ');
   if (limitations) {
     appendText(parent, 'div', 'bdc-assistant-subtitle-detail', limitations);
+  }
+}
+
+async function loadCurrentVideoRelatedFavoritesFromPage(force: boolean): Promise<void> {
+  if (assistantState.context?.kind !== 'video') return;
+  if (assistantState.relatedFavoritesLoading) return;
+  if (
+    !force
+    && assistantState.relatedFavorites
+    && assistantState.relatedFavoritesContextKey === assistantState.contextKey
+  ) {
+    return;
+  }
+
+  const requestId = assistantState.relatedFavoritesRequestId + 1;
+  const contextKey = assistantState.contextKey;
+  assistantState.relatedFavoritesRequestId = requestId;
+  assistantState.relatedFavoritesLoading = true;
+  assistantState.relatedFavoritesError = null;
+  renderAssistantShell();
+
+  try {
+    const summaryHint = assistantState.summary
+      && assistantState.summaryContextKey === contextKey
+      && (assistantState.summary.sourceTier === 'description_summary' || assistantState.summary.sourceTier === 'metadata_summary')
+      ? assistantState.summary.summary
+      : null;
+    const result = await sendRuntimeRequest<CurrentVideoRelatedFavoritesResponse>('GET_CURRENT_VIDEO_RELATED_FAVORITES', {
+      question: assistantState.segmentQuery,
+      summaryHint,
+      limit: 5,
+    });
+    if (assistantState.relatedFavoritesRequestId !== requestId || assistantState.contextKey !== contextKey) return;
+    assistantState.relatedFavorites = result;
+    assistantState.relatedFavoritesContextKey = contextKey;
+  } catch {
+    if (assistantState.relatedFavoritesRequestId !== requestId) return;
+    assistantState.relatedFavoritesError = '相关收藏查找失败：请确认当前 B 站视频页仍然打开，并稍后重试。';
+  } finally {
+    if (assistantState.relatedFavoritesRequestId === requestId) {
+      assistantState.relatedFavoritesLoading = false;
+      renderAssistantShell();
+    }
   }
 }
 
@@ -1969,6 +2206,79 @@ function qaSourceStateLabel(result: CurrentVideoSegmentRetrievalResult): string 
   if (result.qa.sourceState.hasOnlyMetadataHints) return '仅弱提示';
   if (!result.qa.sourceState.contextFresh) return '上下文需刷新';
   return '缺少字幕正文';
+}
+
+function relatedFavoritesNotice(qa: SmartFavoriteQaResponse): string {
+  if (qa.citedVideos.length > 0) {
+    return `在当前已同步收藏中找到 ${qa.citedVideos.length} 个相关收藏，可作为延伸阅读。`;
+  }
+  if (qa.answerType === 'insufficient_evidence') {
+    return '当前收藏检索只能使用收藏元数据和智能索引，未找到足够可引用的相关收藏。';
+  }
+  return '当前已同步收藏中暂未找到匹配收藏。';
+}
+
+function relatedFavoritesCoverageNotice(qa: SmartFavoriteQaResponse): string {
+  if (!qa.status.syncCoverage.complete) {
+    return '收藏同步可能不完整，结果只覆盖当前已同步收藏。';
+  }
+  if (qa.status.indexCoverage.indexMissing) {
+    return '智能索引缺失，本次使用本地元数据结果。';
+  }
+  if (qa.status.indexCoverage.staleIndex) {
+    return '智能索引可能过期或不完整，本次仍保留本地元数据结果。';
+  }
+  if (qa.synthesis?.status === 'disabled') {
+    return 'AI 收藏问答未启用，已保留本地引用结果。';
+  }
+  if (qa.synthesis?.status === 'not_configured') {
+    return 'AI 收藏问答尚未配置，已保留本地引用结果。';
+  }
+  if (qa.synthesis?.status === 'failed' || qa.synthesis?.status === 'rejected') {
+    return 'AI 整理未采用，已保留本地引用结果。';
+  }
+  return '';
+}
+
+function relatedFavoritesStatusColor(qa: SmartFavoriteQaResponse): string {
+  switch (qa.status.kind) {
+    case 'ok':
+      return '#a0e7a0';
+    case 'no_result':
+      return '#c8e6ff';
+    case 'low_confidence':
+    case 'stale_index':
+    case 'incomplete_sync':
+    case 'index_missing':
+    case 'insufficient_evidence':
+    default:
+      return '#ffcf8a';
+  }
+}
+
+function relatedFavoritesAiStatusLabel(status: SmartFavoriteQaSynthesisStatus | undefined): string {
+  switch (status) {
+    case 'generated':
+      return '已整理';
+    case 'disabled':
+      return '未启用';
+    case 'not_configured':
+      return '未配置';
+    case 'failed':
+      return '请求失败';
+    case 'rejected':
+      return '未采用';
+    case 'local_fallback':
+      return '本地引用';
+    default:
+      return '未请求';
+  }
+}
+
+function relatedFavoriteConfidenceLabel(value: SmartFavoriteQaCitedVideo['confidence']): string {
+  if (value === 'high') return '高';
+  if (value === 'medium') return '中';
+  return '低';
 }
 
 function escapeRegExp(value: string): string {
