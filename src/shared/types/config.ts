@@ -28,6 +28,7 @@ export interface AssistantConfig {
   aiSummariesEnabled: boolean;
   smartFavoritesQaAiEnabled: boolean;
   currentVideoSegmentRerankAiEnabled: boolean;
+  currentVideoQaAiEnabled: boolean;
 }
 
 export interface DynamicBillConfig {
@@ -51,6 +52,7 @@ export const DEFAULT_CONFIG: UserConfig = {
     aiSummariesEnabled: false,
     smartFavoritesQaAiEnabled: false,
     currentVideoSegmentRerankAiEnabled: false,
+    currentVideoQaAiEnabled: false,
   },
   dynamicBill: {
     aiExplanationsEnabled: false,

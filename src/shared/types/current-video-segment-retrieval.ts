@@ -91,6 +91,23 @@ export type CurrentVideoSegmentRerankAiStatus =
   | 'rejected'
   | 'low_confidence';
 
+export type CurrentVideoQaStatus =
+  | 'answered'
+  | 'not_found'
+  | 'insufficient_evidence'
+  | 'no_transcript'
+  | 'low_confidence'
+  | 'no_context';
+
+export type CurrentVideoQaAiStatus =
+  | 'not_requested'
+  | 'disabled'
+  | 'not_configured'
+  | 'generated'
+  | 'failed'
+  | 'rejected'
+  | 'low_confidence';
+
 export interface CurrentVideoSegmentRerankExplanation {
   candidateId: string;
   explanation: string;
@@ -109,6 +126,48 @@ export interface CurrentVideoSegmentRerankAiState {
   explanations: CurrentVideoSegmentRerankExplanation[];
 }
 
+export interface CurrentVideoQaCitedSegment {
+  candidateId: string;
+  source: CurrentVideoSegmentRetrievalCandidateSource;
+  sourceLabel: string;
+  timeRangeLabel: string;
+  evidenceText: string;
+  confidence: number;
+  confidenceLabel: CurrentVideoSegmentRetrievalConfidenceLabel;
+  startSeconds: number | null;
+  endSeconds: number | null;
+}
+
+export interface CurrentVideoQaSourceState {
+  transcriptSegmentCount: number;
+  timedKnowledgeNodeCount: number;
+  metadataHintAvailable: boolean;
+  contextFresh: boolean;
+  hasCitableEvidence: boolean;
+  hasOnlyMetadataHints: boolean;
+}
+
+export interface CurrentVideoQaAiState {
+  status: CurrentVideoQaAiStatus;
+  model: string | null;
+  note: string;
+  error: string | null;
+  generatedAt: number;
+  payloadCandidateCount: number;
+  citedCandidateIds: string[];
+}
+
+export interface CurrentVideoQaResult {
+  status: CurrentVideoQaStatus;
+  answer: string;
+  confidence: number;
+  confidenceLabel: CurrentVideoSegmentRetrievalConfidenceLabel;
+  citedSegments: CurrentVideoQaCitedSegment[];
+  sourceState: CurrentVideoQaSourceState;
+  aiState: CurrentVideoQaAiState;
+  limitations: string[];
+}
+
 export interface CurrentVideoSegmentRetrievalResult {
   status: CurrentVideoSegmentRetrievalStatus;
   query: string;
@@ -121,6 +180,7 @@ export interface CurrentVideoSegmentRetrievalResult {
   queryRewrite: CurrentVideoQueryRewriteState;
   evidenceState: CurrentVideoSegmentRetrievalEvidenceState;
   aiRerank: CurrentVideoSegmentRerankAiState;
+  qa: CurrentVideoQaResult;
 }
 
 export interface CurrentVideoTimestampJumpContentPayload {

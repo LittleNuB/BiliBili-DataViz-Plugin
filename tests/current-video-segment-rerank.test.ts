@@ -368,6 +368,7 @@ function userConfig(overrides: {
       aiSummariesEnabled: false,
       smartFavoritesQaAiEnabled: false,
       currentVideoSegmentRerankAiEnabled: overrides.currentVideoSegmentRerankAiEnabled,
+      currentVideoQaAiEnabled: false,
     },
     dynamicBill: {
       aiExplanationsEnabled: false,

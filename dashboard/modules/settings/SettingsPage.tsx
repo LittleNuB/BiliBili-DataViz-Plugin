@@ -39,6 +39,7 @@ const DEFAULT_ASSISTANT: AssistantConfig = {
   aiSummariesEnabled: false,
   smartFavoritesQaAiEnabled: false,
   currentVideoSegmentRerankAiEnabled: false,
+  currentVideoQaAiEnabled: false,
 };
 
 const DEFAULT_DYNAMIC_BILL: DynamicBillConfig = {
@@ -81,6 +82,7 @@ export function SettingsPage() {
       || assistant.aiSummariesEnabled !== loadedConfig.assistant.aiSummariesEnabled
       || assistant.smartFavoritesQaAiEnabled !== loadedConfig.assistant.smartFavoritesQaAiEnabled
       || assistant.currentVideoSegmentRerankAiEnabled !== loadedConfig.assistant.currentVideoSegmentRerankAiEnabled
+      || assistant.currentVideoQaAiEnabled !== loadedConfig.assistant.currentVideoQaAiEnabled
       || dynamicBill.aiExplanationsEnabled !== loadedConfig.dynamicBill.aiExplanationsEnabled;
   }, [assistant, dynamicBill, form, loadedConfig]);
   const localDataCards = localData ? buildLocalDataSummaryCards(localData) : [];
@@ -338,6 +340,12 @@ export function SettingsPage() {
             detail="允许 AI 只在已检索出的本地候选片段中调整展示顺序和解释。"
             checked={assistant.currentVideoSegmentRerankAiEnabled}
             onChange={(checked) => setAssistant({ ...assistant, currentVideoSegmentRerankAiEnabled: checked })}
+          />
+          <FeatureToggle
+            title="当前视频问答整理"
+            detail="允许 AI 只基于当前视频 top-N 本地引用片段整理简短回答；时间点和引用仍来自本地候选。"
+            checked={assistant.currentVideoQaAiEnabled}
+            onChange={(checked) => setAssistant({ ...assistant, currentVideoQaAiEnabled: checked })}
           />
           <FeatureToggle
             title="智能收藏问答"

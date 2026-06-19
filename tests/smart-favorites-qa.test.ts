@@ -404,6 +404,7 @@ function makeConfig(overrides: {
       aiSummariesEnabled: false,
       smartFavoritesQaAiEnabled: overrides.smartFavoritesQaAiEnabled,
       currentVideoSegmentRerankAiEnabled: false,
+      currentVideoQaAiEnabled: false,
     },
     dynamicBill: {
       aiExplanationsEnabled: false,
