@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildExperimentData } from '../src/background/analytics/suggestions.ts';
+import type { ExperimentRealCandidatePool } from '../src/shared/types/analytics';
 import type { FavoriteItem, SmartFavoriteIndex } from '../src/shared/types/favorite';
 import type { WatchHistoryRecord } from '../src/shared/types/watch-event';
 
 const NOW_MS = Date.UTC(2026, 5, 13, 12, 0, 0);
 
-test('builds four local blind boxes with concrete video candidates', () => {
+test('builds blind boxes with a real random explore candidate source', () => {
   const bannedGuessWord = `猜${'你喜欢'}`;
   const records: WatchHistoryRecord[] = [
     createRecord({ bvid: 'BVREC001', tagName: '游戏', daysAgo: 3, actualCompletion: 0.82, title: '最近游戏 1' }),
@@ -54,7 +55,13 @@ test('builds four local blind boxes with concrete video candidates', () => {
     ['random', createSmartIndex('random', ['生活', '旅行'])],
   ]);
 
-  const data = buildExperimentData(records, favorites, smartIndexByItemKey, NOW_MS);
+  const data = buildExperimentData(
+    records,
+    favorites,
+    smartIndexByItemKey,
+    NOW_MS,
+    createRelatedPool(),
+  );
 
   assert.deepEqual(data.blindBoxes.map(box => box.id), [
     'variety',
@@ -78,7 +85,10 @@ test('builds four local blind boxes with concrete video candidates', () => {
   assert.match(reviveInterest.source, /本地历史/);
 
   assert.equal(randomExplore.state, 'ready');
-  assert.ok(randomExplore.video?.bvid);
+  assert.equal(randomExplore.video?.bvid, 'BV1REALRND01');
+  assert.match(randomExplore.source, /相关视频候选/);
+  assert.match(randomExplore.source, /种子视频/);
+  assert.match(randomExplore.reason, /没有保留平台排序|随机抽取/);
   assert.notEqual(randomExplore.video?.bvid, variety.video?.bvid);
   assert.notEqual(randomExplore.video?.bvid, hiddenFavorite.video?.bvid);
   assert.notEqual(randomExplore.video?.bvid, reviveInterest.video?.bvid);
@@ -109,6 +119,34 @@ test('returns Chinese empty states instead of generic filler when local evidence
     assert.equal(box.reason.includes(bannedGuessWord), false);
     assert.equal(box.reason.includes(bannedUnconsumedWord), false);
   }
+});
+
+test('does not fall back to a local random video when related candidates fail', () => {
+  const records: WatchHistoryRecord[] = [
+    createRecord({ bvid: 'BV1LOCAL001', tagName: '游戏', daysAgo: 3, actualCompletion: 0.92, title: '本地种子视频' }),
+    createRecord({ bvid: 'BV1LOCAL002', tagName: '游戏', daysAgo: 40, actualCompletion: 0.91, title: '本地备用视频' }),
+  ];
+  const failedPool: ExperimentRealCandidatePool = {
+    sourceKind: 'bilibili_related',
+    sourceLabel: '相关视频候选',
+    seedCount: 1,
+    candidates: [],
+    failures: [{
+      seedBvid: 'BV1LOCAL001',
+      seedTitle: '本地种子视频',
+      reason: 'request_failed',
+    }],
+  };
+
+  const data = buildExperimentData(records, [], new Map(), NOW_MS, failedPool);
+  const randomExplore = data.blindBoxes.find(box => box.id === 'random_explore');
+
+  assert.ok(randomExplore);
+  assert.equal(randomExplore.state, 'empty');
+  assert.equal(randomExplore.video, undefined);
+  assert.match(randomExplore.source, /相关视频候选/);
+  assert.match(randomExplore.emptyDescription ?? '', /不会用本地库存视频冒充/);
+  assert.ok(randomExplore.evidence.some(line => line.includes('请求失败')));
 });
 
 function createRecord(input: {
@@ -184,5 +222,31 @@ function createSmartIndex(itemKey: string, path: string[]): SmartFavoriteIndex {
     model: 'test-model',
     status: 'indexed',
     indexedAt: Math.floor(NOW_MS / 1000),
+  };
+}
+
+function createRelatedPool(): ExperimentRealCandidatePool {
+  return {
+    sourceKind: 'bilibili_related',
+    sourceLabel: '相关视频候选',
+    seedCount: 2,
+    candidates: [{
+      sourceKind: 'bilibili_related',
+      sourceLabel: '相关视频候选',
+      seedBvid: 'BV1SEED0001',
+      seedTitle: '种子视频',
+      bvid: 'BV1REALRND01',
+      avid: 12345,
+      cid: 54321,
+      title: '真实相关候选视频',
+      authorName: '公开候选UP',
+      authorMid: 67890,
+      cover: 'https://example.com/related.jpg',
+      duration: 960,
+      pubtime: 1_717_000_000,
+      tagName: '科技',
+      url: 'https://www.bilibili.com/video/BV1REALRND01',
+    }],
+    failures: [],
   };
 }

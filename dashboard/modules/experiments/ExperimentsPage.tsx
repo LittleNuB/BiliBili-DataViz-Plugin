@@ -58,9 +58,9 @@ export function ExperimentsPage() {
           borderRadius: '16px',
           padding: '16px',
         }}>
-          <div style={{ color: '#FFFFFF', fontSize: '18px', fontWeight: 700, marginBottom: '8px' }}>本地视频盲盒</div>
+          <div style={{ color: '#FFFFFF', fontSize: '18px', fontWeight: 700, marginBottom: '8px' }}>视频盲盒</div>
           <div style={{ color: '#D4D8E8', fontSize: '13px', lineHeight: 1.7 }}>
-            这里只从本地历史和本地收藏里挑具体视频，不假装 B 站推荐排序，也不会写回 B 站。
+            随机探索会从真实 B 站相关视频候选池里随机抽取；其它盲盒仍只使用本地历史和本地收藏证据。这里不做推荐排序，也不会写回 B 站。
           </div>
           <div style={{ color: '#8F97B5', fontSize: '12px', marginTop: '8px' }}>
             最近生成时间：{new Date(data.generatedAt).toLocaleString('zh-CN')}
@@ -76,6 +76,11 @@ export function ExperimentsPage() {
             const isRevealed = revealed[box.id] === true;
             const isReady = box.state === 'ready';
             const accent = CARD_ACCENT[box.id];
+            const statusLabel = isReady
+              ? '可揭晓'
+              : box.id === 'random_explore'
+                ? '候选源不可用'
+                : '本地证据不足';
             return (
               <article
                 key={box.id}
@@ -105,7 +110,7 @@ export function ExperimentsPage() {
                     fontSize: '11px',
                     whiteSpace: 'nowrap',
                   }}>
-                    {isReady ? '可揭晓' : '本地证据不足'}
+                    {statusLabel}
                   </span>
                 </div>
 
@@ -123,8 +128,10 @@ export function ExperimentsPage() {
                   }}>
                     <div style={{ color: '#DCE2F8', fontSize: '13px', lineHeight: 1.7 }}>
                       {isReady
-                        ? '这盒里是一个可以直接打开的具体视频。揭晓后会显示标题、UP 主、来源、理由和本地证据。'
-                        : '这盒不会拿泛泛建议充数。揭晓后只会告诉你为什么本地证据还不够。'}
+                        ? '这盒里是一个可以直接打开的具体视频。揭晓后会显示标题、UP 主、来源、理由和证据。'
+                        : box.id === 'random_explore'
+                          ? '这盒不会显示空卡，也不会用本地库存冒充真实候选。揭晓后会说明候选源为什么暂时不可用。'
+                          : '这盒不会拿泛泛建议充数。揭晓后只会告诉你为什么本地证据还不够。'}
                     </div>
                     <button
                       type="button"
@@ -207,7 +214,7 @@ export function ExperimentsPage() {
         }}>
           <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>说明</div>
           <div style={{ color: '#A8B0CE', fontSize: '12px', lineHeight: 1.7 }}>
-            盲盒只使用本地历史、收藏和收藏分类路径来挑视频。打开动作只会新开一个 B 站视频页，不会回写收藏、关注或观看状态。
+            随机探索只使用少量本地 BV 号作为种子，请求公开相关视频候选后在本地随机抽取；不会上传完整历史、收藏、关注或反馈。打开动作只会新开一个 B 站视频页，不会回写收藏、关注或观看状态。
           </div>
         </section>
       </div>

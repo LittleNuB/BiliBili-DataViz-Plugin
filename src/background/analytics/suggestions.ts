@@ -2,17 +2,19 @@ import type {
   ExperimentBlindBox,
   ExperimentBlindBoxId,
   ExperimentData,
+  ExperimentRealCandidatePool,
   ExperimentVideoCandidate,
 } from '../../shared/types/analytics';
 import type { FavoriteItem, SmartFavoriteIndex } from '../../shared/types/favorite';
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
+import type { RelatedVideoSeed } from '../api/video-blind-box-candidates.ts';
 import { db } from '../storage/db.ts';
 import { getFavoriteItems, getSmartFavoriteIndexMap } from '../storage/favorite-repo.ts';
 
 const DAY_MS = 86_400_000;
 const RECENT_ACTIVITY_DAYS = 45;
 const RECENT_VIDEO_BLOCK_DAYS = 90;
-const RANDOM_VIDEO_BLOCK_DAYS = 14;
+const RANDOM_RELATED_SEED_LIMIT = 3;
 const MIN_INTEREST_RECORDS = 4;
 const MIN_INTEREST_POSITIVE_RECORDS = 2;
 const POSITIVE_COMPLETION = 0.75;
@@ -29,6 +31,7 @@ interface BlindBoxContext {
   watchCountByBvid: Map<string, number>;
   lastWatchByBvid: Map<string, number>;
   usedBvids: Set<string>;
+  randomExplorePool?: ExperimentRealCandidatePool;
 }
 
 interface FavoriteTaste {
@@ -36,21 +39,20 @@ interface FavoriteTaste {
   matchLabels: string[];
 }
 
-interface RandomPoolEntry {
-  source: string;
-  reason: string;
-  evidence: string[];
-  video: ExperimentVideoCandidate;
-}
-
 export async function getExperimentData(): Promise<ExperimentData> {
+  const nowMs = Date.now();
   const [records, favorites, smartIndexByItemKey] = await Promise.all([
     db.watchHistory.toArray(),
     getFavoriteItems(),
     getSmartFavoriteIndexMap(),
   ]);
+  const { fetchRelatedVideoCandidates } = await import('../api/video-blind-box-candidates.ts');
+  const randomExplorePool = await fetchRelatedVideoCandidates(
+    selectRelatedVideoSeeds(records, nowMs),
+    { seedLimit: RANDOM_RELATED_SEED_LIMIT },
+  );
 
-  return buildExperimentData(records, favorites, smartIndexByItemKey, Date.now());
+  return buildExperimentData(records, favorites, smartIndexByItemKey, nowMs, randomExplorePool);
 }
 
 export function buildExperimentData(
@@ -58,6 +60,7 @@ export function buildExperimentData(
   favorites: FavoriteItem[],
   smartIndexByItemKey: Map<string, SmartFavoriteIndex>,
   nowMs = Date.now(),
+  randomExplorePool?: ExperimentRealCandidatePool,
 ): ExperimentData {
   const recentCutoffMs = nowMs - RECENT_ACTIVITY_DAYS * DAY_MS;
   const recentRecords = records.filter(record => toEpochMs(record.viewAt) >= recentCutoffMs);
@@ -79,6 +82,7 @@ export function buildExperimentData(
     watchCountByBvid: countByBvid(records),
     lastWatchByBvid: buildLastWatchByBvid(records),
     usedBvids: new Set<string>(),
+    randomExplorePool,
   };
 
   return {
@@ -354,76 +358,105 @@ function buildReviveInterestBox(ctx: BlindBoxContext): ExperimentBlindBox {
 }
 
 function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
-  const pool = buildRandomPool(ctx)
-    .filter(entry => !ctx.usedBvids.has(entry.video.bvid))
-    .sort((a, b) => a.video.bvid.localeCompare(b.video.bvid, 'en'));
-
-  if (pool.length === 0) {
+  const sourceLabel = '来自相关视频候选';
+  if (!ctx.randomExplorePool || ctx.randomExplorePool.seedCount === 0) {
     return emptyBox(
       'random_explore',
       '随机探索',
-      '不做推荐排序，只从本地视频池里随机抽一条。',
-      ['本地视频池里暂时没有可以安全抽取的候选。'],
-      '先积累可抽取的视频池',
-      `这盒会排除最近 ${RANDOM_VIDEO_BLOCK_DAYS} 天刚看过的视频，以及其他盲盒已经占用的候选。等本地池子再大一点，它就能开出来。`,
+      '不做推荐排序，只从真实候选池里随机抽一条。',
+      ['本地还没有可作为公开相关视频候选种子的 BV 号。'],
+      '真实候选源还没有可用种子',
+      `随机探索现在需要先用最近少量本地历史作为种子，请求 B 站公开视频的相关视频候选池。等本地有可用 BV 号后，它才会开出真实候选。`,
+      sourceLabel,
+      '没有可请求的种子，未生成空白视频卡。',
     );
   }
 
-  const index = stableHash(`${Math.floor(ctx.nowMs / DAY_MS)}:${pool.length}`) % pool.length;
+  const pool = ctx.randomExplorePool.candidates
+    .filter(candidate => !ctx.usedBvids.has(candidate.bvid) && !ctx.recentBvids.has(candidate.bvid))
+    .sort((a, b) => a.bvid.localeCompare(b.bvid, 'en'));
+
+  if (pool.length === 0) {
+    const failureSummary = formatRelatedCandidateFailures(ctx.randomExplorePool);
+    return emptyBox(
+      'random_explore',
+      '随机探索',
+      '不做推荐排序，只从真实候选池里随机抽一条。',
+      [
+        `已尝试 ${ctx.randomExplorePool.seedCount} 个种子视频的相关视频候选。`,
+        failureSummary,
+        `同时会排除最近 ${RECENT_VIDEO_BLOCK_DAYS} 天看过的视频和本页其它盲盒已占用的视频。`,
+      ],
+      '相关视频候选暂时不可用',
+      '这次没有拿到可安全展示的真实候选，Bili-Bill 不会用本地库存视频冒充随机探索候选。',
+      sourceLabel,
+      '真实候选源失败或为空，未生成空白视频卡。',
+    );
+  }
+
+  const index = stableHash(`${Math.floor(ctx.nowMs / DAY_MS)}:${pool.length}:${pool[0]?.seedBvid ?? ''}`) % pool.length;
   const pick = pool[index];
-  ctx.usedBvids.add(pick.video.bvid);
+  ctx.usedBvids.add(pick.bvid);
 
   return {
     id: 'random_explore',
     title: '随机探索',
-    teaser: '不做推荐排序，只从本地视频池里随机抽一条。',
-    source: pick.source,
-    reason: pick.reason,
+    teaser: '不做推荐排序，只从真实候选池里随机抽一条。',
+    source: `${sourceLabel} / 种子视频「${pick.seedTitle || pick.seedBvid}」`,
+    reason: `Bili-Bill 没有保留平台排序，只是在 ${pool.length} 条公开相关视频候选里随机抽取一条。`,
     evidence: [
-      `这次从本地视频池 ${pool.length} 条候选里随机抽取，并排除了最近 ${RANDOM_VIDEO_BLOCK_DAYS} 天看过的视频。`,
-      ...pick.evidence,
+      `候选来自 B 站公开视频的相关视频候选池，使用 ${ctx.randomExplorePool.seedCount} 个本地种子视频逐个请求。`,
+      `抽取前已排除最近 ${RECENT_VIDEO_BLOCK_DAYS} 天看过的视频，以及其它盲盒已经占用的候选。`,
+      `本次种子视频：${pick.seedTitle || pick.seedBvid}。`,
     ],
     state: 'ready',
-    video: pick.video,
+    video: pick,
   };
 }
 
-function buildRandomPool(ctx: BlindBoxContext): RandomPoolEntry[] {
-  const entries = new Map<string, RandomPoolEntry>();
-  const randomCutoffMs = ctx.nowMs - RANDOM_VIDEO_BLOCK_DAYS * DAY_MS;
+function selectRelatedVideoSeeds(records: WatchHistoryRecord[], nowMs: number): RelatedVideoSeed[] {
+  const recentCutoffMs = nowMs - RECENT_VIDEO_BLOCK_DAYS * DAY_MS;
+  const seeds: RelatedVideoSeed[] = [];
+  const seen = new Set<string>();
+  const sortedRecords = [...records]
+    .filter(record => record.business === 'archive' && cleanText(record.bvid))
+    .sort((a, b) => toEpochMs(b.viewAt) - toEpochMs(a.viewAt));
 
-  for (const record of ctx.records) {
-    const video = toHistoryVideo(record);
-    if (!video || !isPositiveRecord(record)) continue;
-    if (toEpochMs(record.viewAt) >= randomCutoffMs) continue;
-    if (entries.has(video.bvid)) continue;
-
-    entries.set(video.bvid, {
-      source: `本地历史 / 标签「${cleanText(record.tagName) || '未标注'}」`,
-      reason: '这盒不猜你会不会点开，只从你自己的本地历史池里随机抽一条代表视频。',
-      evidence: [
-        `它来自本地历史，标签是「${cleanText(record.tagName) || '未标注'}」，上次观看距今 ${daysSince(record.viewAt, ctx.nowMs)} 天。`,
-      ],
-      video,
+  for (const record of sortedRecords) {
+    const bvid = cleanText(record.bvid);
+    if (!isLikelyBvid(bvid) || seen.has(bvid)) continue;
+    const watchedAt = toEpochMs(record.viewAt);
+    if (watchedAt < recentCutoffMs && seeds.length > 0) break;
+    seen.add(bvid);
+    seeds.push({
+      bvid,
+      title: cleanText(record.title) || bvid,
     });
+    if (seeds.length >= RANDOM_RELATED_SEED_LIMIT) break;
   }
 
-  for (const item of ctx.favorites) {
-    const video = toFavoriteVideo(item);
-    if (!video) continue;
-    if ((ctx.lastWatchByBvid.get(video.bvid) ?? 0) >= randomCutoffMs) continue;
+  return seeds;
+}
 
-    entries.set(video.bvid, {
-      source: `本地收藏 / 收藏夹「${item.folderTitle}」`,
-      reason: '这盒不看推荐排序，只从你已经留下来的本地视频池里随机抽取。',
-      evidence: [
-        `它来自收藏夹「${item.folderTitle}」，收藏于 ${daysSince(item.favTime, ctx.nowMs)} 天前。`,
-      ],
-      video,
-    });
+function formatRelatedCandidateFailures(pool: ExperimentRealCandidatePool): string {
+  if (pool.candidates.length > 0) {
+    return `相关视频候选返回 ${pool.candidates.length} 条，但都已被近期观看、重复候选或其它盲盒占用。`;
+  }
+  if (pool.failures.length === 0) {
+    return '相关视频候选没有返回可展示的视频。';
   }
 
-  return [...entries.values()];
+  const counts = pool.failures.reduce<Record<string, number>>((acc, failure) => {
+    acc[failure.reason] = (acc[failure.reason] ?? 0) + 1;
+    return acc;
+  }, {});
+  const parts = [
+    counts.request_failed ? `请求失败 ${counts.request_failed} 个` : '',
+    counts.empty_response ? `空响应 ${counts.empty_response} 个` : '',
+    counts.no_valid_candidates ? `无有效 BV 候选 ${counts.no_valid_candidates} 个` : '',
+  ].filter(Boolean);
+
+  return `相关视频候选暂不可用：${parts.join('，') || '未返回有效候选'}。`;
 }
 
 function emptyBox(
@@ -433,13 +466,15 @@ function emptyBox(
   evidence: string[],
   emptyTitle: string,
   emptyDescription: string,
+  source = '仅使用本地历史 / 本地收藏',
+  reason = '这盒没有足够的本地证据，不会拿泛泛建议来凑数。',
 ): ExperimentBlindBox {
   return {
     id,
     title,
     teaser,
-    source: '仅使用本地历史 / 本地收藏',
-    reason: '这盒没有足够的本地证据，不会拿泛泛建议来凑数。',
+    source,
+    reason,
     evidence,
     state: 'empty',
     emptyTitle,
@@ -541,6 +576,10 @@ function formatPercent(value: number): string {
 
 function cleanText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function isLikelyBvid(value: string): boolean {
+  return /^BV[0-9A-Za-z]{8,}$/.test(value);
 }
 
 function toEpochMs(value: number): number {

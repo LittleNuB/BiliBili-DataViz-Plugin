@@ -180,10 +180,38 @@ export type ExperimentBlindBoxState = 'ready' | 'empty';
 export interface ExperimentVideoCandidate {
   bvid: string;
   avid?: number;
+  cid?: number;
   title: string;
   authorName: string;
+  authorMid?: number;
   cover: string;
+  duration?: number;
+  pubtime?: number;
+  tagName?: string;
   url: string;
+}
+
+export type ExperimentRealCandidateSourceKind = 'bilibili_related';
+
+export interface ExperimentRealVideoCandidate extends ExperimentVideoCandidate {
+  sourceKind: ExperimentRealCandidateSourceKind;
+  sourceLabel: string;
+  seedBvid: string;
+  seedTitle: string;
+}
+
+export interface ExperimentRealCandidateFailure {
+  seedBvid: string;
+  seedTitle: string;
+  reason: 'request_failed' | 'empty_response' | 'no_valid_candidates';
+}
+
+export interface ExperimentRealCandidatePool {
+  sourceKind: ExperimentRealCandidateSourceKind;
+  sourceLabel: string;
+  seedCount: number;
+  candidates: ExperimentRealVideoCandidate[];
+  failures: ExperimentRealCandidateFailure[];
 }
 
 export interface ExperimentBlindBox {
