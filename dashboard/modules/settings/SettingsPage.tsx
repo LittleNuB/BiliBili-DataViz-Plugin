@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { requestSW } from '../../utils/messaging';
+import {
+  buildLocalDataOperationMessage,
+  buildLocalDataSummaryCards,
+  buildSmartFavoriteRebuildMessage,
+  dangerousLocalDataClearScope,
+  formatLocalDataError,
+  LOCAL_DATA_CLEAR_CONFIRMATION,
+} from '../../../src/shared/local-data-privacy';
 import type {
   AiConfig,
   AiConnectionTestResult,
@@ -7,8 +15,13 @@ import type {
   DynamicBillConfig,
   UserConfig,
 } from '../../../src/shared/types/config';
+import type {
+  LocalDataOperationResult,
+  LocalDataPrivacySummary,
+  SmartFavoriteIndexRebuildResult,
+} from '../../../src/shared/types/local-data-privacy';
 
-type BusyState = '' | 'save' | 'test';
+type BusyState = '' | 'save' | 'test' | 'local-refresh' | 'subtitle-clear' | 'index-rebuild' | 'clear-all';
 
 interface AiFormState {
   baseURL: string;
@@ -43,9 +56,14 @@ export function SettingsPage() {
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [lastTest, setLastTest] = useState<AiConnectionTestResult | null>(null);
+  const [localData, setLocalData] = useState<LocalDataPrivacySummary | null>(null);
+  const [localDataError, setLocalDataError] = useState('');
+  const [clearConfirmVisible, setClearConfirmVisible] = useState(false);
+  const [clearConfirmText, setClearConfirmText] = useState('');
 
   useEffect(() => {
     void refreshConfig();
+    void refreshLocalData();
   }, []);
 
   const effectiveAiConfig = useMemo<AiConfig>(() => ({
@@ -65,6 +83,8 @@ export function SettingsPage() {
       || assistant.currentVideoSegmentRerankAiEnabled !== loadedConfig.assistant.currentVideoSegmentRerankAiEnabled
       || dynamicBill.aiExplanationsEnabled !== loadedConfig.dynamicBill.aiExplanationsEnabled;
   }, [assistant, dynamicBill, form, loadedConfig]);
+  const localDataCards = localData ? buildLocalDataSummaryCards(localData) : [];
+  const canConfirmClear = clearConfirmText.trim() === LOCAL_DATA_CLEAR_CONFIRMATION;
 
   async function refreshConfig() {
     setLoading(true);
@@ -78,6 +98,16 @@ export function SettingsPage() {
       setError(formatSettingsError(err));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refreshLocalData() {
+    setLocalDataError('');
+    try {
+      const summary = await requestSW<LocalDataPrivacySummary>('GET_LOCAL_DATA_PRIVACY_SUMMARY');
+      setLocalData(summary);
+    } catch (err) {
+      setLocalDataError(formatLocalDataError(err));
     }
   }
 
@@ -121,6 +151,65 @@ export function SettingsPage() {
       setNotice(`连接测试通过：模型 ${result.model} 已响应，用时 ${result.latencyMs} 毫秒。`);
     } catch (err) {
       setError(formatConnectionError(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function refreshLocalDataFromButton() {
+    setBusy('local-refresh');
+    setNotice('');
+    setError('');
+    await refreshLocalData();
+    setBusy('');
+  }
+
+  async function clearSubtitleCache() {
+    setBusy('subtitle-clear');
+    setNotice('');
+    setError('');
+    try {
+      const result = await requestSW<LocalDataOperationResult>('CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE');
+      setNotice(buildLocalDataOperationMessage(result));
+      await refreshLocalData();
+    } catch (err) {
+      setLocalDataError(formatLocalDataError(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function rebuildSmartFavoriteIndex() {
+    setBusy('index-rebuild');
+    setNotice('');
+    setError('');
+    try {
+      const result = await requestSW<SmartFavoriteIndexRebuildResult>('REBUILD_SMART_FAVORITE_INDEX');
+      setNotice(buildSmartFavoriteRebuildMessage(result));
+      await refreshLocalData();
+    } catch (err) {
+      setLocalDataError(formatLocalDataError(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function clearAllLocalData() {
+    setBusy('clear-all');
+    setNotice('');
+    setError('');
+    try {
+      const result = await requestSW<LocalDataOperationResult>('CLEAR_ALL_LOCAL_DATA', {
+        confirmation: clearConfirmText.trim(),
+      });
+      const message = buildLocalDataOperationMessage(result);
+      setClearConfirmVisible(false);
+      setClearConfirmText('');
+      await refreshConfig();
+      await refreshLocalData();
+      setNotice(message);
+    } catch (err) {
+      setLocalDataError(formatLocalDataError(err));
     } finally {
       setBusy('');
     }
@@ -268,8 +357,119 @@ export function SettingsPage() {
       <section className="settings-panel">
         <div className="settings-section-head">
           <div>
+            <h3>本地数据与隐私管理</h3>
+            <p>这里只展示本地数据的数量、覆盖范围和最近时间，不展示完整记录、敏感标识或本地文件路径。</p>
+          </div>
+          <span className="settings-pill">
+            {localData ? '状态已读取' : '等待读取'}
+          </span>
+        </div>
+
+        {localDataError && <div className="settings-alert settings-alert-error">{localDataError}</div>}
+
+        <div className="settings-data-grid">
+          {localDataCards.length > 0
+            ? localDataCards.map(card => (
+              <article className="settings-data-card" key={card.id}>
+                <span>{card.title}</span>
+                <strong>{card.value}</strong>
+                <p>{card.detail}</p>
+                <small>{card.meta}</small>
+              </article>
+            ))
+            : (
+              <div className="settings-data-empty">
+                正在读取本地数据摘要...
+              </div>
+            )}
+        </div>
+
+        {localData && (
+          <div className="settings-data-subgrid">
+            <DataStat label="待索引收藏" value={localData.favorites.pendingIndexItems} />
+            <DataStat label="索引失败" value={localData.favorites.failedIndexItems} />
+            <DataStat label="过期字幕片段" value={localData.currentVideoSubtitles.staleSegmentCount} />
+            <DataStat label="动态反馈" value={localData.dynamicBill.feedbackCount} />
+          </div>
+        )}
+
+        <div className="settings-actions">
+          <button type="button" className="settings-action" onClick={refreshLocalDataFromButton} disabled={!!busy}>
+            {busy === 'local-refresh' ? '刷新中...' : '刷新状态'}
+          </button>
+          <button
+            type="button"
+            className="settings-action"
+            onClick={clearSubtitleCache}
+            disabled={!!busy || !localData || localData.currentVideoSubtitles.segmentCount === 0}
+          >
+            {busy === 'subtitle-clear' ? '清理中...' : '清理字幕缓存'}
+          </button>
+          <button
+            type="button"
+            className="settings-action"
+            onClick={rebuildSmartFavoriteIndex}
+            disabled={!!busy || !localData || localData.favorites.storedItems === 0}
+          >
+            {busy === 'index-rebuild' ? '重建中...' : '重建智能收藏索引'}
+          </button>
+          <button
+            type="button"
+            className="settings-action settings-action-danger"
+            onClick={() => setClearConfirmVisible(true)}
+            disabled={!!busy}
+          >
+            清理本地数据
+          </button>
+        </div>
+
+        {clearConfirmVisible && (
+          <div className="settings-danger-box">
+            <div>
+              <strong>确认清理本地数据</strong>
+              <p>这会删除 Bili-Bill 保存在浏览器扩展里的本地内容数据和本地设置，不会修改 B 站账号、关注关系、收藏夹或视频数据。</p>
+            </div>
+            <ul>
+              {dangerousLocalDataClearScope().map(item => <li key={item}>{item}</li>)}
+            </ul>
+            <label className="settings-field">
+              <span>输入“{LOCAL_DATA_CLEAR_CONFIRMATION}”确认</span>
+              <input
+                value={clearConfirmText}
+                onInput={(event) => setClearConfirmText(event.currentTarget.value)}
+                autoComplete="off"
+              />
+            </label>
+            <div className="settings-actions">
+              <button
+                type="button"
+                className="settings-action settings-action-danger"
+                onClick={clearAllLocalData}
+                disabled={!!busy || !canConfirmClear}
+              >
+                {busy === 'clear-all' ? '清理中...' : '确认清理'}
+              </button>
+              <button
+                type="button"
+                className="settings-action"
+                onClick={() => {
+                  setClearConfirmVisible(false);
+                  setClearConfirmText('');
+                }}
+                disabled={!!busy}
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="settings-panel">
+        <div className="settings-section-head">
+          <div>
             <h3>隐私边界</h3>
-            <p>这里记录 Bili-Bill 的本地数据和 AI 请求边界，后续本地数据管理会在单独切片接入。</p>
+            <p>这里记录 Bili-Bill 的本地数据和 AI 请求边界。</p>
           </div>
         </div>
         <ul className="settings-privacy-list">
@@ -279,6 +479,15 @@ export function SettingsPage() {
           <li>动态账单、收藏和当前视频功能不会写回 B 站关注关系、收藏夹或视频数据。</li>
         </ul>
       </section>
+    </div>
+  );
+}
+
+function DataStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="settings-data-stat">
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }

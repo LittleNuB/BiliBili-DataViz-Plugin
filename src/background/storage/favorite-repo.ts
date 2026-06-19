@@ -139,6 +139,12 @@ export async function countIndexedFavorites(): Promise<number> {
   return db.smartFavoriteIndex.where({ status: 'indexed' }).count();
 }
 
+export async function clearSmartFavoriteIndex(): Promise<number> {
+  const count = await db.smartFavoriteIndex.count();
+  await db.smartFavoriteIndex.clear();
+  return count;
+}
+
 async function attachExistingFavoriteFolderIds(folders: FavoriteFolder[]): Promise<FavoriteFolder[]> {
   if (folders.length === 0) return [];
   const mediaIds = folders.map(folder => folder.mediaId);

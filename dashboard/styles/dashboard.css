@@ -450,6 +450,12 @@ button {
   background: var(--bili-pink);
 }
 
+.settings-action-danger {
+  border-color: rgba(255, 107, 107, 0.48);
+  color: #FFFFFF;
+  background: rgba(255, 107, 107, 0.2);
+}
+
 .settings-action:disabled {
   cursor: not-allowed;
   opacity: 0.58;
@@ -524,6 +530,105 @@ button {
 .settings-privacy-list {
   display: grid;
   gap: 8px;
+  padding-left: 18px;
+}
+
+.settings-data-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-data-card,
+.settings-data-empty,
+.settings-data-stat,
+.settings-danger-box {
+  border: 1px solid #333355;
+  border-radius: 8px;
+  background: #1A1A2E;
+}
+
+.settings-data-card {
+  display: grid;
+  gap: 6px;
+  min-height: 138px;
+  padding: 12px;
+}
+
+.settings-data-card span,
+.settings-data-stat span {
+  color: #8FDDF6;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.settings-data-card strong {
+  color: #FFFFFF;
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.settings-data-card p,
+.settings-data-card small,
+.settings-danger-box p,
+.settings-danger-box li {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.settings-data-card p {
+  margin: 0;
+}
+
+.settings-data-empty {
+  grid-column: 1 / -1;
+  min-height: 96px;
+  padding: 18px;
+  color: var(--text-secondary);
+}
+
+.settings-data-subgrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-data-stat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 42px;
+  padding: 10px 12px;
+}
+
+.settings-data-stat strong {
+  color: #FFFFFF;
+  font-size: 16px;
+}
+
+.settings-danger-box {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-color: rgba(255, 107, 107, 0.36);
+  background: rgba(255, 107, 107, 0.08);
+}
+
+.settings-danger-box strong {
+  color: #FFD0D0;
+  font-size: 14px;
+}
+
+.settings-danger-box p {
+  margin: 5px 0 0;
+}
+
+.settings-danger-box ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
   padding-left: 18px;
 }
 
@@ -1505,6 +1610,8 @@ button {
   .dynamic-bill-status-grid,
   .dynamic-bill-board,
   .creator-follow-board,
+  .settings-data-grid,
+  .settings-data-subgrid,
   .settings-toggle-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1586,6 +1693,8 @@ button {
 
   .settings-hero,
   .settings-form-grid,
+  .settings-data-grid,
+  .settings-data-subgrid,
   .settings-toggle-grid {
     grid-template-columns: 1fr;
   }
@@ -1608,6 +1717,8 @@ button {
   .dynamic-bill-board,
   .creator-follow-board,
   .creator-secondary-grid,
+  .settings-data-grid,
+  .settings-data-subgrid,
   .settings-toggle-grid {
     grid-template-columns: 1fr;
   }

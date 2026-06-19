@@ -39,6 +39,11 @@ import type { VideoKnowledgeJumpResponse, VideoKnowledgeResult } from './video-k
 import type { HistoryTailProbeReport } from './history-tail-probe';
 import type { HistorySyncCursorSnapshot, HistorySyncMode } from './history-sync';
 import type { AiConnectionTestResult } from './config';
+import type {
+  LocalDataOperationResult,
+  LocalDataPrivacySummary,
+  SmartFavoriteIndexRebuildResult,
+} from './local-data-privacy';
 
 // 弹窗 / 面板 → Service Worker
 export type RequestAction =
@@ -54,6 +59,10 @@ export type RequestAction =
   | 'GET_CONFIG'
   | 'UPDATE_CONFIG'
   | 'TEST_AI_CONNECTION'
+  | 'GET_LOCAL_DATA_PRIVACY_SUMMARY'
+  | 'CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE'
+  | 'REBUILD_SMART_FAVORITE_INDEX'
+  | 'CLEAR_ALL_LOCAL_DATA'
   | 'EXPORT_DATA'
   | 'EXPORT_DATA_PAGE'
   | 'GET_SYNC_STATUS'
@@ -201,3 +210,6 @@ export type DynamicBillFilterResponse = BiliVizResponse<DynamicBillFilterPrefere
 export type DynamicBillFeedbackResponse = BiliVizResponse<DynamicBillFeedbackResult>;
 export type HistoryTailProbeResponse = BiliVizResponse<HistoryTailProbeReport>;
 export type AiConnectionTestResponse = BiliVizResponse<AiConnectionTestResult>;
+export type LocalDataPrivacySummaryResponse = BiliVizResponse<LocalDataPrivacySummary>;
+export type LocalDataOperationResponse = BiliVizResponse<LocalDataOperationResult>;
+export type SmartFavoriteIndexRebuildResponse = BiliVizResponse<SmartFavoriteIndexRebuildResult>;
