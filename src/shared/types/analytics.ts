@@ -189,9 +189,15 @@ export interface ExperimentVideoCandidate {
   pubtime?: number;
   tagName?: string;
   url: string;
+  publishedAt?: number;
+  sourceKind?: 'local_history' | 'local_favorite' | 'bilibili_related' | 'bili_region_dynamic';
+  sourceLabel?: string;
+  regionRid?: number;
+  regionName?: string;
+  cooldownLabel?: string;
 }
 
-export type ExperimentRealCandidateSourceKind = 'bilibili_related';
+export type ExperimentRealCandidateSourceKind = 'bilibili_related' | 'bili_region_dynamic';
 
 export interface ExperimentRealVideoCandidate extends ExperimentVideoCandidate {
   sourceKind: ExperimentRealCandidateSourceKind;
@@ -222,6 +228,7 @@ export interface ExperimentBlindBox {
   reason: string;
   evidence: string[];
   state: ExperimentBlindBoxState;
+  statusLabel?: string;
   video?: ExperimentVideoCandidate;
   emptyTitle?: string;
   emptyDescription?: string;

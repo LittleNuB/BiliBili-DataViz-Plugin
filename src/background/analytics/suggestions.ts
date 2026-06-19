@@ -7,7 +7,11 @@ import type {
 } from '../../shared/types/analytics';
 import type { FavoriteItem, SmartFavoriteIndex } from '../../shared/types/favorite';
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
-import type { RelatedVideoSeed } from '../api/video-blind-box-candidates.ts';
+import type {
+  RelatedVideoSeed,
+  VarietyRegionCandidatePool,
+  VarietyRegionDirection,
+} from '../api/video-blind-box-candidates.ts';
 import { db } from '../storage/db.ts';
 import { getFavoriteItems, getSmartFavoriteIndexMap } from '../storage/favorite-repo.ts';
 
@@ -15,6 +19,8 @@ const DAY_MS = 86_400_000;
 const RECENT_ACTIVITY_DAYS = 45;
 const RECENT_VIDEO_BLOCK_DAYS = 90;
 const RANDOM_RELATED_SEED_LIMIT = 3;
+const VARIETY_LONG_WINDOW_DAYS = 180;
+const VARIETY_RECENT_WINDOW_DAYS = 30;
 const MIN_INTEREST_RECORDS = 4;
 const MIN_INTEREST_POSITIVE_RECORDS = 2;
 const POSITIVE_COMPLETION = 0.75;
@@ -32,11 +38,12 @@ interface BlindBoxContext {
   lastWatchByBvid: Map<string, number>;
   usedBvids: Set<string>;
   randomExplorePool?: ExperimentRealCandidatePool;
+  varietyRegionPool?: VarietyRegionCandidatePool;
 }
 
-interface FavoriteTaste {
-  displayLabel: string;
-  matchLabels: string[];
+interface ExperimentBuildOptions {
+  randomExplorePool?: ExperimentRealCandidatePool;
+  varietyRegionPool?: VarietyRegionCandidatePool;
 }
 
 export async function getExperimentData(): Promise<ExperimentData> {
@@ -46,13 +53,25 @@ export async function getExperimentData(): Promise<ExperimentData> {
     getFavoriteItems(),
     getSmartFavoriteIndexMap(),
   ]);
-  const { fetchRelatedVideoCandidates } = await import('../api/video-blind-box-candidates.ts');
-  const randomExplorePool = await fetchRelatedVideoCandidates(
-    selectRelatedVideoSeeds(records, nowMs),
-    { seedLimit: RANDOM_RELATED_SEED_LIMIT },
-  );
+  const {
+    fetchRelatedVideoCandidates,
+    fetchVarietyRegionCandidatePool,
+    buildVarietyRegionSourceFailure,
+  } = await import('../api/video-blind-box-candidates.ts');
 
-  return buildExperimentData(records, favorites, smartIndexByItemKey, nowMs, randomExplorePool);
+  const [randomExplorePool, varietyRegionPool] = await Promise.all([
+    fetchRelatedVideoCandidates(
+      selectRelatedVideoSeeds(records, nowMs),
+      { seedLimit: RANDOM_RELATED_SEED_LIMIT },
+    ),
+    fetchVarietyRegionCandidatePool(records, { nowMs })
+      .catch(error => buildVarietyRegionSourceFailure(records, nowMs, error)),
+  ]);
+
+  return buildExperimentData(records, favorites, smartIndexByItemKey, nowMs, {
+    randomExplorePool,
+    varietyRegionPool,
+  });
 }
 
 export function buildExperimentData(
@@ -60,8 +79,9 @@ export function buildExperimentData(
   favorites: FavoriteItem[],
   smartIndexByItemKey: Map<string, SmartFavoriteIndex>,
   nowMs = Date.now(),
-  randomExplorePool?: ExperimentRealCandidatePool,
+  optionsOrRandomPool: ExperimentBuildOptions | ExperimentRealCandidatePool = {},
 ): ExperimentData {
+  const options = normalizeExperimentBuildOptions(optionsOrRandomPool);
   const recentCutoffMs = nowMs - RECENT_ACTIVITY_DAYS * DAY_MS;
   const recentRecords = records.filter(record => toEpochMs(record.viewAt) >= recentCutoffMs);
 
@@ -82,7 +102,8 @@ export function buildExperimentData(
     watchCountByBvid: countByBvid(records),
     lastWatchByBvid: buildLastWatchByBvid(records),
     usedBvids: new Set<string>(),
-    randomExplorePool,
+    randomExplorePool: options.randomExplorePool,
+    varietyRegionPool: options.varietyRegionPool,
   };
 
   return {
@@ -96,93 +117,170 @@ export function buildExperimentData(
   };
 }
 
+function normalizeExperimentBuildOptions(
+  value: ExperimentBuildOptions | ExperimentRealCandidatePool,
+): ExperimentBuildOptions {
+  if ('sourceKind' in value && 'candidates' in value && 'failures' in value) {
+    return { randomExplorePool: value };
+  }
+  return value;
+}
+
 function buildVarietyBox(ctx: BlindBoxContext): ExperimentBlindBox {
-  if (ctx.favorites.length === 0) {
+  const title = '换口味';
+  const teaser = '从长期兴趣里找一条近期少看的真实 B 站新视频。';
+  const pool = ctx.varietyRegionPool;
+
+  if (!pool) {
     return emptyBox(
       'variety',
-      '换口味',
-      '从本地收藏里挑一条和最近口味不一样的。',
-      ['本地收藏 0 条，暂时没有可以换口味的视频池。'],
-      '先把收藏同步进来',
-      '这盒只从本地收藏里挑视频。同步收藏后，我才能从你已经留住的视频里找一条明显不同的口味。',
+      title,
+      teaser,
+      ['真实候选源尚未返回，暂不使用本地收藏冒充候选全集。'],
+      '真实候选池还没准备好',
+      '换口味需要先根据本地长期兴趣选择冷却分区，再从 B 站分区新视频候选池抽取。当前没有拿到候选源结果，所以不显示空卡。',
+      '候选源未返回',
+      'B 站分区新视频',
+      '真实候选源尚未返回，换口味不会退回本地收藏夹凑数。',
     );
   }
 
-  if (ctx.recentRecords.length < 6 || ctx.recentTopTags.length === 0) {
+  if (pool.status !== 'ready' || pool.candidates.length === 0 || pool.directions.length === 0) {
     return emptyBox(
       'variety',
-      '换口味',
-      '从本地收藏里挑一条和最近口味不一样的。',
-      [`最近 ${RECENT_ACTIVITY_DAYS} 天本地历史只有 ${ctx.recentRecords.length} 条，口味轮廓还不够稳定。`],
-      '最近历史还不够成型',
-      '等最近再多积累一点观看记录，我才能判断你现在的主口味，并从收藏里挑一条真正“换口味”的视频。',
+      title,
+      teaser,
+      pool.evidence.length > 0 ? pool.evidence : ['没有留下可解释的真实候选池证据。'],
+      varietyEmptyTitle(pool.status),
+      varietyEmptyDescription(pool),
+      varietyEmptyStatusLabel(pool.status),
+      pool.sourceLabel,
+      varietyEmptyReason(pool),
     );
   }
 
-  const dominantTag = ctx.recentTopTags[0];
-  const candidates = ctx.favorites
-    .map(item => {
-      const video = toFavoriteVideo(item);
-      if (!video || ctx.usedBvids.has(video.bvid) || ctx.recentBvids.has(video.bvid)) return null;
-
-      const smart = ctx.smartIndexByItemKey.get(item.itemKey);
-      const taste = getFavoriteTaste(item, smart);
-      const tasteDiff = taste.matchLabels.every(label => !ctx.recentTopTags.includes(label));
-      if (!tasteDiff) return null;
-
-      const favoriteAgeDays = daysSince(item.favTime, ctx.nowMs);
-      const score = favoriteAgeDays
-        + (smart?.status === 'indexed' ? 20 : 0)
-        + (ctx.recentAuthorMids.has(item.authorMid) ? 0 : 12);
-
-      return {
-        item,
-        taste,
-        smart,
-        video,
-        favoriteAgeDays,
-        score,
-      };
-    })
-    .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
-    .sort((a, b) => b.score - a.score);
-
+  const candidates = pool.candidates.filter(video => !ctx.usedBvids.has(video.bvid) && !ctx.recentBvids.has(video.bvid));
   if (candidates.length === 0) {
-    const indexedCount = ctx.favorites.filter(item => ctx.smartIndexByItemKey.get(item.itemKey)?.status === 'indexed').length;
     return emptyBox(
       'variety',
-      '换口味',
-      '从本地收藏里挑一条和最近口味不一样的。',
+      title,
+      teaser,
       [
-        `最近 ${RECENT_ACTIVITY_DAYS} 天高频主题：${ctx.recentTopTags.join('、')}。`,
-        `本地收藏 ${ctx.favorites.length} 条，其中已生成智能路径 ${indexedCount} 条。`,
+        ...pool.evidence,
+        `真实候选池有 ${pool.candidates.length} 条，但都已被本页其他盲盒占用或在本地最近 ${RECENT_VIDEO_BLOCK_DAYS} 天看过。`,
       ],
-      indexedCount === 0 ? '先生成收藏分类路径' : '收藏和最近口味太接近',
-      indexedCount === 0
-        ? '这盒需要靠本地收藏路径来判断“不同口味”。先同步收藏并生成智能索引，再回来开盒。'
-        : '你最近看的主题和本地收藏重合度很高，暂时挑不出一条明显反差的换口味视频。',
+      '候选都被近期记录挡住了',
+      '换口味不会从近期已经看过的视频里硬抽，也不会退回本地收藏夹凑数。稍后刷新或等分区新视频更新后再试。',
+      '候选已冷却过滤',
+      pool.sourceLabel,
+      '真实候选池有结果，但经过近期观看和本页占用过滤后没有剩余视频。',
     );
   }
 
-  const pick = candidates[0];
-  ctx.usedBvids.add(pick.video.bvid);
+  const pick = candidates[stableHash(`${Math.floor(ctx.nowMs / DAY_MS)}:${pool.directions[0].rid}:${candidates.length}`) % candidates.length];
+  const direction = pool.directions.find(item => item.rid === pick.regionRid) ?? pool.directions[0];
+  ctx.usedBvids.add(pick.bvid);
 
   return {
     id: 'variety',
-    title: '换口味',
-    teaser: '从本地收藏里挑一条和最近口味不一样的。',
-    source: pick.smart?.status === 'indexed'
-      ? `本地收藏 / 智能路径「${pick.taste.displayLabel}」`
-      : `本地收藏 / 收藏夹「${pick.item.folderTitle}」`,
-    reason: `最近 ${RECENT_ACTIVITY_DAYS} 天你更常看「${dominantTag}」，这条收藏落在「${pick.taste.displayLabel}」，适合作为一次主动换口味。`,
+    title,
+    teaser,
+    source: pick.sourceLabel ?? `${pool.sourceLabel} / ${direction.regionName}`,
+    reason: buildVarietyReason(direction, pick),
     evidence: [
-      `最近 ${RECENT_ACTIVITY_DAYS} 天共有 ${ctx.recentRecords.length} 条本地观看，主口味集中在：${ctx.recentTopTags.join('、')}。`,
-      `这条视频收藏于 ${pick.favoriteAgeDays} 天前，来自 ${pick.smart?.status === 'indexed' ? `智能路径「${pick.taste.displayLabel}」` : `收藏夹「${pick.item.folderTitle}」`}。`,
-      `本地最近 ${RECENT_VIDEO_BLOCK_DAYS} 天没有再看过它${ctx.recentAuthorMids.has(pick.item.authorMid) ? '' : '，这位 UP 也不在你最近的高频观看里'}。`,
+      ...buildVarietyReadyEvidence(direction, pick, pool),
+      `这条候选来自公开分区「${pick.regionName ?? direction.regionName}」，Bili-Bill 只保留 bvid、标题、UP、封面、时长和播放页链接用于展示。`,
+      '本地历史和收藏只参与选择冷却方向与解释，不作为本次换口味的候选全集。',
     ],
     state: 'ready',
-    video: pick.video,
+    statusLabel: '真实候选',
+    video: pick,
   };
+}
+
+function buildVarietyReason(
+  direction: VarietyRegionDirection,
+  video: ExperimentVideoCandidate,
+): string {
+  const recentHigh = direction.recentHighLabels.length > 0
+    ? direction.recentHighLabels.join('、')
+    : '暂无明显高频口味';
+  return `你长期看过「${direction.label}」，但最近 ${VARIETY_RECENT_WINDOW_DAYS} 天这个方向正向观看 ${direction.recentPositiveCount} 次，低于长期 ${VARIETY_LONG_WINDOW_DAYS} 天节奏；这条来自 B 站「${video.regionName ?? direction.regionName}」分区新视频候选，和最近高频的「${recentHigh}」拉开距离。`;
+}
+
+function buildVarietyReadyEvidence(
+  direction: VarietyRegionDirection,
+  video: ExperimentVideoCandidate,
+  pool: VarietyRegionCandidatePool,
+): string[] {
+  const recentHigh = direction.recentHighLabels.length > 0
+    ? direction.recentHighLabels.join('、')
+    : '暂无明显高频口味';
+  return [
+    `长期 ${VARIETY_LONG_WINDOW_DAYS} 天里，「${direction.label}」有 ${direction.longWatchedCount} 条观看、${direction.longPositiveCount} 条正向观看。`,
+    `近期 ${VARIETY_RECENT_WINDOW_DAYS} 天里，这个方向正向观看 ${direction.recentPositiveCount} 条；按长期节奏预期约 ${formatCount(direction.expectedRecentPositive)} 条。`,
+    `最近高频口味是：${recentHigh}；本次只从冷却方向「${video.regionName ?? direction.regionName}」分区取新视频候选。`,
+    `真实候选池返回 ${pool.candidates.length} 条可打开视频，已排除最近 ${RECENT_VIDEO_BLOCK_DAYS} 天本地看过的同 bvid ${pool.excludedRecentBvidCount} 条。`,
+  ];
+}
+
+function varietyEmptyTitle(status: VarietyRegionCandidatePool['status']): string {
+  switch (status) {
+    case 'insufficient_local_evidence':
+      return '本地冷却方向还不够明确';
+    case 'unmapped_interest':
+      return '长期兴趣暂时映射不到公开分区';
+    case 'source_failed':
+      return '分区新视频候选源暂不可用';
+    case 'empty':
+      return '真实候选池这次没有留下可打开视频';
+    case 'ready':
+      return '真实候选池暂时为空';
+  }
+}
+
+function varietyEmptyDescription(pool: VarietyRegionCandidatePool): string {
+  switch (pool.status) {
+    case 'insufficient_local_evidence':
+      return '换口味需要先从本地长期历史里找出“长期相关、近期低频”的方向。当前证据不足时不会退回本地收藏夹凑数。';
+    case 'unmapped_interest':
+      return '本地长期兴趣还不能保守映射到 B 站公开分区，所以暂不请求不相关候选，也不从近期高频口味里抽。';
+    case 'source_failed':
+      return `已找到冷却方向，但 B 站分区新视频候选源请求失败${pool.failureReason ? `：${pool.failureReason}` : ''}。本卡保留降级说明，不显示空视频。`;
+    case 'empty':
+      return '已找到冷却方向并尝试真实候选源，但本轮没有可打开的新视频候选。刷新后可重试，当前不会改用本地收藏作为候选全集。';
+    case 'ready':
+      return '真实候选池返回了结果，但候选列表为空。当前不显示空卡。';
+  }
+}
+
+function varietyEmptyReason(pool: VarietyRegionCandidatePool): string {
+  switch (pool.status) {
+    case 'insufficient_local_evidence':
+      return '本地长期兴趣和近期冷却差异还不够明确，暂不生成换口味真实候选。';
+    case 'unmapped_interest':
+      return '本地长期兴趣暂时不能保守映射到 B 站分区，暂不硬抽无关候选。';
+    case 'source_failed':
+      return '已找到换口味冷却方向，但真实分区新视频候选源暂不可用。';
+    case 'empty':
+      return '已请求真实分区新视频候选池，但本轮没有留下可打开候选。';
+    case 'ready':
+      return '真实分区新视频候选池没有返回可展示视频。';
+  }
+}
+
+function varietyEmptyStatusLabel(status: VarietyRegionCandidatePool['status']): string {
+  switch (status) {
+    case 'source_failed':
+      return '候选源暂不可用';
+    case 'empty':
+    case 'ready':
+      return '真实候选为空';
+    case 'unmapped_interest':
+      return '分区未映射';
+    case 'insufficient_local_evidence':
+      return '冷却证据不足';
+  }
 }
 
 function buildHiddenFavoriteBox(ctx: BlindBoxContext): ExperimentBlindBox {
@@ -366,7 +464,8 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
       '不做推荐排序，只从真实候选池里随机抽一条。',
       ['本地还没有可作为公开相关视频候选种子的 BV 号。'],
       '真实候选源还没有可用种子',
-      `随机探索现在需要先用最近少量本地历史作为种子，请求 B 站公开视频的相关视频候选池。等本地有可用 BV 号后，它才会开出真实候选。`,
+      '随机探索现在需要先用最近少量本地历史作为种子，请求 B 站公开视频的相关视频候选池。等本地有可用 BV 号后，它才会开出真实候选。',
+      '候选源未准备好',
       sourceLabel,
       '没有可请求的种子，未生成空白视频卡。',
     );
@@ -389,6 +488,7 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
       ],
       '相关视频候选暂时不可用',
       '这次没有拿到可安全展示的真实候选，Bili-Bill 不会用本地库存视频冒充随机探索候选。',
+      '候选源暂不可用',
       sourceLabel,
       '真实候选源失败或为空，未生成空白视频卡。',
     );
@@ -466,17 +566,19 @@ function emptyBox(
   evidence: string[],
   emptyTitle: string,
   emptyDescription: string,
-  source = '仅使用本地历史 / 本地收藏',
-  reason = '这盒没有足够的本地证据，不会拿泛泛建议来凑数。',
+  statusLabel?: string,
+  source?: string,
+  reason?: string,
 ): ExperimentBlindBox {
   return {
     id,
     title,
     teaser,
-    source,
-    reason,
+    source: source ?? '仅使用本地历史 / 本地收藏',
+    reason: reason ?? '这盒没有足够的本地证据，不会拿泛泛建议来凑数。',
     evidence,
     state: 'empty',
+    statusLabel,
     emptyTitle,
     emptyDescription,
   };
@@ -503,18 +605,6 @@ function toFavoriteVideo(item: FavoriteItem): ExperimentVideoCandidate | null {
     authorName: cleanText(item.authorName) || '未知 UP',
     cover: cleanText(item.cover),
     url: buildVideoUrl(item.bvid, item.avid),
-  };
-}
-
-function getFavoriteTaste(item: FavoriteItem, smart: SmartFavoriteIndex | undefined): FavoriteTaste {
-  const path = smart?.status === 'indexed'
-    ? smart.path.map(cleanText).filter(Boolean)
-    : [];
-  const fallback = [item.tagName, item.folderTitle].map(cleanText).filter(Boolean);
-  const displayParts = path.length > 0 ? path : fallback.length > 0 ? fallback : ['未命名口味'];
-  return {
-    displayLabel: displayParts.join(' / '),
-    matchLabels: uniqueTexts([...displayParts, item.tagName, item.folderTitle]),
   };
 }
 
@@ -553,18 +643,6 @@ function topLabels(labels: string[], limit: number): string[] {
     .map(([label]) => label);
 }
 
-function uniqueTexts(values: string[]): string[] {
-  const result: string[] = [];
-  const seen = new Set<string>();
-  for (const value of values.map(cleanText).filter(Boolean)) {
-    const key = value.toLocaleLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(value);
-  }
-  return result;
-}
-
 function isPositiveRecord(record: WatchHistoryRecord): boolean {
   return record.actualCompletion >= POSITIVE_COMPLETION
     || Math.max(0, record.progress) >= Math.min(Math.max(0, record.duration), 900);
@@ -572,6 +650,10 @@ function isPositiveRecord(record: WatchHistoryRecord): boolean {
 
 function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
+}
+
+function formatCount(value: number): string {
+  return String(Math.round(value * 10) / 10);
 }
 
 function cleanText(value: unknown): string {
