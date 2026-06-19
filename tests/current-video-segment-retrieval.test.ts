@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { searchCurrentVideoSegments } from '../src/shared/current-video-segment-retrieval.ts';
+import {
+  rewriteCurrentVideoSegmentQuery,
+  searchCurrentVideoSegments,
+} from '../src/shared/current-video-segment-retrieval.ts';
 import { buildVideoKnowledgeResult } from '../src/shared/video-knowledge.ts';
 import type { CurrentVideoContext, CurrentVideoContextResult } from '../src/shared/types/current-video-context.ts';
 import type { CurrentVideoTranscriptSegment } from '../src/shared/types/current-video-transcript.ts';
@@ -46,6 +49,122 @@ test('matches a Chinese fuzzy phrase by token and n-gram overlap', () => {
   assert.equal(result.candidates[0].timeRangeLabel, '0:24-0:32');
   assert.ok(result.candidates[0].evidenceText.includes('模型'));
   assert.ok(result.candidates[0].matchReasons.some(reason => reason.includes('中文短语') || reason.includes('模型')));
+});
+
+test('rewrites required current-video synonym groups locally without AI', () => {
+  const cases = [
+    {
+      query: 'sub-agent',
+      expected: ['子代理', '子智能体', '多代理', 'multi-agent'],
+    },
+    {
+      query: 'multi-agent',
+      expected: ['subagent', '子代理', '子智能体', '多代理'],
+    },
+    {
+      query: '上下文窗口',
+      expected: ['长上下文', '1M context', '100万上下文', '一兆上下文'],
+    },
+    {
+      query: 'function calling',
+      expected: ['tool use', '工具调用', '函数调用'],
+    },
+  ];
+
+  for (const item of cases) {
+    const rewrite = rewriteCurrentVideoSegmentQuery(item.query);
+    assert.equal(rewrite.expanded, true);
+    assert.equal(rewrite.aiRewriteEnabled, false);
+    for (const term of item.expected) {
+      assert.ok(
+        rewrite.visibleExpandedTerms.includes(term),
+        `${item.query} should expand ${term}`,
+      );
+    }
+    assert.ok(rewrite.reasons.some(reason => reason.includes('本地词表')));
+  }
+});
+
+test('expands subagent queries to Chinese current-video transcript expressions', () => {
+  const context = withTranscriptEvidence(videoContext({ title: 'Agent 能力演示', descriptionText: null }));
+  const [base] = transcriptSegments();
+  const segments = [{
+    ...base,
+    segmentId: 'transcript:BV1Segment00:101:1:zh-cn:hash123:subagent',
+    startSeconds: 50,
+    endSeconds: 58,
+    text: '这里讲子代理和子智能体如何协作，也提到多代理任务拆分。',
+  }];
+
+  const result = searchCurrentVideoSegments(context, {
+    query: 'subagent',
+    transcriptSegments: segments,
+    videoKnowledge: null,
+    now: 3000,
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.queryRewrite.expanded, true);
+  assert.equal(result.queryRewrite.aiRewriteEnabled, false);
+  assert.ok(result.queryRewrite.visibleExpandedTerms.includes('子代理'));
+  assert.equal(result.candidates[0].binding.segmentId, segments[0].segmentId);
+  assert.ok(result.candidates[0].evidenceText.includes('子智能体'));
+  assert.ok(result.candidates[0].matchReasons.some(reason => reason.includes('已扩展相关表达')));
+  assert.equal(result.candidates[0].jumpPreview.canJump, true);
+});
+
+test('expands 1M context queries to Chinese long-context transcript expressions', () => {
+  const context = withTranscriptEvidence(videoContext({ title: '长上下文演示', descriptionText: null }));
+  const [base] = transcriptSegments();
+  const segments = [{
+    ...base,
+    segmentId: 'transcript:BV1Segment00:101:1:zh-cn:hash123:context',
+    startSeconds: 70,
+    endSeconds: 78,
+    text: '这一段解释100万上下文和一兆上下文，也说明长上下文的限制。',
+  }];
+
+  const result = searchCurrentVideoSegments(context, {
+    query: '1M context',
+    transcriptSegments: segments,
+    videoKnowledge: null,
+    now: 3000,
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.queryRewrite.expanded, true);
+  assert.ok(result.queryRewrite.visibleExpandedTerms.includes('100万上下文'));
+  assert.equal(result.candidates[0].binding.segmentId, segments[0].segmentId);
+  assert.ok(result.candidates[0].evidenceText.includes('一兆上下文'));
+  assert.ok(result.candidates[0].matchReasons.some(reason => reason.includes('已扩展相关表达')));
+  assert.equal(result.candidates[0].jumpPreview.canJump, true);
+});
+
+test('expands tool use queries to Chinese tool and function calling transcript expressions', () => {
+  const context = withTranscriptEvidence(videoContext({ title: '工具调用演示', descriptionText: null }));
+  const [base] = transcriptSegments();
+  const segments = [{
+    ...base,
+    segmentId: 'transcript:BV1Segment00:101:1:zh-cn:hash123:tool-use',
+    startSeconds: 90,
+    endSeconds: 98,
+    text: '这里重点讲工具调用和函数调用，说明模型怎样选择外部工具。',
+  }];
+
+  const result = searchCurrentVideoSegments(context, {
+    query: 'tool use',
+    transcriptSegments: segments,
+    videoKnowledge: null,
+    now: 3000,
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.equal(result.queryRewrite.expanded, true);
+  assert.ok(result.queryRewrite.visibleExpandedTerms.includes('工具调用'));
+  assert.equal(result.candidates[0].binding.segmentId, segments[0].segmentId);
+  assert.ok(result.candidates[0].evidenceText.includes('函数调用'));
+  assert.ok(result.candidates[0].matchReasons.some(reason => reason.includes('已扩展相关表达')));
+  assert.equal(result.candidates[0].jumpPreview.canJump, true);
 });
 
 test('uses a weak metadata helper only when no timed evidence is available', () => {

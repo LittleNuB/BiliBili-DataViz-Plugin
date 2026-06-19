@@ -192,6 +192,26 @@
       </article>
     </section>
 
+    <section data-testid="retrieval-query-rewrite">
+      <h1>查询改写同义召回</h1>
+      <div class="status" data-testid="rewrite-status">已扩展相关表达：子代理、子智能体、多代理、100万上下文、一兆上下文、工具调用、函数调用</div>
+      <article class="candidate" data-testid="rewrite-subagent">
+        <label class="meta">输入 <input value="subagent" readonly></label>
+        <div class="evidence">候选片段：这里讲子代理和子智能体如何协作，也提到多代理任务拆分。</div>
+        <div class="reason">匹配原因：已扩展相关表达命中：子代理、子智能体、多代理</div>
+      </article>
+      <article class="candidate" data-testid="rewrite-context">
+        <label class="meta">输入 <input value="1M context" readonly></label>
+        <div class="evidence">候选片段：这一段解释100万上下文和一兆上下文，也说明长上下文的限制。</div>
+        <div class="reason">匹配原因：已扩展相关表达命中：100万上下文、一兆上下文、长上下文</div>
+      </article>
+      <article class="candidate" data-testid="rewrite-tool-use">
+        <label class="meta">输入 <input value="tool use" readonly></label>
+        <div class="evidence">候选片段：这里重点讲工具调用和函数调用，说明模型怎样选择外部工具。</div>
+        <div class="reason">匹配原因：已扩展相关表达命中：工具调用、函数调用</div>
+      </article>
+    </section>
+
     <section data-testid="retrieval-ai-disabled">
       <h1>AI 未启用回退</h1>
       <div class="status">找到 2 个基于当前视频本地证据的候选片段。</div>

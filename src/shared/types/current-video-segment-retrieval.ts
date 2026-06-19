@@ -72,6 +72,16 @@ export interface CurrentVideoSegmentRetrievalEvidenceState {
   contextFresh: boolean;
 }
 
+export interface CurrentVideoQueryRewriteState {
+  originalQuery: string;
+  normalizedQuery: string;
+  expanded: boolean;
+  expandedTerms: string[];
+  visibleExpandedTerms: string[];
+  reasons: string[];
+  aiRewriteEnabled: false;
+}
+
 export type CurrentVideoSegmentRerankAiStatus =
   | 'not_requested'
   | 'disabled'
@@ -108,6 +118,7 @@ export interface CurrentVideoSegmentRetrievalResult {
   candidates: CurrentVideoSegmentRetrievalCandidate[];
   summary: string;
   limitations: string[];
+  queryRewrite: CurrentVideoQueryRewriteState;
   evidenceState: CurrentVideoSegmentRetrievalEvidenceState;
   aiRerank: CurrentVideoSegmentRerankAiState;
 }
