@@ -4,6 +4,7 @@ import type {
   CurrentVideoSegmentRetrievalCandidate,
   CurrentVideoSegmentRetrievalCandidateSource,
   CurrentVideoSegmentRetrievalConfidenceLabel,
+  CurrentVideoQueryRewriteState,
   CurrentVideoSegmentRetrievalResult,
   CurrentVideoSegmentRetrievalStatus,
 } from './types/current-video-segment-retrieval';
@@ -18,6 +19,54 @@ const LOW_CONFIDENCE_THRESHOLD = 0.45;
 const MEDIUM_CONFIDENCE_THRESHOLD = 0.62;
 const HIGH_CONFIDENCE_THRESHOLD = 0.78;
 const EVIDENCE_TEXT_LIMIT = 220;
+
+const QUERY_SYNONYM_GROUPS = [
+  {
+    terms: [
+      'subagent',
+      'sub-agent',
+      'sub agent',
+      '子代理',
+      '子智能体',
+      '子 agent',
+      '子agent',
+      '多代理',
+      '多智能体',
+      'multi-agent',
+      'multi agent',
+      'multiagent',
+    ],
+  },
+  {
+    terms: [
+      'context window',
+      'context-window',
+      '上下文窗口',
+      '长上下文',
+      '1M context',
+      '1Mcontext',
+      '1M 上下文',
+      '100万上下文',
+      '100 万上下文',
+      '一百万上下文',
+      '一兆上下文',
+      '百万上下文',
+    ],
+  },
+  {
+    terms: [
+      'tool use',
+      'tool-use',
+      'tool calling',
+      'tool-calling',
+      '工具调用',
+      '工具使用',
+      '函数调用',
+      'function calling',
+      'function-calling',
+    ],
+  },
+] as const;
 
 const QUERY_HELPER_WORDS = [
   '那段',
@@ -64,9 +113,19 @@ interface QueryProfile {
   normalized: string;
   compact: string;
   meaningfulCompact: string;
+  rewrite: CurrentVideoQueryRewriteState;
   terms: string[];
   cjkTerms: string[];
   latinTerms: string[];
+  originalTerms: string[];
+  expandedTerms: string[];
+  semanticGroups: QuerySemanticGroup[];
+  termLabels: Map<string, string>;
+}
+
+interface QuerySemanticGroup {
+  terms: string[];
+  labels: string[];
 }
 
 interface ScoreResult {
@@ -374,19 +433,38 @@ function scoreText(profile: QueryProfile, text: string | null | undefined): Scor
 
   const compact = compactText(normalized);
   const matchedTerms = uniqueTerms(profile.terms.filter(term => compact.includes(term)));
-  const totalWeight = profile.terms.reduce((sum, term) => sum + termWeight(term), 0);
-  const matchedWeight = matchedTerms.reduce((sum, term) => sum + termWeight(term), 0);
-  const coverage = totalWeight > 0 ? matchedWeight / totalWeight : 0;
+  const totalWeight = profile.originalTerms.reduce((sum, term) => sum + termWeight(term), 0);
+  const matchedWeight = matchedTerms
+    .filter(term => profile.originalTerms.includes(term))
+    .reduce((sum, term) => sum + termWeight(term), 0);
+  const baseCoverage = totalWeight > 0 ? matchedWeight / totalWeight : 0;
+  const matchedSemanticGroups = profile.semanticGroups
+    .map(group => ({
+      group,
+      matchedTerms: uniqueTerms(group.terms.filter(term => compact.includes(term))),
+    }))
+    .filter(item => item.matchedTerms.length > 0);
+  const semanticCoverage = profile.semanticGroups.length > 0
+    ? matchedSemanticGroups.length / profile.semanticGroups.length
+    : 0;
+  const coverage = Math.max(baseCoverage, semanticCoverage);
   const exact = Boolean(profile.meaningfulCompact && compact.includes(profile.meaningfulCompact));
   const latinExact = profile.latinTerms.length > 0 && profile.latinTerms.every(term => compact.includes(term));
   const cjkCoverage = profile.cjkTerms.length > 0
     ? matchedTerms.filter(term => profile.cjkTerms.includes(term)).length / profile.cjkTerms.length
     : 0;
+  const matchedExpandedTerms = uniqueTerms(
+    matchedTerms.filter(term =>
+      profile.expandedTerms.includes(term)
+      && !profile.originalTerms.includes(term),
+    ),
+  );
 
   let score = coverage * 0.58;
   if (exact) score += 0.28;
   if (latinExact) score += 0.18;
   if (cjkCoverage >= 0.5) score += 0.14;
+  if (semanticCoverage > 0) score += Math.min(0.2, semanticCoverage * 0.18);
   if (matchedTerms.length >= 2) score += 0.06;
   if (matchedTerms.length === 1 && matchedTerms[0].length <= 2) score -= 0.03;
 
@@ -397,8 +475,11 @@ function scoreText(profile: QueryProfile, text: string | null | undefined): Scor
   if (latinExact && !exact) {
     reasons.push(`证据文本命中 ${profile.latinTerms.slice(0, 3).join('、')}`);
   }
+  if (matchedExpandedTerms.length > 0) {
+    reasons.push(`已扩展相关表达命中：${formatMatchedTerms(matchedExpandedTerms, profile).slice(0, 5).join('、')}`);
+  }
   if (matchedTerms.length > 0) {
-    reasons.push(`和问题词有重叠：${matchedTerms.slice(0, 5).join('、')}`);
+    reasons.push(`和查询相关表达有重叠：${formatMatchedTerms(matchedTerms, profile).slice(0, 5).join('、')}`);
   }
   if (cjkCoverage >= 0.5 && profile.cjkTerms.length > 0) {
     reasons.push('中文短语有连续重叠');
@@ -571,6 +652,7 @@ function result(input: {
     })),
     summary: input.summary,
     limitations: input.limitations,
+    queryRewrite: input.profile.rewrite,
     evidenceState: {
       transcriptSegmentCount: evidenceState.transcriptSegmentCount,
       timedKnowledgeNodeCount: evidenceState.timedKnowledgeNodeCount,
@@ -590,21 +672,42 @@ function result(input: {
   };
 }
 
+export function rewriteCurrentVideoSegmentQuery(query: string): CurrentVideoQueryRewriteState {
+  const originalQuery = normalizeText(query);
+  const normalizedQuery = normalizeSearchText(originalQuery);
+  const expansion = buildQueryExpansion(normalizedQuery);
+  return {
+    originalQuery,
+    normalizedQuery,
+    expanded: expansion.expandedTerms.length > 0,
+    expandedTerms: expansion.visibleExpandedTerms,
+    visibleExpandedTerms: expansion.visibleExpandedTerms,
+    reasons: expansion.reasons,
+    aiRewriteEnabled: false,
+  };
+}
+
 function buildQueryProfile(query: string): QueryProfile {
   const original = normalizeText(query);
   const normalized = normalizeSearchText(original);
   const compact = compactText(normalized);
   const meaningfulCompact = stripQueryHelpers(compact);
+  const expansion = buildQueryExpansion(normalized);
+  const rewrite = rewriteCurrentVideoSegmentQuery(query);
   const latinTerms = uniqueTerms(
     (normalized.match(/[a-z0-9]+(?:\.[a-z0-9]+)*/g) ?? [])
       .map(compactText)
       .filter(term => term.length >= 2),
   );
   const cjkTerms = buildCjkTerms(normalized);
-  const terms = uniqueTerms([
+  const originalTerms = uniqueTerms([
     meaningfulCompact.length >= 2 ? meaningfulCompact : '',
     ...latinTerms,
     ...cjkTerms,
+  ].filter(Boolean));
+  const terms = uniqueTerms([
+    ...originalTerms,
+    ...expansion.expandedTerms,
   ].filter(Boolean));
 
   return {
@@ -612,9 +715,81 @@ function buildQueryProfile(query: string): QueryProfile {
     normalized,
     compact,
     meaningfulCompact,
+    rewrite,
     terms,
     cjkTerms,
     latinTerms,
+    originalTerms,
+    expandedTerms: expansion.expandedTerms,
+    semanticGroups: expansion.semanticGroups,
+    termLabels: expansion.termLabels,
+  };
+}
+
+function buildQueryExpansion(normalizedQuery: string): {
+  expandedTerms: string[];
+  visibleExpandedTerms: string[];
+  reasons: string[];
+  semanticGroups: QuerySemanticGroup[];
+  termLabels: Map<string, string>;
+} {
+  const queryCompact = compactText(normalizedQuery);
+  const expandedTerms: string[] = [];
+  const visibleExpandedTerms: string[] = [];
+  const reasons: string[] = [];
+  const semanticGroups: QuerySemanticGroup[] = [];
+  const termLabels = new Map<string, string>();
+
+  if (!queryCompact) {
+    return {
+      expandedTerms,
+      visibleExpandedTerms,
+      reasons,
+      semanticGroups,
+      termLabels,
+    };
+  }
+
+  for (const group of QUERY_SYNONYM_GROUPS) {
+    const variants = group.terms
+      .map(term => ({
+        label: normalizeText(term),
+        compact: compactText(term),
+      }))
+      .filter(term => term.label && term.compact.length >= 2);
+    const matchesQuery = variants.some(term => queryCompact.includes(term.compact));
+    if (!matchesQuery) continue;
+
+    const groupTerms = uniqueTerms(variants.map(term => term.compact));
+    const groupLabels = uniqueTerms(variants.map(term => term.label));
+    semanticGroups.push({
+      terms: groupTerms,
+      labels: groupLabels,
+    });
+    expandedTerms.push(...groupTerms);
+
+    for (const term of variants) {
+      if (!termLabels.has(term.compact)) {
+        termLabels.set(term.compact, term.label);
+      }
+      if (!queryCompact.includes(term.compact)) {
+        visibleExpandedTerms.push(term.label);
+      }
+    }
+  }
+
+  const uniqueExpandedTerms = uniqueTerms(expandedTerms);
+  const uniqueVisibleExpandedTerms = uniqueTerms(visibleExpandedTerms).slice(0, 10);
+  if (uniqueExpandedTerms.length > 0) {
+    reasons.push('已使用本地词表扩展相关表达');
+  }
+
+  return {
+    expandedTerms: uniqueExpandedTerms,
+    visibleExpandedTerms: uniqueVisibleExpandedTerms,
+    reasons,
+    semanticGroups,
+    termLabels,
   };
 }
 
@@ -738,6 +913,10 @@ function formatDuration(seconds: number): string {
 function termWeight(term: string): number {
   if (/^[a-z0-9.]+$/i.test(term)) return Math.min(4, Math.max(1.4, term.length / 2));
   return Math.min(4, Math.max(1, term.length - 1));
+}
+
+function formatMatchedTerms(terms: string[], profile: QueryProfile): string[] {
+  return uniqueTerms(terms.map(term => profile.termLabels.get(term) ?? term));
 }
 
 function uniqueTerms(values: string[]): string[] {

@@ -824,7 +824,19 @@ function appendSegmentRetrievalResult(
     appendBadge(meta, `本地节点 ${result.evidenceState.timedKnowledgeNodeCount} 条`);
   }
   appendBadge(meta, result.evidenceState.contextFresh ? '当前视频上下文有效' : '上下文需刷新');
+  if (result.queryRewrite.expanded) {
+    appendBadge(meta, '已扩展相关表达');
+  }
   parent.appendChild(meta);
+
+  if (result.queryRewrite.expanded && result.queryRewrite.visibleExpandedTerms.length > 0) {
+    appendText(
+      parent,
+      'div',
+      'bdc-assistant-muted',
+      safeVisibleText(`已扩展相关表达：${result.queryRewrite.visibleExpandedTerms.slice(0, 6).join('、')}`),
+    );
+  }
 
   appendSegmentJumpStatus(parent);
 

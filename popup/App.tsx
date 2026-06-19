@@ -997,6 +997,11 @@ function CurrentVideoSegmentRetrievalPanel({
           <div style={{ color: retrievalStatusColor(result), fontSize: '10px', lineHeight: 1.45 }}>
             {retrievalStatusMessage(result)}
           </div>
+          {result.queryRewrite.expanded && result.queryRewrite.visibleExpandedTerms.length > 0 && (
+            <div style={{ color: '#C8E6FF', fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
+              已扩展相关表达：{result.queryRewrite.visibleExpandedTerms.slice(0, 6).join('、')}
+            </div>
+          )}
           <div style={{ color: segmentAiRerankColor(result.aiRerank.status), fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
             AI 重排：{segmentAiRerankStatusLabel(result.aiRerank.status)}。{result.aiRerank.note}
           </div>
