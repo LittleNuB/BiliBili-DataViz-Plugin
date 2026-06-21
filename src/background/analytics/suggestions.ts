@@ -24,6 +24,10 @@ const VARIETY_RECENT_WINDOW_DAYS = 30;
 const MIN_INTEREST_RECORDS = 4;
 const MIN_INTEREST_POSITIVE_RECORDS = 2;
 const POSITIVE_COMPLETION = 0.75;
+const RELATED_CANDIDATE_SOURCE = 'B 站公开视频的相关视频候选池';
+const REGION_CANDIDATE_SOURCE = 'B 站公开分区新视频候选池';
+const LOCAL_FAVORITE_SOURCE = '本地收藏';
+const LOCAL_HISTORY_REVIEW_SOURCE = '本地观看历史';
 
 interface BlindBoxContext {
   nowMs: number;
@@ -45,6 +49,11 @@ interface ExperimentBuildOptions {
   randomExplorePool?: ExperimentRealCandidatePool;
   varietyRegionPool?: VarietyRegionCandidatePool;
 }
+
+type BlindBoxBoundaryMeta = Pick<
+  ExperimentBlindBox,
+  'candidateSource' | 'realCandidateLabel' | 'usesRealBilibiliCandidates'
+>;
 
 export async function getExperimentData(): Promise<ExperimentData> {
   const nowMs = Date.now();
@@ -126,6 +135,38 @@ function normalizeExperimentBuildOptions(
   return value;
 }
 
+function realCandidateUsedMeta(candidateSource: string): BlindBoxBoundaryMeta {
+  return {
+    candidateSource,
+    realCandidateLabel: '已使用真实 B 站候选',
+    usesRealBilibiliCandidates: true,
+  };
+}
+
+function realCandidateUnavailableMeta(candidateSource: string, reason: string): BlindBoxBoundaryMeta {
+  return {
+    candidateSource,
+    realCandidateLabel: `未使用真实 B 站候选：${reason}`,
+    usesRealBilibiliCandidates: false,
+  };
+}
+
+function localFavoriteMeta(): BlindBoxBoundaryMeta {
+  return {
+    candidateSource: LOCAL_FAVORITE_SOURCE,
+    realCandidateLabel: '未使用真实 B 站候选：这是本地收藏回访。',
+    usesRealBilibiliCandidates: false,
+  };
+}
+
+function localHistoryReviewMeta(): BlindBoxBoundaryMeta {
+  return {
+    candidateSource: LOCAL_HISTORY_REVIEW_SOURCE,
+    realCandidateLabel: '未使用真实 B 站候选：这是本地历史回顾。',
+    usesRealBilibiliCandidates: false,
+  };
+}
+
 function buildVarietyBox(ctx: BlindBoxContext): ExperimentBlindBox {
   const title = '换口味';
   const teaser = '从长期兴趣里找一条近期少看的真实 B 站新视频。';
@@ -142,6 +183,7 @@ function buildVarietyBox(ctx: BlindBoxContext): ExperimentBlindBox {
       '候选源未返回',
       'B 站分区新视频',
       '真实候选源尚未返回，换口味不会退回本地收藏夹凑数。',
+      realCandidateUnavailableMeta(REGION_CANDIDATE_SOURCE, '候选源尚未返回。'),
     );
   }
 
@@ -156,6 +198,7 @@ function buildVarietyBox(ctx: BlindBoxContext): ExperimentBlindBox {
       varietyEmptyStatusLabel(pool.status),
       pool.sourceLabel,
       varietyEmptyReason(pool),
+      realCandidateUnavailableMeta(REGION_CANDIDATE_SOURCE, varietyRealCandidateUnavailableReason(pool)),
     );
   }
 
@@ -174,6 +217,7 @@ function buildVarietyBox(ctx: BlindBoxContext): ExperimentBlindBox {
       '候选已冷却过滤',
       pool.sourceLabel,
       '真实候选池有结果，但经过近期观看和本页占用过滤后没有剩余视频。',
+      realCandidateUnavailableMeta(REGION_CANDIDATE_SOURCE, '候选经过近期过滤后没有剩余视频。'),
     );
   }
 
@@ -185,6 +229,7 @@ function buildVarietyBox(ctx: BlindBoxContext): ExperimentBlindBox {
     id: 'variety',
     title,
     teaser,
+    ...realCandidateUsedMeta(REGION_CANDIDATE_SOURCE),
     source: pick.sourceLabel ?? `${pool.sourceLabel} / ${direction.regionName}`,
     reason: buildVarietyReason(direction, pick),
     evidence: [
@@ -269,6 +314,21 @@ function varietyEmptyReason(pool: VarietyRegionCandidatePool): string {
   }
 }
 
+function varietyRealCandidateUnavailableReason(pool: VarietyRegionCandidatePool): string {
+  switch (pool.status) {
+    case 'insufficient_local_evidence':
+      return '本地长期兴趣和近期低频方向还不够明确。';
+    case 'unmapped_interest':
+      return '本地长期兴趣暂时不能映射到 B 站公开分区。';
+    case 'source_failed':
+      return 'B 站分区新视频候选源暂不可用。';
+    case 'empty':
+      return '候选源本轮没有返回可打开视频。';
+    case 'ready':
+      return '候选列表为空。';
+  }
+}
+
 function varietyEmptyStatusLabel(status: VarietyRegionCandidatePool['status']): string {
   switch (status) {
     case 'source_failed':
@@ -291,7 +351,11 @@ function buildHiddenFavoriteBox(ctx: BlindBoxContext): ExperimentBlindBox {
       '从本地收藏里翻出被你压箱底的一条。',
       ['本地收藏 0 条，暂时没有可以翻出来的冷门收藏。'],
       '先同步收藏',
-      '这盒只看本地收藏，不会去猜外部推荐。先把收藏同步进来，再让我帮你翻压箱底。',
+      '这盒只看本地收藏，不会拿外部候选凑数。先把收藏同步进来，再让我帮你翻压箱底。',
+      '本地收藏未同步',
+      LOCAL_FAVORITE_SOURCE,
+      '本地收藏还没有可回访的视频。',
+      localFavoriteMeta(),
     );
   }
 
@@ -328,6 +392,10 @@ function buildHiddenFavoriteBox(ctx: BlindBoxContext): ExperimentBlindBox {
       [`本地收藏 ${ctx.favorites.length} 条，但最近 ${RECENT_VIDEO_BLOCK_DAYS} 天都还比较活跃。`],
       '压箱底的视频还没攒出来',
       '当前收藏里最近都还在看，或者收藏时间太新，暂时没有那种“你留过但快忘了”的冷门收藏。',
+      '本地收藏暂不符合',
+      LOCAL_FAVORITE_SOURCE,
+      '本地收藏里暂时没有足够冷门的回访候选。',
+      localFavoriteMeta(),
     );
   }
 
@@ -338,6 +406,7 @@ function buildHiddenFavoriteBox(ctx: BlindBoxContext): ExperimentBlindBox {
     id: 'hidden_favorite',
     title: '冷门收藏',
     teaser: '从本地收藏里翻出被你压箱底的一条。',
+    ...localFavoriteMeta(),
     source: `本地收藏 / 收藏夹「${pick.item.folderTitle}」`,
     reason: pick.watchCount === 0
       ? '你把它收进本地收藏后，还没有留下再次观看记录。'
@@ -355,14 +424,20 @@ function buildHiddenFavoriteBox(ctx: BlindBoxContext): ExperimentBlindBox {
 }
 
 function buildReviveInterestBox(ctx: BlindBoxContext): ExperimentBlindBox {
+  const title = '本地兴趣回顾';
+  const teaser = '只从本地历史里回看一条旧兴趣代表视频。';
   if (ctx.records.length < MIN_INTEREST_RECORDS) {
     return emptyBox(
       'revive_interest',
-      '久未观看兴趣',
-      '把曾经常看的兴趣，重新翻回你面前。',
+      title,
+      teaser,
       [`本地历史只有 ${ctx.records.length} 条，暂时还看不出长期兴趣。`],
       '先多积累一点历史',
-      '这盒要判断“以前常看、最近冷下来”的兴趣，需要更长一点的本地历史样本。',
+      '这盒只做本地历史回顾，不读取关注新投稿，也不替代动态账单的兴趣再平衡；它需要更长一点的本地历史样本。',
+      '本地历史不足',
+      LOCAL_HISTORY_REVIEW_SOURCE,
+      '本地历史样本不足，暂不回看旧兴趣。',
+      localHistoryReviewMeta(),
     );
   }
 
@@ -416,11 +491,15 @@ function buildReviveInterestBox(ctx: BlindBoxContext): ExperimentBlindBox {
   if (candidates.length === 0) {
     return emptyBox(
       'revive_interest',
-      '久未观看兴趣',
-      '把曾经常看的兴趣，重新翻回你面前。',
+      title,
+      teaser,
       [`在 ${ctx.records.length} 条本地历史里，还没有找到“以前常看、最近明显降温”的主题。`],
       '近期口味还没出现明显冷却',
-      '这盒只会在本地证据足够明确时开出来，不会硬塞一条泛泛建议。',
+      '这盒只会在本地证据足够明确时回看旧兴趣，不读取关注新投稿，也不会硬塞一条泛泛建议。',
+      '本地历史暂不符合',
+      LOCAL_HISTORY_REVIEW_SOURCE,
+      '本地历史里暂时没有明确冷却的旧兴趣。',
+      localHistoryReviewMeta(),
     );
   }
 
@@ -429,11 +508,15 @@ function buildReviveInterestBox(ctx: BlindBoxContext): ExperimentBlindBox {
   if (!video) {
     return emptyBox(
       'revive_interest',
-      '久未观看兴趣',
-      '把曾经常看的兴趣，重新翻回你面前。',
+      title,
+      teaser,
       ['本地找到了兴趣下降信号，但缺少可打开的视频链接。'],
       '证据够了，链接不够',
-      '这个兴趣确实冷下来了，但目前本地没有留下能直接打开的代表视频。',
+      '这个兴趣确实冷下来了，但目前本地没有留下能直接打开的代表视频；不会改用动态账单或外部候选补位。',
+      '本地历史链接不足',
+      LOCAL_HISTORY_REVIEW_SOURCE,
+      '本地历史缺少可打开的代表视频。',
+      localHistoryReviewMeta(),
     );
   }
 
@@ -441,14 +524,15 @@ function buildReviveInterestBox(ctx: BlindBoxContext): ExperimentBlindBox {
 
   return {
     id: 'revive_interest',
-    title: '久未观看兴趣',
-    teaser: '把曾经常看的兴趣，重新翻回你面前。',
+    title,
+    teaser,
+    ...localHistoryReviewMeta(),
     source: `本地历史 / 标签「${pick.label}」`,
-    reason: `你对「${pick.label}」长期有稳定正反馈，但最近已经 ${pick.daysSinceLastWatch} 天没碰它，这条是本地历史里的代表视频。`,
+    reason: `你对「${pick.label}」长期有稳定正反馈，但最近已经 ${pick.daysSinceLastWatch} 天没碰它；这不是动态账单的兴趣再平衡，也不使用关注新投稿，只回看本地历史里的一条代表视频。`,
     evidence: [
       `长期累计 ${pick.records.length} 条相关历史，其中高完成度记录 ${pick.positiveRecords.length} 条，平均完成度 ${formatPercent(pick.averageCompletion)}。`,
       `最近 ${RECENT_ACTIVITY_DAYS} 天相关记录 ${pick.recentRecords.length} 条，上次观看距今 ${pick.daysSinceLastWatch} 天。`,
-      '代表视频优先从这个兴趣里完成度更高、且最近没有重复打开过的本地历史里挑选。',
+      '代表视频只从这个兴趣里完成度更高、且最近没有重复打开过的本地历史里挑选。',
     ],
     state: 'ready',
     video,
@@ -457,17 +541,19 @@ function buildReviveInterestBox(ctx: BlindBoxContext): ExperimentBlindBox {
 
 function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
   const sourceLabel = '来自相关视频候选';
+  const teaser = '只从真实 B 站候选池里随机抽一条，不从本地库存补位。';
   if (!ctx.randomExplorePool || ctx.randomExplorePool.seedCount === 0) {
     return emptyBox(
       'random_explore',
       '随机探索',
-      '不做推荐排序，只从真实候选池里随机抽一条。',
+      teaser,
       ['本地还没有可作为公开相关视频候选种子的 BV 号。'],
       '真实候选源还没有可用种子',
       '随机探索现在需要先用最近少量本地历史作为种子，请求 B 站公开视频的相关视频候选池。等本地有可用 BV 号后，它才会开出真实候选。',
       '候选源未准备好',
       sourceLabel,
       '没有可请求的种子，未生成空白视频卡。',
+      realCandidateUnavailableMeta(RELATED_CANDIDATE_SOURCE, '缺少可请求的本地 BV 种子。'),
     );
   }
 
@@ -480,7 +566,7 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
     return emptyBox(
       'random_explore',
       '随机探索',
-      '不做推荐排序，只从真实候选池里随机抽一条。',
+      teaser,
       [
         `已尝试 ${ctx.randomExplorePool.seedCount} 个种子视频的相关视频候选。`,
         failureSummary,
@@ -491,6 +577,7 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
       '候选源暂不可用',
       sourceLabel,
       '真实候选源失败或为空，未生成空白视频卡。',
+      realCandidateUnavailableMeta(RELATED_CANDIDATE_SOURCE, '候选源失败、为空或过滤后无可打开视频。'),
     );
   }
 
@@ -501,9 +588,10 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
   return {
     id: 'random_explore',
     title: '随机探索',
-    teaser: '不做推荐排序，只从真实候选池里随机抽一条。',
+    teaser,
+    ...realCandidateUsedMeta(RELATED_CANDIDATE_SOURCE),
     source: `${sourceLabel} / 种子视频「${pick.seedTitle || pick.seedBvid}」`,
-    reason: `Bili-Bill 没有保留平台排序，只是在 ${pool.length} 条公开相关视频候选里随机抽取一条。`,
+    reason: `Bili-Bill 只保留可打开的公开相关视频候选，并在 ${pool.length} 条候选里随机抽取一条；不会从本地历史或收藏库存补位。`,
     evidence: [
       `候选来自 B 站公开视频的相关视频候选池，使用 ${ctx.randomExplorePool.seedCount} 个本地种子视频逐个请求。`,
       `抽取前已排除最近 ${RECENT_VIDEO_BLOCK_DAYS} 天看过的视频，以及其它盲盒已经占用的候选。`,
@@ -569,11 +657,13 @@ function emptyBox(
   statusLabel?: string,
   source?: string,
   reason?: string,
+  boundaryMeta: BlindBoxBoundaryMeta = localHistoryReviewMeta(),
 ): ExperimentBlindBox {
   return {
     id,
     title,
     teaser,
+    ...boundaryMeta,
     source: source ?? '仅使用本地历史 / 本地收藏',
     reason: reason ?? '这盒没有足够的本地证据，不会拿泛泛建议来凑数。',
     evidence,
@@ -593,6 +683,7 @@ function toHistoryVideo(record: WatchHistoryRecord): ExperimentVideoCandidate | 
     authorName: cleanText(record.authorName) || '未知 UP',
     cover: cleanText(record.cover),
     url: buildVideoUrl(record.bvid, record.avid),
+    sourceKind: 'local_history',
   };
 }
 
@@ -605,6 +696,7 @@ function toFavoriteVideo(item: FavoriteItem): ExperimentVideoCandidate | null {
     authorName: cleanText(item.authorName) || '未知 UP',
     cover: cleanText(item.cover),
     url: buildVideoUrl(item.bvid, item.avid),
+    sourceKind: 'local_favorite',
   };
 }
 
