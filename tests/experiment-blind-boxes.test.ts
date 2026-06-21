@@ -14,6 +14,7 @@ const NOW_MS = Date.UTC(2026, 5, 13, 12, 0, 0);
 
 test('builds blind boxes with real random explore and real variety candidate sources', () => {
   const bannedGuessWord = ['猜你', '喜欢'].join('');
+  const bannedRankingWord = ['推荐', '排序'].join('');
   const records = createMixedTasteRecords();
 
   const favorites: FavoriteItem[] = [
@@ -65,6 +66,9 @@ test('builds blind boxes with real random explore and real variety candidate sou
 
   assert.equal(variety.state, 'ready');
   assert.equal(variety.statusLabel, '真实候选');
+  assert.equal(variety.candidateSource, 'B 站公开分区新视频候选池');
+  assert.equal(variety.realCandidateLabel, '已使用真实 B 站候选');
+  assert.equal(variety.usesRealBilibiliCandidates, true);
   assert.equal(variety.video?.bvid, 'BV1REAL139A');
   assert.equal(variety.video?.sourceKind, 'bili_region_dynamic');
   assert.notEqual(variety.video?.bvid, 'BVFAVVAR1');
@@ -75,25 +79,43 @@ test('builds blind boxes with real random explore and real variety candidate sou
   assert.ok(variety.evidence.some(line => line.includes('本地历史和收藏只参与选择冷却方向与解释')));
 
   assert.equal(hiddenFavorite.state, 'ready');
+  assert.equal(hiddenFavorite.candidateSource, '本地收藏');
+  assert.equal(hiddenFavorite.realCandidateLabel, '未使用真实 B 站候选：这是本地收藏回访。');
+  assert.equal(hiddenFavorite.usesRealBilibiliCandidates, false);
+  assert.match(hiddenFavorite.source, /^本地收藏/);
   assert.equal(hiddenFavorite.video?.bvid, 'BVFAVHID1');
+  assert.equal(hiddenFavorite.video?.sourceKind, 'local_favorite');
   assert.match(hiddenFavorite.reason, /收藏|本地/);
 
   assert.equal(reviveInterest.state, 'ready');
+  assert.equal(reviveInterest.title, '本地兴趣回顾');
+  assert.equal(reviveInterest.candidateSource, '本地观看历史');
+  assert.equal(reviveInterest.realCandidateLabel, '未使用真实 B 站候选：这是本地历史回顾。');
+  assert.equal(reviveInterest.usesRealBilibiliCandidates, false);
   assert.equal(reviveInterest.video?.bvid, 'BVKNO002');
+  assert.equal(reviveInterest.video?.sourceKind, 'local_history');
   assert.match(reviveInterest.source, /本地历史/);
+  assert.match(reviveInterest.reason, /不是动态账单的兴趣再平衡/);
+  assert.match(reviveInterest.reason, /不使用关注新投稿/);
 
   assert.equal(randomExplore.state, 'ready');
+  assert.equal(randomExplore.candidateSource, 'B 站公开视频的相关视频候选池');
+  assert.equal(randomExplore.realCandidateLabel, '已使用真实 B 站候选');
+  assert.equal(randomExplore.usesRealBilibiliCandidates, true);
   assert.equal(randomExplore.video?.bvid, 'BV1REALRND01');
   assert.equal(randomExplore.video?.sourceKind, 'bilibili_related');
   assert.match(randomExplore.source, /相关视频候选/);
   assert.match(randomExplore.source, /种子视频/);
-  assert.match(randomExplore.reason, /没有保留平台排序|随机抽取/);
+  assert.match(randomExplore.reason, /公开相关视频候选|随机抽取/);
   assert.notEqual(randomExplore.video?.bvid, variety.video?.bvid);
   assert.notEqual(randomExplore.video?.bvid, hiddenFavorite.video?.bvid);
   assert.notEqual(randomExplore.video?.bvid, reviveInterest.video?.bvid);
 
   for (const box of data.blindBoxes) {
     assert.equal(box.reason.includes(bannedGuessWord), false);
+    assert.equal(box.reason.includes(bannedRankingWord), false);
+    assert.ok(box.candidateSource.length > 0);
+    assert.ok(box.realCandidateLabel.length > 0);
     assert.ok(box.evidence.length > 0);
     if (box.state === 'ready') {
       assert.ok(box.video);
@@ -144,6 +166,9 @@ test('returns a clear downgrade when the real region candidate source fails', ()
   assert.equal(variety.id, 'variety');
   assert.equal(variety.state, 'empty');
   assert.equal(variety.statusLabel, '候选源暂不可用');
+  assert.equal(variety.candidateSource, 'B 站公开分区新视频候选池');
+  assert.match(variety.realCandidateLabel, /未使用真实 B 站候选/);
+  assert.equal(variety.usesRealBilibiliCandidates, false);
   assert.equal(variety.source, 'B 站分区新视频');
   assert.match(variety.emptyTitle ?? '', /候选源暂不可用/);
   assert.match(variety.emptyDescription ?? '', /不显示空视频/);
@@ -153,6 +178,7 @@ test('returns a clear downgrade when the real region candidate source fails', ()
 test('returns Chinese empty states instead of generic filler when local evidence is insufficient', () => {
   const bannedGuessWord = ['猜你', '喜欢'].join('');
   const bannedUnconsumedWord = ['未', '消费'].join('');
+  const bannedRankingWord = ['推荐', '排序'].join('');
   const data = buildExperimentData([], [], new Map(), NOW_MS, {
     randomExplorePool: {
       sourceKind: 'bilibili_related',
@@ -178,9 +204,12 @@ test('returns Chinese empty states instead of generic filler when local evidence
     assert.equal(box.state, 'empty');
     assert.ok(box.emptyTitle);
     assert.ok(box.emptyDescription);
+    assert.ok(box.candidateSource);
+    assert.ok(box.realCandidateLabel);
     assert.ok(box.evidence.length > 0);
     assert.equal(box.reason.includes(bannedGuessWord), false);
     assert.equal(box.reason.includes(bannedUnconsumedWord), false);
+    assert.equal(box.reason.includes(bannedRankingWord), false);
   }
 });
 
@@ -207,6 +236,9 @@ test('does not fall back to a local random video when related candidates fail', 
   assert.ok(randomExplore);
   assert.equal(randomExplore.state, 'empty');
   assert.equal(randomExplore.video, undefined);
+  assert.equal(randomExplore.candidateSource, 'B 站公开视频的相关视频候选池');
+  assert.match(randomExplore.realCandidateLabel, /未使用真实 B 站候选/);
+  assert.equal(randomExplore.usesRealBilibiliCandidates, false);
   assert.match(randomExplore.source, /相关视频候选/);
   assert.match(randomExplore.emptyDescription ?? '', /不会用本地库存视频冒充/);
   assert.ok(randomExplore.evidence.some(line => line.includes('请求失败')));

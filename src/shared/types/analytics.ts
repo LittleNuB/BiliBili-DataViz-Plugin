@@ -224,6 +224,9 @@ export interface ExperimentBlindBox {
   id: ExperimentBlindBoxId;
   title: string;
   teaser: string;
+  candidateSource: string;
+  realCandidateLabel: string;
+  usesRealBilibiliCandidates: boolean;
   source: string;
   reason: string;
   evidence: string[];
