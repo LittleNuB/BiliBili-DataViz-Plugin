@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Bili-Bill",
-  "version": "0.10.0",
-  "version_name": "0.10.0-alpha",
+  "version": "0.12.0",
+  "version_name": "0.12.0-alpha",
   "description": "Bili-Bill：本地内容账单、动态账单、智能收藏、当前视频助手与视频知识库。",
   "icons": {
     "16": "icons/icon16.png",
