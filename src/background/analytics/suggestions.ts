@@ -8,6 +8,12 @@ import type {
 import type { FavoriteItem, SmartFavoriteIndex } from '../../shared/types/favorite';
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
 import { getHistoryCoverageSpan, type HistoryCoverageSpan } from './history-coverage.ts';
+import {
+  buildRelatedVideoSourceFailure,
+  buildVarietyRegionSourceFailure,
+  fetchRelatedVideoCandidates,
+  fetchVarietyRegionCandidatePool,
+} from '../api/video-blind-box-candidates.ts';
 import type {
   RelatedVideoSeed,
   VarietyRegionCandidatePool,
@@ -63,12 +69,6 @@ export async function getExperimentData(): Promise<ExperimentData> {
     getFavoriteItems(),
     getSmartFavoriteIndexMap(),
   ]);
-  const {
-    buildRelatedVideoSourceFailure,
-    fetchRelatedVideoCandidates,
-    fetchVarietyRegionCandidatePool,
-    buildVarietyRegionSourceFailure,
-  } = await import('../api/video-blind-box-candidates.ts');
   const relatedSeeds = selectRelatedVideoSeeds(records, nowMs);
 
   const [randomExplorePool, varietyRegionPool] = await Promise.all([

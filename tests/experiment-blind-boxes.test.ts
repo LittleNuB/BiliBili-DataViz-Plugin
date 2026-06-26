@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { buildExperimentData } from '../src/background/analytics/suggestions.ts';
 import {
@@ -297,6 +298,13 @@ test('dynamic bill long-term columns require local history to span the recent co
     getHistoryCoverageSpan(createMixedTasteRecords(), NOW_MS).hasEnoughForRecentComparison,
     true,
   );
+});
+
+test('keeps blind-box candidate helpers out of service-worker dynamic preload', () => {
+  const source = readFileSync(new URL('../src/background/analytics/suggestions.ts', import.meta.url), 'utf8');
+
+  assert.equal(source.includes("await import('../api/video-blind-box-candidates.ts')"), false);
+  assert.match(source, /from ['"]\.\.\/api\/video-blind-box-candidates\.ts['"]/);
 });
 
 function createMixedTasteRecords(): WatchHistoryRecord[] {
