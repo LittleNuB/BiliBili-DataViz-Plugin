@@ -7,6 +7,7 @@ import type {
 } from '../../shared/types/analytics';
 import type { FavoriteItem, SmartFavoriteIndex } from '../../shared/types/favorite';
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
+import { getHistoryCoverageSpan, type HistoryCoverageSpan } from './history-coverage.ts';
 import type {
   RelatedVideoSeed,
   VarietyRegionCandidatePool,
@@ -63,16 +64,18 @@ export async function getExperimentData(): Promise<ExperimentData> {
     getSmartFavoriteIndexMap(),
   ]);
   const {
+    buildRelatedVideoSourceFailure,
     fetchRelatedVideoCandidates,
     fetchVarietyRegionCandidatePool,
     buildVarietyRegionSourceFailure,
   } = await import('../api/video-blind-box-candidates.ts');
+  const relatedSeeds = selectRelatedVideoSeeds(records, nowMs);
 
   const [randomExplorePool, varietyRegionPool] = await Promise.all([
     fetchRelatedVideoCandidates(
-      selectRelatedVideoSeeds(records, nowMs),
+      relatedSeeds,
       { seedLimit: RANDOM_RELATED_SEED_LIMIT },
-    ),
+    ).catch(error => buildRelatedVideoSourceFailure(relatedSeeds, error, { seedLimit: RANDOM_RELATED_SEED_LIMIT })),
     fetchVarietyRegionCandidatePool(records, { nowMs })
       .catch(error => buildVarietyRegionSourceFailure(records, nowMs, error)),
   ]);
@@ -168,9 +171,12 @@ function localHistoryReviewMeta(): BlindBoxBoundaryMeta {
 }
 
 function buildVarietyBox(ctx: BlindBoxContext): ExperimentBlindBox {
-  const title = '换口味';
-  const teaser = '从长期兴趣里找一条近期少看的真实 B 站新视频。';
   const pool = ctx.varietyRegionPool;
+  const hasShortHistoryCoverage = pool ? hasShortHistoryCoverageEvidence(pool.evidence) : false;
+  const title = hasShortHistoryCoverage ? '历史证据不足' : '换口味';
+  const teaser = hasShortHistoryCoverage
+    ? '本地历史覆盖太短，暂不判断长期口味冷却。'
+    : '从长期兴趣里找一条近期少看的真实 B 站新视频。';
 
   if (!pool) {
     return emptyBox(
@@ -287,6 +293,9 @@ function varietyEmptyTitle(status: VarietyRegionCandidatePool['status']): string
 function varietyEmptyDescription(pool: VarietyRegionCandidatePool): string {
   switch (pool.status) {
     case 'insufficient_local_evidence':
+      if (hasShortHistoryCoverageEvidence(pool.evidence)) {
+        return `${shortHistoryCoverageLine(pool.evidence)} 暂不生成换口味真实候选，避免把最近几天的记录说成长期兴趣或冷却方向。`;
+      }
       return '换口味需要先从本地长期历史里找出“长期相关、近期低频”的方向。当前证据不足时不会退回本地收藏夹凑数。';
     case 'unmapped_interest':
       return '本地长期兴趣还不能保守映射到 B 站公开分区，所以暂不请求不相关候选，也不从近期高频口味里抽。';
@@ -426,6 +435,23 @@ function buildHiddenFavoriteBox(ctx: BlindBoxContext): ExperimentBlindBox {
 function buildReviveInterestBox(ctx: BlindBoxContext): ExperimentBlindBox {
   const title = '本地兴趣回顾';
   const teaser = '只从本地历史里回看一条旧兴趣代表视频。';
+  const coverage = getHistoryCoverageSpan(ctx.records, ctx.nowMs, VARIETY_RECENT_WINDOW_DAYS);
+  if (!coverage.hasEnoughForRecentComparison) {
+    const coverageLine = formatShortHistoryCoverageForBlindBox(coverage);
+    return emptyBox(
+      'revive_interest',
+      '历史证据不足',
+      '本地历史覆盖太短，暂不回顾旧兴趣。',
+      [coverageLine],
+      '本地历史覆盖还不够长',
+      `${coverageLine} 不能把最近几天当作长期兴趣，也不会用本地库存视频冒充旧兴趣回顾。`,
+      '历史证据不足',
+      LOCAL_HISTORY_REVIEW_SOURCE,
+      '本地观看历史覆盖短于近期对比窗口，暂不判断旧兴趣。',
+      localHistoryReviewMeta(),
+    );
+  }
+
   if (ctx.records.length < MIN_INTEREST_RECORDS) {
     return emptyBox(
       'revive_interest',
@@ -645,6 +671,22 @@ function formatRelatedCandidateFailures(pool: ExperimentRealCandidatePool): stri
   ].filter(Boolean);
 
   return `相关视频候选暂不可用：${parts.join('，') || '未返回有效候选'}。`;
+}
+
+function hasShortHistoryCoverageEvidence(evidence: string[]): boolean {
+  return evidence.some(line => line.includes('本地观看历史目前只覆盖约'));
+}
+
+function shortHistoryCoverageLine(evidence: string[]): string {
+  return evidence.find(line => line.includes('本地观看历史目前只覆盖约'))
+    ?? '本地观看历史覆盖短于近期对比窗口。';
+}
+
+function formatShortHistoryCoverageForBlindBox(coverage: HistoryCoverageSpan): string {
+  if (coverage.recordCount === 0) {
+    return `本地观看历史目前还没有可用于长期/近期对比的记录，至少需要覆盖最近 ${coverage.requiredDays} 天。`;
+  }
+  return `本地观看历史目前只覆盖约 ${coverage.spanDays} 天，短于最近 ${coverage.requiredDays} 天对比窗口。`;
 }
 
 function emptyBox(

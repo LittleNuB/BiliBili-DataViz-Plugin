@@ -481,6 +481,11 @@ button {
   cursor: pointer;
 }
 
+.settings-toggle.is-on {
+  border-color: rgba(20, 184, 166, 0.44);
+  background: rgba(20, 184, 166, 0.09);
+}
+
 .settings-toggle input {
   position: absolute;
   opacity: 0;
@@ -516,15 +521,49 @@ button {
   transform: translateX(18px);
 }
 
+.settings-toggle.is-on .settings-toggle-control {
+  background: var(--bb-mint);
+}
+
+.settings-toggle.is-on .settings-toggle-control::after {
+  transform: translateX(18px);
+}
+
 .settings-toggle-copy {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
+.settings-toggle-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
 .settings-toggle-copy strong {
   color: #FFFFFF;
   font-size: 13px;
+}
+
+.settings-toggle-state {
+  flex: 0 0 auto;
+  min-height: 20px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #C8C8D8;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.settings-toggle.is-on .settings-toggle-state {
+  color: #A8FFF0;
+  background: rgba(20, 184, 166, 0.16);
 }
 
 .settings-privacy-list {

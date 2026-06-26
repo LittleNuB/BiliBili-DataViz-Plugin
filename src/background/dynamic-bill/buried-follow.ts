@@ -17,6 +17,7 @@ import {
 } from '../storage/dynamic-bill-repo';
 import { applyDynamicBillFeedbackScore, evaluateDynamicBillFeedback } from './feedback';
 import { DYNAMIC_BILL_STRATEGY, getDynamicBillThresholdEvidence } from './strategy';
+import { getHistoryCoverageSpan } from '../analytics/history-coverage.ts';
 
 const SECONDS_PER_DAY = 86_400;
 const BURIED_FOLLOW_COLUMN = 'buried_follow';
@@ -79,6 +80,40 @@ export async function generateBuriedFollowBillItems(): Promise<DynamicBillGenera
     if (!existing || update.dynamicTime > existing.dynamicTime) {
       newestUnwatchedUpdateByCreator.set(update.authorMid, update);
     }
+  }
+
+  const historyCoverage = getHistoryCoverageSpan(
+    longRecords,
+    generatedAt,
+    DYNAMIC_BILL_STRATEGY.recentWindowDays,
+  );
+  if (!historyCoverage.hasEnoughForRecentComparison) {
+    const storedItems = await replaceDynamicBillItemsForColumn(BURIED_FOLLOW_COLUMN, []);
+    const overview = await getDynamicBillOverview(DYNAMIC_BILL_STRATEGY.updateWindowDays);
+
+    return {
+      generatedAt,
+      itemCount: storedItems.length,
+      candidatesScanned: updates.length,
+      eligibleCreatorCount: 0,
+      excludedNoLongSignalCount: newestUnwatchedUpdateByCreator.size,
+      excludedRecentActiveCount: 0,
+      excludedRecentSameVideoCount,
+      excludedByFeedbackCount: 0,
+      columnItemCounts: {
+        afk_update: 0,
+        variety: 0,
+        buried_follow: storedItems.length,
+      },
+      columnEligibleCounts: {
+        afk_update: 0,
+        variety: 0,
+        buried_follow: 0,
+      },
+      items: storedItems,
+      thresholds,
+      overview,
+    };
   }
 
   const candidates: Candidate[] = [];

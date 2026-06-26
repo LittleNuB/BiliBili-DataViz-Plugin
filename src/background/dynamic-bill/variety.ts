@@ -17,6 +17,7 @@ import {
 } from '../storage/dynamic-bill-repo';
 import { applyDynamicBillFeedbackScore, evaluateDynamicBillFeedback } from './feedback';
 import { DYNAMIC_BILL_STRATEGY, getDynamicBillThresholdEvidence } from './strategy';
+import { getHistoryCoverageSpan } from '../analytics/history-coverage.ts';
 
 const SECONDS_PER_DAY = 86_400;
 const VARIETY_COLUMN = 'variety';
@@ -96,6 +97,40 @@ export async function generateVarietyBillItems(): Promise<DynamicBillGenerateRes
       continue;
     }
     unwatchedUpdates.push(update);
+  }
+
+  const historyCoverage = getHistoryCoverageSpan(
+    longRecords,
+    generatedAt,
+    DYNAMIC_BILL_STRATEGY.recentWindowDays,
+  );
+  if (!historyCoverage.hasEnoughForRecentComparison) {
+    const storedItems = await replaceDynamicBillItemsForColumn(VARIETY_COLUMN, []);
+    const overview = await getDynamicBillOverview(DYNAMIC_BILL_STRATEGY.updateWindowDays);
+
+    return {
+      generatedAt,
+      itemCount: storedItems.length,
+      candidatesScanned: updates.length,
+      eligibleCreatorCount: 0,
+      excludedNoLongSignalCount: unwatchedUpdates.length,
+      excludedRecentActiveCount: 0,
+      excludedRecentSameVideoCount,
+      excludedByFeedbackCount: 0,
+      columnItemCounts: {
+        afk_update: 0,
+        variety: storedItems.length,
+        buried_follow: 0,
+      },
+      columnEligibleCounts: {
+        afk_update: 0,
+        variety: 0,
+        buried_follow: 0,
+      },
+      items: storedItems,
+      thresholds,
+      overview,
+    };
   }
 
   const recentRecords = longRecords.filter(record => record.viewAt >= recentCutoff);

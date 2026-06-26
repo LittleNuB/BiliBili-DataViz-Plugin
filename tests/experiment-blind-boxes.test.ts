@@ -2,10 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildExperimentData } from '../src/background/analytics/suggestions.ts';
 import {
+  buildRelatedVideoSourceFailure,
+  buildVarietyRegionSourceFailure,
   buildVarietyRegionDirections,
+  fetchVarietyRegionCandidatePool,
   type VarietyRegionCandidatePool,
   type VarietyRegionDirection,
 } from '../src/background/api/video-blind-box-candidates.ts';
+import { getHistoryCoverageSpan } from '../src/background/analytics/history-coverage.ts';
 import type { ExperimentRealCandidatePool } from '../src/shared/types/analytics';
 import type { FavoriteItem, SmartFavoriteIndex } from '../src/shared/types/favorite';
 import type { WatchHistoryRecord } from '../src/shared/types/watch-event';
@@ -175,6 +179,25 @@ test('returns a clear downgrade when the real region candidate source fails', ()
   assert.equal(variety.video, undefined);
 });
 
+test('sanitizes raw runtime errors from region candidate source failures', () => {
+  const failedPool = buildVarietyRegionSourceFailure(
+    createMixedTasteRecords(),
+    NOW_MS,
+    new ReferenceError('document is not defined'),
+  );
+  const data = buildExperimentData(createMixedTasteRecords(), [], new Map(), NOW_MS, {
+    randomExplorePool: createRelatedPool(),
+    varietyRegionPool: failedPool,
+  });
+  const variety = data.blindBoxes.find(box => box.id === 'variety');
+
+  assert.ok(variety);
+  assert.equal(variety.state, 'empty');
+  assert.match(variety.emptyDescription ?? '', /候选源|运行环境|暂时不可用/);
+  assert.equal(JSON.stringify(variety).includes('document is not defined'), false);
+  assert.equal(JSON.stringify(variety).includes('ReferenceError'), false);
+});
+
 test('returns Chinese empty states instead of generic filler when local evidence is insufficient', () => {
   const bannedGuessWord = ['猜你', '喜欢'].join('');
   const bannedUnconsumedWord = ['未', '消费'].join('');
@@ -218,17 +241,10 @@ test('does not fall back to a local random video when related candidates fail', 
     createRecord({ bvid: 'BV1LOCAL001', tagName: '游戏', daysAgo: 3, actualCompletion: 0.92, title: '本地种子视频' }),
     createRecord({ bvid: 'BV1LOCAL002', tagName: '游戏', daysAgo: 40, actualCompletion: 0.91, title: '本地备用视频' }),
   ];
-  const failedPool: ExperimentRealCandidatePool = {
-    sourceKind: 'bilibili_related',
-    sourceLabel: '相关视频候选',
-    seedCount: 1,
-    candidates: [],
-    failures: [{
-      seedBvid: 'BV1LOCAL001',
-      seedTitle: '本地种子视频',
-      reason: 'request_failed',
-    }],
-  };
+  const failedPool = buildRelatedVideoSourceFailure(
+    [{ bvid: 'BV1LOCAL001', title: '本地种子视频' }],
+    new ReferenceError('document is not defined'),
+  );
 
   const data = buildExperimentData(records, [], new Map(), NOW_MS, failedPool);
   const randomExplore = data.blindBoxes.find(box => box.id === 'random_explore');
@@ -242,6 +258,45 @@ test('does not fall back to a local random video when related candidates fail', 
   assert.match(randomExplore.source, /相关视频候选/);
   assert.match(randomExplore.emptyDescription ?? '', /不会用本地库存视频冒充/);
   assert.ok(randomExplore.evidence.some(line => line.includes('请求失败')));
+  assert.equal(JSON.stringify(randomExplore).includes('document is not defined'), false);
+});
+
+test('downgrades blind-box long-term surfaces when local history only spans about a week', async () => {
+  const records = createShortCoverageRecords();
+  const coverage = getHistoryCoverageSpan(records, NOW_MS);
+  assert.equal(coverage.spanDays, 7);
+  assert.equal(coverage.hasEnoughForRecentComparison, false);
+
+  assert.deepEqual(buildVarietyRegionDirections(records, { nowMs: NOW_MS }), []);
+  const regionPool = await fetchVarietyRegionCandidatePool(records, { nowMs: NOW_MS });
+  assert.equal(regionPool.status, 'insufficient_local_evidence');
+  assert.ok(regionPool.evidence.some(line => line.includes('本地观看历史目前只覆盖约 7 天')));
+
+  const data = buildExperimentData(records, [], new Map(), NOW_MS, {
+    randomExplorePool: createRelatedPool(),
+    varietyRegionPool: regionPool,
+  });
+  const variety = data.blindBoxes.find(box => box.id === 'variety');
+  const reviveInterest = data.blindBoxes.find(box => box.id === 'revive_interest');
+
+  assert.ok(variety);
+  assert.equal(variety.state, 'empty');
+  assert.match(variety.emptyDescription ?? '', /本地观看历史目前只覆盖约 7 天/);
+  assert.equal(variety.title.includes('换口味'), false);
+  assert.ok(reviveInterest);
+  assert.equal(reviveInterest.state, 'empty');
+  assert.match(reviveInterest.emptyDescription ?? '', /不能把最近几天当作长期兴趣/);
+});
+
+test('dynamic bill long-term columns require local history to span the recent comparison window', () => {
+  assert.equal(
+    getHistoryCoverageSpan(createShortCoverageRecords(), NOW_MS).hasEnoughForRecentComparison,
+    false,
+  );
+  assert.equal(
+    getHistoryCoverageSpan(createMixedTasteRecords(), NOW_MS).hasEnoughForRecentComparison,
+    true,
+  );
 });
 
 function createMixedTasteRecords(): WatchHistoryRecord[] {
@@ -256,6 +311,16 @@ function createMixedTasteRecords(): WatchHistoryRecord[] {
     createRecord({ bvid: 'BVKNO002', tagName: '知识', daysAgo: 145, actualCompletion: 0.94, title: '旧兴趣 2' }),
     createRecord({ bvid: 'BVKNO003', tagName: '知识', daysAgo: 170, actualCompletion: 0.9, title: '旧兴趣 3' }),
     createRecord({ bvid: 'BVKNO004', tagName: '知识', daysAgo: 175, actualCompletion: 0.89, title: '旧兴趣 4' }),
+  ];
+}
+
+function createShortCoverageRecords(): WatchHistoryRecord[] {
+  return [
+    createRecord({ bvid: 'BVSHORT001', tagName: '知识', daysAgo: 0, actualCompletion: 0.92, title: '短历史知识 1' }),
+    createRecord({ bvid: 'BVSHORT002', tagName: '知识', daysAgo: 1, actualCompletion: 0.9, title: '短历史知识 2' }),
+    createRecord({ bvid: 'BVSHORT003', tagName: '知识', daysAgo: 2, actualCompletion: 0.88, title: '短历史知识 3' }),
+    createRecord({ bvid: 'BVSHORT004', tagName: '知识', daysAgo: 4, actualCompletion: 0.91, title: '短历史知识 4' }),
+    createRecord({ bvid: 'BVSHORT005', tagName: '知识', daysAgo: 6, actualCompletion: 0.89, title: '短历史知识 5' }),
   ];
 }
 

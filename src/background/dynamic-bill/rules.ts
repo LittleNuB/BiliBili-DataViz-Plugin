@@ -16,6 +16,7 @@ import {
 } from '../storage/dynamic-bill-repo';
 import { applyDynamicBillFeedbackScore, evaluateDynamicBillFeedback } from './feedback';
 import { DYNAMIC_BILL_STRATEGY, getDynamicBillThresholdEvidence } from './strategy';
+import { getHistoryCoverageSpan } from '../analytics/history-coverage.ts';
 
 const SECONDS_PER_DAY = 86_400;
 const AFK_UPDATE_COLUMN = 'afk_update';
@@ -37,6 +38,17 @@ interface Candidate {
 }
 
 type CandidateInput = Omit<Candidate, 'score' | 'feedbackFacts'>;
+
+export function hasSufficientLongTermHistoryCoverage(
+  records: WatchHistoryRecord[],
+  nowSeconds: number,
+): boolean {
+  return getHistoryCoverageSpan(
+    records,
+    nowSeconds * 1000,
+    DYNAMIC_BILL_STRATEGY.recentWindowDays,
+  ).hasEnoughForRecentComparison;
+}
 
 export async function generateAfkUpdateBillItems(): Promise<DynamicBillGenerateResult> {
   const generatedAt = Date.now();
@@ -75,6 +87,35 @@ export async function generateAfkUpdateBillItems(): Promise<DynamicBillGenerateR
     if (!existing || update.dynamicTime > existing.dynamicTime) {
       newestUnwatchedUpdateByCreator.set(update.authorMid, update);
     }
+  }
+
+  if (!hasSufficientLongTermHistoryCoverage(longRecords, nowSeconds)) {
+    const storedItems = await replaceDynamicBillItemsForColumn(AFK_UPDATE_COLUMN, []);
+    const overview = await getDynamicBillOverview(DYNAMIC_BILL_STRATEGY.updateWindowDays);
+
+    return {
+      generatedAt,
+      itemCount: storedItems.length,
+      candidatesScanned: updates.length,
+      eligibleCreatorCount: 0,
+      excludedNoLongSignalCount: newestUnwatchedUpdateByCreator.size,
+      excludedRecentActiveCount: 0,
+      excludedRecentSameVideoCount,
+      excludedByFeedbackCount: 0,
+      columnItemCounts: {
+        afk_update: storedItems.length,
+        variety: 0,
+        buried_follow: 0,
+      },
+      columnEligibleCounts: {
+        afk_update: 0,
+        variety: 0,
+        buried_follow: 0,
+      },
+      items: storedItems,
+      thresholds,
+      overview,
+    };
   }
 
   const candidates: Candidate[] = [];

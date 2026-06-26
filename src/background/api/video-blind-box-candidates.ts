@@ -5,6 +5,7 @@ import type {
   ExperimentVideoCandidate,
 } from '../../shared/types/analytics';
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
+import { getHistoryCoverageSpan, type HistoryCoverageSpan } from '../analytics/history-coverage.ts';
 
 const DAY_MS = 86_400_000;
 const RELATED_VIDEO_ENDPOINT = '/x/web-interface/archive/related';
@@ -218,6 +219,21 @@ export async function fetchRelatedVideoCandidates(
   };
 }
 
+export function buildRelatedVideoSourceFailure(
+  seeds: RelatedVideoSeed[],
+  _error: unknown,
+  options: RelatedVideoCandidateOptions = {},
+): ExperimentRealCandidatePool {
+  const selectedSeeds = normalizeSeeds(seeds).slice(0, clampPositive(options.seedLimit, DEFAULT_SEED_LIMIT));
+  return {
+    sourceKind: 'bilibili_related',
+    sourceLabel: '相关视频候选',
+    seedCount: selectedSeeds.length,
+    candidates: [],
+    failures: selectedSeeds.map(seed => toRelatedFailure(seed, 'request_failed')),
+  };
+}
+
 export async function fetchVarietyRegionCandidatePool(
   records: WatchHistoryRecord[],
   options: VarietyRegionCandidateOptions = {},
@@ -338,6 +354,9 @@ export function buildVarietyRegionDirections(
   options: { nowMs?: number; maxDirections?: number } = {},
 ): VarietyRegionDirection[] {
   const nowMs = options.nowMs ?? Date.now();
+  const coverage = getHistoryCoverageSpan(records, nowMs, RECENT_WINDOW_DAYS);
+  if (!coverage.hasEnoughForRecentComparison) return [];
+
   const longCutoffMs = nowMs - LONG_WINDOW_DAYS * DAY_MS;
   const recentCutoffMs = nowMs - RECENT_WINDOW_DAYS * DAY_MS;
   const longRecords = records.filter(record => toEpochMs(record.viewAt) >= longCutoffMs);
@@ -454,13 +473,15 @@ function toRelatedCandidate(
 }
 
 function buildNoDirectionPool(records: WatchHistoryRecord[], nowMs: number): VarietyRegionCandidatePool {
+  const coverage = getHistoryCoverageSpan(records, nowMs, RECENT_WINDOW_DAYS);
   const positiveRecords = records
     .filter(record => toEpochMs(record.viewAt) >= nowMs - LONG_WINDOW_DAYS * DAY_MS)
     .filter(isPositiveRecord);
   const mappedSignalCount = positiveRecords
     .flatMap(record => getRecordSignals(record))
     .length;
-  const status: VarietyRegionCandidatePoolStatus = positiveRecords.length < MIN_LONG_POSITIVE_COUNT
+  const hasShortHistoryCoverage = !coverage.hasEnoughForRecentComparison;
+  const status: VarietyRegionCandidatePoolStatus = hasShortHistoryCoverage || positiveRecords.length < MIN_LONG_POSITIVE_COUNT
     ? 'insufficient_local_evidence'
     : mappedSignalCount === 0
       ? 'unmapped_interest'
@@ -472,8 +493,12 @@ function buildNoDirectionPool(records: WatchHistoryRecord[], nowMs: number): Var
     directions: [],
     candidates: [],
     evidence: [
-      `近 ${LONG_WINDOW_DAYS} 天本地正向观看 ${positiveRecords.length} 条，换口味至少需要 ${MIN_LONG_POSITIVE_COUNT} 条可聚合兴趣证据。`,
-      status === 'unmapped_interest'
+      hasShortHistoryCoverage
+        ? formatShortHistoryCoverageEvidence(coverage)
+        : `近 ${LONG_WINDOW_DAYS} 天本地正向观看 ${positiveRecords.length} 条，换口味至少需要 ${MIN_LONG_POSITIVE_COUNT} 条可聚合兴趣证据。`,
+      hasShortHistoryCoverage
+        ? `本地历史覆盖短于最近 ${RECENT_WINDOW_DAYS} 天对比窗口，暂不把这些记录解释成长期兴趣或冷却方向。`
+        : status === 'unmapped_interest'
         ? '本地长期兴趣还不能保守映射到 B 站公开分区，暂不硬凑真实候选。'
         : '没有找到长期相关但近期低频的分区方向，避免从近期高频口味里抽。',
     ],
@@ -481,6 +506,13 @@ function buildNoDirectionPool(records: WatchHistoryRecord[], nowMs: number): Var
     excludedRecentBvidCount: 0,
     excludedInvalidCandidateCount: 0,
   };
+}
+
+function formatShortHistoryCoverageEvidence(coverage: HistoryCoverageSpan): string {
+  if (coverage.recordCount === 0) {
+    return `本地观看历史目前还没有可用于长期/近期对比的记录，至少需要覆盖最近 ${coverage.requiredDays} 天。`;
+  }
+  return `本地观看历史目前只覆盖约 ${coverage.spanDays} 天，短于最近 ${coverage.requiredDays} 天对比窗口。`;
 }
 
 function buildDirectionEvidence(
@@ -680,11 +712,30 @@ function formatCount(value: number): string {
 }
 
 function readableCandidateError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
+  if (error instanceof Error) return sanitizeCandidateError(error.message);
+  if (typeof error === 'string') return sanitizeCandidateError(error);
   try {
-    return JSON.stringify(error);
+    return sanitizeCandidateError(JSON.stringify(error));
   } catch {
-    return String(error);
+    return sanitizeCandidateError(String(error));
   }
+}
+
+function sanitizeCandidateError(message: string): string {
+  if (/document is not defined|window is not defined|ReferenceError/i.test(message)) {
+    return '运行环境暂不支持该候选源';
+  }
+  if (/RATE_LIMITED|HTTP 412|\b412\b/i.test(message)) {
+    return '请求频率受限';
+  }
+  if (/REQUEST_TIMEOUT|AbortError|timeout/i.test(message)) {
+    return '请求超时';
+  }
+  if (/NOT_LOGGED_IN/i.test(message)) {
+    return '登录状态不可用';
+  }
+  if (/API Error/i.test(message)) {
+    return 'B 站接口暂时不可用';
+  }
+  return '候选源请求失败';
 }
