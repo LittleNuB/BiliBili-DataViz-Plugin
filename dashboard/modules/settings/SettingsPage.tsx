@@ -8,12 +8,13 @@ import {
   formatLocalDataError,
   LOCAL_DATA_CLEAR_CONFIRMATION,
 } from '../../../src/shared/local-data-privacy';
-import type {
-  AiConfig,
-  AiConnectionTestResult,
-  AssistantConfig,
-  DynamicBillConfig,
-  UserConfig,
+import {
+  DEFAULT_CONFIG,
+  type AiConfig,
+  type AiConnectionTestResult,
+  type AssistantConfig,
+  type DynamicBillConfig,
+  type UserConfig,
 } from '../../../src/shared/types/config';
 import type {
   LocalDataOperationResult,
@@ -30,21 +31,14 @@ interface AiFormState {
 }
 
 const DEFAULT_AI_FORM: AiFormState = {
-  baseURL: 'https://api.deepseek.com',
-  chatModel: 'deepseek-v4-flash',
+  baseURL: DEFAULT_CONFIG.ai.baseURL,
+  chatModel: DEFAULT_CONFIG.ai.chatModel,
   apiKeyInput: '',
 };
 
-const DEFAULT_ASSISTANT: AssistantConfig = {
-  aiSummariesEnabled: false,
-  smartFavoritesQaAiEnabled: false,
-  currentVideoSegmentRerankAiEnabled: false,
-  currentVideoQaAiEnabled: false,
-};
+const DEFAULT_ASSISTANT: AssistantConfig = DEFAULT_CONFIG.assistant;
 
-const DEFAULT_DYNAMIC_BILL: DynamicBillConfig = {
-  aiExplanationsEnabled: false,
-};
+const DEFAULT_DYNAMIC_BILL: DynamicBillConfig = DEFAULT_CONFIG.dynamicBill;
 
 export function SettingsPage() {
   const [form, setForm] = useState<AiFormState>(DEFAULT_AI_FORM);
@@ -65,6 +59,25 @@ export function SettingsPage() {
   useEffect(() => {
     void refreshConfig();
     void refreshLocalData();
+  }, []);
+
+  useEffect(() => {
+    if (typeof chrome === 'undefined' || !chrome.storage?.onChanged) return undefined;
+
+    const handleStorageChange = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string,
+    ) => {
+      if (areaName !== 'local') return;
+      const change = changes.userConfig;
+      if (!change?.newValue) return;
+      applyConfig(change.newValue as Partial<UserConfig>);
+      setNotice('');
+      setLastTest(null);
+    };
+
+    chrome.storage.onChanged.addListener(handleStorageChange);
+    return () => chrome.storage.onChanged.removeListener(handleStorageChange);
   }, []);
 
   const effectiveAiConfig = useMemo<AiConfig>(() => ({
@@ -119,12 +132,13 @@ export function SettingsPage() {
     setNotice('');
     try {
       await ensureAiHostPermission(effectiveAiConfig.baseURL);
-      const nextConfig: UserConfig = {
-        ...(loadedConfig ?? await requestSW<UserConfig>('GET_CONFIG')),
+      const baseConfig = normalizeSettingsUserConfig(loadedConfig ?? await requestSW<UserConfig>('GET_CONFIG'));
+      const nextConfig = normalizeSettingsUserConfig({
+        ...baseConfig,
         ai: effectiveAiConfig,
         assistant,
         dynamicBill,
-      };
+      });
       await requestSW('UPDATE_CONFIG', {
         ai: nextConfig.ai,
         assistant: nextConfig.assistant,
@@ -217,16 +231,17 @@ export function SettingsPage() {
     }
   }
 
-  function applyConfig(config: UserConfig) {
-    setLoadedConfig(config);
+  function applyConfig(config: Partial<UserConfig>) {
+    const normalized = normalizeSettingsUserConfig(config);
+    setLoadedConfig(normalized);
     setForm({
-      baseURL: config.ai.baseURL,
-      chatModel: config.ai.chatModel,
+      baseURL: normalized.ai.baseURL,
+      chatModel: normalized.ai.chatModel,
       apiKeyInput: '',
     });
-    setSavedApiKey(config.ai.apiKey);
-    setAssistant(config.assistant);
-    setDynamicBill(config.dynamicBill);
+    setSavedApiKey(normalized.ai.apiKey);
+    setAssistant(normalized.assistant);
+    setDynamicBill(normalized.dynamicBill);
   }
 
   if (loading) {
@@ -333,31 +348,31 @@ export function SettingsPage() {
             title="当前视频摘要"
             detail="允许当前视频助手在有边界的元数据、简介或字幕证据上整理摘要。"
             checked={assistant.aiSummariesEnabled}
-            onChange={(checked) => setAssistant({ ...assistant, aiSummariesEnabled: checked })}
+            onChange={(checked) => setAssistant(current => ({ ...current, aiSummariesEnabled: checked }))}
           />
           <FeatureToggle
             title="当前视频片段排序辅助"
             detail="允许 AI 只在已检索出的本地候选片段中调整展示顺序和解释。"
             checked={assistant.currentVideoSegmentRerankAiEnabled}
-            onChange={(checked) => setAssistant({ ...assistant, currentVideoSegmentRerankAiEnabled: checked })}
+            onChange={(checked) => setAssistant(current => ({ ...current, currentVideoSegmentRerankAiEnabled: checked }))}
           />
           <FeatureToggle
             title="当前视频问答整理"
             detail="允许 AI 只基于当前视频 top-N 本地引用片段整理简短回答；时间点和引用仍来自本地候选。"
             checked={assistant.currentVideoQaAiEnabled}
-            onChange={(checked) => setAssistant({ ...assistant, currentVideoQaAiEnabled: checked })}
+            onChange={(checked) => setAssistant(current => ({ ...current, currentVideoQaAiEnabled: checked }))}
           />
           <FeatureToggle
             title="智能收藏问答"
             detail="允许 AI 基于已同步收藏的前置引用视频整理综合回答。"
             checked={assistant.smartFavoritesQaAiEnabled}
-            onChange={(checked) => setAssistant({ ...assistant, smartFavoritesQaAiEnabled: checked })}
+            onChange={(checked) => setAssistant(current => ({ ...current, smartFavoritesQaAiEnabled: checked }))}
           />
           <FeatureToggle
             title="动态账单解释"
             detail="允许 AI 为已入选的账单项生成解释；入选、排序和状态推进仍由本地规则决定。"
             checked={dynamicBill.aiExplanationsEnabled}
-            onChange={(checked) => setDynamicBill({ ...dynamicBill, aiExplanationsEnabled: checked })}
+            onChange={(checked) => setDynamicBill(current => ({ ...current, aiExplanationsEnabled: checked }))}
           />
         </div>
       </section>
@@ -483,7 +498,7 @@ export function SettingsPage() {
         <ul className="settings-privacy-list">
           <li>API Key 只保存在本地浏览器扩展存储中，不会提交到 Bili-Bill 服务端。</li>
           <li>AI 请求只发送当前功能需要的最小证据片段，不上传完整观看历史、完整收藏、完整关注或反馈记录。</li>
-          <li>Bili-Bill 不读取 Cookie 文件、浏览器用户资料目录、Bilibili 登录态文件或本地密钥文件。</li>
+          <li>Bili-Bill 不读取本地登录凭据文件、浏览器用户资料目录、B 站登录状态文件或本地密钥文件。</li>
           <li>动态账单、收藏和当前视频功能不会写回 B 站关注关系、收藏夹或视频数据。</li>
         </ul>
       </section>
@@ -511,8 +526,12 @@ function FeatureToggle({
   checked: boolean;
   onChange: (checked: boolean) => void;
 }) {
+  const stateText = checked ? '已启用' : '已关闭';
   return (
-    <label className="settings-toggle">
+    <label
+      className={`settings-toggle ${checked ? 'is-on' : 'is-off'}`}
+      data-state={checked ? 'on' : 'off'}
+    >
       <input
         type="checkbox"
         checked={checked}
@@ -520,11 +539,42 @@ function FeatureToggle({
       />
       <span className="settings-toggle-control" aria-hidden="true" />
       <span className="settings-toggle-copy">
-        <strong>{title}</strong>
+        <span className="settings-toggle-title-row">
+          <strong>{title}</strong>
+          <span className="settings-toggle-state">{stateText}</span>
+        </span>
         <small>{detail}</small>
       </span>
     </label>
   );
+}
+
+function normalizeSettingsUserConfig(config: Partial<UserConfig>): UserConfig {
+  return {
+    ...DEFAULT_CONFIG,
+    ...config,
+    ai: {
+      ...DEFAULT_CONFIG.ai,
+      ...(config.ai ?? {}),
+    },
+    assistant: normalizeAssistantConfig(config.assistant),
+    dynamicBill: normalizeDynamicBillConfig(config.dynamicBill),
+  };
+}
+
+function normalizeAssistantConfig(config: Partial<AssistantConfig> | undefined): AssistantConfig {
+  return {
+    aiSummariesEnabled: config?.aiSummariesEnabled === true,
+    smartFavoritesQaAiEnabled: config?.smartFavoritesQaAiEnabled === true,
+    currentVideoSegmentRerankAiEnabled: config?.currentVideoSegmentRerankAiEnabled === true,
+    currentVideoQaAiEnabled: config?.currentVideoQaAiEnabled === true,
+  };
+}
+
+function normalizeDynamicBillConfig(config: Partial<DynamicBillConfig> | undefined): DynamicBillConfig {
+  return {
+    aiExplanationsEnabled: config?.aiExplanationsEnabled === true,
+  };
 }
 
 async function ensureAiHostPermission(baseURL: string): Promise<void> {

@@ -30,7 +30,7 @@ export function ExperimentsPage() {
       setRevealed({});
       setOpened({});
     } catch (error) {
-      expError.value = (error as Error).message;
+      expError.value = formatExperimentLoadError(error);
     } finally {
       expLoading.value = false;
     }
@@ -225,6 +225,14 @@ export function ExperimentsPage() {
       </div>
     </ErrorBoundary>
   );
+}
+
+function formatExperimentLoadError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/document is not defined|window is not defined|ReferenceError/i.test(message)) {
+    return '盲盒候选源暂时不可用，请刷新后重试。';
+  }
+  return message || '盲盒数据读取失败，请稍后重试。';
 }
 
 function sourceMetaStyle(): Record<string, string> {

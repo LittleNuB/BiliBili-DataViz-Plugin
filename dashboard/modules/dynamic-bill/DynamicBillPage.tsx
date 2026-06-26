@@ -38,14 +38,14 @@ const BILL_COLUMNS = [
   {
     key: "afk_update",
     title: "久违更新",
-    detail: "长期窗口有正反馈、近期冷却、最近 7 天有新投稿的已关注 UP。",
+    detail: "本地历史覆盖足够长时，才比较长期正反馈、近期冷却和最近 7 天新投稿。",
     accent: "pink",
     enabled: true,
   },
   {
     key: "variety",
-    title: "换换口味",
-    detail: "长期分区/标签强、近期明显下降，最近 7 天有已关注 UP 新投稿。",
+    title: "兴趣再平衡",
+    detail: "本地历史覆盖足够长时，才比较长期分区/标签和近期下降。",
     accent: "blue",
     enabled: true,
   },
@@ -356,13 +356,13 @@ export function DynamicBillPage() {
           <span className="dynamic-bill-kicker">消费前 / 已关注视频投稿</span>
           <h2>动态账单</h2>
           <p>
-            面向兴趣再平衡，久违更新、换换口味和被淹没的关注由本地规则入选和排序；AI 只生成解释展示，未启用、未配置或失败时继续显示本地证据结果。
+            面向兴趣再平衡，账单项由本地规则入选和排列；AI 只生成解释展示，未启用、未配置或失败时继续显示本地证据结果。
           </p>
         </div>
         <div className="dynamic-bill-scope">
           <strong>解释数据范围</strong>
           <span>
-            AI 只接收已入选账单项的新视频标题/简介、UP 名、分区/标签、发布时间、时长和紧凑证据事实；不发送完整历史、完整关注列表、Cookie、用户账号标识、个人资料或反馈记录。
+            AI 只接收已入选账单项的新视频标题/简介、UP 名、分区/标签、发布时间、时长和紧凑证据事实；不发送完整历史、完整关注列表、本地登录凭据、用户账号标识、个人资料或反馈记录。
           </span>
           <span>
             {dynamicBillAiSettingsCopy(isAiEnabled, isAiConfigured)}
@@ -426,7 +426,7 @@ export function DynamicBillPage() {
         <StatusMetric
           label="本地账单"
           value={String(items.length)}
-          detail={`久违更新 ${afkItems.length} / 换换口味 ${varietyItems.length} / 被淹没的关注 ${buriedFollowItems.length}`}
+          detail={`久违更新 ${afkItems.length} / 兴趣再平衡 ${varietyItems.length} / 被淹没的关注 ${buriedFollowItems.length}`}
         />
       </section>
 
@@ -866,7 +866,7 @@ function describeSyncResult(result: DynamicSyncResult): string {
 }
 
 function describeGenerateResult(result: DynamicBillGenerateResult): string {
-  return `本地账单生成 ${result.itemCount} 项：久违更新 ${result.columnItemCounts.afk_update} 项，换换口味 ${result.columnItemCounts.variety} 项，被淹没的关注 ${result.columnItemCounts.buried_follow} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除近期已看同视频 ${result.excludedRecentSameVideoCount} 条，长期/关注记忆证据不足 ${result.excludedNoLongSignalCount} 个，近期仍活跃 ${result.excludedRecentActiveCount} 个，本地少提醒阈值排除 ${result.excludedByFeedbackCount} 个。`;
+  return `本地账单生成 ${result.itemCount} 项：久违更新 ${result.columnItemCounts.afk_update} 项，兴趣再平衡 ${result.columnItemCounts.variety} 项，被淹没的关注 ${result.columnItemCounts.buried_follow} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除近期已看同视频 ${result.excludedRecentSameVideoCount} 条，长期/关注记忆证据不足 ${result.excludedNoLongSignalCount} 个，近期仍活跃 ${result.excludedRecentActiveCount} 个，本地少提醒阈值排除 ${result.excludedByFeedbackCount} 个。若本地观看历史覆盖不足最近 ${result.thresholds.recentWindowDays} 天，依赖长期/近期对比的栏目会保持为空，不当作长期洞察。`;
 }
 
 function describeExplanationResult(result: DynamicBillExplanationResult): string {
@@ -937,19 +937,19 @@ function getColumnEmptyCopy(
   }
   if (column.key === "variety") {
     return {
-      title: `暂无${statusLabel}换换口味`,
-      detail: "可能是长期分区/标签强度不足、近期没有明显下降，或最近新投稿没有命中下降兴趣。",
+      title: `暂无${statusLabel}兴趣再平衡项`,
+      detail: "可能是本地历史覆盖不足最近 30 天、长期分区/标签证据不足、近期没有明显下降，或最近新投稿没有命中下降兴趣。覆盖太短时不会当作长期洞察展示。",
     };
   }
   if (column.key === "buried_follow") {
     return {
       title: `暂无${statusLabel}被淹没的关注`,
-      detail: "可能是缺少长期关注、特别关注或近期窗口以前弱观看等关注记忆信号，或该 UP 最近 30 天仍在观看。",
+      detail: "可能是本地历史覆盖不足最近 30 天、缺少长期关注、特别关注或近期窗口以前弱观看等关注记忆信号，或该 UP 最近 30 天仍在观看。",
     };
   }
   return {
     title: `暂无${statusLabel}久违更新`,
-    detail: "可能是长期正反馈不足、近期仍在观看，或同一新视频已在近期观看历史中出现。",
+    detail: "可能是本地历史覆盖不足最近 30 天、长期正反馈不足、近期仍在观看，或同一新视频已在近期观看历史中出现。",
   };
 }
 
@@ -1012,7 +1012,7 @@ function localFallbackReason(item: DynamicBillItem): string {
 
 function localFallbackViewingAngle(item: DynamicBillItem): string {
   if (item.column === "variety" && item.evidence.interest) {
-    return `把它当作回到「${item.evidence.interest.label}」这个长期兴趣的一次口味切换。`;
+    return `把它当作回到「${item.evidence.interest.label}」这个长期兴趣的一次兴趣再平衡。`;
   }
   if (item.column === "buried_follow") {
     return "把它当作一次低压力回访，判断这个长期关注是否仍值得保留注意力。";
