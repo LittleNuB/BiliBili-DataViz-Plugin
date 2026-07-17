@@ -204,7 +204,7 @@ function realCandidateUnavailableMeta(candidateSource: string, reason: string): 
 function localFavoriteMeta(): BlindBoxBoundaryMeta {
   return {
     candidateSource: LOCAL_FAVORITE_SOURCE,
-    realCandidateLabel: '未使用真实 B 站候选：这是本地收藏回访。',
+    realCandidateLabel: '本卡不使用；固定从本地收藏回访。',
     usesRealBilibiliCandidates: false,
   };
 }
@@ -398,9 +398,7 @@ function buildHiddenFavoriteBox(ctx: BlindBoxContext): ExperimentBlindBox {
       hasOnlyUnopenableFavorites
         ? '本地收藏返回了记录，但没有可打开的视频。'
         : '本地收藏里暂时没有足够冷门的回访候选。',
-      hasOnlyUnopenableFavorites
-        ? realCandidateUnavailableMeta(LOCAL_FAVORITE_SOURCE, '本轮本地收藏候选暂时不能打开。')
-        : localFavoriteMeta(),
+      localFavoriteMeta(),
     );
   }
 
@@ -555,7 +553,7 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
       ['本地还没有可作为公开相关视频候选种子的近期视频。'],
       '当前没有可用于探索的近期视频',
       '随机探索需要先用最近少量本地历史作为种子，请求 B 站公开视频的相关视频候选池。当前没有合格种子，因此没有发出相关候选请求。',
-      '候选源未准备好',
+      '没有可用种子',
       sourceLabel,
       '没有可请求的种子，未生成空白视频卡。',
       realCandidateUnavailableMeta(RELATED_CANDIDATE_SOURCE, '缺少可请求的本地近期视频。'),

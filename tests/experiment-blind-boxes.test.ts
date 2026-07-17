@@ -23,6 +23,7 @@ import {
   BLIND_BOX_DRAW_HISTORY_STORAGE_KEY,
   clearBlindBoxDrawHistory,
   collectBlindBoxDrawHistoryUsage,
+  getBlindBoxRecentDrawnBvids,
   mergeBlindBoxDrawHistory,
   normalizeBlindBoxDrawHistory,
   readBlindBoxDrawHistoryAfterClear,
@@ -100,7 +101,7 @@ test('builds fixed blind boxes with source labels for all four 0.13 sources', ()
   assert.equal(hiddenFavorite.title, '冷门收藏');
   assert.equal(hiddenFavorite.state, 'ready');
   assert.equal(hiddenFavorite.candidateSource, '本地收藏');
-  assert.equal(hiddenFavorite.realCandidateLabel, '未使用真实 B 站候选：这是本地收藏回访。');
+  assert.equal(hiddenFavorite.realCandidateLabel, '本卡不使用；固定从本地收藏回访。');
   assert.equal(hiddenFavorite.usesRealBilibiliCandidates, false);
   assert.equal(hiddenFavorite.video?.bvid, 'BVFAVHID01');
   assert.equal(hiddenFavorite.video?.sourceKind, 'local_favorite');
@@ -401,6 +402,7 @@ test('distinguishes no seed, no real candidates, upstream failure, and unopenabl
   });
   const noSeed = noSeedData.blindBoxes.find(box => box.id === 'random_explore');
   assert.equal(noSeed?.state, 'empty');
+  assert.equal(noSeed?.statusLabel, '没有可用种子');
   assert.equal(noSeed?.emptyTitle, '当前没有可用于探索的近期视频');
   assert.match(noSeed?.emptyDescription ?? '', /没有合格种子/);
 
@@ -467,6 +469,32 @@ test('distinguishes no seed, no real candidates, upstream failure, and unopenabl
   assert.equal(unopenable?.statusLabel, '候选不可打开');
   assert.match(unopenable?.emptyDescription ?? '', /返回了候选，但没有留下可打开的视频/);
   assertNoForbiddenVisibleText(visibleBlindBoxText(unopenable!));
+});
+
+test('cold favorites report reachable unopenable local records without implying an upstream failure', () => {
+  const data = buildExperimentData([], [createFavorite({
+    itemKey: 'unopenable-local-favorite',
+    bvid: 'not-a-bvid',
+    title: '缺少可打开身份的收藏',
+    folderTitle: '旧收藏',
+    tagName: '知识',
+    favDaysAgo: 180,
+  })], new Map(), NOW_MS, {
+    randomExplorePool: emptyRelatedPool(),
+    crossRegionPool: emptyCrossRegionPool(),
+    creatorArchivePool: emptyCreatorArchivePool(),
+  });
+  const coldFavorite = data.blindBoxes.find(box => box.id === 'hidden_favorite');
+
+  assert.equal(coldFavorite?.title, '冷门收藏');
+  assert.equal(coldFavorite?.state, 'empty');
+  assert.equal(coldFavorite?.statusLabel, '候选不可打开');
+  assert.equal(coldFavorite?.candidateSource, '本地收藏');
+  assert.equal(coldFavorite?.realCandidateLabel, '本卡不使用；固定从本地收藏回访。');
+  assert.equal(coldFavorite?.usesRealBilibiliCandidates, false);
+  assert.match(coldFavorite?.emptyDescription ?? '', /本地收藏/);
+  assert.doesNotMatch(visibleBlindBoxText(coldFavorite!), /接口|没有真实候选/);
+  assertNoForbiddenVisibleText(visibleBlindBoxText(coldFavorite!));
 });
 
 test('shared recent draw history prefers unseen candidates across all four cards', () => {
@@ -566,6 +594,131 @@ test('blind-box draw history keeps the latest 50 normalized BVIDs and clears wit
   });
 });
 
+test('overlapping blind-box history records retain both batches in newest-first order', async () => {
+  const firstGetStarted = createDeferred<void>();
+  const releaseFirstGet = createDeferred<void>();
+  let getCalls = 0;
+  const storage = createMemoryStorage({
+    [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1EXISTING1'],
+  }, {
+    afterGetSnapshot: async call => {
+      getCalls = call;
+      if (call === 1) {
+        firstGetStarted.resolve();
+        await releaseFirstGet.promise;
+      }
+    },
+  });
+
+  const firstRecord = recordBlindBoxDrawnBvids(['BV1FIRST001'], storage);
+  await firstGetStarted.promise;
+  const secondRecord = recordBlindBoxDrawnBvids(['BV1SECOND01'], storage);
+  await Promise.resolve();
+  const getCallsBeforeRelease = getCalls;
+  releaseFirstGet.resolve();
+
+  const [firstResult, secondResult] = await Promise.all([firstRecord, secondRecord]);
+  assert.equal(getCallsBeforeRelease, 1, 'the second read must wait for the first mutation');
+  assert.deepEqual(firstResult, ['BV1FIRST001', 'BV1EXISTING1']);
+  assert.deepEqual(secondResult, ['BV1SECOND01', 'BV1FIRST001', 'BV1EXISTING1']);
+  assert.deepEqual(await getBlindBoxRecentDrawnBvids(storage), secondResult);
+});
+
+test('blind-box history clear waits for an earlier record and removes its completed result', async () => {
+  const setStarted = createDeferred<void>();
+  const releaseSet = createDeferred<void>();
+  let removeCalls = 0;
+  const storage = createMemoryStorage({
+    [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1BASE0001'],
+  }, {
+    beforeSet: async () => {
+      setStarted.resolve();
+      await releaseSet.promise;
+    },
+    beforeRemove: () => {
+      removeCalls += 1;
+    },
+  });
+
+  const record = recordBlindBoxDrawnBvids(['BV1RECORD01'], storage);
+  await setStarted.promise;
+  const clear = clearBlindBoxDrawHistory(storage);
+  await Promise.resolve();
+  const removeCallsBeforeRelease = removeCalls;
+  releaseSet.resolve();
+
+  assert.deepEqual(await record, ['BV1RECORD01', 'BV1BASE0001']);
+  assert.equal(await clear, 2);
+  assert.equal(removeCallsBeforeRelease, 0, 'clear must wait for the earlier write');
+  assert.deepEqual(await getBlindBoxRecentDrawnBvids(storage), []);
+});
+
+test('a rejected blind-box history write does not poison the next mutation', async () => {
+  let rejectNextWrite = true;
+  const storage = createMemoryStorage({
+    [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1STABLE001'],
+  }, {
+    beforeSet: () => {
+      if (rejectNextWrite) {
+        rejectNextWrite = false;
+        throw new Error('synthetic storage write failure');
+      }
+    },
+  });
+
+  await assert.rejects(
+    recordBlindBoxDrawnBvids(['BV1FAILED001'], storage),
+    /synthetic storage write failure/,
+  );
+  const next = await recordBlindBoxDrawnBvids(['BV1RECOVER01'], storage);
+
+  assert.deepEqual(next, ['BV1RECOVER01', 'BV1STABLE001']);
+  assert.deepEqual(await getBlindBoxRecentDrawnBvids(storage), next);
+});
+
+test('blind-box history reads and counts wait for prior mutations without deadlock', async () => {
+  const setStarted = createDeferred<void>();
+  const releaseSet = createDeferred<void>();
+  let getCalls = 0;
+  const storage = createMemoryStorage({
+    [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1BEFORE001'],
+  }, {
+    afterGetSnapshot: call => {
+      getCalls = call;
+    },
+    beforeSet: async () => {
+      setStarted.resolve();
+      await releaseSet.promise;
+    },
+  });
+
+  const record = recordBlindBoxDrawnBvids(['BV1AFTER001'], storage);
+  await setStarted.promise;
+  const read = getBlindBoxRecentDrawnBvids(storage);
+  const usage = collectBlindBoxDrawHistoryUsage(storage);
+  const readback = readBlindBoxDrawHistoryAfterClear(storage);
+  await Promise.resolve();
+  const getCallsBeforeRelease = getCalls;
+  releaseSet.resolve();
+
+  await record;
+  assert.equal(getCallsBeforeRelease, 1, 'public reads must wait for the pending write');
+  assert.deepEqual(await read, ['BV1AFTER001', 'BV1BEFORE001']);
+  assert.deepEqual(await usage, {
+    count: 2,
+    usageBytes: JSON.stringify({
+      [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1AFTER001', 'BV1BEFORE001'],
+    }).length,
+  });
+  assert.deepEqual(await readback, {
+    count: 2,
+    usageBytes: JSON.stringify({
+      [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1AFTER001', 'BV1BEFORE001'],
+    }).length,
+    empty: false,
+  });
+});
+
 test('blind-box draw history is registered for per-category clear and clear-all orchestration', async () => {
   const dependencies = createRegistryDependenciesForBlindBox(['BV1LATEST01', 'BV1LATEST02']);
   const categories = createRegisteredLocalDataCategories(dependencies);
@@ -603,13 +756,26 @@ test('formats experiment load errors without exposing runtime messages or raw fi
   }
 });
 
+test('mock QA fixture keeps the four failure states and local favorite source contract distinct', () => {
+  const mockSource = readFileSync(new URL('./experiment-blind-boxes.mock.html', import.meta.url), 'utf8');
+  const mockVisibleText = htmlVisibleText(mockSource);
+
+  assert.match(mockSource, /data-box-id="cold_favorite_unopenable"/);
+  assert.match(mockVisibleText, /没有可用种子/);
+  assert.match(mockVisibleText, /没有真实候选/);
+  assert.match(mockVisibleText, /接口暂时失败/);
+  assert.match(mockVisibleText, /候选不可打开/);
+  assert.match(mockVisibleText, /冷门收藏/);
+  assert.match(mockVisibleText, /本卡不使用；固定从本地收藏回访/);
+  assert.doesNotMatch(mockVisibleText, /隐藏收藏/);
+  assertNoForbiddenVisibleText(mockVisibleText);
+});
+
 test('keeps blind-box candidate helpers out of service-worker dynamic preload', () => {
   const source = readFileSync(new URL('../src/background/analytics/suggestions.ts', import.meta.url), 'utf8');
-  const mockSource = readFileSync(new URL('./experiment-blind-boxes.mock.html', import.meta.url), 'utf8');
 
   assert.equal(source.includes("await import('../api/video-blind-box-candidates.ts')"), false);
   assert.match(source, /from ['"]\.\.\/api\/video-blind-box-candidates\.ts['"]/);
-  assertNoForbiddenVisibleText(htmlVisibleText(mockSource));
 });
 
 function buildRandomContractData(
@@ -942,21 +1108,53 @@ function emptyRelatedPool(): ExperimentRealCandidatePool {
   };
 }
 
-function createMemoryStorage(initial: Record<string, unknown> = {}): BlindBoxDrawHistoryStorage {
+interface MemoryStorageHooks {
+  afterGetSnapshot?: (call: number) => void | Promise<void>;
+  beforeSet?: (items: Record<string, unknown>, call: number) => void | Promise<void>;
+  beforeRemove?: (keys: string[], call: number) => void | Promise<void>;
+}
+
+function createMemoryStorage(
+  initial: Record<string, unknown> = {},
+  hooks: MemoryStorageHooks = {},
+): BlindBoxDrawHistoryStorage {
   const values = new Map<string, unknown>(Object.entries(initial));
+  let getCalls = 0;
+  let setCalls = 0;
+  let removeCalls = 0;
   return {
-    get: async keys => Object.fromEntries(keys.map(key => [key, values.get(key)])),
+    get: async keys => {
+      getCalls += 1;
+      const snapshot = Object.fromEntries(keys.map(key => [key, values.get(key)]));
+      await hooks.afterGetSnapshot?.(getCalls);
+      return snapshot;
+    },
     set: async items => {
+      setCalls += 1;
+      await hooks.beforeSet?.(items, setCalls);
       for (const [key, value] of Object.entries(items)) {
         values.set(key, value);
       }
     },
     remove: async keys => {
+      removeCalls += 1;
+      await hooks.beforeRemove?.(keys, removeCalls);
       for (const key of keys) {
         values.delete(key);
       }
     },
   };
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>(currentResolve => {
+    resolve = currentResolve;
+  });
+  return { promise, resolve };
 }
 
 function createRegistryDependenciesForBlindBox(bvids: string[]): LocalDataCategoryRegistryDependencies {

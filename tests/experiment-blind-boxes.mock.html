@@ -213,7 +213,7 @@
         </div>
         <div class="meta">
           <div>候选来源：本地收藏</div>
-          <div>真实 B 站候选：未使用真实 B 站候选：这是本地收藏回访。</div>
+          <div>真实 B 站候选：本卡不使用；固定从本地收藏回访。</div>
           <div>来源：本地收藏 / 收藏夹「旧收藏」</div>
         </div>
         <div class="content">
@@ -254,14 +254,14 @@
       </article>
     </section>
 
-    <section class="grid" aria-label="空态卡片">
+    <section class="grid" aria-label="失败与空态卡片">
       <article class="empty" style="--accent: #a78bfa" data-box-id="random_explore_empty">
         <div class="top">
           <div>
             <h2>随机探索</h2>
             <div class="teaser">只从真实 B 站候选池里随机抽一条。</div>
           </div>
-          <span class="badge">暂无候选</span>
+          <span class="badge">没有可用种子</span>
         </div>
         <div class="meta">
           <div>候选来源：B 站公开视频的相关视频候选池</div>
@@ -274,21 +274,21 @@
         <button type="button">重新生成这一页</button>
       </article>
 
-      <article class="empty" style="--accent: #ff9f6e" data-box-id="cross_region_empty">
+      <article class="empty" style="--accent: #ff9f6e" data-box-id="cross_region_no_real_candidates">
         <div class="top">
           <div>
             <h2>跨区漫游</h2>
             <div class="teaser">避开最近高频分区，从公开分区新视频里随机开一条。</div>
           </div>
-          <span class="badge">真实候选为空</span>
+          <span class="badge">没有真实候选</span>
         </div>
         <div class="meta">
           <div>候选来源：B 站公开分区新视频候选池</div>
-          <div>真实 B 站候选：未使用真实 B 站候选：候选源本轮没有返回可打开视频。</div>
+          <div>真实 B 站候选：未使用；本轮公开分区没有返回真实视频候选。</div>
         </div>
         <div class="content">
-          <div class="title">这次没有取得可打开的分区新视频</div>
-          <div class="reason">已请求本轮公开分区新视频候选池，但没有留下可打开视频。当前不会改用本地历史或收藏。</div>
+          <div class="title">这次没有取得真实分区候选</div>
+          <div class="reason">已请求本轮公开分区新视频候选池，但没有返回真实视频候选。当前不会改用本地历史、收藏或其他盲盒来源。</div>
         </div>
         <button type="button">重新生成这一页</button>
       </article>
@@ -312,21 +312,21 @@
         <button type="button">重新生成这一页</button>
       </article>
 
-      <article class="empty" style="--accent: #ffd166" data-box-id="hidden_favorite_no_real_candidates">
+      <article class="empty" style="--accent: #ffd166" data-box-id="cold_favorite_unopenable">
         <div class="top">
           <div>
-            <h2>隐藏收藏</h2>
-            <div class="teaser">只从本地收藏回访池里随机开一条。</div>
+            <h2>冷门收藏</h2>
+            <div class="teaser">从本地收藏里翻出被你压箱底的一条。</div>
           </div>
-          <span class="badge">没有真实候选</span>
+          <span class="badge">候选不可打开</span>
         </div>
         <div class="meta">
           <div>候选来源：本地收藏</div>
-          <div>真实 B 站候选：未使用真实 B 站候选：本地收藏回访池本轮没有可抽视频。</div>
+          <div>真实 B 站候选：本卡不使用；固定从本地收藏回访。</div>
         </div>
         <div class="content">
-          <div class="title">这次没有可回访的收藏视频</div>
-          <div class="reason">隐藏收藏只使用本地收藏回访候选；候选为空时不会借用其他盲盒来源。</div>
+          <div class="title">本地收藏暂时打不开</div>
+          <div class="reason">这批本地收藏缺少可打开的视频身份，冷门收藏不会改用外部候选或其他盲盒来源。</div>
         </div>
         <button type="button">重新生成这一页</button>
       </article>

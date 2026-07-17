@@ -14,21 +14,25 @@ export interface BlindBoxDrawHistoryStorage {
 
 export type BlindBoxDrawHistoryReadStorage = Pick<BlindBoxDrawHistoryStorage, 'get' | 'remove'>;
 
+let mutationTail: Promise<void> = Promise.resolve();
+
 export async function getBlindBoxRecentDrawnBvids(
   storage: Pick<BlindBoxDrawHistoryStorage, 'get'> = chrome.storage.local,
 ): Promise<string[]> {
-  const stored = await storage.get([BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]);
-  return normalizeBlindBoxDrawHistory(stored[BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]);
+  await mutationTail;
+  return readBlindBoxRecentDrawnBvids(storage);
 }
 
 export async function recordBlindBoxDrawnBvids(
   drawnBvids: string[],
   storage: BlindBoxDrawHistoryStorage = chrome.storage.local,
 ): Promise<string[]> {
-  const current = await getBlindBoxRecentDrawnBvids(storage);
-  const next = mergeBlindBoxDrawHistory(current, drawnBvids);
-  await storage.set({ [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: next });
-  return next;
+  return enqueueMutation(async () => {
+    const current = await readBlindBoxRecentDrawnBvids(storage);
+    const next = mergeBlindBoxDrawHistory(current, drawnBvids);
+    await storage.set({ [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: next });
+    return next;
+  });
 }
 
 export async function collectBlindBoxDrawHistoryUsage(
@@ -44,9 +48,11 @@ export async function collectBlindBoxDrawHistoryUsage(
 export async function clearBlindBoxDrawHistory(
   storage: BlindBoxDrawHistoryReadStorage,
 ): Promise<number> {
-  const before = await getBlindBoxRecentDrawnBvids(storage);
-  await storage.remove([BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]);
-  return before.length;
+  return enqueueMutation(async () => {
+    const before = await readBlindBoxRecentDrawnBvids(storage);
+    await storage.remove([BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]);
+    return before.length;
+  });
 }
 
 export async function readBlindBoxDrawHistoryAfterClear(
@@ -89,6 +95,22 @@ export function normalizeBlindBoxDrawHistory(value: unknown): string[] {
     if (result.length >= BLIND_BOX_DRAW_HISTORY_LIMIT) break;
   }
 
+  return result;
+}
+
+async function readBlindBoxRecentDrawnBvids(
+  storage: Pick<BlindBoxDrawHistoryStorage, 'get'>,
+): Promise<string[]> {
+  const stored = await storage.get([BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]);
+  return normalizeBlindBoxDrawHistory(stored[BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]);
+}
+
+function enqueueMutation<T>(mutation: () => Promise<T>): Promise<T> {
+  const result = mutationTail.then(mutation);
+  mutationTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
   return result;
 }
 
