@@ -1,6 +1,6 @@
 # Bili-Bill 0.13 本地转录技术 Spike
 
-状态：待执行。本文定义技术验证，不承诺本地转录一定进入 0.13 普通 UI。
+状态：**已执行 / no-go**。执行证据与最终决定见 [`report-local-transcription-0.13.md`](./report-local-transcription-0.13.md)；本文保留技术验收定义，不承诺本地转录进入 0.13 普通 UI。
 
 ## 1. 目标
 

@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const SPIKE_TEMP_PREFIX = 'bili-bill-asr-spike-';
+const SPIKE_OWNERSHIP_FILE = '.bili-bill-asr-spike-owner';
 const EDGE_START_TIMEOUT_MS = 15_000;
 const EDGE_PROBE_TIMEOUT_MS = 20_000;
 const EDGE_EXIT_TIMEOUT_MS = 5_000;
@@ -22,30 +23,73 @@ const PUBLIC_SAMPLES = [
     purpose: '普通中文口播/知识视频，无字幕场景',
     bvid: 'BV1xdNt6TEP3',
     cid: '39943406244',
-    expectedTitle: '搞强拆能惹多大祸？【奇葩小国53】'
+    expectedTitle: '搞强拆能惹多大祸？【奇葩小国53】',
+    expectedDurationSeconds: 2337,
+    expectedAudioCodec: 'mp4a.40.2',
+    expectedAudioMime: 'video/mp4',
+    requireLongDuration: false,
+    requireFullStream: false
   },
   {
     id: 'mixed-terms',
     purpose: '中文为主且包含 iPhone/iOS/feat 等英文术语，无字幕场景',
     bvid: 'BV1CaZxYFEFG',
     cid: '29173615369',
-    expectedTitle: '【iPhone用户必看】一定要升级到iOS18.4正式版！feat. 25+ 新功能｜大耳朵TV'
+    expectedTitle: '【iPhone用户必看】一定要升级到iOS18.4正式版！feat. 25+ 新功能｜大耳朵TV',
+    expectedDurationSeconds: 897,
+    expectedAudioCodec: 'mp4a.40.2',
+    expectedAudioMime: 'video/mp4',
+    requireLongDuration: false,
+    requireFullStream: false
   },
   {
     id: 'long-117m',
     purpose: '不低于 90 分钟的长视频，无字幕场景',
     bvid: 'BV1oSKg63E1t',
     cid: '39992362063',
-    expectedTitle: '王濛李诞是懂彼此的丨《互相关注》EP01正片'
+    expectedTitle: '王濛李诞是懂彼此的丨《互相关注》EP01正片',
+    expectedDurationSeconds: 7050,
+    expectedAudioCodec: 'mp4a.40.2',
+    expectedAudioMime: 'video/mp4',
+    requireLongDuration: true,
+    requireFullStream: true
   }
 ];
 
 const MODEL_CANDIDATE = {
   runtimePackage: '@huggingface/transformers',
   runtimeVersion: '4.2.0',
+  runtimeLicense: 'Apache-2.0',
   modelId: 'Xenova/whisper-tiny',
-  modelRevision: '5332fcc35e32a33b86612b9a57a89be7906102b1'
+  modelRevision: '5332fcc35e32a33b86612b9a57a89be7906102b1',
+  modelLicense: 'apache-2.0',
+  expectedSelectedTotalBytes: 100_102_365
 };
+
+const MODEL_SELECTED_FILES = [
+  {
+    file: 'onnx/encoder_model_q4.onnx',
+    size: 9_006_044,
+    hash: 'f895af36f57fec9cbeac8d29a982ae47b2e81e461d98320fbd30c47d01a6a13f',
+    hashAlgorithm: 'sha256'
+  },
+  {
+    file: 'onnx/decoder_model_merged_q4.onnx',
+    size: 86_739_474,
+    hash: '462a65ea8459402cded5e6f22a378ac410ec7e0aad9367ebb08431906c237660',
+    hashAlgorithm: 'sha256'
+  },
+  { file: 'tokenizer.json', size: 2_480_466, hash: '1e95340ff836fad1b5932e800fb7b8c5e6d78a74', hashAlgorithm: 'git-blob-sha1' },
+  { file: 'tokenizer_config.json', size: 282_683, hash: 'd13b786c04765fb1a06492b53587752cd67665ea', hashAlgorithm: 'git-blob-sha1' },
+  { file: 'vocab.json', size: 1_036_584, hash: '90e797dd4fd05d9dea443d702ca06be2463c5f2f', hashAlgorithm: 'git-blob-sha1' },
+  { file: 'merges.txt', size: 493_869, hash: '6038932a2a1f09a66991b1c2adae0d14066fa29e', hashAlgorithm: 'git-blob-sha1' },
+  { file: 'normalizer.json', size: 52_666, hash: 'dd6ae819ad738ac1a546e9f9282ef325c33b9ea0', hashAlgorithm: 'git-blob-sha1' },
+  { file: 'preprocessor_config.json', size: 339, hash: '91876762a536a746d268353c5cba57286e76b058', hashAlgorithm: 'git-blob-sha1' },
+  { file: 'generation_config.json', size: 3_716, hash: '72e54ad7340e05287aa731f9d8556b5368be3fe0', hashAlgorithm: 'git-blob-sha1' },
+  { file: 'config.json', size: 2_248, hash: 'dea913aa8ec7d53db029e97c97a766d534c8da04', hashAlgorithm: 'git-blob-sha1' },
+  { file: 'special_tokens_map.json', size: 2_194, hash: 'bf69932dca4b3719b59fdd8f6cc1978109509f6c', hashAlgorithm: 'git-blob-sha1' },
+  { file: 'added_tokens.json', size: 2_082, hash: 'a973b01f5b1e5755fb2fd8a89cbd0c0c0ccf1460', hashAlgorithm: 'git-blob-sha1' }
+];
 
 function formatBytes(bytes) {
   return `${bytes} B`;
@@ -96,6 +140,22 @@ function parseTotalBytes(contentRange) {
   return match ? Number(match[1]) : null;
 }
 
+function parseContentLength(contentLength) {
+  const value = typeof contentLength === 'string' ? Number(contentLength) : NaN;
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function parseContentRange(contentRange) {
+  const match =
+    typeof contentRange === 'string' ? contentRange.match(/^bytes\s+(\d+)-(\d+)\/(\d+|\*)$/i) : null;
+  if (!match) return { rangeStart: null, rangeEnd: null, totalBytes: parseTotalBytes(contentRange) };
+  return {
+    rangeStart: Number(match[1]),
+    rangeEnd: Number(match[2]),
+    totalBytes: match[3] === '*' ? null : Number(match[3])
+  };
+}
+
 function buildAudioHeaders(sample, range) {
   return {
     'User-Agent': API_HEADERS['User-Agent'],
@@ -105,23 +165,55 @@ function buildAudioHeaders(sample, range) {
   };
 }
 
-async function fetchRange(sample, audioUrl, endByte) {
+async function readBodyEvidence(response) {
+  const reader = response.body?.getReader() ?? null;
+  let firstChunkBytes = 0;
+  let bytesRead = 0;
+  let bodyComplete = false;
+  let readError = null;
+  if (!reader) return { firstChunkBytes, bytesRead, bodyComplete, readError: 'no-readable-body' };
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        bodyComplete = true;
+        break;
+      }
+      if (firstChunkBytes === 0) firstChunkBytes = chunk.value.byteLength;
+      bytesRead += chunk.value.byteLength;
+    }
+  } catch (error) {
+    readError = describeError(error);
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // A failed stream may have released its lock already.
+    }
+  }
+  return { firstChunkBytes, bytesRead, bodyComplete, readError };
+}
+
+export async function fetchRangeEvidence(sample, audioUrl, endByte) {
   const headers = buildAudioHeaders(sample, `bytes=0-${endByte}`);
   const startedAt = performance.now();
   const response = await fetch(audioUrl, { headers });
-  const buffer = await response.arrayBuffer();
+  const body = await readBodyEvidence(response);
+  const contentRange = response.headers.get('content-range');
+  const contentLength = response.headers.get('content-length');
   return {
     status: response.status,
     elapsedMs: Math.round(performance.now() - startedAt),
     contentType: response.headers.get('content-type'),
-    contentRange: response.headers.get('content-range'),
-    contentLength: response.headers.get('content-length'),
-    bytesRead: buffer.byteLength,
-    totalBytes: parseTotalBytes(response.headers.get('content-range'))
+    contentRange,
+    contentLength,
+    contentLengthBytes: parseContentLength(contentLength),
+    ...parseContentRange(contentRange),
+    ...body
   };
 }
 
-export async function testCancellation(sample, audioUrl) {
+export async function cancelReadAfterFirstChunk(sample, audioUrl, { safetyTimeoutMs = 15_000 } = {}) {
   const headers = buildAudioHeaders(sample, 'bytes=0-52428799');
   const controller = new AbortController();
   const startedAt = performance.now();
@@ -134,7 +226,7 @@ export async function testCancellation(sample, audioUrl) {
       abortReason = 'safety-timeout';
       controller.abort();
     }
-  }, 15_000);
+  }, safetyTimeoutMs);
 
   try {
     const response = await fetch(audioUrl, { headers, signal: controller.signal });
@@ -172,7 +264,11 @@ export async function testCancellation(sample, audioUrl) {
   } catch (error) {
     return {
       result: describeError(error),
-      aborted: controller.signal.aborted && error?.name === 'AbortError',
+      aborted:
+        error?.name === 'AbortError' &&
+        abortReason === 'after-first-chunk' &&
+        bytesReadBeforeAbort > 0 &&
+        status !== null,
       abortReason,
       status,
       bytesReadBeforeAbort,
@@ -188,26 +284,136 @@ export async function testCancellation(sample, audioUrl) {
   }
 }
 
-async function streamAndDiscard(sample, audioUrl) {
+export async function streamAndDiscard(sample, audioUrl) {
   const headers = buildAudioHeaders(sample);
   const beforeMemory = process.memoryUsage().rss;
   const startedAt = performance.now();
   const response = await fetch(audioUrl, { headers });
-  let bytesRead = 0;
-  const reader = response.body?.getReader();
-  while (reader) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    bytesRead += chunk.value.byteLength;
-  }
+  const body = await readBodyEvidence(response);
   const afterMemory = process.memoryUsage().rss;
+  const contentRange = response.headers.get('content-range');
+  const contentLength = response.headers.get('content-length');
   return {
     status: response.status,
     elapsedMs: Math.round(performance.now() - startedAt),
     contentType: response.headers.get('content-type'),
-    contentLength: response.headers.get('content-length'),
-    bytesRead,
+    contentRange,
+    contentLength,
+    contentLengthBytes: parseContentLength(contentLength),
+    ...parseContentRange(contentRange),
+    ...body,
     rssDeltaBytes: afterMemory - beforeMemory
+  };
+}
+
+function mimeMatches(actual, expected) {
+  return (
+    typeof actual === 'string' &&
+    typeof expected === 'string' &&
+    actual.split(';', 1)[0].trim().toLowerCase() === expected.toLowerCase()
+  );
+}
+
+function knownLengthsMatch(stream) {
+  if (!stream || !(stream.bytesRead > 0)) return false;
+  const knownMatches = [];
+  if (Number.isSafeInteger(stream.contentLengthBytes)) {
+    knownMatches.push(stream.bytesRead === stream.contentLengthBytes);
+  }
+  if (Number.isSafeInteger(stream.totalBytes)) {
+    knownMatches.push(stream.bytesRead === stream.totalBytes);
+  }
+  if (knownMatches.length === 0 || knownMatches.some(matches => !matches)) return false;
+  if (stream.status === 206) {
+    return (
+      stream.rangeStart === 0 &&
+      stream.rangeEnd === stream.bytesRead - 1 &&
+      stream.totalBytes === stream.bytesRead
+    );
+  }
+  return true;
+}
+
+export function evaluatePublicSampleEvidence(evidence) {
+  const { sample, view, subtitle, playurl, range, cancellation, fullStream } = evidence;
+  const fullStreamMustValidate = sample?.requireFullStream === true || fullStream !== null;
+  const checks = {
+    viewHttpOk: view?.httpStatus === 200,
+    viewApiOk: view?.apiCode === 0,
+    bvidMatches: view?.bvid === sample?.bvid,
+    titleMatches: view?.title === sample?.expectedTitle,
+    currentCidMatches: String(view?.currentPageCid ?? '') === String(sample?.cid ?? ''),
+    durationMatches:
+      view?.durationSeconds === sample?.expectedDurationSeconds &&
+      view?.currentPageDurationSeconds === sample?.expectedDurationSeconds,
+    longDurationOk: sample?.requireLongDuration !== true || view?.currentPageDurationSeconds >= 5_400,
+    subtitleHttpOk: subtitle?.httpStatus === 200,
+    subtitleApiOk: subtitle?.apiCode === 0,
+    noSubtitles: subtitle?.count === 0,
+    playurlHttpOk: playurl?.httpStatus === 200,
+    playurlApiOk: playurl?.apiCode === 0,
+    audioPresent: playurl?.audioCount > 0,
+    audioCodecMatches: playurl?.firstAudioCodec === sample?.expectedAudioCodec,
+    rangeHttpPartial: range?.status === 206,
+    rangeMimeMatches: mimeMatches(range?.contentType, sample?.expectedAudioMime),
+    rangeBodyComplete: range?.bodyComplete === true && range?.readError === null,
+    rangeFirstChunkNonEmpty: range?.firstChunkBytes > 0 && range?.bytesRead > 0,
+    rangeLengthMatches:
+      Number.isSafeInteger(range?.contentLengthBytes) &&
+      range.contentLengthBytes > 0 &&
+      range.bytesRead === range.contentLengthBytes &&
+      range.rangeStart === 0 &&
+      range.rangeEnd === range.bytesRead - 1 &&
+      Number.isSafeInteger(range.totalBytes) &&
+      range.totalBytes >= range.bytesRead,
+    cancellationAbortError: typeof cancellation?.result === 'string' && cancellation.result.startsWith('AbortError:'),
+    cancellationAfterFirstChunk:
+      cancellation?.aborted === true &&
+      cancellation?.abortReason === 'after-first-chunk' &&
+      cancellation?.bytesReadBeforeAbort > 0 &&
+      cancellation?.status === 206,
+    fullStreamPresent: sample?.requireFullStream !== true || fullStream !== null,
+    fullStreamStatusOk: !fullStreamMustValidate || fullStream?.status === 200 || fullStream?.status === 206,
+    fullStreamMimeMatches: !fullStreamMustValidate || mimeMatches(fullStream?.contentType, sample?.expectedAudioMime),
+    fullStreamFirstChunkNonEmpty:
+      !fullStreamMustValidate || (fullStream?.firstChunkBytes > 0 && fullStream?.bytesRead > 0),
+    fullStreamComplete:
+      !fullStreamMustValidate || (fullStream?.bodyComplete === true && fullStream?.readError === null),
+    fullStreamLengthMatches: !fullStreamMustValidate || knownLengthsMatch(fullStream)
+  };
+  const failures = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return { ok: failures.length === 0, checks, failures };
+}
+
+export function summarizePublicSampleEvidence(results, expectedSampleCount = PUBLIC_SAMPLES.length) {
+  const failedSampleIds = results.filter(result => !result.gate?.ok).map(result => result.sample.id);
+  const actualSampleCount = results.length;
+  return {
+    ok: actualSampleCount === expectedSampleCount && failedSampleIds.length === 0,
+    expectedSampleCount,
+    actualSampleCount,
+    passedCount: actualSampleCount - failedSampleIds.length,
+    failedCount: failedSampleIds.length,
+    failedSampleIds
+  };
+}
+
+export function summarizeHarnessGates({ mv3Only, publicSamplesGate, modelRuntimeGate, mv3Gate }) {
+  const requested = mv3Only
+    ? { mv3: mv3Gate }
+    : { publicSamples: publicSamplesGate, modelRuntime: modelRuntimeGate, mv3: mv3Gate };
+  const failedGates = Object.entries(requested)
+    .filter(([, gate]) => gate?.ok !== true)
+    .map(([name]) => name);
+  return {
+    ok: failedGates.length === 0,
+    evidenceGatesOk: failedGates.length === 0,
+    asrProductGatesOk: false,
+    decision: 'no-go',
+    requestedGates: Object.keys(requested),
+    failedGates
   };
 }
 
@@ -219,18 +425,25 @@ async function probePublicAudio() {
     const playurl = await fetchJson(
       `https://api.bilibili.com/x/player/playurl?bvid=${sample.bvid}&cid=${sample.cid}&qn=64&fnval=16&fourk=1`
     );
+    const pages = view.body?.data?.pages ?? [];
+    const currentPage = pages.find(page => String(page.cid) === String(sample.cid)) ?? null;
     const audioUrl = getAudioUrl(playurl.body);
-    const range = audioUrl ? await fetchRange(sample, audioUrl, sample.id === 'long-117m' ? 262143 : 1048575) : null;
-    const cancellation = audioUrl ? await testCancellation(sample, audioUrl) : null;
+    const range = audioUrl
+      ? await fetchRangeEvidence(sample, audioUrl, sample.id === 'long-117m' ? 262143 : 1048575)
+      : null;
+    const cancellation = audioUrl ? await cancelReadAfterFirstChunk(sample, audioUrl) : null;
     const fullStream = audioUrl && sample.id === 'long-117m' ? await streamAndDiscard(sample, audioUrl) : null;
-    results.push({
+    const evidence = {
       sample,
       view: {
         httpStatus: view.status,
         apiCode: view.body?.code,
+        bvid: view.body?.data?.bvid ?? null,
         title: view.body?.data?.title ?? null,
         durationSeconds: view.body?.data?.duration ?? null,
-        pages: view.body?.data?.pages?.length ?? null
+        pages: pages.length,
+        currentPageCid: currentPage?.cid != null ? String(currentPage.cid) : null,
+        currentPageDurationSeconds: currentPage?.duration ?? null
       },
       subtitle: {
         httpStatus: subtitle.status,
@@ -249,9 +462,12 @@ async function probePublicAudio() {
       range,
       cancellation,
       fullStream
-    });
+    };
+    evidence.gate = evaluatePublicSampleEvidence(evidence);
+    results.push(evidence);
   }
-  return results;
+  const gate = summarizePublicSampleEvidence(results);
+  return { ok: gate.ok, gate, samples: results };
 }
 
 export function validateModelRevision(modelBody, candidate) {
@@ -264,6 +480,50 @@ export function validateModelRevision(modelBody, candidate) {
   };
 }
 
+export function evaluateModelRuntimeEvidence(evidence, candidate, expectedFiles) {
+  const selectedFiles = evidence?.model?.selectedFiles ?? [];
+  const fileChecks = Object.fromEntries(
+    expectedFiles.map(expected => {
+      const actual = selectedFiles.find(file => file.file === expected.file);
+      return [
+        expected.file,
+        {
+          present: actual?.present === true,
+          sizeMatches: actual?.size === expected.size,
+          hashMatches: actual?.hash === expected.hash,
+          hashAlgorithmMatches: actual?.hashAlgorithm === expected.hashAlgorithm
+        }
+      ];
+    })
+  );
+  const allFileChecksPass = Object.values(fileChecks).every(checks => Object.values(checks).every(Boolean));
+  const expectedTotalBytes = expectedFiles.reduce((sum, file) => sum + file.size, 0);
+  const checks = {
+    runtimeHttpOk: evidence?.runtime?.httpStatus === 200,
+    runtimeNameMatches: evidence?.runtime?.name === candidate.runtimePackage,
+    runtimeVersionMatches: evidence?.runtime?.version === candidate.runtimeVersion,
+    runtimeLicenseMatches:
+      typeof evidence?.runtime?.license === 'string' &&
+      evidence.runtime.license.toLowerCase() === candidate.runtimeLicense.toLowerCase(),
+    modelHttpOk: evidence?.model?.httpStatus === 200,
+    modelIdMatches: evidence?.model?.id === candidate.modelId,
+    modelRevisionMatches: evidence?.model?.sha === candidate.modelRevision,
+    modelLicenseMatches:
+      typeof evidence?.model?.license === 'string' &&
+      evidence.model.license.toLowerCase() === candidate.modelLicense.toLowerCase(),
+    expectedFileCountIsTwelve: expectedFiles.length === 12,
+    selectedFileCountMatches: selectedFiles.length === expectedFiles.length,
+    selectedFilesMatch: allFileChecksPass,
+    selectedTotalBytesMatch:
+      candidate.expectedSelectedTotalBytes === expectedTotalBytes &&
+      evidence?.model?.selectedTotalBytes === expectedTotalBytes
+  };
+  const failures = Object.entries(checks)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name);
+  return { ok: failures.length === 0, checks, fileChecks, failures };
+}
+
 async function probeModelCandidate() {
   const npmPackage = await fetchJson(`https://registry.npmjs.org/${encodeURIComponent(MODEL_CANDIDATE.runtimePackage)}/${MODEL_CANDIDATE.runtimeVersion}`, {
     'User-Agent': API_HEADERS['User-Agent']
@@ -274,21 +534,8 @@ async function probeModelCandidate() {
   const model = await fetchJson(metadataUrl, { 'User-Agent': API_HEADERS['User-Agent'] });
   const revisionValidation = validateModelRevision(model.body, MODEL_CANDIDATE);
   const siblings = model.body?.siblings ?? [];
-  const selectedFiles = [
-    'onnx/encoder_model_q4.onnx',
-    'onnx/decoder_model_merged_q4.onnx',
-    'tokenizer.json',
-    'tokenizer_config.json',
-    'vocab.json',
-    'merges.txt',
-    'normalizer.json',
-    'preprocessor_config.json',
-    'generation_config.json',
-    'config.json',
-    'special_tokens_map.json',
-    'added_tokens.json'
-  ];
-  const selected = selectedFiles.map(filename => {
+  const selected = MODEL_SELECTED_FILES.map(expected => {
+    const filename = expected.file;
     const item = siblings.find(sibling => sibling.rfilename === filename);
     if (!item) {
       return {
@@ -308,7 +555,7 @@ async function probeModelCandidate() {
     };
   });
   const allSelectedFilesPresent = selected.every(item => item.present && Number.isFinite(item.size));
-  return {
+  const evidence = {
     candidate: MODEL_CANDIDATE,
     runtime: {
       httpStatus: npmPackage.status,
@@ -335,6 +582,9 @@ async function probeModelCandidate() {
       repositoryUsedStorage: model.body?.usedStorage ?? null
     }
   };
+  evidence.gate = evaluateModelRuntimeEvidence(evidence, MODEL_CANDIDATE, MODEL_SELECTED_FILES);
+  evidence.ok = evidence.gate.ok;
+  return evidence;
 }
 
 export function validateMv3SpikeResult(result, marker) {
@@ -364,6 +614,82 @@ export function isOwnedSpikeTempRoot(path) {
     name.startsWith(SPIKE_TEMP_PREFIX) &&
     name.length > SPIKE_TEMP_PREFIX.length
   );
+}
+
+export async function createOwnedSpikeTempRoot() {
+  const path = await mkdtemp(join(tmpdir(), SPIKE_TEMP_PREFIX));
+  const marker = randomUUID();
+  const markerPath = join(path, SPIKE_OWNERSHIP_FILE);
+  await writeFile(markerPath, marker, { encoding: 'utf8', flag: 'wx' });
+  return { path, marker, markerPath };
+}
+
+export async function verifyOwnedSpikeTempRoot(path, expectedMarker) {
+  const checks = {
+    pathPatternMatches: isOwnedSpikeTempRoot(path),
+    rootExists: false,
+    rootNotSymbolicLink: false,
+    rootIsDirectory: false,
+    markerExists: false,
+    markerNotSymbolicLink: false,
+    markerIsFile: false,
+    markerMatches: false
+  };
+  const errors = [];
+  if (!checks.pathPatternMatches) return { ok: false, checks, errors: ['path-pattern-mismatch'] };
+
+  let rootStat;
+  try {
+    rootStat = await lstat(path);
+    checks.rootExists = true;
+    checks.rootNotSymbolicLink = !rootStat.isSymbolicLink();
+    checks.rootIsDirectory = rootStat.isDirectory();
+  } catch (error) {
+    errors.push(`root:${describeError(error)}`);
+    return { ok: false, checks, errors };
+  }
+  if (!checks.rootNotSymbolicLink || !checks.rootIsDirectory) return { ok: false, checks, errors };
+
+  const markerPath = join(path, SPIKE_OWNERSHIP_FILE);
+  let markerStat;
+  try {
+    markerStat = await lstat(markerPath);
+    checks.markerExists = true;
+    checks.markerNotSymbolicLink = !markerStat.isSymbolicLink();
+    checks.markerIsFile = markerStat.isFile();
+  } catch (error) {
+    errors.push(`marker:${describeError(error)}`);
+    return { ok: false, checks, errors };
+  }
+  if (!checks.markerNotSymbolicLink || !checks.markerIsFile) return { ok: false, checks, errors };
+
+  try {
+    const actualMarker = await readFile(markerPath, 'utf8');
+    checks.markerMatches = actualMarker === expectedMarker;
+  } catch (error) {
+    errors.push(`marker-read:${describeError(error)}`);
+  }
+  return { ok: Object.values(checks).every(Boolean), checks, errors };
+}
+
+export async function removeOwnedSpikeTempRoot(path, expectedMarker) {
+  const verification = await verifyOwnedSpikeTempRoot(path, expectedMarker);
+  if (!verification.ok) {
+    return {
+      removed: false,
+      verification,
+      error: `ownership-verification-failed:${Object.entries(verification.checks)
+        .filter(([, passed]) => !passed)
+        .map(([name]) => name)
+        .join(',')}`
+    };
+  }
+  try {
+    await rm(path, { recursive: true, force: false });
+    return { removed: true, verification, error: null };
+  } catch (error) {
+    return { removed: false, verification, error: describeError(error) };
+  }
 }
 
 function childHasExited(child) {
@@ -643,14 +969,17 @@ async function launchEdgeHarness() {
   const startedAt = performance.now();
   const cleanupWarnings = [];
   let runRoot = null;
+  let runRootMarker = null;
   let child = null;
   let edgeShutdown = null;
   let tempRootRemoved = false;
+  let tempRootVerification = null;
   let probeResult = null;
 
   try {
-    runRoot = await mkdtemp(join(tmpdir(), SPIKE_TEMP_PREFIX));
-    if (!isOwnedSpikeTempRoot(runRoot)) throw new Error('Refusing to use an unowned spike temp root.');
+    const ownedRoot = await createOwnedSpikeTempRoot();
+    runRoot = ownedRoot.path;
+    runRootMarker = ownedRoot.marker;
     const extensionDir = join(runRoot, 'extension');
     const userDataDir = join(runRoot, 'edge-profile');
     await Promise.all([mkdir(extensionDir), mkdir(userDataDir)]);
@@ -737,11 +1066,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const workerJs = `
 self.onmessage = event => {
   let buffer = new ArrayBuffer(event.data.bytes);
-  const bytes = new Uint8Array(buffer);
+  let bytes = new Uint8Array(buffer);
   bytes[0] = 7;
   const firstByte = bytes[0];
+  bytes = null;
   buffer = null;
-  self.postMessage({ marker: event.data.marker, firstByte, released: buffer === null });
+  self.postMessage({
+    marker: event.data.marker,
+    firstByte,
+    released: buffer === null && bytes === null
+  });
 };
 `;
     await Promise.all([
@@ -811,16 +1145,10 @@ self.onmessage = event => {
       cleanupWarnings.push(...edgeShutdown.warnings);
     }
     if (runRoot) {
-      if (!isOwnedSpikeTempRoot(runRoot)) {
-        cleanupWarnings.push('Refused to delete an unowned temp path.');
-      } else {
-        try {
-          await rm(runRoot, { recursive: true, force: true });
-          tempRootRemoved = true;
-        } catch (error) {
-          cleanupWarnings.push(`${basename(runRoot)}: ${describeError(error)}`);
-        }
-      }
+      const removal = await removeOwnedSpikeTempRoot(runRoot, runRootMarker);
+      tempRootVerification = removal.verification;
+      tempRootRemoved = removal.removed;
+      if (!removal.removed) cleanupWarnings.push(`${basename(runRoot)}:${removal.error}`);
     }
   }
 
@@ -837,6 +1165,7 @@ self.onmessage = event => {
       ok: cleanupOk,
       edge: edgeShutdown,
       tempRootRemoved,
+      tempRootVerification,
       warnings: cleanupWarnings
     }
   };
@@ -845,8 +1174,31 @@ self.onmessage = event => {
 async function main() {
   const startedAt = new Date().toISOString();
   const mv3Only = process.argv.includes('--mv3-only');
-  const audio = mv3Only ? null : await probePublicAudio();
-  const model = mv3Only ? null : await probeModelCandidate();
+  let audio = null;
+  if (!mv3Only) {
+    try {
+      audio = await probePublicAudio();
+    } catch (error) {
+      audio = {
+        ok: false,
+        error: describeError(error),
+        samples: [],
+        gate: { ok: false, failures: ['probeError'], error: describeError(error) }
+      };
+    }
+  }
+  let model = null;
+  if (!mv3Only) {
+    try {
+      model = await probeModelCandidate();
+    } catch (error) {
+      model = {
+        ok: false,
+        error: describeError(error),
+        gate: { ok: false, failures: ['probeError'], error: describeError(error) }
+      };
+    }
+  }
   let mv3;
   try {
     mv3 = await launchEdgeHarness();
@@ -856,6 +1208,20 @@ async function main() {
       error: `${error?.name ?? 'Error'}:${error?.message ?? String(error)}`
     };
   }
+  const machineGates = {
+    publicSamples: mv3Only ? null : audio?.gate ?? { ok: false, failures: ['missingGate'] },
+    modelRuntime: mv3Only ? null : model?.gate ?? { ok: false, failures: ['missingGate'] },
+    mv3: {
+      ok: mv3?.ok === true,
+      failures: mv3?.ok === true ? [] : [mv3?.error ?? 'mv3ProbeFailed']
+    }
+  };
+  const overall = summarizeHarnessGates({
+    mv3Only,
+    publicSamplesGate: machineGates.publicSamples,
+    modelRuntimeGate: machineGates.modelRuntime,
+    mv3Gate: machineGates.mv3
+  });
   const output = {
     generatedAt: new Date().toISOString(),
     startedAt,
@@ -867,11 +1233,15 @@ async function main() {
       audioPersisted: false,
       modelPersisted: false
     },
-    publicSamples: audio,
+    publicSamples: mv3Only ? null : audio?.samples ?? [],
     modelCandidate: model,
-    mv3OffscreenWasmProbe: mv3
+    mv3OffscreenWasmProbe: mv3,
+    machineGates,
+    overall,
+    harnessExitCode: overall.ok ? 0 : 1
   };
   console.log(JSON.stringify(output, null, 2));
+  if (!overall.ok) process.exitCode = 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
