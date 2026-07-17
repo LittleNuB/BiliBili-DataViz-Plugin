@@ -29,10 +29,12 @@ const generator = await import('../src/background/dynamic-bill/generator.ts');
 const dynamicBillAi = await import('../src/background/dynamic-bill/ai.ts');
 const dynamicBillSync = await import('../src/background/dynamic-bill/sync.ts');
 const dynamicBillRepo = await import('../src/background/storage/dynamic-bill-repo.ts');
+const { buildDynamicBillExplanationContent } = await import('../src/background/dynamic-bill/explanation-content.ts');
 const { getRegisteredLocalDataCategories } = await import('../src/background/storage/local-data-category-registry.ts');
 const localDataRepo = await import('../src/background/storage/local-data-privacy-repo.ts');
 const { runLocalDataCategoryLifecycle } = await import('../src/shared/local-data-category-contract.ts');
 const { LOCAL_DATA_CLEAR_CONFIRMATION } = await import('../src/shared/local-data-privacy.ts');
+const { DEFAULT_CONFIG } = await import('../src/shared/types/config.ts');
 const {
   DYNAMIC_BILL_MIGRATION_VERSION,
   DYNAMIC_BILL_UPGRADE_FAILED_MESSAGE,
@@ -49,6 +51,7 @@ const sideEffects = {
   storageClear: 0,
 };
 let afterStorageRemove: (() => Promise<void>) | null = null;
+let fetchHandler: ((...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>) | null = null;
 
 Object.defineProperty(globalThis, 'chrome', {
   configurable: true,
@@ -95,9 +98,10 @@ Object.defineProperty(globalThis, 'chrome', {
 
 Object.defineProperty(globalThis, 'fetch', {
   configurable: true,
-  value: async () => {
+  value: (...args: Parameters<typeof fetch>) => {
     sideEffects.fetch++;
-    throw new Error('TEST_NETWORK_SHOULD_NOT_RUN');
+    if (fetchHandler) return fetchHandler(...args);
+    return Promise.reject(new Error('TEST_NETWORK_SHOULD_NOT_RUN'));
   },
 });
 
@@ -106,6 +110,7 @@ test.beforeEach(async () => {
   await Dexie.delete(DB_NAME);
   storageData.clear();
   afterStorageRemove = null;
+  fetchHandler = null;
   resetSideEffects();
 });
 
@@ -327,6 +332,81 @@ test('item reads hide a hash-mismatched explanation before regeneration cleanup'
     await db.dynamicBillExplanations.where('billKey').equals(initial.billKey).count(),
     1,
   );
+});
+
+test('late generated AI response cannot overwrite a newer explanation after reclassification', async () => {
+  await assertLateAiResponseDiscarded('generated');
+});
+
+test('late failed AI response cannot overwrite a newer explanation after reclassification', async () => {
+  await assertLateAiResponseDiscarded('failed');
+});
+
+test('AI explanation payload excludes rotation ledger facts and creator identifiers', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  const creatorMid = 609;
+  await seedCurrentCandidate(now, creatorMid);
+  await db.dynamicBillRotationRecords.put({
+    creatorMid,
+    creatorName: `UP ${creatorMid}`,
+    lastShownAt: now - 7 * DAY_MS,
+    lastBillKey: 'old-rotation-item',
+    lastColumn: 'follow_rotation',
+    updatedAt: now - 7 * DAY_MS,
+  });
+  const item = (await generator.generateDynamicBillItems()).items[0];
+  assert.ok(item);
+  const rotationFact = item.evidence.facts.find(fact => fact.includes('全局轮换记录'));
+  assert.ok(rotationFact);
+
+  const payload = await dynamicBillAi.buildDynamicBillExplanationPayload(item);
+  const raw = JSON.stringify(payload);
+  const payloadFacts = payload.localEvidence.facts.join('\n');
+
+  assert.equal(payload.column, '关注轮换');
+  assert.equal(payload.localEvidence.facts.includes(rotationFact), false);
+  assert.doesNotMatch(payloadFacts, /轮换.*(?:记录|上次|展示过|最久未展示)/);
+  assert.match(payloadFacts, /AI 不参与入选、归属、轮换或状态/);
+  assert.doesNotMatch(raw, /creatorMid|authorMid|rotationLastShownAt|lastShownAt|lastBillKey|lastColumn/);
+});
+
+test('generation excludes same-video BVIDs outside the long evidence window without requiring history', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  const nowSeconds = Math.floor(now / 1000);
+  await seedCurrentCandidate(now, 612);
+  await seedCurrentCandidate(now, 613);
+  await db.watchHistory.put({
+    sessionKey: `old-same-video:${nowSeconds}`,
+    kid: nowSeconds,
+    avid: 612,
+    bvid: 'BV1fixture612',
+    cid: 1,
+    title: '旧观看记录',
+    authorName: 'UP 612',
+    authorMid: 612,
+    tagName: '知识',
+    tags: [],
+    cover: '',
+    viewAt: nowSeconds - 240 * 86_400,
+    progress: 120,
+    duration: 120,
+    actualCompletion: 1,
+    deviceType: 2,
+    isFavorite: false,
+    business: 'archive',
+    dt: 0,
+    syncedAt: now,
+  });
+
+  const result = await generator.generateDynamicBillItems();
+
+  assert.equal(result.excludedRecentSameVideoCount, 1);
+  assert.deepEqual(result.items.map(item => item.creatorMid), [613]);
+  assert.equal(result.items[0].evidence.longWindow.watchedCount, 0);
 });
 
 test('legacy feedback injected after the marker cannot change candidates, pauses, or settings counts', async () => {
@@ -686,6 +766,116 @@ function resetSideEffects(): void {
 
 function hasMessage(message: string): (error: unknown) => boolean {
   return error => error instanceof Error && error.message === message;
+}
+
+async function assertLateAiResponseDiscarded(
+  outcome: 'generated' | 'failed',
+): Promise<void> {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  const creatorMid = outcome === 'generated' ? 610 : 611;
+  await seedCurrentCandidate(now, creatorMid);
+  const initial = (await generator.generateDynamicBillItems()).items[0];
+  assert.ok(initial);
+  assert.equal(initial.column, 'follow_rotation');
+  enableFixtureAi();
+  const response = deferred<Response>();
+  fetchHandler = () => response.promise;
+
+  const oldRun = dynamicBillAi.buildDynamicBillExplanations({ maxItems: 1 });
+  await waitFor(() => sideEffects.fetch === 1);
+
+  await db.favoriteItems.put(fixtureFavoriteForCreator(now, creatorMid, outcome));
+  const reclassified = (await generator.generateDynamicBillItems()).items[0];
+  assert.equal(reclassified.column, 'favorite_related');
+  const currentUpdate = await db.followedVideoUpdates
+    .where('updateKey')
+    .equals(reclassified.updateKey)
+    .first();
+  const { contentHash } = buildDynamicBillExplanationContent(reclassified, currentUpdate);
+  const newerWrite = await dynamicBillRepo.putDynamicBillExplanation({
+    ...fixtureExplanation(now + 1, reclassified.billKey),
+    status: 'generated',
+    summary: '新的收藏关联解释',
+    reason: '新的本地证据解释',
+    model: 'fixture-model',
+    contentHash,
+  });
+
+  if (outcome === 'generated') {
+    response.resolve(aiResponse({
+      summary: '旧轮换解释',
+      reason: '旧轮换证据',
+      viewingAngle: '旧视角',
+      keywords: ['旧轮换'],
+      confidence: 0.8,
+    }));
+  } else {
+    response.reject(new Error('OLD_AI_REQUEST_FAILED'));
+  }
+
+  const result = await oldRun;
+  assert.equal(newerWrite.status, 'written');
+  const stored = await db.dynamicBillExplanations
+    .where('billKey')
+    .equals(reclassified.billKey)
+    .first();
+  const returned = (await dynamicBillRepo.getDynamicBillItems())[0].explanation;
+
+  assert.equal(result.processed, 1);
+  assert.equal(result.generated, 0);
+  assert.equal(result.failed, 0);
+  assert.equal(result.discarded, 1);
+  assert.equal(stored?.summary, '新的收藏关联解释');
+  assert.equal(stored?.contentHash, contentHash);
+  assert.equal(returned?.summary, '新的收藏关联解释');
+  assert.equal(returned?.contentHash, contentHash);
+}
+
+function enableFixtureAi(): void {
+  storageData.set('userConfig', {
+    ...DEFAULT_CONFIG,
+    ai: {
+      baseURL: 'https://fixture.invalid/v1',
+      apiKey: 'fixture-key',
+      chatModel: 'fixture-model',
+    },
+    dynamicBill: {
+      aiExplanationsEnabled: true,
+    },
+  });
+}
+
+function aiResponse(content: Record<string, unknown>): Response {
+  return new Response(JSON.stringify({
+    choices: [{ message: { content: JSON.stringify(content) } }],
+  }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  throw new Error('TEST_CONDITION_TIMEOUT');
 }
 
 async function snapshotDatabaseTables(): Promise<Record<string, unknown[]>> {

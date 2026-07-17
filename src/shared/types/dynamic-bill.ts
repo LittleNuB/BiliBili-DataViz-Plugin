@@ -165,6 +165,7 @@ export interface DynamicBillExplanationResult {
   failed: number;
   skipped: number;
   fallback: number;
+  discarded: number;
   pending: number;
   items: DynamicBillItem[];
 }
@@ -228,7 +229,6 @@ export interface DynamicBillThresholdEvidence {
   longWindowDays: number;
   recentWindowDays: number;
   updateWindowDays: number;
-  recentSameVideoWindowDays: number;
   positiveCompletionRate: number;
   minPositiveWatchSeconds: number;
   minBuriedFollowAgeDays: number;

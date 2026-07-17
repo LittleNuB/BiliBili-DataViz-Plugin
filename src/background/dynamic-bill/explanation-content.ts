@@ -61,6 +61,14 @@ const AI_FACT_EXCLUDED_TERMS = [
   '个人资料',
   '反馈记录',
 ];
+const ROTATION_LEDGER_FACT_MARKERS = [
+  '全局轮换记录',
+  '上次进入动态账单',
+  '上次展示',
+  '展示过',
+  '尚未展示',
+  '最久未展示',
+];
 
 export function buildDynamicBillExplanationContent(
   item: DynamicBillItem,
@@ -86,7 +94,7 @@ export function buildDynamicBillExplanationContent(
         : '',
     },
     localEvidence: {
-      facts: compactFacts(evidence.facts),
+      facts: compactDynamicBillFactsForAi(evidence.facts),
       longWindow: {
         days: evidence.longWindow.windowDays,
         watchedCount: evidence.longWindow.watchedCount,
@@ -122,11 +130,16 @@ export function buildDynamicBillExplanationContent(
   };
 }
 
-function compactFacts(facts: string[]): string[] {
+export function compactDynamicBillFactsForAi(facts: string[]): string[] {
   return facts
-    .filter(fact => !AI_FACT_EXCLUDED_TERMS.some(term => fact.includes(term)))
+    .filter(isDynamicBillFactAllowedForAi)
     .map(fact => limitText(fact, 180))
     .slice(0, MAX_FACTS_IN_PROMPT);
+}
+
+function isDynamicBillFactAllowedForAi(fact: string): boolean {
+  if (AI_FACT_EXCLUDED_TERMS.some(term => fact.includes(term))) return false;
+  return !ROTATION_LEDGER_FACT_MARKERS.some(marker => fact.includes(marker));
 }
 
 function columnTitle(column: DynamicBillColumn): string {

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>动态账单局部空栏 QA</title>
+    <link rel="stylesheet" href="../dashboard/styles/dashboard.css" />
+    <style>
+      .qa-main {
+        min-width: 0;
+      }
+
+      .qa-sidebar-copy {
+        color: var(--bb-muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .qa-status {
+        color: var(--bb-muted);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bb-shell">
+      <aside class="bb-sidebar">
+        <div class="bb-brand">
+          <span class="bb-brand-mark">BB</span>
+          <span class="bb-brand-text"><strong>Bili-Bill</strong><span>动态账单</span></span>
+        </div>
+        <p class="qa-sidebar-copy">固定三栏布局检查</p>
+      </aside>
+      <main class="qa-main">
+        <div class="dynamic-bill-page">
+          <section class="dynamic-bill-status-copy">
+            <strong id="qa-title">正在准备布局</strong>
+            <span>三栏身份和顺序保持不变，空栏只显示紧凑说明。</span>
+          </section>
+          <section class="dynamic-bill-layout">
+            <div class="dynamic-bill-board" id="qa-board" aria-label="动态账单栏目"></div>
+            <aside class="dynamic-bill-detail" aria-label="账单项详情">
+              <span class="dynamic-bill-kicker">选中账单项</span>
+              <h3>示例 UP</h3>
+              <p>这里使用匿名固定数据检查详情栏与三栏布局是否互相遮挡。</p>
+            </aside>
+          </section>
+          <p class="qa-status" id="qa-status" role="status">正在检查尺寸</p>
+        </div>
+      </main>
+    </div>
+    <script>
+      const columns = [
+        { key: "buried_follow", title: "被淹没的关注", tone: "mint" },
+        { key: "favorite_related", title: "收藏关联更新", tone: "pink" },
+        { key: "follow_rotation", title: "关注轮换", tone: "blue" },
+      ];
+      const params = new URLSearchParams(location.search);
+      const scenario = params.get("scenario") === "two-empty" ? "two-empty" : "one-empty";
+      const emptyKeys = new Set(
+        scenario === "two-empty"
+          ? ["buried_follow", "follow_rotation"]
+          : ["favorite_related"],
+      );
+      const board = document.querySelector("#qa-board");
+
+      for (const column of columns) {
+        const isEmpty = emptyKeys.has(column.key);
+        const article = document.createElement("article");
+        article.className = `dynamic-bill-column tone-${column.tone}${isEmpty ? " is-empty" : ""}`;
+        article.dataset.column = column.key;
+        article.innerHTML = `
+          <div class="dynamic-bill-column-head">
+            <div><h3>${column.title}</h3><p>本地规则固定栏目说明。</p></div>
+            <span>${isEmpty ? "0/0" : "1/1"}</span>
+          </div>
+          ${isEmpty ? `
+            <div class="dynamic-bill-column-empty">
+              <strong>本栏暂无待查看项</strong>
+              <p>同步或筛选变化后会按本地规则更新。</p>
+            </div>
+          ` : `
+            <div class="dynamic-bill-item-list">
+              <button type="button" class="dynamic-bill-item-card">
+                <span class="dynamic-bill-card-meta">#1 · 未打开</span>
+                <strong>示例 UP</strong>
+                <span class="dynamic-bill-card-title">最近发布的匿名示例视频</span>
+                <span class="dynamic-bill-card-fact">可用本地观看记录中未发现同一新视频</span>
+              </button>
+            </div>
+          `}
+        `;
+        board.append(article);
+      }
+
+      document.querySelector("#qa-title").textContent = scenario === "two-empty"
+        ? "两栏为空，一栏有内容"
+        : "一栏为空，两栏有内容";
+
+      requestAnimationFrame(() => {
+        const articles = [...document.querySelectorAll(".dynamic-bill-column")];
+        const compactRows = [...document.querySelectorAll(".dynamic-bill-column-empty")];
+        const populated = articles.filter((article) => !article.classList.contains("is-empty"));
+        const empty = articles.filter((article) => article.classList.contains("is-empty"));
+        const expectedEmptyCount = scenario === "two-empty" ? 2 : 1;
+        const hasHorizontalOverflow = document.documentElement.scrollWidth > window.innerWidth + 1;
+        const clippedColumn = articles.some((article) => article.scrollWidth > article.clientWidth + 1);
+        const compactHeight = Math.max(...compactRows.map((row) => row.getBoundingClientRect().height));
+        const order = articles.map((article) => article.dataset.column).join(",");
+        const orderStable = order === columns.map((column) => column.key).join(",");
+        const desktopWeighted = window.innerWidth <= 980 || empty.every((emptyColumn) =>
+          populated.every((populatedColumn) =>
+            populatedColumn.getBoundingClientRect().width > emptyColumn.getBoundingClientRect().width,
+          ),
+        );
+        const passed = empty.length === expectedEmptyCount
+          && compactHeight < 120
+          && !hasHorizontalOverflow
+          && !clippedColumn
+          && orderStable
+          && desktopWeighted;
+
+        window.__dynamicBillLayoutQa = {
+          scenario,
+          passed,
+          compactHeight,
+          hasHorizontalOverflow,
+          clippedColumn,
+          orderStable,
+          desktopWeighted,
+          widths: articles.map((article) => Math.round(article.getBoundingClientRect().width)),
+          heights: articles.map((article) => Math.round(article.getBoundingClientRect().height)),
+        };
+        document.body.dataset.qa = passed ? "passed" : "failed";
+        document.querySelector("#qa-status").textContent = passed
+          ? "布局检查通过"
+          : "布局检查未通过";
+      });
+    </script>
+  </body>
+</html>

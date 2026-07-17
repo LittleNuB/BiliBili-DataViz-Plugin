@@ -1,5 +1,8 @@
 import type { DynamicBillColumn, DynamicBillGenerateResult, DynamicBillItem } from '../../shared/types/dynamic-bill.ts';
-import { getRecordsSince } from '../storage/watch-history-repo.ts';
+import {
+  getKnownWatchHistoryBvids,
+  getRecordsSince,
+} from '../storage/watch-history-repo.ts';
 import { db } from '../storage/db.ts';
 import {
   getActiveDynamicBillCreatorPauses,
@@ -29,6 +32,7 @@ export async function generateFixedDynamicBillItems(): Promise<DynamicBillGenera
     creators,
     updates,
     historyRecords,
+    knownWatchedBvids,
     favoriteItems,
     rotationRecords,
     pauses,
@@ -36,6 +40,7 @@ export async function generateFixedDynamicBillItems(): Promise<DynamicBillGenera
     getActiveFollowedCreators(),
     getRecentFollowedVideoUpdates(DYNAMIC_BILL_STRATEGY.updateWindowDays),
     getRecordsSince(longCutoff),
+    getKnownWatchHistoryBvids(),
     db.favoriteItems.toArray(),
     getDynamicBillRotationRecords(),
     getActiveDynamicBillCreatorPauses(generatedAt),
@@ -45,6 +50,7 @@ export async function generateFixedDynamicBillItems(): Promise<DynamicBillGenera
     creators,
     updates,
     historyRecords,
+    knownWatchedBvids,
     favoriteItems,
     rotationRecords,
     pausedCreatorMids: new Set(pauses.map(pause => pause.creatorMid)),

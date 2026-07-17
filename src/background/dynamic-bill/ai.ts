@@ -16,6 +16,7 @@ import {
 } from '../storage/dynamic-bill-repo';
 import {
   buildDynamicBillExplanationContent,
+  compactDynamicBillFactsForAi,
   type DynamicBillExplanationContent,
   type DynamicBillExplanationPayload,
 } from './explanation-content';
@@ -34,20 +35,15 @@ interface AiExplanationResponse {
   confidence?: unknown;
 }
 
+interface FallbackExplanationWriteResult {
+  processed: number;
+  written: number;
+  skipped: number;
+  discarded: number;
+}
+
 const DEFAULT_EXPLANATION_BATCH_SIZE = 6;
 const MAX_EXPLANATION_BATCH_SIZE = 12;
-const MAX_FACTS_IN_PROMPT = 7;
-const AI_FACT_EXCLUDED_TERMS = [
-  '少提醒',
-  '反馈',
-  '完整历史',
-  '完整关注列表',
-  '关注列表',
-  'Cookie',
-  '用户 mid',
-  '个人资料',
-  '反馈记录',
-];
 
 export async function buildDynamicBillExplanations(
   options: BuildDynamicBillExplanationOptions = {},
@@ -77,11 +73,12 @@ export async function buildDynamicBillExplanations(
     );
     return {
       status: 'disabled',
-      processed: fallback,
+      processed: fallback.processed,
       generated: 0,
       failed: 0,
-      skipped: 0,
-      fallback,
+      skipped: fallback.skipped,
+      fallback: fallback.written,
+      discarded: fallback.discarded,
       pending: 0,
       items: await getDynamicBillItems(),
     };
@@ -96,11 +93,12 @@ export async function buildDynamicBillExplanations(
     );
     return {
       status: 'not_configured',
-      processed: fallback,
+      processed: fallback.processed,
       generated: 0,
       failed: 0,
-      skipped: 0,
-      fallback,
+      skipped: fallback.skipped,
+      fallback: fallback.written,
+      discarded: fallback.discarded,
       pending: 0,
       items: await getDynamicBillItems(),
     };
@@ -110,7 +108,8 @@ export async function buildDynamicBillExplanations(
   let generated = 0;
   let failed = 0;
   let skipped = 0;
-  let processable = 0;
+  let discarded = 0;
+  const attemptedContent = new Set<string>();
 
   for (const item of items) {
     const { payload, contentHash } = await getDynamicBillExplanationContent(item);
@@ -119,40 +118,55 @@ export async function buildDynamicBillExplanations(
       continue;
     }
 
-    processable++;
     if (processed >= maxItems) continue;
 
+    attemptedContent.add(explanationAttemptKey(item.billKey, contentHash));
+    let explanation: DynamicBillExplanation;
     try {
       const ai = await createAiExplanation(payload, config.ai);
-      await putDynamicBillExplanation(normalizeAiExplanation(
+      explanation = normalizeAiExplanation(
         item,
         ai,
         config.ai.chatModel,
         contentHash,
-      ));
-      generated++;
+      );
     } catch (error) {
-      await putDynamicBillExplanation(buildFallbackExplanation(
+      explanation = buildFallbackExplanation(
         item,
         'failed',
         config.ai.chatModel,
         contentHash,
         errorMessage(error),
-      ));
+      );
+    }
+
+    const write = await putDynamicBillExplanation(explanation);
+    if (write.status === 'discarded') {
+      discarded++;
+    } else if (explanation.status === 'generated') {
+      generated++;
+    } else {
       failed++;
     }
     processed++;
   }
 
+  const finalItems = await getDynamicBillItems();
   return {
-    status: runStatus(generated, failed, processed),
+    status: runStatus(generated, failed),
     processed,
     generated,
     failed,
     skipped,
     fallback: failed,
-    pending: Math.max(0, processable - processed),
-    items: await getDynamicBillItems(),
+    discarded,
+    pending: await countPendingExplanations(
+      finalItems,
+      config.ai.chatModel,
+      includeFailed,
+      attemptedContent,
+    ),
+    items: finalItems,
   };
 }
 
@@ -217,8 +231,11 @@ async function writeFallbackExplanations(
   status: Extract<DynamicBillExplanationStatus, 'disabled' | 'not_configured'>,
   model: string,
   error: string,
-): Promise<number> {
+): Promise<FallbackExplanationWriteResult> {
+  let processed = 0;
   let written = 0;
+  let skipped = 0;
+  let discarded = 0;
   for (const item of items) {
     const { contentHash } = await getDynamicBillExplanationContent(item);
     const explanation = item.explanation;
@@ -227,18 +244,24 @@ async function writeFallbackExplanations(
       && explanation.contentHash === contentHash
       && explanation.model === model
     ) {
+      skipped++;
       continue;
     }
-    await putDynamicBillExplanation(buildFallbackExplanation(
+    const write = await putDynamicBillExplanation(buildFallbackExplanation(
       item,
       status,
       model,
       contentHash,
       error,
     ));
-    written++;
+    processed++;
+    if (write.status === 'written') {
+      written++;
+    } else {
+      discarded++;
+    }
   }
-  return written;
+  return { processed, written, skipped, discarded };
 }
 
 function normalizeAiExplanation(
@@ -288,7 +311,7 @@ function fallbackSummary(item: DynamicBillItem): string {
 }
 
 function fallbackReason(item: DynamicBillItem): string {
-  const facts = compactFacts(item.evidence.facts).slice(0, 2).join(' ');
+  const facts = compactDynamicBillFactsForAi(item.evidence.facts).slice(0, 2).join(' ');
   return `这个视频出现是因为它已经被「${columnTitle(item.column)}」本地规则入选：${facts || cardReason(item)}。`;
 }
 
@@ -321,13 +344,6 @@ function cardReason(item: DynamicBillItem): string {
   return '这条来自剩余已关注 UP 的最近新投稿，按全局轮换扩大创作者覆盖。';
 }
 
-function compactFacts(facts: string[]): string[] {
-  return facts
-    .filter(fact => !AI_FACT_EXCLUDED_TERMS.some(term => fact.includes(term)))
-    .map(fact => limitText(fact, 180))
-    .slice(0, MAX_FACTS_IN_PROMPT);
-}
-
 function columnTitle(column: DynamicBillColumn): string {
   switch (column) {
     case 'buried_follow':
@@ -344,12 +360,11 @@ function columnTitle(column: DynamicBillColumn): string {
 function runStatus(
   generated: number,
   failed: number,
-  processed: number,
 ): DynamicBillExplanationRunStatus {
   if (generated > 0 && failed === 0) return 'generated';
   if (failed > 0 && generated === 0) return 'failed';
   if (generated > 0) return 'generated';
-  return processed > 0 ? 'failed' : 'idle';
+  return 'idle';
 }
 
 function emptyResult(
@@ -363,9 +378,29 @@ function emptyResult(
     failed: 0,
     skipped: 0,
     fallback: 0,
+    discarded: 0,
     pending: 0,
     items,
   };
+}
+
+async function countPendingExplanations(
+  items: DynamicBillItem[],
+  model: string,
+  includeFailed: boolean,
+  attemptedContent: Set<string>,
+): Promise<number> {
+  let pending = 0;
+  for (const item of items) {
+    const { contentHash } = await getDynamicBillExplanationContent(item);
+    if (attemptedContent.has(explanationAttemptKey(item.billKey, contentHash))) continue;
+    if (shouldProcessItem(item, contentHash, model, includeFailed)) pending++;
+  }
+  return pending;
+}
+
+function explanationAttemptKey(billKey: string, contentHash: string): string {
+  return `${billKey}\u0000${contentHash}`;
 }
 
 function normalizeText(value: unknown, fallback: string, maxLength: number): string {

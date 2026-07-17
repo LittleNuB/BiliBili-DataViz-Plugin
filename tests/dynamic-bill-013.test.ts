@@ -113,6 +113,35 @@ test('selects the same latest unwatched update for every equal-time input permut
   assert.deepEqual(selectedUpdateKeys, Array(6).fill('u1-a'));
 });
 
+test('excludes same-video BVIDs from all available history without changing deterministic selection', () => {
+  const tiedUpdates = [
+    { ...update(1, 'watched', 0), dynamicTime: NOW_SECONDS, pubtime: NOW_SECONDS },
+    { ...update(1, 'b', 0), dynamicTime: NOW_SECONDS, pubtime: NOW_SECONDS },
+    { ...update(1, 'c', 0), dynamicTime: NOW_SECONDS, pubtime: NOW_SECONDS },
+  ];
+  const oldWatch = history(1, 'BV1-watched', NOW_SECONDS - 60 * 86_400);
+
+  for (const updates of permutations(tiedUpdates)) {
+    const plan = planFixedDynamicBillItems({
+      now: NOW,
+      creators: [creator(1)],
+      updates,
+      historyRecords: [oldWatch],
+      favoriteItems: [],
+      rotationRecords: [],
+      pausedCreatorMids: new Set(),
+    });
+
+    assert.equal(plan.items[0]?.evidence.newVideo.updateKey, 'u1-b');
+    assert.equal(plan.excludedRecentSameVideoCount, 1);
+    assert.match(
+      plan.items[0].evidence.facts.join('\n'),
+      /可用本地观看记录中未发现同一新视频 BV1-b/,
+    );
+    assert.doesNotMatch(plan.items[0].evidence.facts.join('\n'), /最近 30 天未发现/);
+  }
+});
+
 test('uses one global rotation record and caps a column at five items', () => {
   const creatorIds = [10, 11, 12, 13, 14, 15];
   const plan = planFixedDynamicBillItems({
@@ -138,7 +167,7 @@ test('uses one global rotation record and caps a column at five items', () => {
   assert.equal(rotationItems.some(item => item.creatorMid === 15), false);
 });
 
-test('excludes paused creators and recently watched same videos before column ownership', () => {
+test('excludes paused creators and known watched same videos before column ownership', () => {
   const plan = planFixedDynamicBillItems({
     now: NOW,
     creators: [creator(1), creator(2), creator(3)],

@@ -211,6 +211,7 @@ export function DynamicBillPage() {
         failed: 0,
         skipped: 0,
         fallback: 0,
+        discarded: 0,
         pending: 0,
         items,
       };
@@ -231,6 +232,7 @@ export function DynamicBillPage() {
         total.failed += batch.failed;
         total.skipped += batch.skipped;
         total.fallback += batch.fallback;
+        total.discarded += batch.discarded;
         total.pending = batch.pending;
         total.items = batch.items;
         setItems(batch.items);
@@ -425,7 +427,9 @@ export function DynamicBillPage() {
 
               return (
                 <article
-                  className={`dynamic-bill-column tone-${column.accent}`}
+                  className={`dynamic-bill-column tone-${column.accent}${
+                    columnItems.length === 0 ? " is-empty" : ""
+                  }`}
                   key={column.key}
                 >
                   <div className="dynamic-bill-column-head">
@@ -462,7 +466,7 @@ export function DynamicBillPage() {
                       ))}
                     </div>
                   ) : (
-                    <div className="dynamic-bill-empty">
+                    <div className="dynamic-bill-column-empty">
                       <strong>{emptyCopy.title}</strong>
                       <p>{emptyCopy.detail}</p>
                     </div>
@@ -533,7 +537,7 @@ function BillItemDetail({
       <div className="dynamic-bill-status-copy">
         <strong>新投稿证据</strong>
         <span>
-          最近 {evidence.thresholds.updateWindowDays} 天发布；同一新视频在最近 {evidence.thresholds.recentSameVideoWindowDays} 天已看过时不会进入账单。
+          最近 {evidence.thresholds.updateWindowDays} 天发布；同一新视频只要出现在可用本地观看记录中，就不会进入账单。
         </span>
       </div>
       <div className="dynamic-bill-evidence-grid">
@@ -723,18 +727,21 @@ function describeSyncResult(result: DynamicSyncResult): string {
 }
 
 function describeGenerateResult(result: DynamicBillGenerateResult): string {
-  return `本地账单生成 ${result.itemCount} 项：被淹没的关注 ${result.columnItemCounts.buried_follow} 项，收藏关联更新 ${result.columnItemCounts.favorite_related} 项，关注轮换 ${result.columnItemCounts.follow_rotation} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除近期已看同视频 ${result.excludedRecentSameVideoCount} 条，本地暂停记录排除 ${result.excludedByFeedbackCount} 条。`;
+  return `本地账单生成 ${result.itemCount} 项：被淹没的关注 ${result.columnItemCounts.buried_follow} 项，收藏关联更新 ${result.columnItemCounts.favorite_related} 项，关注轮换 ${result.columnItemCounts.follow_rotation} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除本地已记录同视频 ${result.excludedRecentSameVideoCount} 条，本地暂停记录排除 ${result.excludedByFeedbackCount} 条。`;
 }
 
 function describeExplanationResult(result: DynamicBillExplanationResult): string {
+  const refreshed = result.discarded > 0
+    ? `；${result.discarded} 个账单项已更新，旧说明未写入`
+    : "";
   if (result.status === "disabled") {
-    return `AI 解释未启用，已为 ${result.fallback} 个账单项展示本地证据说明。`;
+    return `AI 解释未启用，已为 ${result.fallback} 个账单项展示本地证据说明${refreshed}。`;
   }
   if (result.status === "not_configured") {
-    return `AI 尚未在设置中配置 API Key，已为 ${result.fallback} 个账单项展示本地证据说明。`;
+    return `AI 尚未在设置中配置 API Key，已为 ${result.fallback} 个账单项展示本地证据说明${refreshed}。`;
   }
   const pending = result.pending > 0 ? `，剩余 ${result.pending} 个待处理` : "";
-  return `AI 解释处理 ${result.processed} 项：成功 ${result.generated} 项，失败 ${result.failed} 项，跳过 ${result.skipped} 项${pending}；失败项仍展示本地证据说明。`;
+  return `AI 解释处理 ${result.processed} 项：成功 ${result.generated} 项，失败 ${result.failed} 项，跳过 ${result.skipped} 项${pending}${refreshed}；失败项仍展示本地证据说明。`;
 }
 
 function getColumnEmptyCopy(
@@ -781,7 +788,7 @@ function getColumnEmptyCopy(
   }
   return {
     title: `暂无${statusLabel}关注轮换`,
-    detail: "可能是剩余已关注 UP 没有未观看的新投稿，或本轮都已归入前两栏。",
+    detail: "可能是剩余已关注 UP 没有可用本地观看记录中未出现的新投稿，或本轮都已归入前两栏。",
   };
 }
 
@@ -848,16 +855,16 @@ function localColumnReason(item: DynamicBillItem): string {
 
 function thresholdCopy(evidence: DynamicBillEvidence): string {
   const positiveRule = `有效观看为完成度不少于 ${formatPercent(evidence.thresholds.positiveCompletionRate)}、观看不少于 ${formatDuration(evidence.thresholds.minPositiveWatchSeconds)} 或已收藏`;
-  const sameVideoRule = `同一新视频排除窗口为 ${evidence.thresholds.recentSameVideoWindowDays} 天`;
+  const sameVideoRule = "同一新视频只要出现在可用本地观看记录中就会排除";
   const capacityRule = `每栏最多 ${evidence.thresholds.maxItemsPerColumn} 项，总计最多 ${evidence.thresholds.maxItemsTotal} 项`;
 
   if (evidence.kind === "favorite_related") {
-    return `本地已同步收藏中存在同 UP 作品，且最近 ${evidence.thresholds.updateWindowDays} 天有未观看新投稿；${sameVideoRule}；${capacityRule}。`;
+    return `本地已同步收藏中存在同 UP 作品，且最近 ${evidence.thresholds.updateWindowDays} 天有未在可用本地观看记录中出现的新投稿；${sameVideoRule}；${capacityRule}。`;
   }
   if (evidence.kind === "buried_follow") {
     return `基础入选必须是已关注 UP、最近 ${evidence.thresholds.updateWindowDays} 天有新视频投稿、近期 ${evidence.thresholds.recentWindowDays} 天观看不超过 ${evidence.thresholds.maxBuriedRecentWatchCount} 次且有效观看不超过 ${evidence.thresholds.maxBuriedRecentPositiveWatchCount} 次；关注记忆信号至少满足长期关注、特别关注、本地连续观察或近期窗口以前有观看记录之一；${positiveRule}；${sameVideoRule}；${capacityRule}。`;
   }
-  return `在前两栏归属后，剩余已关注 UP 的最近未观看投稿按全局轮换展示；${sameVideoRule}；${capacityRule}。`;
+  return `在前两栏归属后，剩余已关注 UP 最近一条未在可用本地观看记录中出现的投稿按全局轮换展示；${sameVideoRule}；${capacityRule}。`;
 }
 
 function followEvidenceCopy(evidence: DynamicBillEvidence): string {

@@ -41,6 +41,10 @@ export interface DynamicBillFeedbackProfile {
   pausesByCreatorMid: Map<number, DynamicBillCreatorPauseRecord>;
 }
 
+export type DynamicBillExplanationWriteResult =
+  | { status: 'written'; explanation: DynamicBillExplanation }
+  | { status: 'discarded' };
+
 export async function replaceFollowedCreatorSnapshot(creators: FollowedCreator[], syncedAt: number): Promise<number> {
   await ensureDynamicBill013Migration();
   const activeMids = new Set(creators.map(creator => creator.mid));
@@ -267,18 +271,41 @@ export async function getDynamicBillExplanationMap(
 
 export async function putDynamicBillExplanation(
   explanation: DynamicBillExplanation,
-): Promise<DynamicBillExplanation> {
+): Promise<DynamicBillExplanationWriteResult> {
   await ensureDynamicBill013Migration();
-  const existing = await db.dynamicBillExplanations
-    .where('billKey')
-    .equals(explanation.billKey)
-    .first();
-  const next: DynamicBillExplanation = {
-    ...explanation,
-    id: existing?.id,
-  };
-  await db.dynamicBillExplanations.put(next);
-  return next;
+  return db.transaction(
+    'rw',
+    db.dynamicBillItems,
+    db.followedVideoUpdates,
+    db.dynamicBillExplanations,
+    async () => {
+      const item = await db.dynamicBillItems
+        .where('billKey')
+        .equals(explanation.billKey)
+        .first();
+      if (!item) return { status: 'discarded' };
+
+      const update = await db.followedVideoUpdates
+        .where('updateKey')
+        .equals(item.updateKey)
+        .first();
+      const { contentHash } = buildDynamicBillExplanationContent(item, update);
+      if (contentHash !== explanation.contentHash) {
+        return { status: 'discarded' };
+      }
+
+      const existing = await db.dynamicBillExplanations
+        .where('billKey')
+        .equals(explanation.billKey)
+        .first();
+      const next: DynamicBillExplanation = {
+        ...explanation,
+        id: existing?.id,
+      };
+      await db.dynamicBillExplanations.put(next);
+      return { status: 'written', explanation: next };
+    },
+  );
 }
 
 export async function getDynamicBillFilterPreference(): Promise<DynamicBillFilterPreference> {

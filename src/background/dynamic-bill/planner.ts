@@ -41,6 +41,7 @@ export interface FixedDynamicBillPlanInput {
   creators: FollowedCreator[];
   updates: FollowedVideoUpdate[];
   historyRecords: WatchHistoryRecord[];
+  knownWatchedBvids?: Iterable<string>;
   favoriteItems: FavoriteItem[];
   rotationRecords: DynamicBillRotationRecord[];
   pausedCreatorMids: Set<number>;
@@ -62,7 +63,6 @@ export function planFixedDynamicBillItems(input: FixedDynamicBillPlanInput): Fix
   const nowSeconds = Math.floor(input.now / 1000);
   const longCutoff = nowSeconds - DYNAMIC_BILL_STRATEGY.longWindowDays * SECONDS_PER_DAY;
   const recentCutoff = nowSeconds - DYNAMIC_BILL_STRATEGY.recentWindowDays * SECONDS_PER_DAY;
-  const recentSameVideoCutoff = nowSeconds - DYNAMIC_BILL_STRATEGY.recentSameVideoWindowDays * SECONDS_PER_DAY;
   const activeCreatorsByMid = new Map(
     input.creators
       .filter(creator => creator.isActive !== false)
@@ -71,10 +71,12 @@ export function planFixedDynamicBillItems(input: FixedDynamicBillPlanInput): Fix
   const recordsByCreator = groupRecordsByCreator(input.historyRecords);
   const favoriteItemsByCreator = groupFavoriteItemsByCreator(input.favoriteItems);
   const rotationsByCreator = new Map(input.rotationRecords.map(record => [record.creatorMid, record]));
-  const recentlyWatchedBvids = new Set(
-    input.historyRecords
-      .filter(record => record.viewAt >= recentSameVideoCutoff)
-      .map(record => record.bvid)
+  const knownWatchedBvids = new Set(
+    [
+      ...input.historyRecords.map(record => record.bvid),
+      ...(input.knownWatchedBvids ?? []),
+    ]
+      .map(normalizeBvid)
       .filter(Boolean),
   );
 
@@ -88,7 +90,7 @@ export function planFixedDynamicBillItems(input: FixedDynamicBillPlanInput): Fix
       excludedByFeedbackCount++;
       continue;
     }
-    if (recentlyWatchedBvids.has(update.bvid)) {
+    if (knownWatchedBvids.has(normalizeBvid(update.bvid))) {
       excludedRecentSameVideoCount++;
       continue;
     }
@@ -346,8 +348,8 @@ function buildFacts(candidate: FixedBillCandidate): string[] {
   const creatorName = candidate.creator.name || candidate.update.authorName;
   const baseFacts = [
     `最近 ${DYNAMIC_BILL_STRATEGY.updateWindowDays} 天，已关注 UP「${creatorName}」发布了新视频《${title}》。`,
-    `本地最近 ${DYNAMIC_BILL_STRATEGY.recentSameVideoWindowDays} 天未发现同一新视频 ${candidate.update.bvid} 的观看记录。`,
-    '本轮先为每位 UP 选择最新一条尚未观看投稿，再按固定三栏唯一归属展示；AI 不参与入选、归属、轮换或状态。',
+    `可用本地观看记录中未发现同一新视频 ${candidate.update.bvid}。`,
+    '本轮先为每位 UP 选择可用本地观看记录中未出现的最新投稿，再按固定三栏唯一归属展示；AI 不参与入选、归属、轮换或状态。',
   ];
 
   if (candidate.column === 'favorite_related') {
@@ -471,6 +473,10 @@ function normalizeMilliseconds(value: number | undefined): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return 0;
   return numeric < 10_000_000_000 ? numeric * 1000 : numeric;
+}
+
+function normalizeBvid(value: string): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function clamp01(value: number): number {
