@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>视频盲盒固定四类 Mock QA</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101424;
+      --panel: #171b2e;
+      --line: rgba(255, 255, 255, 0.09);
+      --muted: #a8b0ce;
+      --text: #f7f8ff;
+      --pink: #fb7299;
+      --blue: #00a1d6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, "Microsoft YaHei", sans-serif;
+    }
+    main {
+      display: grid;
+      gap: 14px;
+      padding: 16px;
+      max-width: 1120px;
+      margin: 0 auto;
+    }
+    .hero,
+    .note {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(135deg, rgba(251, 114, 153, 0.16), rgba(0, 161, 214, 0.12));
+      padding: 14px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      line-height: 1.35;
+    }
+    p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 12px;
+    }
+    article {
+      display: flex;
+      min-height: 330px;
+      flex-direction: column;
+      gap: 10px;
+      border: 1px solid color-mix(in srgb, var(--accent), transparent 65%);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 14px;
+      box-shadow: 0 10px 24px color-mix(in srgb, var(--accent), transparent 86%);
+    }
+    .top {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: flex-start;
+    }
+    h2 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.35;
+    }
+    .teaser,
+    .meta,
+    li {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .badge {
+      flex: 0 0 auto;
+      border: 1px solid color-mix(in srgb, var(--accent), transparent 55%);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--accent), transparent 88%);
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 8px;
+      white-space: nowrap;
+    }
+    .meta,
+    .content {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.03);
+      padding: 10px;
+    }
+    .content {
+      flex: 1;
+    }
+    .title {
+      color: #fff;
+      font-size: 15px;
+      font-weight: 800;
+      line-height: 1.45;
+    }
+    .reason {
+      margin-top: 8px;
+      color: #dce2f8;
+      font-size: 13px;
+      line-height: 1.65;
+    }
+    ul {
+      margin: 8px 0 0;
+      padding-left: 18px;
+    }
+    button,
+    a {
+      display: block;
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid color-mix(in srgb, var(--accent), transparent 55%);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--accent), transparent 86%);
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 800;
+      line-height: 38px;
+      text-align: center;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .empty button {
+      border-color: rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.035);
+      color: #dce2f8;
+    }
+    @media (max-width: 620px) {
+      main { padding: 12px; }
+      article { min-height: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <h1>视频盲盒</h1>
+      <p>随机探索、跨区漫游、冷门收藏和 UP 主考古固定展示。每张卡都说明候选来源、入选原因，以及是否使用真实 B 站候选。</p>
+    </section>
+
+    <section class="grid" aria-label="视频盲盒四类卡片">
+      <article style="--accent: #a78bfa" data-box-id="random_explore">
+        <div class="top">
+          <div>
+            <h2>随机探索</h2>
+            <div class="teaser">只从真实 B 站相关视频候选池里随机抽一条。</div>
+          </div>
+          <span class="badge">真实候选</span>
+        </div>
+        <div class="meta">
+          <div>候选来源：B 站公开视频的相关视频候选池</div>
+          <div>真实 B 站候选：已使用真实 B 站候选</div>
+          <div>来源：相关视频候选 / 种子视频「本地种子视频」</div>
+        </div>
+        <div class="content">
+          <div class="title">真实相关候选视频</div>
+          <div class="teaser">UP 主：公开候选 UP</div>
+          <div class="reason">理由：Bili-Bill 只保留可打开的公开相关视频候选，并在候选池里随机抽取一条；不会从本地历史或收藏库存补位。</div>
+          <ul>
+            <li>本次种子视频：本地种子视频。</li>
+            <li>最终视频来自本轮取得的真实相关视频候选池。</li>
+          </ul>
+        </div>
+        <a href="https://www.bilibili.com/video/BV1REALRND01" target="_blank" rel="noopener noreferrer">打开 B 站视频页</a>
+      </article>
+
+      <article style="--accent: #ff9f6e" data-box-id="cross_region">
+        <div class="top">
+          <div>
+            <h2>跨区漫游</h2>
+            <div class="teaser">避开最近高频分区，从公开分区新视频里随机开一条。</div>
+          </div>
+          <span class="badge">真实候选</span>
+        </div>
+        <div class="meta">
+          <div>候选来源：B 站公开分区新视频候选池</div>
+          <div>真实 B 站候选：已使用真实 B 站候选</div>
+          <div>来源：B 站分区新视频 / 知识</div>
+        </div>
+        <div class="content">
+          <div class="title">真实分区新视频</div>
+          <div class="teaser">UP 主：公开知识 UP</div>
+          <div class="reason">理由：最近最多 7 天的高频分区是「游戏」，本轮避开这些方向，随机选择 B 站「知识」分区，并从公开新视频候选池里抽取这条视频。</div>
+          <ul>
+            <li>跨区漫游只使用固定公开分区目录和 B 站分区新视频接口。</li>
+            <li>本切片不使用最近抽取记录去重，也不改用本地历史或收藏补位。</li>
+          </ul>
+        </div>
+        <a href="https://www.bilibili.com/video/BV1REAL139A" target="_blank" rel="noopener noreferrer">打开 B 站视频页</a>
+      </article>
+
+      <article style="--accent: #ffd166" data-box-id="hidden_favorite">
+        <div class="top">
+          <div>
+            <h2>冷门收藏</h2>
+            <div class="teaser">从本地收藏里翻出被你压箱底的一条。</div>
+          </div>
+          <span class="badge">本地候选</span>
+        </div>
+        <div class="meta">
+          <div>候选来源：本地收藏</div>
+          <div>真实 B 站候选：未使用真实 B 站候选：这是本地收藏回访。</div>
+          <div>来源：本地收藏 / 收藏夹「旧收藏」</div>
+        </div>
+        <div class="content">
+          <div class="title">压箱底收藏视频</div>
+          <div class="teaser">UP 主：游戏收藏 UP</div>
+          <div class="reason">理由：你把它收进本地收藏后，还没有留下再次观看记录。</div>
+          <ul>
+            <li>这条视频来自本地已同步收藏。</li>
+            <li>它不是外部探索，也不会冒充真实 B 站候选。</li>
+          </ul>
+        </div>
+        <a href="https://www.bilibili.com/video/BVFAVHID1" target="_blank" rel="noopener noreferrer">打开 B 站视频页</a>
+      </article>
+
+      <article style="--accent: #7fd1ff" data-box-id="creator_archive">
+        <div class="top">
+          <div>
+            <h2>UP 主考古</h2>
+            <div class="teaser">从已关注 UP 的公开较早投稿里随机翻一条。</div>
+          </div>
+          <span class="badge">真实候选</span>
+        </div>
+        <div class="meta">
+          <div>候选来源：已关注 UP 的公开较早投稿</div>
+          <div>真实 B 站候选：已使用真实 B 站候选</div>
+          <div>来源：UP 主公开较早投稿 / 考古 UP</div>
+        </div>
+        <div class="content">
+          <div class="title">公开较早投稿</div>
+          <div class="teaser">UP 主：考古 UP</div>
+          <div class="reason">理由：这条来自已关注 UP「考古 UP」的公开较早投稿，已排除最近 7 天新投稿，避免和动态账单重复。</div>
+          <ul>
+            <li>只请求少量已关注 UP 的公开投稿第一页。</li>
+            <li>最终视频来自公开 UP 空间投稿候选池。</li>
+          </ul>
+        </div>
+        <a href="https://www.bilibili.com/video/BV1ARCOLD1" target="_blank" rel="noopener noreferrer">打开 B 站视频页</a>
+      </article>
+    </section>
+
+    <section class="grid" aria-label="空态卡片">
+      <article class="empty" style="--accent: #a78bfa" data-box-id="random_explore_empty">
+        <div class="top">
+          <div>
+            <h2>随机探索</h2>
+            <div class="teaser">只从真实 B 站候选池里随机抽一条。</div>
+          </div>
+          <span class="badge">暂无候选</span>
+        </div>
+        <div class="meta">
+          <div>候选来源：B 站公开视频的相关视频候选池</div>
+          <div>真实 B 站候选：未使用真实 B 站候选：缺少可用于请求的近期视频。</div>
+        </div>
+        <div class="content">
+          <div class="title">当前没有可用于探索的近期视频</div>
+          <div class="reason">随机探索需要先用最近少量本地历史作为种子，请求 B 站公开视频的相关视频候选池。</div>
+        </div>
+        <button type="button">重新生成这一页</button>
+      </article>
+
+      <article class="empty" style="--accent: #ff9f6e" data-box-id="cross_region_empty">
+        <div class="top">
+          <div>
+            <h2>跨区漫游</h2>
+            <div class="teaser">避开最近高频分区，从公开分区新视频里随机开一条。</div>
+          </div>
+          <span class="badge">真实候选为空</span>
+        </div>
+        <div class="meta">
+          <div>候选来源：B 站公开分区新视频候选池</div>
+          <div>真实 B 站候选：未使用真实 B 站候选：候选源本轮没有返回可打开视频。</div>
+        </div>
+        <div class="content">
+          <div class="title">这次没有取得可打开的分区新视频</div>
+          <div class="reason">已请求本轮公开分区新视频候选池，但没有留下可打开视频。当前不会改用本地历史或收藏。</div>
+        </div>
+        <button type="button">重新生成这一页</button>
+      </article>
+    </section>
+
+    <section class="note">
+      <p>打开动作只会新开一个 B 站视频页，不会回写收藏、关注或观看状态。</p>
+    </section>
+  </main>
+</body>
+</html>
