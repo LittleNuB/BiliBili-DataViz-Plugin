@@ -127,12 +127,7 @@ export function createRegisteredLocalDataCategories(
       favoriteItems: counts[1] ?? 0,
       smartFavoriteIndexes: counts[2] ?? 0,
     })),
-    tableCategory(dependencies, 'currentVideoSubtitles', '当前视频字幕缓存', {
-      tables: [tables.currentVideoTranscriptSources, tables.currentVideoTranscriptSegments],
-    }, counts => ({
-      currentVideoSubtitleSources: counts[0] ?? 0,
-      currentVideoSubtitleSegments: counts[1] ?? 0,
-    })),
+    currentVideoSubtitleCategory(dependencies),
     tableCategory(dependencies, 'dynamicBill', '动态账单', {
       tables: [
         tables.followedCreators,
@@ -170,6 +165,45 @@ function blindBoxDrawHistoryCategory(
       return { cleared: { blindBoxDrawHistory: clearedCount } };
     },
     readAfterClear: () => readBlindBoxDrawHistoryAfterClear(dependencies.storage),
+  };
+}
+
+function currentVideoSubtitleCategory(
+  dependencies: LocalDataCategoryRegistryDependencies,
+): LocalDataCategoryRegistration {
+  const group = {
+    tables: [
+      dependencies.tables.currentVideoTranscriptSources,
+      dependencies.tables.currentVideoTranscriptSegments,
+    ],
+  };
+  const collectUsage = () => collectCurrentVideoSubtitleUsage(group.tables);
+  return {
+    id: 'currentVideoSubtitles',
+    label: '当前视频字幕缓存',
+    includeInClearAll: true,
+    collectUsage,
+    clear: async () => {
+      const [sources, segments] = await Promise.all(group.tables.map(table => table.toArray()));
+      await dependencies.transaction(group.tables, async () => {
+        for (const table of group.tables) {
+          await table.clear();
+        }
+      });
+      return {
+        cleared: {
+          currentVideoSubtitleSources: sources.length,
+          currentVideoSubtitleSegments: segments.length,
+        },
+      };
+    },
+    readAfterClear: async () => {
+      const usage = await collectUsage();
+      return {
+        ...usage,
+        empty: usage.count === 0 && usage.usageBytes === 0,
+      };
+    },
   };
 }
 
@@ -243,6 +277,28 @@ async function collectTableUsage(
   };
 }
 
+async function collectCurrentVideoSubtitleUsage(
+  tables: LocalDataCategoryTable[],
+): Promise<LocalDataCategoryUsage> {
+  const [sources, segments] = await Promise.all(tables.map(table => table.toArray()));
+  const sourceIdentityCount = new Set(
+    sources
+      .map(row => sourceIdentityKey(row))
+      .filter((value): value is string => Boolean(value)),
+  ).size;
+  const usageBytes = sources.length > 0 || segments.length > 0
+    ? serializedSize({ sources, segments })
+    : 0;
+  return {
+    count: sourceIdentityCount,
+    usageBytes,
+    details: {
+      currentVideoSubtitleSources: sources.length,
+      currentVideoSubtitleSegments: segments.length,
+    },
+  };
+}
+
 async function collectStorageUsage(
   storage: LocalDataCategoryStorage,
   storageKeys: string[],
@@ -291,4 +347,13 @@ function serializedSize(value: unknown): number {
     return new TextEncoder().encode(text).byteLength;
   }
   return text.length;
+}
+
+function sourceIdentityKey(row: unknown): string | null {
+  if (!row || typeof row !== 'object') return null;
+  const record = row as Record<string, unknown>;
+  const sourceIdentity = record.sourceIdentityKey ?? record.identityKey;
+  return typeof sourceIdentity === 'string' && sourceIdentity.trim()
+    ? sourceIdentity
+    : null;
 }

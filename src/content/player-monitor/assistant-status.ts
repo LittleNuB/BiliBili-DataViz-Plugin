@@ -589,23 +589,6 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
   injectStyle();
   updateAssistantContext(context);
   renderAssistantShell();
-
-  if (
-    assistantState.expanded
-    && context.kind === 'video'
-    && !assistantState.summary
-    && !assistantState.summaryLoading
-  ) {
-    void loadCurrentVideoSummary(false);
-  }
-  if (
-    assistantState.expanded
-    && context.kind === 'video'
-    && !assistantState.knowledge
-    && !assistantState.knowledgeLoading
-  ) {
-    void loadCurrentVideoKnowledge(false);
-  }
 }
 
 function updateAssistantContext(context: CurrentVideoContextResult): void {
@@ -675,8 +658,6 @@ function renderCollapsedCard(root: HTMLElement): void {
   const expand = button('展开助手', 'bdc-assistant-button bdc-assistant-button-primary', () => {
     assistantState.expanded = true;
     renderAssistantShell();
-    void loadCurrentVideoSummary(false);
-    void loadCurrentVideoKnowledge(false);
   });
   actions.appendChild(expand);
   header.appendChild(actions);
@@ -687,7 +668,7 @@ function renderCollapsedCard(root: HTMLElement): void {
   if (assistantState.context?.kind === 'video') {
     appendText(status, 'div', 'bdc-assistant-video-title', assistantState.context.title ?? '当前视频');
   }
-  appendText(status, 'div', 'bdc-assistant-muted', '直接在当前播放页提问、核对引用片段、预览并确认跳转。');
+  appendText(status, 'div', 'bdc-assistant-muted', '先确认当前分 P 的可用文本来源；没有正文时请手动开启中文 AI 字幕后重新检测。');
   card.appendChild(status);
   root.appendChild(card);
 }
@@ -701,14 +682,14 @@ function renderExpandedPanel(root: HTMLElement): void {
   const brand = document.createElement('div');
   brand.className = 'bdc-assistant-brand';
   appendText(brand, 'div', 'bdc-assistant-kicker', '当前视频助手');
-  appendText(brand, 'div', 'bdc-assistant-subtitle', '在当前播放页提问、核对引用并手动跳转');
+  appendText(brand, 'div', 'bdc-assistant-subtitle', '确认当前分 P 的主要文本来源');
   header.appendChild(brand);
 
   const actions = document.createElement('div');
   actions.className = 'bdc-assistant-actions';
-  actions.appendChild(button('刷新摘要', 'bdc-assistant-button bdc-assistant-button-quiet', () => {
-    void loadCurrentVideoSummary(true);
-  }, assistantState.summaryLoading || assistantState.context?.kind !== 'video'));
+  actions.appendChild(button('重新检测字幕', 'bdc-assistant-button bdc-assistant-button-quiet', () => {
+    void refreshSubtitleEvidenceFromPage();
+  }, assistantState.subtitleRefreshing || assistantState.context?.kind !== 'video'));
   actions.appendChild(button('收起', 'bdc-assistant-button bdc-assistant-button-quiet', () => {
     assistantState.expanded = false;
     renderAssistantShell();
@@ -721,10 +702,6 @@ function renderExpandedPanel(root: HTMLElement): void {
 
   const context = assistantState.context;
   if (context?.kind === 'video') {
-    appendSegmentSearch(body, context);
-    appendSummary(body);
-    appendRelatedFavorites(body, context);
-    appendVideoKnowledge(body, context);
     appendSubtitleDiagnostics(body, context);
     appendVideoIdentity(body, context);
   } else {
@@ -735,7 +712,7 @@ function renderExpandedPanel(root: HTMLElement): void {
   }
 
   const footer = section('全局入口', 'bdc-assistant-section-auxiliary');
-  appendText(footer, 'div', 'bdc-assistant-muted', '全局总览用于长期视图；单个视频的提问、引用和跳转可直接在本页完成。');
+  appendText(footer, 'div', 'bdc-assistant-muted', '全局总览用于长期视图；当前切片只确认视频文本来源，不会自动发送完整文本请求。');
   footer.appendChild(dashboardLink('打开全局总览'));
   body.appendChild(footer);
 
@@ -755,7 +732,7 @@ function appendVideoIdentity(parent: HTMLElement, context: CurrentVideoContext):
   block.appendChild(pills);
 
   appendRow(block, '当前分 P', `第 ${context.currentPart.page}${context.currentPart.total ? ` / ${context.currentPart.total} P` : ' P'}`);
-  appendRow(block, '页面可见文字', availabilityLabel(context.sources.contentText));
+  appendRow(block, '主要文本来源', primaryTextSourceLabel(context));
   appendRow(block, '字幕轨道', availabilityLabel(context.sources.transcript));
   appendRow(block, '字幕正文', transcriptEvidenceLabel(context));
   parent.appendChild(block);
@@ -780,15 +757,14 @@ function appendSubtitleDiagnostics(parent: HTMLElement, context: CurrentVideoCon
   appendText(box, 'div', 'bdc-assistant-subtitle-text', safeVisibleText(summarySubtitleMessage(context, diagnostics)));
   appendText(box, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(summarySubtitleAction(context, diagnostics)));
 
-  const summaryGate = diagnostics.featureGates.find(item => item.label === '摘要');
-  if (summaryGate) {
-    appendText(
-      box,
-      'div',
-      'bdc-assistant-subtitle-detail',
-      safeVisibleText(`摘要：${summaryGate.message}`),
-    );
-  }
+  appendText(
+    box,
+    'div',
+    'bdc-assistant-subtitle-detail',
+    safeVisibleText(context.transcriptEvidence?.active
+      ? '主要文本：B站字幕正文已可用；后续完整文本请求仍需用户主动触发。'
+      : '主要文本：尚未取得正文；不会把可能存在的字幕或轨道当作正文。'),
+  );
 
   const buttonEl = button(
     assistantState.subtitleRefreshing ? '检测中...' : '重新检测字幕',
@@ -1731,11 +1707,6 @@ async function refreshSubtitleEvidenceFromPage(): Promise<void> {
     assistantState.subtitleRefreshing = false;
     assistantState.subtitleStatus = subtitleRefreshResultText(nextContext);
     renderAssistantShell();
-
-    if (nextContext.kind === 'video') {
-      await loadCurrentVideoSummary(true);
-      await loadCurrentVideoKnowledge(true);
-    }
   } catch {
     if (assistantState.subtitleRequestId !== requestId) return;
     assistantState.subtitleRefreshing = false;
@@ -1929,7 +1900,7 @@ function contextStateKey(context: CurrentVideoContextResult): string {
 function compactStatusText(context: CurrentVideoContextResult | null): string {
   if (!context) return '正在读取当前视频状态';
   if (context.kind !== 'video') return '未识别到当前视频';
-  if (context.transcriptEvidence?.active) return '字幕正文已缓存，可查看摘要';
+  if (context.transcriptEvidence?.active) return '已取得当前分 P 字幕正文';
   if (context.cid) return '已识别视频，等待字幕正文';
   return '已识别视频，CID 待刷新';
 }
@@ -1939,6 +1910,19 @@ function transcriptEvidenceLabel(context: CurrentVideoContext): string {
   if (evidence?.active) return `已缓存 ${evidence.segmentCount} 条`;
   if (evidence && evidence.status !== 'missing') return evidenceStatusLabel(evidence.status);
   return availabilityLabel(context.sources.contentText);
+}
+
+function primaryTextSourceLabel(context: CurrentVideoContext): string {
+  const evidence = context.transcriptEvidence;
+  if (evidence?.active && evidence.source === 'bilibili_subtitle') {
+    return evidence.temporary
+      ? 'B站字幕正文（本次临时使用）'
+      : 'B站字幕正文';
+  }
+  if (context.subtitleProbe?.available || context.sources.transcript === 'available') {
+    return '已探测到字幕轨道，尚未取得正文';
+  }
+  return '暂无正文，请开启中文 AI 字幕后重新检测';
 }
 
 function evidenceStatusLabel(status: CurrentVideoTranscriptEvidenceState['status']): string {
@@ -1974,24 +1958,24 @@ function summarySubtitleMessage(
     return '正在刷新当前视频上下文、检测字幕来源，并尝试读取字幕正文。';
   }
   if (context.transcriptEvidence?.active) {
-    return `已缓存当前视频字幕正文证据 ${context.transcriptEvidence.segmentCount} 条，页内摘要可使用这些本地字幕片段。`;
+    return `已取得并缓存当前分 P 匹配的字幕正文 ${context.transcriptEvidence.segmentCount} 条，可作为主要文本来源。`;
   }
 
   switch (diagnostics.status) {
     case 'missing_cid':
       return '还没有拿到当前分 P 的 CID，暂时不能安全检测字幕正文。';
     case 'track_found':
-      return '已发现字幕轨道，还需要读取并缓存正文后才能用于当前视频摘要。';
+      return '已发现字幕轨道，但还没有取得可引用的字幕正文。';
     case 'enable_ai_subtitle':
       return '当前还没有可用字幕正文。通常需要先在播放器里手动开启中文 AI 字幕。';
     case 'login_required':
       return '字幕需要当前浏览器会话具备访问权限；Bili-Bill 不会读取本地敏感文件。';
     case 'no_track':
-      return 'B 站播放器接口没有返回可用字幕轨道，当前摘要仍会使用元数据或简介兜底。';
+      return 'B 站播放器接口没有返回可用字幕轨道，当前没有可用视频正文。';
     case 'fetch_failed':
-      return '字幕正文读取失败，当前仍只能使用元数据或简介作为本地证据。';
+      return '字幕正文读取失败，当前没有可用视频正文。';
     case 'malformed':
-      return '字幕正文结构暂时无法稳定解析，因此不会作为摘要证据。';
+      return '字幕正文结构暂时无法稳定解析，因此不会作为主要文本来源。';
     case 'empty':
       return '已找到字幕来源，但没有返回有效正文片段。';
     case 'language_mismatch':
@@ -1999,9 +1983,9 @@ function summarySubtitleMessage(
     case 'unsupported_host':
       return '字幕来源不在受限的 B 站字幕域名范围内，已拒绝读取。';
     case 'stale':
-      return '本地字幕证据与当前视频不匹配，当前摘要会回退到元数据或简介。';
+      return '本地字幕证据与当前视频不匹配，不能作为当前分 P 正文。';
     default:
-      return '当前没有可引用的字幕正文；页内摘要不会当作完整视频总结。';
+      return '当前没有可引用的字幕正文。';
   }
 }
 
@@ -2010,7 +1994,7 @@ function summarySubtitleAction(
   diagnostics: CurrentVideoSubtitleDiagnostics,
 ): string {
   if (assistantState.subtitleRefreshing || diagnostics.status === 'reading_body') {
-    return '请保持当前视频页打开，检测完成后摘要会自动刷新。';
+    return '请保持当前视频页打开，检测完成后只更新文本来源状态。';
   }
   if (context.transcriptEvidence?.active) {
     return coverageText(context.transcriptEvidence) || '如果刚切换分 P，可以再次重新检测字幕。';
@@ -2021,7 +2005,7 @@ function summarySubtitleAction(
 function subtitleRefreshResultText(context: CurrentVideoContextResult): string {
   const diagnostics = buildCurrentVideoSubtitleDiagnostics(context);
   if (context.kind === 'video' && context.transcriptEvidence?.active) {
-    return `已刷新：字幕正文已缓存 ${context.transcriptEvidence.segmentCount} 条，摘要正在更新。`;
+    return `已刷新：已取得字幕正文 ${context.transcriptEvidence.segmentCount} 条。`;
   }
   return `已刷新：${diagnostics.title}。`;
 }

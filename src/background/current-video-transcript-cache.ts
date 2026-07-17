@@ -35,7 +35,11 @@ export interface CacheCurrentVideoTranscriptOptions {
   requestedLanguage?: string | null;
   fetchPlayerInfo?: CurrentVideoSubtitlePlayerInfoFetcher;
   fetchSubtitleJson?: (url: string) => Promise<unknown>;
-  upsertEvidence?: (evidence: CurrentVideoTranscriptEvidenceWrite) => Promise<CurrentVideoTranscriptEvidenceState>;
+  protectedSourceIdentityKeys?: Iterable<string>;
+  upsertEvidence?: (
+    evidence: CurrentVideoTranscriptEvidenceWrite,
+    options?: { protectedSourceIdentityKeys?: Iterable<string> },
+  ) => Promise<CurrentVideoTranscriptEvidenceState>;
 }
 
 export async function cacheCurrentVideoTranscriptEvidence(
@@ -169,7 +173,12 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
           trackUrlHost: url.hostname,
           fetchedAt: options.now,
         },
-      ));
+      ), {
+        protectedSourceIdentityKeys: protectedTranscriptSourceIdentityKeys(
+          context,
+          options.protectedSourceIdentityKeys,
+        ),
+      });
     } catch (error) {
       const message = errorMessage(error);
       lastError = message;
@@ -208,9 +217,10 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
 
 async function defaultUpsertEvidence(
   evidence: CurrentVideoTranscriptEvidenceWrite,
+  options: { protectedSourceIdentityKeys?: Iterable<string> } = {},
 ): Promise<CurrentVideoTranscriptEvidenceState> {
   const repo = await import('./storage/current-video-transcript-repo.ts');
-  return await repo.upsertCurrentVideoTranscriptEvidence(evidence);
+  return await repo.upsertCurrentVideoTranscriptEvidence(evidence, options);
 }
 
 const fetchBilibiliPlayerInfo: CurrentVideoSubtitlePlayerInfoFetcher = async (
@@ -350,6 +360,26 @@ function selectSubtitleTrack(
       || language === 'zh'
       || language?.startsWith('zh-');
   }) ?? tracks[0] ?? null;
+}
+
+function protectedTranscriptSourceIdentityKeys(
+  context: CurrentVideoContext,
+  extraKeys: Iterable<string> | undefined,
+): string[] {
+  const keys = new Set<string>();
+  const addKey = (value: unknown) => {
+    if (typeof value === 'string' && value.trim()) {
+      keys.add(value.trim());
+    }
+  };
+
+  addKey(context.transcriptEvidence?.sourceIdentityKey);
+  if (extraKeys) {
+    for (const key of extraKeys) {
+      addKey(key);
+    }
+  }
+  return Array.from(keys);
 }
 
 function normalizeSubtitleUrl(value: string): URL | null {

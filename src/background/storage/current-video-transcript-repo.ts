@@ -7,11 +7,17 @@ import type {
   CurrentVideoTranscriptEvidenceWrite,
   CurrentVideoTranscriptIdentity,
   CurrentVideoTranscriptSegment,
+  CurrentVideoTranscriptSourceRecord,
 } from '../../shared/types/current-video-transcript';
 import { db } from './db';
 
+export interface UpsertCurrentVideoTranscriptEvidenceOptions {
+  protectedSourceIdentityKeys?: Iterable<string>;
+}
+
 export async function upsertCurrentVideoTranscriptEvidence(
   evidence: CurrentVideoTranscriptEvidenceWrite,
+  options: UpsertCurrentVideoTranscriptEvidenceOptions = {},
 ): Promise<CurrentVideoTranscriptEvidenceState> {
   let state: CurrentVideoTranscriptEvidenceState | null = null;
 
@@ -21,19 +27,23 @@ export async function upsertCurrentVideoTranscriptEvidence(
     db.currentVideoTranscriptSegments,
     async () => {
       const [sources, segments] = await Promise.all([
-        db.currentVideoTranscriptSources
-          .where('bvid')
-          .equals(evidence.sourceRecord.bvid)
-          .toArray(),
-        db.currentVideoTranscriptSegments
-          .where('bvid')
-          .equals(evidence.sourceRecord.bvid)
-          .toArray(),
+        db.currentVideoTranscriptSources.toArray(),
+        db.currentVideoTranscriptSegments.toArray(),
       ]);
-      const plan = planTranscriptEvidenceUpsert(sources, segments, evidence);
+      const plan = planTranscriptEvidenceUpsert(sources, segments, evidence, {
+        protectedSourceIdentityKeys: options.protectedSourceIdentityKeys,
+      });
 
-      await db.currentVideoTranscriptSources.bulkPut(plan.sourcesToPut);
-      if (plan.segmentsToPut.length > 0) {
+      if (plan.sourceIdsToDelete.length > 0) {
+        await db.currentVideoTranscriptSources.bulkDelete(plan.sourceIdsToDelete);
+      }
+      if (plan.segmentIdsToDelete.length > 0) {
+        await db.currentVideoTranscriptSegments.bulkDelete(plan.segmentIdsToDelete);
+      }
+      if (plan.sourcesToPut.length > 0) {
+        await db.currentVideoTranscriptSources.bulkPut(plan.sourcesToPut);
+      }
+      if (!plan.skippedPersistentWrite && plan.segmentsToPut.length > 0) {
         await db.currentVideoTranscriptSegments.bulkPut(plan.segmentsToPut);
       }
       state = plan.state;
@@ -55,7 +65,11 @@ export async function getCurrentVideoTranscriptEvidenceState(
     db.currentVideoTranscriptSegments.where('bvid').equals(identity.bvid).toArray(),
   ]);
 
-  return buildTranscriptEvidenceStateFromCache(identity, sources, segments, now);
+  const state = buildTranscriptEvidenceStateFromCache(identity, sources, segments, now);
+  if (state.sourceIdentityKey && state.active) {
+    await touchTranscriptSource(state.sourceIdentityKey, now);
+  }
+  return state;
 }
 
 export async function getCurrentVideoTranscriptSegments(
@@ -67,6 +81,7 @@ export async function getCurrentVideoTranscriptSegments(
     .toArray();
   const expectedLanguage = languageKey(identity.language);
   const expectedSourceHash = identity.sourceHash ?? null;
+  const expectedSourceIdentityKey = identity.sourceIdentityKey ?? null;
 
   return rows
     .filter(segment =>
@@ -74,7 +89,33 @@ export async function getCurrentVideoTranscriptSegments(
       && (!identity.language || languageKey(segment.language) === expectedLanguage)
       && (!expectedSourceHash || segment.sourceHash === expectedSourceHash),
     )
+    .filter(segment =>
+      !expectedSourceIdentityKey
+      || segment.sourceIdentityKey === expectedSourceIdentityKey
+      || legacySegmentSourceIdentity(segment) === expectedSourceIdentityKey,
+    )
     .sort((a, b) => a.startSeconds - b.startSeconds || a.endSeconds - b.endSeconds);
+}
+
+async function touchTranscriptSource(sourceIdentityKey: string, now: number): Promise<void> {
+  await db.currentVideoTranscriptSources
+    .where('identityKey')
+    .equals(sourceIdentityKey)
+    .modify((source: CurrentVideoTranscriptSourceRecord) => {
+      source.lastAccessedAt = now;
+    });
+}
+
+function legacySegmentSourceIdentity(segment: CurrentVideoTranscriptSegment): string {
+  return [
+    'primary-text',
+    segment.source,
+    segment.bvid,
+    segment.cid,
+    segment.page,
+    languageKey(segment.language),
+    segment.sourceHash,
+  ].join(':');
 }
 
 function languageKey(value: string | null | undefined): string {

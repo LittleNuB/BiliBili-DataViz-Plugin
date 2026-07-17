@@ -739,7 +739,10 @@ async function getTranscriptEvidenceForActiveTab(
   const requestedLanguage = typeof params?.language === 'string'
     ? params.language
     : null;
-  return await cacheCurrentVideoTranscriptEvidence(context, { requestedLanguage });
+  return await cacheCurrentVideoTranscriptEvidence(context, {
+    requestedLanguage,
+    protectedSourceIdentityKeys: currentVideoProtectedSourceIdentityKeys(context, params),
+  });
 }
 
 async function enrichCurrentVideoContextWithSubtitleProbe(
@@ -818,6 +821,7 @@ async function getActiveCurrentVideoTranscriptSegments(
     cid: context.cid,
     page: context.currentPart.page,
     language: context.transcriptEvidence.language,
+    sourceIdentityKey: context.transcriptEvidence.sourceIdentityKey,
     sourceHash: context.transcriptEvidence.sourceHash,
   });
 }
@@ -855,6 +859,32 @@ function currentVideoLookupOptions(
     forceContextRefresh: params?.forceContextRefresh === true,
     forceSubtitleProbe: params?.forceSubtitleProbe === true,
   };
+}
+
+function currentVideoProtectedSourceIdentityKeys(
+  context: CurrentVideoContextResult,
+  params: Record<string, unknown> | undefined,
+): string[] {
+  const keys = new Set<string>();
+  const addKey = (value: unknown) => {
+    if (typeof value === 'string' && value.trim()) {
+      keys.add(value.trim());
+    }
+  };
+
+  if (context.kind === 'video') {
+    addKey(context.transcriptEvidence?.sourceIdentityKey);
+  }
+  addKey(params?.sourceIdentityKey);
+  addKey(params?.selectedSourceIdentityKey);
+
+  if (Array.isArray(params?.protectedSourceIdentityKeys)) {
+    for (const key of params.protectedSourceIdentityKeys) {
+      addKey(key);
+    }
+  }
+
+  return Array.from(keys);
 }
 
 async function resolveCurrentVideoLookupState(): Promise<{

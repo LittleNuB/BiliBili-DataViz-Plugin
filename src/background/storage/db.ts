@@ -15,6 +15,7 @@ import type {
   CurrentVideoTranscriptSegment,
   CurrentVideoTranscriptSourceRecord,
 } from '../../shared/types/current-video-transcript.ts';
+import { clearLegacyCurrentVideoTranscriptCache } from './current-video-transcript-migration.ts';
 
 export class BiliAnalyticsDB extends Dexie {
   watchHistory!: Table<WatchHistoryRecord, number>;
@@ -236,6 +237,41 @@ export class BiliAnalyticsDB extends Dexie {
         }
       });
     });
+
+    this.version(10).stores({
+      watchHistory:
+        '++id, kid, &sessionKey, avid, bvid, [avid+cid+viewAt], authorMid, tagName, viewAt, dt',
+      playerEvents:
+        '++id, [bvid+cid], eventType, timestamp, tabId',
+      dailyAggregates:
+        '++id, &date',
+      favoriteFolders:
+        '++id, &mediaId, title, syncedAt',
+      favoriteItems:
+        '++id, &itemKey, mediaId, avid, bvid, authorMid, tagName, favTime, syncedAt',
+      smartFavoriteIndex:
+        '++id, &itemKey, status, indexedAt, contentHash',
+      followedCreators:
+        '++id, &mid, followedAt, followAgeKnown, isActive, firstSeenAt, syncedAt, lastSeenAt',
+      followedVideoUpdates:
+        '++id, &updateKey, dynamicId, bvid, authorMid, dynamicTime, pubtime, syncedAt',
+      dynamicBillItems:
+        '++id, &billKey, column, status, creatorMid, updateKey, generatedAt, localRank',
+      dynamicBillFeedback:
+        '++id, [scope+key], scope, key, creatorMid, billKey, column, createdAt',
+      dynamicBillExplanations:
+        '++id, &billKey, status, generatedAt, model, contentHash',
+      dynamicBillCreatorPauses:
+        '++id, &creatorMid, expiresAt, startedAt, source, updatedAt',
+      dynamicBillRotationRecords:
+        '++id, &creatorMid, lastShownAt, lastColumn, updatedAt',
+      dynamicBillMigrations:
+        '++id, &version, completedAt',
+      currentVideoTranscriptSources:
+        '++id, &identityKey, &sourceIdentityKey, partIdentityKey, bvid, [bvid+cid+page], [bvid+cid+page+language], sourceHash, bodyHash, timelineHash, stale, updatedAt, lastAccessedAt',
+      currentVideoTranscriptSegments:
+        '++id, &segmentId, sourceIdentityKey, bvid, [bvid+cid+page], [bvid+cid+page+language], sourceHash, stale, updatedAt',
+    }).upgrade(clearLegacyCurrentVideoTranscriptCache);
   }
 }
 

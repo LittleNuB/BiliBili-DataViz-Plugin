@@ -39,11 +39,11 @@ export function buildLocalDataSummaryCards(summary: LocalDataPrivacySummary): Lo
     {
       id: 'subtitles',
       title: '当前视频字幕缓存',
-      value: `${summary.currentVideoSubtitles.segmentCount} 段`,
+      value: `${summary.currentVideoSubtitles.sourceIdentityCount} 个来源`,
       detail: summary.currentVideoSubtitles.segmentCount > 0
-        ? `已缓存 ${summary.currentVideoSubtitles.cachedVideoCount} 个视频的字幕正文证据。`
+        ? `已缓存 ${summary.currentVideoSubtitles.cachedVideoCount} 个视频分 P、${summary.currentVideoSubtitles.segmentCount} 段字幕正文。`
         : '还没有缓存的字幕正文。',
-      meta: `最近缓存：${formatLocalDate(summary.currentVideoSubtitles.lastUpdatedAt, 'milliseconds')}`,
+      meta: `占用 ${formatBytes(summary.currentVideoSubtitles.usageBytes)}；最近缓存：${formatLocalDate(summary.currentVideoSubtitles.lastUpdatedAt, 'milliseconds')}`,
     },
     {
       id: 'dynamicBill',
@@ -109,4 +109,11 @@ function formatLocalDate(value: number | null, unit: 'milliseconds' | 'seconds')
     minute: '2-digit',
     hour12: false,
   });
+}
+
+function formatBytes(value: number): string {
+  const safe = Math.max(0, Math.floor(value));
+  if (safe < 1024) return `${safe} B`;
+  if (safe < 1024 * 1024) return `${(safe / 1024).toFixed(1)} KB`;
+  return `${(safe / 1024 / 1024).toFixed(1)} MB`;
 }

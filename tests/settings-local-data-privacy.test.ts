@@ -124,8 +124,10 @@ test('registered categories collect usage, clear independently, and read back th
   const categories = createRegisteredLocalDataCategories(dependencies);
   const usageBefore = await Promise.all(categories.map(category => category.collectUsage()));
 
-  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 2, 6, 2, 2]);
+  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 1, 6, 2, 2]);
   assert.ok(usageBefore.every(usage => usage.usageBytes > 0));
+  assert.equal(usageBefore[2].details?.currentVideoSubtitleSources, 1);
+  assert.equal(usageBefore[2].details?.currentVideoSubtitleSegments, 1);
 
   const history = categories[0];
   const favorites = categories[1];
@@ -254,9 +256,11 @@ function makeSummary(): LocalDataPrivacySummary {
     },
     currentVideoSubtitles: {
       sourceCount: 3,
+      sourceIdentityCount: 3,
       segmentCount: 42,
       staleSegmentCount: 4,
       cachedVideoCount: 2,
+      usageBytes: 8192,
       lastUpdatedAt: 1_718_000_000_000,
     },
     dynamicBill: {
@@ -296,7 +300,7 @@ function createRegistryDependencies(): LocalDataCategoryRegistryDependencies {
     'dynamicBillRotationRecords',
   ];
   const tables = Object.fromEntries(
-    tableNames.map(name => [name, memoryTable([{ id: name, value: `row-${name}` }])]),
+    tableNames.map(name => [name, memoryTable([registryRow(name)])]),
   ) as LocalDataCategoryRegistryDependencies['tables'];
   const storage = new Map<string, unknown>([
     ['lastSyncTime', 100],
@@ -316,6 +320,24 @@ function createRegistryDependencies(): LocalDataCategoryRegistryDependencies {
     },
     transaction: async (_tables, operation) => operation(),
   };
+}
+
+function registryRow(name: keyof LocalDataCategoryRegistryDependencies['tables']): Record<string, unknown> {
+  if (name === 'currentVideoTranscriptSources') {
+    return {
+      id: name,
+      identityKey: 'primary-text:bilibili_subtitle:BV1Settings:101:1:zh-cn:hash',
+      sourceIdentityKey: 'primary-text:bilibili_subtitle:BV1Settings:101:1:zh-cn:hash',
+    };
+  }
+  if (name === 'currentVideoTranscriptSegments') {
+    return {
+      id: name,
+      segmentId: 'transcript:settings:1',
+      sourceIdentityKey: 'primary-text:bilibili_subtitle:BV1Settings:101:1:zh-cn:hash',
+    };
+  }
+  return { id: name, value: `row-${name}` };
 }
 
 function memoryTable(initialRows: unknown[]): LocalDataCategoryTable {

@@ -173,19 +173,33 @@ async function summarizeFavorites(): Promise<LocalDataPrivacySummary['favorites'
 }
 
 async function summarizeCurrentVideoSubtitles(): Promise<LocalDataPrivacySummary['currentVideoSubtitles']> {
-  const [sources, segmentCount, staleSegmentCount, lastUpdated] = await Promise.all([
+  const [sources, segments, lastUpdated] = await Promise.all([
     db.currentVideoTranscriptSources.toArray(),
-    db.currentVideoTranscriptSegments.count(),
-    db.currentVideoTranscriptSegments.filter(segment => segment.stale === true).count(),
+    db.currentVideoTranscriptSegments.toArray(),
     db.currentVideoTranscriptSources.orderBy('updatedAt').last(),
   ]);
-  const cachedVideoCount = new Set(sources.map(source => source.bvid).filter(Boolean)).size;
+  const staleSegmentCount = segments.filter(segment => segment.stale === true).length;
+  const sourceIdentityCount = new Set(
+    sources
+      .map(source => source.sourceIdentityKey ?? source.identityKey)
+      .filter(Boolean),
+  ).size;
+  const cachedVideoCount = new Set(
+    sources
+      .filter(source => source.status === 'cached')
+      .map(source => `${source.bvid}:${source.cid}:${source.page}`)
+      .filter(Boolean),
+  ).size;
 
   return {
     sourceCount: sources.length,
-    segmentCount,
+    sourceIdentityCount,
+    segmentCount: segments.length,
     staleSegmentCount,
     cachedVideoCount,
+    usageBytes: sources.length > 0 || segments.length > 0
+      ? serializedSize({ sources, segments })
+      : 0,
     lastUpdatedAt: normalizeNullableTimestamp(lastUpdated?.updatedAt),
   };
 }
@@ -294,4 +308,12 @@ function latestTimestamp(...values: Array<number | null | undefined>): number | 
 
 function normalizeNullableTimestamp(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function serializedSize(value: unknown): number {
+  const text = JSON.stringify(value ?? null);
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(text).byteLength;
+  }
+  return text.length;
 }
