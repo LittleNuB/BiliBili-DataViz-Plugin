@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>动态账单失败状态 QA</title>
+    <style>
+      :root {
+        color: #202124;
+        background: #f6f7f8;
+        font-family: "Microsoft YaHei", sans-serif;
+      }
+      body {
+        margin: 0;
+      }
+      main {
+        width: min(720px, calc(100% - 32px));
+        margin: 40px auto;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 24px;
+        letter-spacing: 0;
+      }
+      #qa-status {
+        margin: 0 0 24px;
+        color: #087f5b;
+      }
+      dl {
+        margin: 0;
+        border: 1px solid #d8dcdf;
+        border-radius: 6px;
+        background: #fff;
+      }
+      .failure-row {
+        display: grid;
+        grid-template-columns: 120px minmax(0, 1fr);
+        gap: 16px;
+        padding: 16px;
+        border-bottom: 1px solid #e7e9eb;
+      }
+      .failure-row:last-child {
+        border-bottom: 0;
+      }
+      dt {
+        font-weight: 700;
+      }
+      dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      @media (max-width: 520px) {
+        main {
+          margin: 24px auto;
+        }
+        .failure-row {
+          grid-template-columns: 1fr;
+          gap: 6px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>动态账单失败状态</h1>
+      <p id="qa-status" role="status">正在检查可见文案</p>
+      <dl id="failure-results"></dl>
+    </main>
+    <script type="module">
+      import {
+        dynamicBillFailureCopy,
+        explanationStateCopy,
+      } from "../dashboard/modules/dynamic-bill/failure-copy.ts";
+      import {
+        DYNAMIC_BILL_UPGRADE_FAILED_MESSAGE,
+      } from "../src/shared/dynamic-bill-errors.ts";
+
+      const rawTokens = [
+        "provider 401",
+        "document is not defined",
+        "fallback",
+        "transcript",
+        "confidence",
+        "sourceHash",
+        "segmentId",
+        "subtitle_url",
+      ];
+      const rawError = new Error(rawTokens.join(" "));
+      const samples = [
+        ["账单读取", dynamicBillFailureCopy("readItems", rawError)],
+        ["同步状态", dynamicBillFailureCopy("syncState", rawError)],
+        [
+          "AI 解释",
+          explanationStateCopy(
+            { status: "failed", error: rawError.message },
+            { enabled: true, configured: true, model: "fixture" },
+          ),
+        ],
+        [
+          "数据升级",
+          dynamicBillFailureCopy(
+            "readItems",
+            new Error(DYNAMIC_BILL_UPGRADE_FAILED_MESSAGE),
+          ),
+        ],
+      ];
+      const results = document.querySelector("#failure-results");
+      for (const [label, copy] of samples) {
+        const row = document.createElement("div");
+        row.className = "failure-row";
+        const term = document.createElement("dt");
+        term.textContent = label;
+        const detail = document.createElement("dd");
+        detail.textContent = copy;
+        row.append(term, detail);
+        results.append(row);
+      }
+
+      const visibleCopy = results.textContent ?? "";
+      const leaked = rawTokens.some((token) =>
+        visibleCopy.toLowerCase().includes(token.toLowerCase()),
+      );
+      document.body.dataset.qa = leaked ? "failed" : "passed";
+      document.querySelector("#qa-status").textContent = leaked
+        ? "可见文案检查失败"
+        : "可见文案检查通过";
+    </script>
+  </body>
+</html>

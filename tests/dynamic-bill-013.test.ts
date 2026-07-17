@@ -49,6 +49,47 @@ test('plans fixed 0.13 columns with unique ownership and one latest item per UP'
   assert.equal(plan.columnEligibleCounts.follow_rotation, 1);
 });
 
+test('deduplicates the same favorite BVID across folders without changing ownership', () => {
+  const firstFolder = favorite(1, 'shared');
+  const secondFolder = {
+    ...firstFolder,
+    itemKey: `200:${firstFolder.bvid}`,
+    mediaId: 200,
+    folderTitle: 'Second folder',
+  };
+  const plan = planFixedDynamicBillItems({
+    now: NOW,
+    creators: [creator(1)],
+    updates: [update(1, 'new', 1)],
+    historyRecords: [],
+    favoriteItems: [firstFolder, secondFolder],
+    rotationRecords: [],
+    pausedCreatorMids: new Set(),
+  });
+
+  assert.equal(plan.items.length, 1);
+  assert.equal(plan.items[0].column, 'favorite_related');
+  assert.equal(plan.columnEligibleCounts.favorite_related, 1);
+  assert.match(plan.items[0].evidence.facts[0], /有 1 条来自这个 UP 的既有作品/);
+});
+
+test('keeps one bill identity when the same update is reclassified across columns', () => {
+  const plans = [
+    planForOneCreator(creator(1), []),
+    planForOneCreator(creator(1, { followedAtDaysAgo: 400 }), []),
+    planForOneCreator(creator(1), [favorite(1, 'evidence')]),
+  ];
+
+  assert.deepEqual(
+    plans.map(plan => plan.items[0].column),
+    ['follow_rotation', 'buried_follow', 'favorite_related'],
+  );
+  assert.deepEqual(
+    plans.map(plan => plan.items[0].billKey),
+    Array(3).fill('update:u1-new'),
+  );
+});
+
 test('selects the same latest unwatched update for every equal-time input permutation', () => {
   const tiedUpdates = [
     { ...update(1, 'z', 0), dynamicTime: NOW_SECONDS, pubtime: NOW_SECONDS - 1 },
@@ -159,6 +200,21 @@ function creator(
     syncedAt: firstSeenAt,
     lastSeenAt: NOW,
   };
+}
+
+function planForOneCreator(
+  followedCreator: FollowedCreator,
+  favoriteItems: FavoriteItem[],
+) {
+  return planFixedDynamicBillItems({
+    now: NOW,
+    creators: [followedCreator],
+    updates: [update(1, 'new', 1)],
+    historyRecords: [],
+    favoriteItems,
+    rotationRecords: [],
+    pausedCreatorMids: new Set(),
+  });
 }
 
 function update(authorMid: number, key: string, daysAgo: number): FollowedVideoUpdate {

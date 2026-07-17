@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import type {
   DynamicBillColumn,
-  DynamicBillExplanation,
   DynamicBillExplanationResult,
   DynamicBillFilterPreference,
   DynamicBillGenerateResult,
@@ -15,6 +14,7 @@ import type {
 } from "../../../src/shared/types/dynamic-bill";
 import type { UserConfig } from "../../../src/shared/types/config";
 import { requestSW } from "../../utils/messaging";
+import { dynamicBillFailureCopy, explanationStateCopy } from "./failure-copy";
 
 const STATUS_FILTERS: Array<{
   key: DynamicBillStatusFilter;
@@ -88,16 +88,16 @@ export function DynamicBillPage() {
 
   useEffect(() => {
     refreshConfig().catch((error) => {
-      setNotice(`读取 AI 配置失败：${describeError(error)}`);
+      setNotice(dynamicBillFailureCopy("readConfig", error));
     });
     refreshFilterPreference().catch((error) => {
-      setNotice(`读取筛选偏好失败：${describeError(error)}`);
+      setNotice(dynamicBillFailureCopy("readFilter", error));
     });
     refreshOverview().catch((error) => {
-      setNotice(`读取动态账单状态失败：${describeError(error)}`);
+      setNotice(dynamicBillFailureCopy("readOverview", error));
     });
     refreshBillItems().catch((error) => {
-      setNotice(`读取动态账单失败：${describeError(error)}`);
+      setNotice(dynamicBillFailureCopy("readItems", error));
     });
   }, []);
 
@@ -151,7 +151,7 @@ export function DynamicBillPage() {
         status: nextStatus,
       });
     } catch (error) {
-      setNotice(`保存筛选偏好失败：${describeError(error)}`);
+      setNotice(dynamicBillFailureCopy("saveFilter", error));
     }
   }
 
@@ -165,7 +165,7 @@ export function DynamicBillPage() {
       await refreshBillItems();
       setNotice(`已打开《${videoTitle(item)}》，账单状态推进为已打开。`);
     } catch (error) {
-      setNotice(`打开新视频失败：${describeError(error)}`);
+      setNotice(dynamicBillFailureCopy("openVideo", error));
     } finally {
       setProcessingBillKey("");
     }
@@ -181,7 +181,7 @@ export function DynamicBillPage() {
       await refreshBillItems();
       setNotice(`已将「${item.creatorName}」标记为已处理；该动作不等同于已消费。`);
     } catch (error) {
-      setNotice(`标记已处理失败：${describeError(error)}`);
+      setNotice(dynamicBillFailureCopy("markProcessed", error));
     } finally {
       setProcessingBillKey("");
     }
@@ -194,7 +194,7 @@ export function DynamicBillPage() {
       const result = await generateLocalBill();
       setNotice(describeGenerateResult(result));
     } catch (error) {
-      setNotice(`生成本地账单失败：${describeError(error)}`);
+      setNotice(dynamicBillFailureCopy("generateBill", error));
     } finally {
       setGenerating(false);
     }
@@ -245,7 +245,7 @@ export function DynamicBillPage() {
       } while (total.pending > 0 && guard-- > 0);
       await refreshBillItems();
     } catch (error) {
-      setNotice(`生成 AI 解释失败：${describeError(error)}。页面仍展示本地证据说明。`);
+      setNotice(dynamicBillFailureCopy("buildExplanations", error));
       await refreshBillItems().catch(() => {});
     } finally {
       setExplaining(false);
@@ -266,14 +266,14 @@ export function DynamicBillPage() {
           nextNotice = `${nextNotice} ${describeGenerateResult(generated)}`;
         } catch (generateError) {
           await refreshBillItems().catch(() => {});
-          nextNotice = `${nextNotice} 但生成本地账单失败：${describeError(generateError)}`;
+          nextNotice = `${nextNotice} ${dynamicBillFailureCopy("generateBill", generateError)}`;
         }
       } else {
         await refreshBillItems().catch(() => {});
       }
       setNotice(nextNotice);
     } catch (error) {
-      setNotice(`动态同步请求失败：${describeError(error)}`);
+      setNotice(dynamicBillFailureCopy("syncRequest", error));
       await refreshOverview().catch(() => {});
       await refreshBillItems().catch(() => {});
     } finally {
@@ -701,7 +701,7 @@ function describeOverview(overview: DynamicBillOverview): string {
     return "需要先登录 B 站账号，Bili-Bill 才能同步关注关系和关注动态；已存在的本地证据仍可读取。";
   }
   if (state.status === "failed") {
-    return `动态同步失败：${state.lastError ?? "未知错误"}。已保留本地已有动态数据和账单项。`;
+    return dynamicBillFailureCopy("syncState", state.lastError);
   }
   if (state.status === "success") {
     return `已同步 ${overview.activeFollowedCreatorCount} 个关注 UP，最近 ${overview.updateWindowDays} 天视频投稿 ${overview.recentVideoUpdateCount} 条。`;
@@ -717,7 +717,7 @@ function describeSyncResult(result: DynamicSyncResult): string {
     return "同步未完成：当前没有可用的 B 站登录态。";
   }
   if (result.status === "failed") {
-    return `同步失败：${result.error ?? "未知错误"}。已保留本地已有动态数据。`;
+    return dynamicBillFailureCopy("syncResult", result.error);
   }
   return `同步完成：关注 UP ${result.followedCreatorsStored} 个，最近视频投稿 ${result.videoUpdatesStored} 条，过滤非视频动态 ${result.filteredNonVideoCount} 条。`;
 }
@@ -801,29 +801,6 @@ function cardFact(item: DynamicBillItem): string {
     return `${followShortCopy(item.evidence)} · 近期观看 ${item.evidence.recentWindow.watchedCount} 次`;
   }
   return firstFact(item) || "按全局轮换展示剩余已关注新投稿";
-}
-
-function explanationStateCopy(
-  explanation: DynamicBillExplanation | undefined,
-  aiAvailability: {
-    enabled: boolean;
-    configured: boolean;
-    model: string;
-  },
-): string {
-  if (explanation?.status === "generated") {
-    return `由 ${explanation.model || aiAvailability.model || "AI"} 生成；只用于展示解释，不参与入选、归属、轮换或状态。`;
-  }
-  if (explanation?.status === "failed") {
-    return `AI 生成失败：${explanation.error ?? "未知错误"}；以下使用本地规则事实解释。`;
-  }
-  if (explanation?.status === "not_configured" || (aiAvailability.enabled && !aiAvailability.configured)) {
-    return "AI 尚未在设置中配置 API Key；以下使用本地规则事实解释。";
-  }
-  if (explanation?.status === "disabled" || !aiAvailability.enabled) {
-    return "AI 解释未在设置中启用；以下使用本地规则事实解释。";
-  }
-  return "尚未生成 AI 解释；以下使用本地规则事实解释。";
 }
 
 function dynamicBillAiSettingsCopy(enabled: boolean, configured: boolean): string {
@@ -998,16 +975,6 @@ function formatPercent(value: number): string {
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds} 秒`;
   return `${Math.round(seconds / 60)} 分钟`;
-}
-
-function describeError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
 }
 
 function StatusMetric({

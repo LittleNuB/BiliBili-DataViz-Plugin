@@ -121,8 +121,10 @@ export function planFixedDynamicBillItems(input: FixedDynamicBillPlanInput): Fix
     );
     const followAgeDays = getFollowAgeDays(creator, nowSeconds);
     const memorySignals = buildMemorySignals(creator, creatorRecords, followAgeDays, recentCutoff, input.now);
-    const favoriteEvidence = (favoriteItemsByCreator.get(creatorMid) ?? [])
-      .filter(item => item.bvid !== update.bvid);
+    const favoriteEvidence = deduplicateFavoriteItemsByBvid(
+      (favoriteItemsByCreator.get(creatorMid) ?? [])
+        .filter(item => item.bvid !== update.bvid),
+    );
     const column = chooseColumn({
       favoriteEvidenceCount: favoriteEvidence.length,
       recentStats,
@@ -246,6 +248,16 @@ function groupFavoriteItemsByCreator(items: FavoriteItem[]): Map<number, Favorit
   return groups;
 }
 
+function deduplicateFavoriteItemsByBvid(items: FavoriteItem[]): FavoriteItem[] {
+  const seenBvids = new Set<string>();
+  return items.filter((item) => {
+    const bvid = item.bvid.trim();
+    if (!bvid || seenBvids.has(bvid)) return false;
+    seenBvids.add(bvid);
+    return true;
+  });
+}
+
 function buildWindowStats(
   records: WatchHistoryRecord[],
   windowDays: number,
@@ -286,7 +298,7 @@ function toBillItem(candidate: FixedBillCandidate, localRank: number, generatedA
   const facts = buildFacts(candidate);
 
   return {
-    billKey: `${candidate.column}:${candidate.update.updateKey}`,
+    billKey: `update:${candidate.update.updateKey}`,
     column: candidate.column,
     status: 'unopened',
     updateKey: candidate.update.updateKey,

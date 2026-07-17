@@ -1,5 +1,6 @@
 import { DYNAMIC_UPDATE_WINDOW_DAYS } from '../../shared/constants.ts';
 import type { DynamicBillThresholdEvidence } from '../../shared/types/dynamic-bill.ts';
+export { DYNAMIC_BILL_UPGRADE_FAILED_MESSAGE } from '../../shared/dynamic-bill-errors.ts';
 
 export const DYNAMIC_BILL_COLUMNS = [
   'buried_follow',
@@ -8,7 +9,6 @@ export const DYNAMIC_BILL_COLUMNS = [
 ] as const;
 
 export const DYNAMIC_BILL_MIGRATION_VERSION = 'dynamic-bill-0.13-fixed-columns';
-export const DYNAMIC_BILL_UPGRADE_FAILED_MESSAGE = '动态账单本地数据升级失败，请稍后重试。';
 export const DYNAMIC_BILL_MIGRATION_CREATOR_PAUSE_DAYS = 30;
 
 export const DYNAMIC_BILL_STRATEGY = {

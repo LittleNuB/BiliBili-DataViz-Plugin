@@ -4,11 +4,9 @@ import type {
   LocalDataPrivacySummary,
 } from '../../shared/types/local-data-privacy.ts';
 import { ensureDynamicBill013Migration } from '../dynamic-bill/migration.ts';
-import {
-  clearDynamicBillStoredState,
-  getDynamicSyncState,
-} from './dynamic-bill-repo.ts';
+import { getDynamicSyncState } from './dynamic-bill-repo.ts';
 import { db } from './db.ts';
+import { getRegisteredLocalDataCategories } from './local-data-category-registry.ts';
 import {
   getBackfillComplete,
   getHistorySyncing,
@@ -66,56 +64,15 @@ export async function clearCurrentVideoSubtitleCache(): Promise<LocalDataOperati
 
 export async function clearDynamicBillLocalData(): Promise<LocalDataOperationResult> {
   await ensureDynamicBill013Migration();
-  const [
-    followedCreators,
-    followedVideoUpdates,
-    dynamicBillItems,
-    dynamicBillExplanations,
-    dynamicBillCreatorPauses,
-    dynamicBillRotationRecords,
-  ] = await Promise.all([
-    db.followedCreators.count(),
-    db.followedVideoUpdates.count(),
-    db.dynamicBillItems.count(),
-    db.dynamicBillExplanations.count(),
-    db.dynamicBillCreatorPauses.count(),
-    db.dynamicBillRotationRecords.count(),
-  ]);
-
-  await db.transaction(
-    'rw',
-    [
-      db.followedCreators,
-      db.followedVideoUpdates,
-      db.dynamicBillItems,
-      db.dynamicBillExplanations,
-      db.dynamicBillFeedback,
-      db.dynamicBillCreatorPauses,
-      db.dynamicBillRotationRecords,
-    ],
-    async () => {
-      await db.followedCreators.clear();
-      await db.followedVideoUpdates.clear();
-      await db.dynamicBillItems.clear();
-      await db.dynamicBillExplanations.clear();
-      await db.dynamicBillFeedback.clear();
-      await db.dynamicBillCreatorPauses.clear();
-      await db.dynamicBillRotationRecords.clear();
-    },
-  );
-  await clearDynamicBillStoredState();
+  const category = getRegisteredLocalDataCategories()
+    .find(registration => registration.id === 'dynamicBill');
+  if (!category) throw new Error('DYNAMIC_BILL_LOCAL_DATA_CATEGORY_MISSING');
+  const result = await category.clear();
 
   return {
     operation: 'clear_dynamic_bill_data',
     completedAt: Date.now(),
-    cleared: {
-      followedCreators,
-      followedVideoUpdates,
-      dynamicBillItems,
-      dynamicBillExplanations,
-      dynamicBillCreatorPauses,
-      dynamicBillRotationRecords,
-    },
+    cleared: result.cleared,
   };
 }
 

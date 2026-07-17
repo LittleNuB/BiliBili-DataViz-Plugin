@@ -220,6 +220,59 @@ test('repository update ordering is stable across equal-time database insertion 
   }
 });
 
+test('regeneration preserves state when the same update changes columns', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  const creatorMid = 606;
+  await seedCurrentCandidate(now, creatorMid);
+  const scenarios = ['opened', 'consumed', 'processed'] as const;
+
+  for (const [index, status] of scenarios.entries()) {
+    await db.dynamicBillItems.clear();
+    await db.favoriteItems.clear();
+    const initial = (await generator.generateDynamicBillItems()).items[0];
+    assert.ok(initial);
+    assert.equal(initial.column, 'follow_rotation');
+    assert.equal(initial.billKey, `update:${initial.updateKey}`);
+
+    const openedAt = now + index * 10 + 1;
+    await dynamicBillRepo.markDynamicBillItemOpened(initial.billKey, openedAt);
+    if (status === 'consumed') {
+      await dynamicBillRepo.markDynamicBillItemsConsumedByBvid(
+        initial.evidence.newVideo.bvid,
+        openedAt + 1,
+      );
+    }
+    if (status === 'processed') {
+      await dynamicBillRepo.markDynamicBillItemProcessed(initial.billKey, openedAt + 2);
+    }
+    const before = (await dynamicBillRepo.getDynamicBillItems())[0];
+    assert.equal(before.status, status);
+
+    await db.favoriteItems.put(fixtureFavoriteForCreator(now, creatorMid, status));
+    const reclassified = (await generator.generateDynamicBillItems()).items[0];
+
+    assert.equal(reclassified.column, 'favorite_related');
+    assert.equal(reclassified.billKey, initial.billKey);
+    assert.deepEqual(
+      {
+        status: reclassified.status,
+        openedAt: reclassified.openedAt,
+        consumedAt: reclassified.consumedAt,
+        processedAt: reclassified.processedAt,
+      },
+      {
+        status: before.status,
+        openedAt: before.openedAt,
+        consumedAt: before.consumedAt,
+        processedAt: before.processedAt,
+      },
+      `${status} state changed after reclassification`,
+    );
+  }
+});
+
 test('legacy feedback injected after the marker cannot change candidates, pauses, or settings counts', async () => {
   await seedLegacyDatabase();
   await migration.ensureDynamicBill013Migration();
@@ -705,6 +758,27 @@ function fixtureFollowedVideoUpdate(
     authorFace: '',
     tagName: '知识',
     tags: [],
+    syncedAt: now,
+  };
+}
+
+function fixtureFavoriteForCreator(now: number, creatorMid: number, suffix: string) {
+  return {
+    itemKey: `favorite-${creatorMid}-${suffix}`,
+    mediaId: 100 + creatorMid,
+    folderTitle: 'Fixture folder',
+    avid: creatorMid + 10_000,
+    bvid: `BV1favorite${creatorMid}${suffix}`,
+    title: `Favorite ${creatorMid}`,
+    intro: '',
+    authorName: `UP ${creatorMid}`,
+    authorMid: creatorMid,
+    tagName: '知识',
+    tags: [],
+    cover: '',
+    duration: 120,
+    pubtime: 0,
+    favTime: Math.floor(now / 1000),
     syncedAt: now,
   };
 }
