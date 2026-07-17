@@ -2,14 +2,24 @@ import { DYNAMIC_UPDATE_WINDOW_DAYS } from '../../shared/constants';
 import type {
   DynamicBillColumn,
   DynamicBillCreatorPauseRecord,
+  DynamicBillCreatorPauseView,
+  DynamicBillCreatorReviewPromptRecord,
+  DynamicBillCreatorReviewPromptView,
   DynamicBillExplanation,
+  DynamicBillFeedbackActionRecord,
+  DynamicBillFeedbackStateView,
   DynamicBillFeedbackScope,
   DynamicBillFilterPreference,
   DynamicBillItem,
+  DynamicBillLessReminderResult,
   DynamicBillOverview,
+  DynamicBillPendingFeedbackActionView,
+  DynamicBillReviewPromptResolveAction,
+  DynamicBillReviewPromptResolveResult,
   DynamicBillRotationRecord,
   DynamicBillStatus,
   DynamicBillStatusFilter,
+  DynamicBillUndoFeedbackResult,
   DynamicSyncState,
   FollowedCreator,
   FollowedVideoUpdate,
@@ -24,6 +34,10 @@ import { db } from './db';
 const DYNAMIC_SYNC_STATE_KEY = 'dynamicBillSyncState';
 const DYNAMIC_BILL_FILTER_KEY = 'dynamicBillFilterPreference';
 const DYNAMIC_SYNC_STALE_TIMEOUT_MS = 5 * 60 * 1000;
+export const DYNAMIC_BILL_CREATOR_LESS_REMINDER_UNDO_WINDOW_MS = 8_000;
+const CREATOR_LESS_REMINDER_PAUSE_DAYS = 30;
+const CREATOR_LESS_REMINDER_REVIEW_THRESHOLD = 3;
+const DAY_MS = 86_400_000;
 const DEFAULT_SYNC_STATE: DynamicSyncState = {
   status: 'idle',
   stage: 'idle',
@@ -139,8 +153,274 @@ export async function getDynamicBillRotationRecords(): Promise<DynamicBillRotati
 
 export async function getActiveDynamicBillCreatorPauses(now = Date.now()): Promise<DynamicBillCreatorPauseRecord[]> {
   await ensureDynamicBill013Migration();
+  await finalizeExpiredDynamicBillFeedbackActions(now);
   await db.dynamicBillCreatorPauses.where('expiresAt').belowOrEqual(now).delete();
   return db.dynamicBillCreatorPauses.where('expiresAt').above(now).toArray();
+}
+
+export async function getDynamicBillActiveCreatorPauseViews(now = Date.now()): Promise<DynamicBillCreatorPauseView[]> {
+  const pauses = await getActiveDynamicBillCreatorPauses(now);
+  return pauses
+    .sort((a, b) => a.expiresAt - b.expiresAt || a.creatorMid - b.creatorMid)
+    .map(pause => toCreatorPauseView(pause, now));
+}
+
+export async function getDynamicBillFeedbackState(now = Date.now()): Promise<DynamicBillFeedbackStateView> {
+  await ensureDynamicBill013Migration();
+  await finalizeExpiredDynamicBillFeedbackActions(now);
+  const [actions, prompts] = await Promise.all([
+    db.dynamicBillFeedbackActions
+      .where('state')
+      .equals('pending_undo')
+      .toArray(),
+    db.dynamicBillCreatorReviewPrompts
+      .where('state')
+      .equals('pending')
+      .toArray(),
+  ]);
+
+  return {
+    pendingActions: actions
+      .filter(action => action.undoDeadlineAt > now)
+      .sort((a, b) => a.undoDeadlineAt - b.undoDeadlineAt || a.createdAt - b.createdAt)
+      .map(toPendingFeedbackActionView),
+    reviewPrompts: prompts
+      .sort((a, b) => a.createdAt - b.createdAt || a.creatorMid - b.creatorMid)
+      .map(toCreatorReviewPromptView),
+  };
+}
+
+export async function applyDynamicBillCreatorLessReminder(
+  billKey: string,
+  options: {
+    idempotencyKey?: string;
+    now?: number;
+  } = {},
+): Promise<DynamicBillLessReminderResult | null> {
+  await ensureDynamicBill013Migration();
+  const now = normalizeOperationTimestamp(options.now);
+  await finalizeExpiredDynamicBillFeedbackActions(now);
+  const suppliedActionKey = normalizeActionKey(options.idempotencyKey);
+
+  return db.transaction(
+    'rw',
+    [
+      db.dynamicBillItems,
+      db.dynamicBillCreatorPauses,
+      db.dynamicBillFeedbackActions,
+      db.dynamicBillCreatorFeedbackCounts,
+      db.dynamicBillCreatorReviewPrompts,
+    ],
+    async () => {
+      if (suppliedActionKey) {
+        const existingByKey = await db.dynamicBillFeedbackActions
+          .where('actionKey')
+          .equals(suppliedActionKey)
+          .first();
+        if (existingByKey) {
+          return existingLessReminderResult(existingByKey, await itemForAction(existingByKey), now);
+        }
+      }
+
+      const item = await db.dynamicBillItems
+        .where('billKey')
+        .equals(billKey)
+        .first();
+      if (!item) return null;
+
+      const existingForItem = await db.dynamicBillFeedbackActions
+        .where('[billKey+creatorMid]')
+        .equals([item.billKey, item.creatorMid])
+        .filter(action => action.state !== 'undone')
+        .first();
+      if (existingForItem) {
+        return existingLessReminderResult(existingForItem, item, now);
+      }
+      const existingPendingForCreator = await db.dynamicBillFeedbackActions
+        .where('creatorMid')
+        .equals(item.creatorMid)
+        .filter(action => action.state === 'pending_undo')
+        .first();
+      if (existingPendingForCreator) {
+        return existingLessReminderResult(existingPendingForCreator, await itemForAction(existingPendingForCreator) ?? item, now);
+      }
+
+      const existingPause = await db.dynamicBillCreatorPauses
+        .where('creatorMid')
+        .equals(item.creatorMid)
+        .first();
+      const actionKey = suppliedActionKey ?? makeActionKey(item, now);
+      const undoToken = makeUndoToken(actionKey);
+      const appliedProcessedAt = item.processedAt ?? now;
+      const pauseExpiresAt = now + CREATOR_LESS_REMINDER_PAUSE_DAYS * DAY_MS;
+      const action: DynamicBillFeedbackActionRecord = {
+        actionKey,
+        billKey: item.billKey,
+        creatorMid: item.creatorMid,
+        creatorName: item.creatorName,
+        state: 'pending_undo',
+        undoToken,
+        undoDeadlineAt: now + DYNAMIC_BILL_CREATOR_LESS_REMINDER_UNDO_WINDOW_MS,
+        previousStatus: item.status,
+        previousOpenedAt: item.openedAt,
+        previousConsumedAt: item.consumedAt,
+        previousProcessedAt: item.processedAt,
+        previousPause: existingPause ? { ...existingPause } : null,
+        appliedProcessedAt,
+        pauseStartedAt: now,
+        pauseExpiresAt,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const processedItem = applyProcessedStateForLessReminder(item, appliedProcessedAt);
+      await db.dynamicBillItems.put(processedItem);
+      await db.dynamicBillCreatorPauses.put({
+        id: existingPause?.id,
+        creatorMid: item.creatorMid,
+        creatorName: item.creatorName,
+        startedAt: now,
+        expiresAt: pauseExpiresAt,
+        source: 'user',
+        billKey: item.billKey,
+        actionKey,
+        createdAt: existingPause?.createdAt ?? now,
+        updatedAt: now,
+      });
+      await db.dynamicBillFeedbackActions.put(action);
+
+      return {
+        status: 'pending_undo',
+        action: toPendingFeedbackActionView(action),
+        item: processedItem,
+      };
+    },
+  );
+}
+
+export async function undoDynamicBillCreatorLessReminder(
+  undoToken: string,
+  now = Date.now(),
+): Promise<DynamicBillUndoFeedbackResult> {
+  await ensureDynamicBill013Migration();
+  await finalizeExpiredDynamicBillFeedbackActions(now);
+
+  return db.transaction(
+    'rw',
+    db.dynamicBillItems,
+    db.dynamicBillCreatorPauses,
+    db.dynamicBillFeedbackActions,
+    async () => {
+      const action = await db.dynamicBillFeedbackActions
+        .where('undoToken')
+        .equals(undoToken)
+        .first();
+      if (!action) return { status: 'invalid' };
+      if (action.state !== 'pending_undo') return { status: 'expired' };
+      if (action.undoDeadlineAt <= now) return { status: 'expired' };
+
+      const [item, pause] = await Promise.all([
+        db.dynamicBillItems.where('billKey').equals(action.billKey).first(),
+        db.dynamicBillCreatorPauses.where('creatorMid').equals(action.creatorMid).first(),
+      ]);
+      if (!item || !pauseMatchesAction(pause, action) || !itemMatchesPendingAction(item, action)) {
+        return { status: 'conflict' };
+      }
+
+      const restoredItem = restoreItemBeforeFeedback(item, action);
+      await db.dynamicBillItems.put(restoredItem);
+      if (action.previousPause) {
+        await db.dynamicBillCreatorPauses.put({ ...action.previousPause });
+      } else if (pause?.id !== undefined) {
+        await db.dynamicBillCreatorPauses.delete(pause.id);
+      }
+      await db.dynamicBillFeedbackActions.put({
+        ...action,
+        state: 'undone',
+        undoneAt: now,
+        updatedAt: now,
+      });
+
+      return {
+        status: 'undone',
+        item: restoredItem,
+      };
+    },
+  );
+}
+
+export async function restoreDynamicBillCreatorReminder(
+  creatorMid: number,
+  now = Date.now(),
+): Promise<DynamicBillCreatorPauseView | null> {
+  await ensureDynamicBill013Migration();
+  await finalizeExpiredDynamicBillFeedbackActions(now);
+  const pause = await db.dynamicBillCreatorPauses
+    .where('creatorMid')
+    .equals(creatorMid)
+    .first();
+  if (!pause || pause.expiresAt <= now) {
+    if (pause?.id !== undefined) {
+      await db.dynamicBillCreatorPauses.delete(pause.id);
+    }
+    return null;
+  }
+  if (pause.id !== undefined) {
+    await db.dynamicBillCreatorPauses.delete(pause.id);
+  }
+  return toCreatorPauseView(pause, now);
+}
+
+export async function getDynamicBillCreatorReviewPrompts(now = Date.now()): Promise<DynamicBillCreatorReviewPromptView[]> {
+  const state = await getDynamicBillFeedbackState(now);
+  return state.reviewPrompts;
+}
+
+export async function resolveDynamicBillCreatorReviewPrompt(
+  creatorMid: number,
+  action: DynamicBillReviewPromptResolveAction,
+  now = Date.now(),
+): Promise<DynamicBillReviewPromptResolveResult> {
+  await ensureDynamicBill013Migration();
+  await finalizeExpiredDynamicBillFeedbackActions(now);
+
+  const prompt = await db.dynamicBillCreatorReviewPrompts
+    .where('creatorMid')
+    .equals(creatorMid)
+    .first();
+  if (!prompt || prompt.state !== 'pending') {
+    return { status: 'not_found' };
+  }
+  const nextPrompt: DynamicBillCreatorReviewPromptRecord = {
+    ...prompt,
+    state: action === 'open_space' ? 'opened' : 'dismissed',
+    decision: action,
+    resolvedAt: now,
+    updatedAt: now,
+  };
+  await db.dynamicBillCreatorReviewPrompts.put(nextPrompt);
+  const view = toCreatorReviewPromptView(prompt);
+  return {
+    status: 'resolved',
+    prompt: view,
+    url: action === 'open_space' ? creatorSpaceUrl(creatorMid) : undefined,
+  };
+}
+
+export async function finalizeExpiredDynamicBillFeedbackActions(
+  now = Date.now(),
+): Promise<DynamicBillCreatorReviewPromptView[]> {
+  await ensureDynamicBill013Migration();
+  const expiredActions = await db.dynamicBillFeedbackActions
+    .where('undoDeadlineAt')
+    .belowOrEqual(now)
+    .filter(action => action.state === 'pending_undo')
+    .toArray();
+  const prompts: DynamicBillCreatorReviewPromptView[] = [];
+  for (const action of expiredActions) {
+    const prompt = await finalizeDynamicBillFeedbackAction(action.actionKey, now);
+    if (prompt) prompts.push(prompt);
+  }
+  return prompts;
 }
 
 export async function replaceAllDynamicBillItems(
@@ -227,6 +507,7 @@ export async function getDynamicBillItems(options: {
   status?: DynamicBillStatus;
 } = {}): Promise<DynamicBillItem[]> {
   await ensureDynamicBill013Migration();
+  await finalizeExpiredDynamicBillFeedbackActions();
   let items = options.column
     ? await db.dynamicBillItems.where('column').equals(options.column).toArray()
     : await db.dynamicBillItems.toArray();
@@ -547,6 +828,235 @@ function isStaleSyncState(state: DynamicSyncState): boolean {
   return state.status === 'syncing'
     && state.lastStartedAt > 0
     && Date.now() - state.lastStartedAt > DYNAMIC_SYNC_STALE_TIMEOUT_MS;
+}
+
+async function finalizeDynamicBillFeedbackAction(
+  actionKey: string,
+  now: number,
+): Promise<DynamicBillCreatorReviewPromptView | null> {
+  return db.transaction(
+    'rw',
+    db.dynamicBillFeedbackActions,
+    db.dynamicBillCreatorFeedbackCounts,
+    db.dynamicBillCreatorReviewPrompts,
+    async () => {
+      const action = await db.dynamicBillFeedbackActions
+        .where('actionKey')
+        .equals(actionKey)
+        .first();
+      if (!action || action.state !== 'pending_undo' || action.undoDeadlineAt > now) {
+        return null;
+      }
+
+      const existingCount = await db.dynamicBillCreatorFeedbackCounts
+        .where('creatorMid')
+        .equals(action.creatorMid)
+        .first();
+      const effectiveCount = (existingCount?.effectiveCount ?? 0) + 1;
+      const existingPrompt = await db.dynamicBillCreatorReviewPrompts
+        .where('creatorMid')
+        .equals(action.creatorMid)
+        .first();
+      let promptView: DynamicBillCreatorReviewPromptView | null = null;
+
+      if (effectiveCount >= CREATOR_LESS_REMINDER_REVIEW_THRESHOLD && !existingPrompt) {
+        const prompt: DynamicBillCreatorReviewPromptRecord = {
+          creatorMid: action.creatorMid,
+          creatorName: action.creatorName,
+          state: 'pending',
+          effectiveCount,
+          actionKey: action.actionKey,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await db.dynamicBillCreatorReviewPrompts.add(prompt);
+        promptView = toCreatorReviewPromptView(prompt);
+      }
+
+      await db.dynamicBillCreatorFeedbackCounts.put({
+        id: existingCount?.id,
+        creatorMid: action.creatorMid,
+        creatorName: action.creatorName,
+        effectiveCount,
+        promptCreatedAt: existingCount?.promptCreatedAt ?? promptView?.createdAt,
+        promptActionKey: existingCount?.promptActionKey ?? (promptView ? action.actionKey : undefined),
+        createdAt: existingCount?.createdAt ?? now,
+        updatedAt: now,
+      });
+      await db.dynamicBillFeedbackActions.put({
+        ...action,
+        state: 'finalized',
+        effectiveCountAfterFinalize: effectiveCount,
+        finalizedAt: now,
+        updatedAt: now,
+      });
+
+      return promptView;
+    },
+  );
+}
+
+async function existingLessReminderResult(
+  action: DynamicBillFeedbackActionRecord,
+  item: DynamicBillItem | null,
+  now: number,
+): Promise<DynamicBillLessReminderResult | null> {
+  if (!item) return null;
+  if (action.state === 'pending_undo' && action.undoDeadlineAt > now) {
+    return {
+      status: 'already_pending',
+      action: toPendingFeedbackActionView(action),
+      item,
+    };
+  }
+
+  const prompt = await db.dynamicBillCreatorReviewPrompts
+    .where('creatorMid')
+    .equals(action.creatorMid)
+    .first();
+  return {
+    status: 'already_finalized',
+    action: null,
+    item,
+    reviewPrompt: prompt?.state === 'pending'
+      ? toCreatorReviewPromptView(prompt)
+      : undefined,
+  };
+}
+
+async function itemForAction(action: DynamicBillFeedbackActionRecord): Promise<DynamicBillItem | null> {
+  return (await db.dynamicBillItems
+    .where('billKey')
+    .equals(action.billKey)
+    .first()) ?? null;
+}
+
+function applyProcessedStateForLessReminder(
+  item: DynamicBillItem,
+  processedAt: number,
+): DynamicBillItem {
+  return {
+    ...item,
+    status: statusOrder(item.status) < statusOrder('processed') ? 'processed' : item.status,
+    processedAt,
+  };
+}
+
+function restoreItemBeforeFeedback(
+  item: DynamicBillItem,
+  action: DynamicBillFeedbackActionRecord,
+): DynamicBillItem {
+  const restored: DynamicBillItem = {
+    ...item,
+    status: action.previousStatus,
+  };
+  setOptionalTimestamp(restored, 'openedAt', action.previousOpenedAt);
+  setOptionalTimestamp(restored, 'consumedAt', action.previousConsumedAt);
+  setOptionalTimestamp(restored, 'processedAt', action.previousProcessedAt);
+  return restored;
+}
+
+function setOptionalTimestamp(
+  item: DynamicBillItem,
+  key: 'openedAt' | 'consumedAt' | 'processedAt',
+  value: number | undefined,
+): void {
+  if (value === undefined) {
+    delete item[key];
+    return;
+  }
+  item[key] = value;
+}
+
+function pauseMatchesAction(
+  pause: DynamicBillCreatorPauseRecord | undefined,
+  action: DynamicBillFeedbackActionRecord,
+): boolean {
+  return pause?.actionKey === action.actionKey
+    && pause.expiresAt === action.pauseExpiresAt
+    && pause.startedAt === action.pauseStartedAt
+    && pause.source === 'user';
+}
+
+function itemMatchesPendingAction(
+  item: DynamicBillItem,
+  action: DynamicBillFeedbackActionRecord,
+): boolean {
+  return item.status === 'processed'
+    && item.processedAt === action.appliedProcessedAt;
+}
+
+function toPendingFeedbackActionView(
+  action: DynamicBillFeedbackActionRecord,
+): DynamicBillPendingFeedbackActionView {
+  return {
+    actionKey: action.actionKey,
+    billKey: action.billKey,
+    creatorMid: action.creatorMid,
+    creatorName: action.creatorName,
+    undoToken: action.undoToken,
+    undoDeadlineAt: action.undoDeadlineAt,
+    createdAt: action.createdAt,
+  };
+}
+
+function toCreatorPauseView(
+  pause: DynamicBillCreatorPauseRecord,
+  now: number,
+): DynamicBillCreatorPauseView {
+  return {
+    creatorMid: pause.creatorMid,
+    creatorName: pause.creatorName,
+    startedAt: pause.startedAt,
+    expiresAt: pause.expiresAt,
+    source: pause.source,
+    remainingDays: Math.max(0, Math.ceil((pause.expiresAt - now) / DAY_MS)),
+  };
+}
+
+function toCreatorReviewPromptView(
+  prompt: DynamicBillCreatorReviewPromptRecord,
+): DynamicBillCreatorReviewPromptView {
+  return {
+    creatorMid: prompt.creatorMid,
+    creatorName: prompt.creatorName,
+    effectiveCount: prompt.effectiveCount,
+    createdAt: prompt.createdAt,
+  };
+}
+
+function normalizeOperationTimestamp(value: number | undefined): number {
+  return Number.isFinite(value) && Number(value) > 0 ? Math.floor(Number(value)) : Date.now();
+}
+
+function normalizeActionKey(value: string | undefined): string | null {
+  const normalized = value?.trim();
+  if (!normalized) return null;
+  return `creator-less:${normalized.slice(0, 160)}`;
+}
+
+function makeActionKey(item: DynamicBillItem, now: number): string {
+  return `creator-less:${item.billKey}:${item.creatorMid}:${now}:${randomToken()}`;
+}
+
+function makeUndoToken(actionKey: string): string {
+  return `${actionKey}:undo:${randomToken()}`;
+}
+
+function randomToken(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  const bytes = new Uint32Array(4);
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, value => value.toString(16).padStart(8, '0')).join('');
+  }
+  return `${Math.random().toString(16).slice(2)}${Date.now().toString(16)}`;
+}
+
+function creatorSpaceUrl(creatorMid: number): string {
+  return `https://space.bilibili.com/${encodeURIComponent(String(creatorMid))}`;
 }
 
 function mergeExistingDynamicBillState(

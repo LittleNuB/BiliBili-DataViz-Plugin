@@ -8,7 +8,7 @@ import type {
 import { ensureDynamicBill013Migration } from '../dynamic-bill/migration.ts';
 import { clearTemporaryCurrentVideoTranscriptCache } from '../current-video-temporary-transcript-cache.ts';
 import { runCurrentVideoTranscriptClearCoordinator } from '../current-video-transcript-clear-epoch.ts';
-import { getDynamicSyncState } from './dynamic-bill-repo.ts';
+import { getDynamicBillActiveCreatorPauseViews, getDynamicSyncState } from './dynamic-bill-repo.ts';
 import { db } from './db.ts';
 import { getRegisteredLocalDataCategories } from './local-data-category-registry.ts';
 import {
@@ -214,12 +214,15 @@ async function summarizeCurrentVideoSubtitles(): Promise<LocalDataPrivacySummary
 
 async function summarizeDynamicBill(): Promise<LocalDataPrivacySummary['dynamicBill']> {
   await ensureDynamicBill013Migration();
+  const activeCreatorPauses = await getDynamicBillActiveCreatorPauseViews();
   const [
     creators,
     updatesCount,
     items,
     explanationCount,
-    pauseCount,
+    actionCount,
+    creatorFeedbackCount,
+    promptCount,
     rotationRecordCount,
     syncState,
   ] = await Promise.all([
@@ -227,7 +230,9 @@ async function summarizeDynamicBill(): Promise<LocalDataPrivacySummary['dynamicB
     db.followedVideoUpdates.count(),
     db.dynamicBillItems.toArray(),
     db.dynamicBillExplanations.count(),
-    db.dynamicBillCreatorPauses.count(),
+    db.dynamicBillFeedbackActions.count(),
+    db.dynamicBillCreatorFeedbackCounts.count(),
+    db.dynamicBillCreatorReviewPrompts.count(),
     db.dynamicBillRotationRecords.count(),
     getDynamicSyncState(),
   ]);
@@ -242,7 +247,11 @@ async function summarizeDynamicBill(): Promise<LocalDataPrivacySummary['dynamicB
     followedVideoUpdateCount: updatesCount,
     billItemCount: items.length,
     rotationRecordCount,
-    creatorPauseCount: pauseCount,
+    creatorPauseCount: activeCreatorPauses.length,
+    feedbackActionCount: actionCount,
+    creatorFeedbackCount,
+    creatorReviewPromptCount: promptCount,
+    activeCreatorPauses,
     unopenedItems: statusCounts.unopened ?? 0,
     openedItems: statusCounts.opened ?? 0,
     consumedItems: statusCounts.consumed ?? 0,
@@ -269,6 +278,9 @@ async function collectClearCounts(
     dynamicBillItems,
     dynamicBillExplanations,
     dynamicBillCreatorPauses,
+    dynamicBillFeedbackActions,
+    dynamicBillCreatorFeedbackCounts,
+    dynamicBillCreatorReviewPrompts,
     dynamicBillRotationRecords,
     currentVideoSubtitleSources,
     currentVideoSubtitleSegments,
@@ -285,6 +297,9 @@ async function collectClearCounts(
     db.dynamicBillItems.count(),
     db.dynamicBillExplanations.count(),
     db.dynamicBillCreatorPauses.count(),
+    db.dynamicBillFeedbackActions.count(),
+    db.dynamicBillCreatorFeedbackCounts.count(),
+    db.dynamicBillCreatorReviewPrompts.count(),
     db.dynamicBillRotationRecords.count(),
     db.currentVideoTranscriptSources.count(),
     db.currentVideoTranscriptSegments.count(),
@@ -303,6 +318,9 @@ async function collectClearCounts(
     dynamicBillItems,
     dynamicBillExplanations,
     dynamicBillCreatorPauses,
+    dynamicBillFeedbackActions,
+    dynamicBillCreatorFeedbackCounts,
+    dynamicBillCreatorReviewPrompts,
     dynamicBillRotationRecords,
     currentVideoSubtitleSources,
     currentVideoSubtitleSegments,

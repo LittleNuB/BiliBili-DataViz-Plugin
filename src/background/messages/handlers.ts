@@ -99,13 +99,19 @@ import {
   getLocalDataPrivacySummary,
 } from '../storage/local-data-privacy-repo';
 import {
+  applyDynamicBillCreatorLessReminder,
   getDynamicBillFilterPreference,
+  getDynamicBillFeedbackState,
+  getDynamicBillActiveCreatorPauseViews,
   getDynamicBillItems,
   addDynamicBillFeedback,
   markDynamicBillItemOpened,
   markDynamicBillItemProcessed,
   markDynamicBillItemsConsumedByBvid,
+  resolveDynamicBillCreatorReviewPrompt,
+  restoreDynamicBillCreatorReminder,
   setDynamicBillFilterPreference,
+  undoDynamicBillCreatorLessReminder,
 } from '../storage/dynamic-bill-repo';
 import {
   getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys,
@@ -153,6 +159,13 @@ const DYNAMIC_BILL_MIGRATION_GATED_ACTIONS = new Set<RequestAction>([
   'GET_DYNAMIC_BILL_FILTER',
   'UPDATE_DYNAMIC_BILL_FILTER',
   'ADD_DYNAMIC_BILL_FEEDBACK',
+  'GET_DYNAMIC_BILL_FEEDBACK_STATE',
+  'APPLY_DYNAMIC_BILL_CREATOR_LESS_REMINDER',
+  'UNDO_DYNAMIC_BILL_CREATOR_LESS_REMINDER',
+  'DISMISS_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT',
+  'OPEN_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT',
+  'GET_DYNAMIC_BILL_ACTIVE_PAUSES',
+  'RESTORE_DYNAMIC_BILL_CREATOR_REMINDER',
   'OPEN_DYNAMIC_BILL_VIDEO',
   'MARK_DYNAMIC_BILL_ITEM_PROCESSED',
 ]);
@@ -662,6 +675,44 @@ async function handleRequest<T>(
       const billKey = requireStringParam(request.params?.billKey, 'billKey');
       const scope = normalizeDynamicBillFeedbackScope(request.params?.scope);
       return { success: true, data: await addDynamicBillFeedback(billKey, scope) as T };
+    }
+    case 'GET_DYNAMIC_BILL_FEEDBACK_STATE':
+      return { success: true, data: await getDynamicBillFeedbackState() as T };
+    case 'APPLY_DYNAMIC_BILL_CREATOR_LESS_REMINDER': {
+      const billKey = requireStringParam(request.params?.billKey, 'billKey');
+      const idempotencyKey = optionalStringParam(request.params?.idempotencyKey);
+      return {
+        success: true,
+        data: await applyDynamicBillCreatorLessReminder(billKey, { idempotencyKey }) as T,
+      };
+    }
+    case 'UNDO_DYNAMIC_BILL_CREATOR_LESS_REMINDER': {
+      const undoToken = requireStringParam(request.params?.undoToken, 'undoToken');
+      return { success: true, data: await undoDynamicBillCreatorLessReminder(undoToken) as T };
+    }
+    case 'DISMISS_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT': {
+      const creatorMid = normalizePositiveInteger(request.params?.creatorMid, 0);
+      if (creatorMid <= 0) throw new Error('INVALID_CREATOR_MID');
+      return {
+        success: true,
+        data: await resolveDynamicBillCreatorReviewPrompt(creatorMid, 'dismiss') as T,
+      };
+    }
+    case 'OPEN_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT': {
+      const creatorMid = normalizePositiveInteger(request.params?.creatorMid, 0);
+      if (creatorMid <= 0) throw new Error('INVALID_CREATOR_MID');
+      const result = await resolveDynamicBillCreatorReviewPrompt(creatorMid, 'open_space');
+      if (result.status === 'resolved' && result.url) {
+        await chrome.tabs.create({ url: result.url });
+      }
+      return { success: true, data: result as T };
+    }
+    case 'GET_DYNAMIC_BILL_ACTIVE_PAUSES':
+      return { success: true, data: await getDynamicBillActiveCreatorPauseViews() as T };
+    case 'RESTORE_DYNAMIC_BILL_CREATOR_REMINDER': {
+      const creatorMid = normalizePositiveInteger(request.params?.creatorMid, 0);
+      if (creatorMid <= 0) throw new Error('INVALID_CREATOR_MID');
+      return { success: true, data: await restoreDynamicBillCreatorReminder(creatorMid) as T };
     }
     case 'OPEN_DYNAMIC_BILL_VIDEO': {
       const billKey = requireStringParam(request.params?.billKey, 'billKey');
@@ -1725,6 +1776,10 @@ function optionalPositiveInteger(value: unknown): number | null {
 
 function timestampOperationKind(value: unknown): CurrentVideoTimestampOperationKind | null {
   return value === 'jump' || value === 'return' ? value : null;
+}
+
+function optionalStringParam(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeAiConfigParam(value: unknown): UserConfig['ai'] {

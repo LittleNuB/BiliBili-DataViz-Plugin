@@ -39,6 +39,10 @@ export type DynamicBillColumn = 'buried_follow' | 'favorite_related' | 'follow_r
 export type DynamicBillStatus = 'unopened' | 'opened' | 'consumed' | 'processed';
 export type DynamicBillStatusFilter = 'active' | DynamicBillStatus;
 export type DynamicBillInterestKind = 'category' | 'tag';
+export type DynamicBillCreatorPauseSource = 'migration' | 'user';
+export type DynamicBillFeedbackActionState = 'pending_undo' | 'undone' | 'finalized';
+export type DynamicBillCreatorReviewPromptState = 'pending' | 'opened' | 'dismissed';
+export type DynamicBillCreatorReviewPromptDecision = 'open_space' | 'dismiss';
 export type DynamicBillFollowMemorySignal =
   | 'long_follow'
   | 'special_follow'
@@ -96,10 +100,121 @@ export interface DynamicBillCreatorPauseRecord {
   creatorName: string;
   startedAt: number;
   expiresAt: number;
-  source: 'migration';
+  source: DynamicBillCreatorPauseSource;
   billKey?: string;
+  actionKey?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface DynamicBillFeedbackActionRecord {
+  id?: number;
+  actionKey: string;
+  billKey: string;
+  creatorMid: number;
+  creatorName: string;
+  state: DynamicBillFeedbackActionState;
+  undoToken: string;
+  undoDeadlineAt: number;
+  previousStatus: DynamicBillStatus;
+  previousOpenedAt?: number;
+  previousConsumedAt?: number;
+  previousProcessedAt?: number;
+  previousPause?: DynamicBillCreatorPauseRecord | null;
+  appliedProcessedAt: number;
+  pauseStartedAt: number;
+  pauseExpiresAt: number;
+  effectiveCountAfterFinalize?: number;
+  createdAt: number;
+  updatedAt: number;
+  finalizedAt?: number;
+  undoneAt?: number;
+}
+
+export interface DynamicBillCreatorFeedbackCountRecord {
+  id?: number;
+  creatorMid: number;
+  creatorName: string;
+  effectiveCount: number;
+  promptCreatedAt?: number;
+  promptActionKey?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DynamicBillCreatorReviewPromptRecord {
+  id?: number;
+  creatorMid: number;
+  creatorName: string;
+  state: DynamicBillCreatorReviewPromptState;
+  effectiveCount: number;
+  actionKey: string;
+  createdAt: number;
+  updatedAt: number;
+  resolvedAt?: number;
+  decision?: DynamicBillCreatorReviewPromptDecision;
+}
+
+export interface DynamicBillPendingFeedbackActionView {
+  actionKey: string;
+  billKey: string;
+  creatorMid: number;
+  creatorName: string;
+  undoToken: string;
+  undoDeadlineAt: number;
+  createdAt: number;
+}
+
+export interface DynamicBillCreatorPauseView {
+  creatorMid: number;
+  creatorName: string;
+  startedAt: number;
+  expiresAt: number;
+  source: DynamicBillCreatorPauseSource;
+  remainingDays: number;
+}
+
+export interface DynamicBillCreatorReviewPromptView {
+  creatorMid: number;
+  creatorName: string;
+  effectiveCount: number;
+  createdAt: number;
+}
+
+export interface DynamicBillFeedbackStateView {
+  pendingActions: DynamicBillPendingFeedbackActionView[];
+  reviewPrompts: DynamicBillCreatorReviewPromptView[];
+}
+
+export type DynamicBillLessReminderStatus =
+  | 'pending_undo'
+  | 'already_pending'
+  | 'already_finalized';
+
+export interface DynamicBillLessReminderResult {
+  status: DynamicBillLessReminderStatus;
+  action: DynamicBillPendingFeedbackActionView | null;
+  item: DynamicBillItem;
+  reviewPrompt?: DynamicBillCreatorReviewPromptView;
+}
+
+export type DynamicBillUndoFeedbackResultStatus =
+  | 'undone'
+  | 'expired'
+  | 'invalid'
+  | 'conflict';
+
+export interface DynamicBillUndoFeedbackResult {
+  status: DynamicBillUndoFeedbackResultStatus;
+  item?: DynamicBillItem;
+}
+
+export type DynamicBillReviewPromptResolveAction = 'open_space' | 'dismiss';
+
+export interface DynamicBillReviewPromptResolveResult {
+  status: 'resolved' | 'not_found';
+  prompt?: DynamicBillCreatorReviewPromptView;
+  url?: string;
 }
 
 export interface DynamicBillRotationRecord {

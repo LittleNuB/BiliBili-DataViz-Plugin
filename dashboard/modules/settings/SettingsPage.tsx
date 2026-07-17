@@ -21,13 +21,22 @@ import type {
   LocalDataPrivacySummary,
   SmartFavoriteIndexRebuildResult,
 } from '../../../src/shared/types/local-data-privacy';
+import type { DynamicBillCreatorPauseView } from '../../../src/shared/types/dynamic-bill';
 import {
   formatSettingsError,
   normalizeSettingsUserConfig,
   saveSettingsDraft,
 } from './settings-save-state';
 
-type BusyState = '' | 'save' | 'test' | 'local-refresh' | 'subtitle-clear' | 'index-rebuild' | 'clear-all';
+type BusyState =
+  | ''
+  | 'save'
+  | 'test'
+  | 'local-refresh'
+  | 'subtitle-clear'
+  | 'index-rebuild'
+  | 'pause-restore'
+  | 'clear-all';
 
 interface AiFormState {
   baseURL: string;
@@ -228,6 +237,21 @@ export function SettingsPage() {
     }
   }
 
+  async function restoreDynamicBillCreatorReminder(creatorMid: number, creatorName: string) {
+    setBusy('pause-restore');
+    setNotice('');
+    setError('');
+    try {
+      await requestSW('RESTORE_DYNAMIC_BILL_CREATOR_REMINDER', { creatorMid });
+      await refreshLocalData();
+      setNotice(`已恢复「${creatorName}」的动态账单提醒；这不会修改 B 站关注关系。`);
+    } catch (err) {
+      setLocalDataError(formatLocalDataError(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
   async function clearAllLocalData() {
     setBusy('clear-all');
     setNotice('');
@@ -421,6 +445,14 @@ export function SettingsPage() {
           </div>
         )}
 
+        {localData && (
+          <DynamicBillPauseList
+            pauses={localData.dynamicBill.activeCreatorPauses}
+            busy={busy === 'pause-restore'}
+            onRestore={restoreDynamicBillCreatorReminder}
+          />
+        )}
+
         <div className="settings-actions">
           <button type="button" className="settings-action" onClick={refreshLocalDataFromButton} disabled={!!busy}>
             {busy === 'local-refresh' ? '刷新中...' : '刷新状态'}
@@ -520,6 +552,53 @@ function DataStat({ label, value }: { label: string; value: number }) {
   );
 }
 
+function DynamicBillPauseList({
+  busy,
+  onRestore,
+  pauses,
+}: {
+  busy: boolean;
+  onRestore: (creatorMid: number, creatorName: string) => void;
+  pauses: DynamicBillCreatorPauseView[];
+}) {
+  return (
+    <div className="settings-pause-list" data-testid="settings-dynamic-bill-pauses">
+      <div className="settings-section-head">
+        <div>
+          <h4>动态账单暂停提醒</h4>
+          <p>这里只恢复 Bili-Bill 本地提醒资格，不修改 B 站关注关系，也不重置少提醒次数。</p>
+        </div>
+      </div>
+      {pauses.length === 0 ? (
+        <div className="settings-data-empty">当前没有暂停提醒的 UP。</div>
+      ) : (
+        <div className="settings-pause-items">
+          {pauses.map(pause => (
+            <article className="settings-pause-item" key={pause.creatorMid}>
+              <div>
+                <strong>{pause.creatorName || `UP ${pause.creatorMid}`}</strong>
+                <span>
+                  {pause.remainingDays > 0
+                    ? `约 ${pause.remainingDays} 天后自动恢复`
+                    : '即将自动恢复'}；到期时间 {formatSettingsDate(pause.expiresAt)}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="settings-action"
+                disabled={busy}
+                onClick={() => onRestore(pause.creatorMid, pause.creatorName || `UP ${pause.creatorMid}`)}
+              >
+                恢复提醒
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FeatureToggle({
   title,
   detail,
@@ -552,6 +631,17 @@ function FeatureToggle({
       </span>
     </label>
   );
+}
+
+function formatSettingsDate(timestamp: number): string {
+  return new Date(timestamp).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
 }
 
 async function ensureAiHostPermission(baseURL: string): Promise<void> {

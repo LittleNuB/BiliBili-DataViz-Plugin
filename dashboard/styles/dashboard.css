@@ -647,6 +647,53 @@ button {
   font-size: 16px;
 }
 
+.settings-pause-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.settings-pause-list h4 {
+  margin: 0;
+  color: #FFFFFF;
+  font-size: 15px;
+}
+
+.settings-pause-items {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-pause-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.settings-pause-item div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-pause-item strong {
+  color: #FFFFFF;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.settings-pause-item span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .settings-danger-box {
   display: grid;
   gap: 12px;
@@ -1227,6 +1274,23 @@ button {
   font-weight: 750;
 }
 
+.dynamic-bill-feedback-dock {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 40;
+  display: grid;
+  gap: 8px;
+  width: min(360px, calc(100vw - 24px));
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  pointer-events: none;
+}
+
+.dynamic-bill-feedback-dock > * {
+  pointer-events: auto;
+}
+
 .dynamic-bill-creator-review {
   display: grid;
   gap: 8px;
@@ -1273,6 +1337,17 @@ button {
 .dynamic-bill-feedback-actions a {
   border-color: rgba(0, 161, 214, 0.42);
   background: rgba(0, 161, 214, 0.16);
+}
+
+.dynamic-bill-feedback-actions button:first-child {
+  color: #FFFFFF;
+  border-color: rgba(0, 161, 214, 0.42);
+  background: rgba(0, 161, 214, 0.16);
+}
+
+.dynamic-bill-feedback-actions button:disabled {
+  cursor: default;
+  opacity: 0.62;
 }
 
 .dynamic-bill-action-grid {
@@ -1777,6 +1852,10 @@ button {
     display: grid;
   }
 
+  .settings-pause-item {
+    grid-template-columns: 1fr;
+  }
+
   .dynamic-bill-scope {
     min-width: 0;
   }
@@ -1785,6 +1864,12 @@ button {
   .dynamic-bill-feedback-actions,
   .dynamic-bill-evidence-grid {
     grid-template-columns: 1fr;
+  }
+
+  .dynamic-bill-feedback-dock {
+    right: 12px;
+    bottom: 12px;
+    width: calc(100vw - 24px);
   }
 
   .dynamic-bill-status-grid,

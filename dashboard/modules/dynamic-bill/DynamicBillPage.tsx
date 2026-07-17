@@ -2,15 +2,20 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import type {
   DynamicBillColumn,
   DynamicBillExplanationResult,
+  DynamicBillFeedbackStateView,
   DynamicBillFilterPreference,
   DynamicBillGenerateResult,
   DynamicBillEvidence,
   DynamicBillItem,
+  DynamicBillLessReminderResult,
+  DynamicBillPendingFeedbackActionView,
+  DynamicBillCreatorReviewPromptView,
   DynamicBillOverview,
   DynamicBillStatus,
   DynamicBillStatusFilter,
   DynamicSyncResult,
   DynamicSyncStatus,
+  DynamicBillUndoFeedbackResult,
 } from "../../../src/shared/types/dynamic-bill";
 import type { UserConfig } from "../../../src/shared/types/config";
 import { requestSW } from "../../utils/messaging";
@@ -58,6 +63,11 @@ const BILL_COLUMNS: Array<{
   },
 ];
 
+const EMPTY_FEEDBACK_STATE: DynamicBillFeedbackStateView = {
+  pendingActions: [],
+  reviewPrompts: [],
+};
+
 export function DynamicBillPage() {
   const [statusFilter, setStatusFilter] = useState<DynamicBillStatusFilter>("active");
   const [overview, setOverview] = useState<DynamicBillOverview | null>(null);
@@ -69,6 +79,8 @@ export function DynamicBillPage() {
   const [explaining, setExplaining] = useState(false);
   const [processingBillKey, setProcessingBillKey] = useState("");
   const [notice, setNotice] = useState("");
+  const [feedbackState, setFeedbackState] =
+    useState<DynamicBillFeedbackStateView>(EMPTY_FEEDBACK_STATE);
 
   const activeStatus =
     STATUS_FILTERS.find((item) => item.key === statusFilter) ?? STATUS_FILTERS[0];
@@ -101,7 +113,25 @@ export function DynamicBillPage() {
     refreshBillItems().catch((error) => {
       setNotice(dynamicBillFailureCopy("readItems", error));
     });
+    refreshFeedbackState().catch((error) => {
+      setNotice(dynamicBillFailureCopy("readItems", error));
+    });
   }, []);
+
+  useEffect(() => {
+    const nextDeadline = feedbackState.pendingActions.reduce((earliest, action) => {
+      if (action.undoDeadlineAt <= Date.now()) return earliest;
+      return Math.min(earliest, action.undoDeadlineAt);
+    }, Number.POSITIVE_INFINITY);
+    if (!Number.isFinite(nextDeadline)) return undefined;
+
+    const timeout = window.setTimeout(() => {
+      refreshBillItems().catch(() => {});
+      refreshFeedbackState().catch(() => {});
+    }, Math.max(0, nextDeadline - Date.now() + 80));
+
+    return () => window.clearTimeout(timeout);
+  }, [feedbackState.pendingActions]);
 
   useEffect(() => {
     setSelectedBillKey((current) =>
@@ -131,6 +161,13 @@ export function DynamicBillPage() {
     setSelectedBillKey((current) =>
       chooseDynamicBillSelectedKey(current, next, statusFilter),
     );
+  }
+
+  async function refreshFeedbackState() {
+    const next = await requestSW<DynamicBillFeedbackStateView>(
+      "GET_DYNAMIC_BILL_FEEDBACK_STATE",
+    );
+    setFeedbackState(next);
   }
 
   async function generateLocalBill(): Promise<DynamicBillGenerateResult> {
@@ -186,6 +223,81 @@ export function DynamicBillPage() {
       setNotice(dynamicBillFailureCopy("markProcessed", error));
     } finally {
       setProcessingBillKey("");
+    }
+  }
+
+  async function handleLessReminder(item: DynamicBillItem) {
+    setProcessingBillKey(item.billKey);
+    setNotice("");
+    try {
+      const result = await requestSW<DynamicBillLessReminderResult | null>(
+        "APPLY_DYNAMIC_BILL_CREATOR_LESS_REMINDER",
+        {
+          billKey: item.billKey,
+          idempotencyKey: `${item.billKey}:${Date.now()}:${Math.random().toString(16).slice(2)}`,
+        },
+      );
+      if (!result) {
+        setNotice("没有找到这个账单项，请刷新后重试。");
+        return;
+      }
+      await Promise.all([refreshBillItems(), refreshFeedbackState()]);
+      const seconds = result.action
+        ? Math.max(1, Math.ceil((result.action.undoDeadlineAt - Date.now()) / 1000))
+        : 0;
+      setNotice(seconds > 0
+        ? `已少提醒「${item.creatorName}」；${seconds} 秒内可撤销，过期后才计入有效次数。`
+        : `已少提醒「${item.creatorName}」，这次操作已经生效。`);
+    } catch (error) {
+      setNotice(dynamicBillFailureCopy("markProcessed", error));
+    } finally {
+      setProcessingBillKey("");
+    }
+  }
+
+  async function handleUndoLessReminder(action: DynamicBillPendingFeedbackActionView) {
+    setNotice("");
+    try {
+      const result = await requestSW<DynamicBillUndoFeedbackResult>(
+        "UNDO_DYNAMIC_BILL_CREATOR_LESS_REMINDER",
+        { undoToken: action.undoToken },
+      );
+      await Promise.all([refreshBillItems(), refreshFeedbackState()]);
+      if (result.status === "undone") {
+        setNotice(`已撤销对「${action.creatorName}」的少提醒，本次不会计入有效次数。`);
+      } else if (result.status === "expired") {
+        setNotice("撤销窗口已经结束，这次少提醒已按本地规则生效。");
+      } else {
+        setNotice("这次撤销没有生效；当前状态已有更新，请刷新后查看。");
+      }
+    } catch (error) {
+      setNotice(dynamicBillFailureCopy("markProcessed", error));
+    }
+  }
+
+  async function handleReviewPromptOpen(prompt: DynamicBillCreatorReviewPromptView) {
+    setNotice("");
+    try {
+      await requestSW("OPEN_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT", {
+        creatorMid: prompt.creatorMid,
+      });
+      await refreshFeedbackState();
+      setNotice(`已打开「${prompt.creatorName}」的 B 站主页；Bili-Bill 不会修改关注关系。`);
+    } catch (error) {
+      setNotice(dynamicBillFailureCopy("openVideo", error));
+    }
+  }
+
+  async function handleReviewPromptDismiss(prompt: DynamicBillCreatorReviewPromptView) {
+    setNotice("");
+    try {
+      await requestSW("DISMISS_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT", {
+        creatorMid: prompt.creatorMid,
+      });
+      await refreshFeedbackState();
+      setNotice(`已暂不处理「${prompt.creatorName}」；当前 30 天暂停不变。`);
+    } catch (error) {
+      setNotice(dynamicBillFailureCopy("markProcessed", error));
     }
   }
 
@@ -373,6 +485,13 @@ export function DynamicBillPage() {
         </span>
       </section>
 
+      <FeedbackStateDock
+        state={feedbackState}
+        onUndo={handleUndoLessReminder}
+        onOpenPrompt={handleReviewPromptOpen}
+        onDismissPrompt={handleReviewPromptDismiss}
+      />
+
       <section className="dynamic-bill-filters" aria-label="账单状态筛选">
         {STATUS_FILTERS.map((item) => (
           <button
@@ -484,6 +603,7 @@ export function DynamicBillPage() {
                 item={selectedItem}
                 busy={processingBillKey === selectedItem.billKey}
                 onMarkProcessed={handleMarkProcessed}
+                onLessReminder={handleLessReminder}
                 onOpenVideo={handleOpenVideo}
                 aiAvailability={{
                   enabled: isAiEnabled,
@@ -506,6 +626,7 @@ function BillItemDetail({
   busy,
   item,
   onMarkProcessed,
+  onLessReminder,
   onOpenVideo,
 }: {
   aiAvailability: {
@@ -516,6 +637,7 @@ function BillItemDetail({
   busy: boolean;
   item: DynamicBillItem;
   onMarkProcessed: (item: DynamicBillItem) => void;
+  onLessReminder: (item: DynamicBillItem) => void;
   onOpenVideo: (item: DynamicBillItem) => void;
 }) {
   const evidence = item.evidence;
@@ -589,11 +711,68 @@ function BillItemDetail({
         >
           {isProcessed ? "已处理" : "标记已处理"}
         </button>
+        <button
+          type="button"
+          disabled={busy}
+          data-testid="dynamic-bill-less-remind-creator"
+          onClick={() => onLessReminder(item)}
+        >
+          少提醒这个 UP
+        </button>
         <a href={spaceUrl(item.creatorMid)} target="_blank" rel="noreferrer">
           打开 UP 主页
         </a>
       </div>
     </>
+  );
+}
+
+function FeedbackStateDock({
+  onDismissPrompt,
+  onOpenPrompt,
+  onUndo,
+  state,
+}: {
+  onDismissPrompt: (prompt: DynamicBillCreatorReviewPromptView) => void;
+  onOpenPrompt: (prompt: DynamicBillCreatorReviewPromptView) => void;
+  onUndo: (action: DynamicBillPendingFeedbackActionView) => void;
+  state: DynamicBillFeedbackStateView;
+}) {
+  if (state.pendingActions.length === 0 && state.reviewPrompts.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="dynamic-bill-feedback-dock" aria-live="polite">
+      {state.pendingActions.map((action) => (
+        <section className="dynamic-bill-creator-review" key={action.actionKey}>
+          <strong>已少提醒「{action.creatorName}」</strong>
+          <span>
+            撤销窗口为 8 秒；窗口结束后才计入有效次数，并保持当前 30 天暂停。
+          </span>
+          <div className="dynamic-bill-feedback-actions">
+            <button type="button" onClick={() => onUndo(action)}>撤销</button>
+            <button type="button" disabled>等待生效</button>
+          </div>
+        </section>
+      ))}
+      {state.reviewPrompts.map((prompt) => (
+        <section className="dynamic-bill-creator-review" key={prompt.creatorMid}>
+          <strong>要检查「{prompt.creatorName}」的关注关系吗？</strong>
+          <span>
+            你已经 3 次选择少提醒这个 UP。Bili-Bill 只会打开主页或暂不处理，不会自动取关。
+          </span>
+          <div className="dynamic-bill-feedback-actions">
+            <button type="button" onClick={() => onOpenPrompt(prompt)}>
+              打开 UP 主页
+            </button>
+            <button type="button" onClick={() => onDismissPrompt(prompt)}>
+              暂不处理
+            </button>
+          </div>
+        </section>
+      ))}
+    </div>
   );
 }
 

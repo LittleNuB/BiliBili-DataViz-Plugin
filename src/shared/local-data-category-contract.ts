@@ -18,6 +18,9 @@ export interface LocalDataClearedCounts {
   dynamicBillItems?: number;
   dynamicBillExplanations?: number;
   dynamicBillCreatorPauses?: number;
+  dynamicBillFeedbackActions?: number;
+  dynamicBillCreatorFeedbackCounts?: number;
+  dynamicBillCreatorReviewPrompts?: number;
   dynamicBillRotationRecords?: number;
   blindBoxDrawHistory?: number;
   currentVideoSubtitleSources?: number;

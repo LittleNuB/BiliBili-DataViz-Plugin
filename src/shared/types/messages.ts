@@ -11,12 +11,17 @@ import type {
 } from './analytics';
 import type {
   DynamicBillExplanationResult,
+  DynamicBillFeedbackStateView,
   DynamicBillFeedbackResult,
   DynamicBillFilterPreference,
   DynamicBillGenerateResult,
   DynamicBillItem,
+  DynamicBillCreatorPauseView,
+  DynamicBillLessReminderResult,
   DynamicBillOverview,
+  DynamicBillReviewPromptResolveResult,
   DynamicSyncResult,
+  DynamicBillUndoFeedbackResult,
 } from './dynamic-bill';
 import type {
   FavoriteFolderGapProbeResult,
@@ -94,6 +99,13 @@ export type RequestAction =
   | 'GET_DYNAMIC_BILL_FILTER'
   | 'UPDATE_DYNAMIC_BILL_FILTER'
   | 'ADD_DYNAMIC_BILL_FEEDBACK'
+  | 'GET_DYNAMIC_BILL_FEEDBACK_STATE'
+  | 'APPLY_DYNAMIC_BILL_CREATOR_LESS_REMINDER'
+  | 'UNDO_DYNAMIC_BILL_CREATOR_LESS_REMINDER'
+  | 'DISMISS_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT'
+  | 'OPEN_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT'
+  | 'GET_DYNAMIC_BILL_ACTIVE_PAUSES'
+  | 'RESTORE_DYNAMIC_BILL_CREATOR_REMINDER'
   | 'OPEN_DYNAMIC_BILL_VIDEO'
   | 'MARK_DYNAMIC_BILL_ITEM_PROCESSED';
 
@@ -211,6 +223,11 @@ export type DynamicBillItemsResponse = BiliVizResponse<DynamicBillItem[]>;
 export type DynamicBillItemResponse = BiliVizResponse<DynamicBillItem | null>;
 export type DynamicBillFilterResponse = BiliVizResponse<DynamicBillFilterPreference>;
 export type DynamicBillFeedbackResponse = BiliVizResponse<DynamicBillFeedbackResult>;
+export type DynamicBillFeedbackStateResponse = BiliVizResponse<DynamicBillFeedbackStateView>;
+export type DynamicBillLessReminderResponse = BiliVizResponse<DynamicBillLessReminderResult | null>;
+export type DynamicBillUndoFeedbackResponse = BiliVizResponse<DynamicBillUndoFeedbackResult>;
+export type DynamicBillCreatorPauseListResponse = BiliVizResponse<DynamicBillCreatorPauseView[]>;
+export type DynamicBillReviewPromptResolveResponse = BiliVizResponse<DynamicBillReviewPromptResolveResult>;
 export type HistoryTailProbeResponse = BiliVizResponse<HistoryTailProbeReport>;
 export type AiConnectionTestResponse = BiliVizResponse<AiConnectionTestResult>;
 export type LocalDataPrivacySummaryResponse = BiliVizResponse<LocalDataPrivacySummary>;

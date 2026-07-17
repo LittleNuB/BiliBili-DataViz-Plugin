@@ -1,4 +1,4 @@
-import type { DynamicSyncStatus } from './dynamic-bill';
+import type { DynamicBillCreatorPauseView, DynamicSyncStatus } from './dynamic-bill';
 import type { LocalDataClearedCounts } from '../local-data-category-contract';
 
 export interface LocalDataPrivacySummary {
@@ -38,6 +38,10 @@ export interface LocalDataPrivacySummary {
     billItemCount: number;
     rotationRecordCount: number;
     creatorPauseCount: number;
+    feedbackActionCount: number;
+    creatorFeedbackCount: number;
+    creatorReviewPromptCount: number;
+    activeCreatorPauses: DynamicBillCreatorPauseView[];
     unopenedItems: number;
     openedItems: number;
     consumedItems: number;
