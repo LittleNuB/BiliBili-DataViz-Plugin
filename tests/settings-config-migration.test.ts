@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import {
+  saveSettingsDraft,
+  type SettingsDraft,
+} from '../dashboard/modules/settings/settings-save-state.ts';
 import {
   loadConfig,
   normalizeUserConfig,
@@ -96,25 +99,117 @@ test('settings save preserves a saved API key when updating feature switches', a
   assert.equal('videoBlindBoxAiEnabled' in persisted.assistant, false);
 });
 
-test('settings save failure keeps every draft field and reports that it is unsaved', async () => {
-  const source = await readFile(
-    new URL('../dashboard/modules/settings/SettingsPage.tsx', import.meta.url),
-    'utf8',
-  );
-  const saveFunction = source.match(
-    /async function saveSettings\(\)[\s\S]*?\n  async function testConnection/,
-  )?.[0];
-  assert.ok(saveFunction, 'saveSettings should remain executable from the settings page');
+test('settings save failure keeps the complete draft and does not apply unpersisted state', async () => {
+  const persistedConfig = normalizeUserConfig({
+    ai: {
+      baseURL: 'https://saved.example.test',
+      apiKey: 'saved-key',
+      chatModel: 'saved-model',
+    },
+    assistant: {
+      currentVideoAiAssistantEnabled: false,
+      smartFavoritesQaAiEnabled: false,
+    },
+    dynamicBill: {
+      aiExplanationsEnabled: false,
+    },
+  });
+  const draft = makeSettingsDraft();
+  let appliedConfig = persistedConfig;
 
-  const catchBody = saveFunction.match(/} catch \(err\) \{([\s\S]*?)\n    } finally/)?.[1];
-  assert.ok(catchBody, 'saveSettings should expose a failure branch');
-  assert.doesNotMatch(
-    catchBody,
-    /\b(?:refreshConfig|applyConfig|setForm|setAssistant|setDynamicBill)\s*\(/,
-    'a failed save must not replace service, model, key, or toggle drafts',
+  const result = await saveSettingsDraft(
+    { persistedConfig, draft },
+    {
+      persist: async () => {
+        throw new Error('raw persistence failure');
+      },
+      applyPersistedConfig: config => {
+        appliedConfig = config;
+      },
+    },
   );
-  assert.match(source, /设置未保存[^'"\n]*当前输入已保留/);
+
+  assert.equal(result.status, 'failure');
+  assert.deepEqual(result.draft, draft);
+  assert.deepEqual(result.persistedConfig, persistedConfig);
+  assert.equal(appliedConfig, persistedConfig);
+  assert.match(result.error, /设置未保存，当前输入已保留/);
+  assert.doesNotMatch(result.error, /raw persistence failure/);
 });
+
+test('settings save success persists and applies the complete draft', async () => {
+  const persistedConfig = normalizeUserConfig({
+    dailyWatchGoal: 75,
+    ai: {
+      baseURL: 'https://saved.example.test',
+      apiKey: 'saved-key',
+      chatModel: 'saved-model',
+    },
+    assistant: {
+      currentVideoAiAssistantEnabled: false,
+      smartFavoritesQaAiEnabled: false,
+    },
+    dynamicBill: {
+      aiExplanationsEnabled: false,
+    },
+  });
+  const draft = makeSettingsDraft();
+  let persistedPayload: typeof persistedConfig | null = null;
+  let appliedConfig = persistedConfig;
+
+  const result = await saveSettingsDraft(
+    { persistedConfig, draft },
+    {
+      persist: async config => {
+        persistedPayload = config;
+      },
+      applyPersistedConfig: config => {
+        appliedConfig = config;
+      },
+    },
+  );
+
+  const expectedConfig = {
+    ...persistedConfig,
+    ai: {
+      baseURL: 'https://draft.example.test/v1',
+      apiKey: 'draft-key',
+      chatModel: 'draft-model',
+    },
+    assistant: {
+      currentVideoAiAssistantEnabled: true,
+      smartFavoritesQaAiEnabled: true,
+    },
+    dynamicBill: {
+      aiExplanationsEnabled: true,
+    },
+  };
+  assert.equal(result.status, 'success');
+  assert.deepEqual(persistedPayload, expectedConfig);
+  assert.deepEqual(appliedConfig, expectedConfig);
+  assert.deepEqual(result.persistedConfig, expectedConfig);
+  assert.equal(result.draft.ai.apiKeyInput, '');
+  assert.equal(result.draft.ai.savedApiKey, 'draft-key');
+  assert.equal(result.error, '');
+});
+
+function makeSettingsDraft(): SettingsDraft {
+  return {
+    ai: {
+      baseURL: '  https://draft.example.test/v1  ',
+      chatModel: '  draft-model  ',
+      apiKeyInput: '  draft-key  ',
+      savedApiKey: 'saved-key',
+    },
+    assistant: {
+      currentVideoAiAssistantEnabled: true,
+      smartFavoritesQaAiEnabled: true,
+    },
+    dynamicBill: {
+      aiExplanationsEnabled: true,
+    },
+  };
+}
 
 function installChromeStorageMock(initial: MockChromeStorage): MockChromeStorage {
   const store: MockChromeStorage = { ...initial };

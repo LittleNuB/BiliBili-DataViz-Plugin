@@ -46,6 +46,12 @@ export interface LocalDataCategoryRegistration {
 
 export type LocalDataCategoryFailureStage = 'collect_usage' | 'clear' | 'readback';
 
+export type LocalDataCategoryFailureReason =
+  | 'usage_unavailable'
+  | 'clear_failed'
+  | 'readback_unavailable'
+  | 'data_remaining';
+
 export interface LocalDataCategoryLifecycleSuccess {
   status: 'success';
   id: LocalDataCategoryId;
@@ -60,10 +66,11 @@ export interface LocalDataCategoryLifecycleFailure {
   id: LocalDataCategoryId;
   label: string;
   failedStage: LocalDataCategoryFailureStage;
+  failureReason: LocalDataCategoryFailureReason;
   message: string;
   before: LocalDataCategoryUsage | null;
   clearResult: LocalDataCategoryClearResult | null;
-  after: null;
+  after: LocalDataCategoryReadback | null;
 }
 
 export type LocalDataCategoryLifecycleResult =
@@ -77,18 +84,28 @@ export async function runLocalDataCategoryLifecycle(
   try {
     before = await registration.collectUsage();
   } catch {
-    return lifecycleFailure(registration, 'collect_usage', null, null);
+    return lifecycleFailure(registration, 'collect_usage', 'usage_unavailable', null, null, null);
   }
 
   let clearResult: LocalDataCategoryClearResult;
   try {
     clearResult = await registration.clear();
   } catch {
-    return lifecycleFailure(registration, 'clear', before, null);
+    return lifecycleFailure(registration, 'clear', 'clear_failed', before, null, null);
   }
 
   try {
     const after = await registration.readAfterClear();
+    if (!after.empty || after.count !== 0 || after.usageBytes !== 0) {
+      return lifecycleFailure(
+        registration,
+        'readback',
+        'data_remaining',
+        before,
+        clearResult,
+        after,
+      );
+    }
     return {
       status: 'success',
       id: registration.id,
@@ -98,7 +115,14 @@ export async function runLocalDataCategoryLifecycle(
       after,
     };
   } catch {
-    return lifecycleFailure(registration, 'readback', before, clearResult);
+    return lifecycleFailure(
+      registration,
+      'readback',
+      'readback_unavailable',
+      before,
+      clearResult,
+      null,
+    );
   }
 }
 
@@ -128,23 +152,27 @@ export function validateLocalDataCategoryRegistration(
 function lifecycleFailure(
   registration: LocalDataCategoryRegistration,
   failedStage: LocalDataCategoryFailureStage,
+  failureReason: LocalDataCategoryFailureReason,
   before: LocalDataCategoryUsage | null,
   clearResult: LocalDataCategoryClearResult | null,
+  after: LocalDataCategoryReadback | null,
 ): LocalDataCategoryLifecycleFailure {
   return {
     status: 'failure',
     id: registration.id,
     label: registration.label,
     failedStage,
-    message: lifecycleFailureMessage(registration.label, failedStage),
+    failureReason,
+    message: lifecycleFailureMessage(registration.label, failureReason),
     before,
     clearResult,
-    after: null,
+    after,
   };
 }
 
-function lifecycleFailureMessage(label: string, stage: LocalDataCategoryFailureStage): string {
-  if (stage === 'collect_usage') return `${label}的数据统计失败，暂时无法开始清理。`;
-  if (stage === 'readback') return `${label}已执行清理，但结果回读失败，请刷新后核对。`;
+function lifecycleFailureMessage(label: string, reason: LocalDataCategoryFailureReason): string {
+  if (reason === 'usage_unavailable') return `${label}的数据统计失败，暂时无法开始清理。`;
+  if (reason === 'readback_unavailable') return `${label}已执行清理，但结果回读失败，请刷新后核对。`;
+  if (reason === 'data_remaining') return `${label}已执行清理，但回读后仍有本地数据，请重试。`;
   return `${label}清理失败，已完成的其他类别不会受影响。`;
 }

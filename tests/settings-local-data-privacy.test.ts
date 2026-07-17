@@ -9,9 +9,11 @@ import {
   LOCAL_DATA_CLEAR_CONFIRMATION,
 } from '../src/shared/local-data-privacy.ts';
 import {
+  runLocalDataCategoryLifecycle,
   runLocalDataCategoryLifecycles,
   validateLocalDataCategoryRegistration,
   type LocalDataCategoryRegistration,
+  type LocalDataCategoryReadback,
 } from '../src/shared/local-data-category-contract.ts';
 import {
   createRegisteredLocalDataCategories,
@@ -157,6 +159,41 @@ test('lifecycle results retain completed categories and name a failed category i
     assert.equal(results[1].failedStage, 'clear');
     assert.match(results[1].message, /收藏与智能索引清理失败/);
     assert.equal(results[1].before?.count, 1);
+  }
+});
+
+test('lifecycle reports a readback failure whenever cleared data remains', async t => {
+  const cases: Array<{ name: string; after: LocalDataCategoryReadback }> = [
+    {
+      name: 'empty is false',
+      after: { count: 0, usageBytes: 0, empty: false },
+    },
+    {
+      name: 'count is non-zero',
+      after: { count: 1, usageBytes: 0, empty: true },
+    },
+    {
+      name: 'usage is non-zero',
+      after: { count: 0, usageBytes: 16, empty: true },
+    },
+  ];
+
+  for (const currentCase of cases) {
+    await t.test(currentCase.name, async () => {
+      const registration = lifecycleRegistration('history', '观看历史', []);
+      registration.readAfterClear = async () => currentCase.after;
+
+      const result = await runLocalDataCategoryLifecycle(registration);
+
+      assert.equal(result.status, 'failure');
+      if (result.status === 'failure') {
+        assert.equal(result.failedStage, 'readback');
+        assert.equal(result.failureReason, 'data_remaining');
+        assert.deepEqual(result.after, currentCase.after);
+        assert.match(result.message, /观看历史已执行清理，但回读后仍有本地数据/);
+        assertCleanUserCopy(result.message);
+      }
+    });
   }
 });
 
