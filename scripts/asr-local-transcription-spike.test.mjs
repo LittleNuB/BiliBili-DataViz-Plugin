@@ -1,22 +1,26 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { access, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { access, mkdtemp, rename, rm, symlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
 
 import {
   buildEdgeProcessTreeStopPlan,
   cancelReadAfterFirstChunk,
   createOwnedSpikeTempRoot,
+  createSpikeServiceWorkerSource,
   evaluateEdgeProcessTreeShutdown,
   evaluateModelRuntimeEvidence,
   evaluatePublicSampleEvidence,
+  evaluateWindowsCdpBrowserShutdown,
   fetchJson,
   fetchRangeEvidence,
   isOwnedSpikeTempRoot,
   removeOwnedSpikeTempRoot,
+  selectTerminalMv3Result,
   streamAndDiscard,
   summarizeHarnessGates,
   summarizePublicSampleEvidence,
@@ -491,27 +495,50 @@ test('MV3 result requires the exact run marker and real WASM/worker evidence', (
   );
 });
 
-test('Edge process-tree stop plans target only the exact spawned PID with bounded escalation', () => {
-  assert.deepEqual(buildEdgeProcessTreeStopPlan('win32', 4321), [
-    {
-      stage: 'graceful-tree',
-      kind: 'command',
-      command: 'taskkill.exe',
-      args: ['/PID', '4321', '/T'],
-      targetPid: 4321,
-      tree: true,
-      force: false
-    },
-    {
-      stage: 'force-tree',
-      kind: 'command',
-      command: 'taskkill.exe',
-      args: ['/PID', '4321', '/T', '/F'],
-      targetPid: 4321,
-      tree: true,
-      force: true
+test('service-worker persistence failure is terminal and contained without an unobserved rejection', async () => {
+  const marker = 'persistence-failure-marker';
+  let storageSetAttempts = 0;
+  const context = {
+    chrome: {
+      storage: {
+        local: {
+          set: async () => {
+            storageSetAttempts += 1;
+            throw new Error('storage unavailable');
+          }
+        }
+      },
+      offscreen: {
+        createDocument: async () => {
+          throw new Error('offscreen should not run after initial persistence failure');
+        }
+      },
+      runtime: {
+        sendMessage: async () => null
+      }
     }
-  ]);
+  };
+
+  runInNewContext(createSpikeServiceWorkerSource(marker), context);
+  await assert.doesNotReject(async () => context.ASR_SPIKE_RUN_PROMISE);
+
+  assert.equal(storageSetAttempts, 2);
+  assert.equal(context.ASR_SPIKE_RESULT.marker, marker);
+  assert.equal(context.ASR_SPIKE_RESULT.phase, 'failed');
+  assert.equal(context.ASR_SPIKE_RESULT.error.message, 'storage unavailable');
+  assert.equal(context.ASR_SPIKE_RESULT.persistenceFailure.message, 'storage unavailable');
+
+  const terminal = selectTerminalMv3Result({
+    globalResult: context.ASR_SPIKE_RESULT,
+    storedResult: { marker, phase: 'service-worker-started' }
+  });
+  assert.equal(terminal.source, 'global');
+  assert.equal(terminal.storageTerminalPersisted, false);
+  assert.equal(terminal.result.phase, 'failed');
+});
+
+test('Windows cleanup uses no PID tree command and fails closed after exact CDP browser closure', () => {
+  assert.deepEqual(buildEdgeProcessTreeStopPlan('win32', 4321), []);
   assert.deepEqual(buildEdgeProcessTreeStopPlan('linux', 4321), [
     {
       stage: 'graceful-group',
@@ -533,6 +560,37 @@ test('Edge process-tree stop plans target only the exact spawned PID with bounde
     }
   ]);
   assert.throws(() => buildEdgeProcessTreeStopPlan('win32', 0), /positive integer PID/);
+
+  const shutdown = evaluateWindowsCdpBrowserShutdown({
+    targetPid: 4321,
+    alreadyExited: false,
+    rootExited: true,
+    waitTimedOut: false,
+    browserClose: {
+      available: true,
+      requested: true,
+      acknowledged: true,
+      error: null
+    }
+  });
+  const overall = summarizeHarnessGates({
+    mv3Only: true,
+    publicSamplesGate: null,
+    modelRuntimeGate: null,
+    mv3Gate: { ok: shutdown.ok }
+  });
+
+  assert.equal(shutdown.ok, false);
+  assert.equal(shutdown.ownershipSafeBrowserCloseAcknowledged, true);
+  assert.equal(shutdown.launchTimeProcessTreeOwnershipVerified, false);
+  assert.equal(shutdown.descendantTerminationVerified, false);
+  assert.equal(shutdown.treeTerminationVerified, false);
+  assert.equal(shutdown.jobObjectUsed, false);
+  assert.equal(shutdown.tempRootRemovalAllowed, false);
+  assert.deepEqual(shutdown.failureReasons, ['windows-process-tree-ownership-unproven-without-job-object']);
+  assert.equal(overall.ok, false);
+  assert.deepEqual(overall.failedGates, ['mv3']);
+  assert.equal(overall.exitCode, 1);
 });
 
 test('temp-root removal requires machine-readable process-tree termination proof', () => {
@@ -612,7 +670,41 @@ test('owned temp root deletion requires the exact random marker and removes only
 
   const removal = await removeOwnedSpikeTempRoot(owned.path, owned.marker);
   assert.equal(removal.removed, true);
+  assert.equal(removal.quarantined, true);
+  assert.equal(removal.initialVerification.ok, true);
+  assert.equal(removal.postRenameVerification.ok, true);
   await assert.rejects(access(owned.path));
+  await assert.rejects(access(removal.quarantinePath));
+});
+
+test('owned temp root deletion retains a whole-path replacement detected after quarantine rename', async t => {
+  const owned = await createOwnedSpikeTempRoot();
+  const replacement = await createOwnedSpikeTempRoot();
+  let quarantinePath = null;
+  t.after(async () => {
+    await rm(owned.path, { recursive: true, force: true });
+    await rm(replacement.path, { recursive: true, force: true });
+    if (quarantinePath) await rm(quarantinePath, { recursive: true, force: true });
+  });
+
+  const removal = await removeOwnedSpikeTempRoot(owned.path, owned.marker, {
+    afterQuarantineRename: async renamedPath => {
+      quarantinePath = renamedPath;
+      await rm(renamedPath, { recursive: true, force: false });
+      await rename(replacement.path, renamedPath);
+    }
+  });
+
+  assert.equal(removal.removed, false);
+  assert.equal(removal.retained, true);
+  assert.equal(removal.quarantined, true);
+  assert.equal(removal.quarantinePath, quarantinePath);
+  assert.equal(removal.initialVerification.ok, true);
+  assert.equal(removal.postRenameVerification.ok, false);
+  assert.equal(removal.postRenameVerification.checks.markerMatches, false);
+  assert.match(removal.error, /^quarantine-verification-failed:/);
+  await assert.rejects(access(owned.path));
+  await access(quarantinePath);
 });
 
 test('owned temp root deletion refuses a wrong marker and a same-prefix unrelated directory', async t => {

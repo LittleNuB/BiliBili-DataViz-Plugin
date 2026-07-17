@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -10,7 +10,6 @@ const SPIKE_OWNERSHIP_FILE = '.bili-bill-asr-spike-owner';
 const EDGE_START_TIMEOUT_MS = 15_000;
 const EDGE_PROBE_TIMEOUT_MS = 20_000;
 const EDGE_EXIT_TIMEOUT_MS = 5_000;
-const EDGE_TREE_COMMAND_TIMEOUT_MS = 2_000;
 const EDGE_TREE_GRACE_WAIT_MS = 1_000;
 const CDP_COMMAND_TIMEOUT_MS = 5_000;
 const JSON_REQUEST_TIMEOUT_MS = 20_000;
@@ -835,23 +834,97 @@ export async function verifyOwnedSpikeTempRoot(path, expectedMarker) {
   return { ok: Object.values(checks).every(Boolean), checks, errors };
 }
 
-export async function removeOwnedSpikeTempRoot(path, expectedMarker) {
-  const verification = await verifyOwnedSpikeTempRoot(path, expectedMarker);
-  if (!verification.ok) {
+export async function removeOwnedSpikeTempRoot(path, expectedMarker, { afterQuarantineRename = null } = {}) {
+  const ownedPath = typeof path === 'string' ? resolve(path) : path;
+  const initialVerification = await verifyOwnedSpikeTempRoot(ownedPath, expectedMarker);
+  if (!initialVerification.ok) {
     return {
       removed: false,
-      verification,
-      error: `ownership-verification-failed:${Object.entries(verification.checks)
+      retained: true,
+      quarantined: false,
+      quarantinePath: null,
+      initialVerification,
+      postRenameVerification: null,
+      verification: initialVerification,
+      error: `ownership-verification-failed:${Object.entries(initialVerification.checks)
         .filter(([, passed]) => !passed)
         .map(([name]) => name)
         .join(',')}`
     };
   }
+  const quarantinePath = join(dirname(ownedPath), `${basename(ownedPath)}.quarantine-${randomUUID()}`);
   try {
-    await rm(path, { recursive: true, force: false });
-    return { removed: true, verification, error: null };
+    await rename(ownedPath, quarantinePath);
   } catch (error) {
-    return { removed: false, verification, error: describeError(error) };
+    return {
+      removed: false,
+      retained: true,
+      quarantined: false,
+      quarantinePath,
+      initialVerification,
+      postRenameVerification: null,
+      verification: initialVerification,
+      error: `quarantine-rename-failed:${describeError(error)}`
+    };
+  }
+
+  if (afterQuarantineRename) {
+    try {
+      await afterQuarantineRename(quarantinePath);
+    } catch (error) {
+      return {
+        removed: false,
+        retained: true,
+        quarantined: true,
+        quarantinePath,
+        initialVerification,
+        postRenameVerification: null,
+        verification: initialVerification,
+        error: `after-quarantine-rename-failed:${describeError(error)}`
+      };
+    }
+  }
+
+  const postRenameVerification = await verifyOwnedSpikeTempRoot(quarantinePath, expectedMarker);
+  if (!postRenameVerification.ok) {
+    return {
+      removed: false,
+      retained: true,
+      quarantined: true,
+      quarantinePath,
+      initialVerification,
+      postRenameVerification,
+      verification: postRenameVerification,
+      error: `quarantine-verification-failed:${Object.entries(postRenameVerification.checks)
+        .filter(([, passed]) => !passed)
+        .map(([name]) => name)
+        .join(',')}`
+    };
+  }
+
+  try {
+    await rm(quarantinePath, { recursive: true, force: false });
+    return {
+      removed: true,
+      retained: false,
+      quarantined: true,
+      quarantinePath,
+      initialVerification,
+      postRenameVerification,
+      verification: postRenameVerification,
+      error: null
+    };
+  } catch (error) {
+    return {
+      removed: false,
+      retained: true,
+      quarantined: true,
+      quarantinePath,
+      initialVerification,
+      postRenameVerification,
+      verification: postRenameVerification,
+      error: `quarantine-remove-failed:${describeError(error)}`
+    };
   }
 }
 
@@ -861,28 +934,7 @@ function childHasExited(child) {
 
 export function buildEdgeProcessTreeStopPlan(platform, pid) {
   if (!Number.isInteger(pid) || pid <= 0) throw new Error('Process-tree stop requires a positive integer PID.');
-  if (platform === 'win32') {
-    return [
-      {
-        stage: 'graceful-tree',
-        kind: 'command',
-        command: 'taskkill.exe',
-        args: ['/PID', String(pid), '/T'],
-        targetPid: pid,
-        tree: true,
-        force: false
-      },
-      {
-        stage: 'force-tree',
-        kind: 'command',
-        command: 'taskkill.exe',
-        args: ['/PID', String(pid), '/T', '/F'],
-        targetPid: pid,
-        tree: true,
-        force: true
-      }
-    ];
-  }
+  if (platform === 'win32') return [];
   return [
     {
       stage: 'graceful-group',
@@ -905,6 +957,69 @@ export function buildEdgeProcessTreeStopPlan(platform, pid) {
   ];
 }
 
+export function evaluateWindowsCdpBrowserShutdown({
+  targetPid,
+  alreadyExited,
+  rootExited,
+  waitTimedOut,
+  browserClose
+}) {
+  const validTargetPid = Number.isInteger(targetPid) && targetPid > 0;
+  const ownershipSafeBrowserCloseRequested =
+    browserClose?.available === true && browserClose?.requested === true;
+  const ownershipSafeBrowserCloseAcknowledged =
+    ownershipSafeBrowserCloseRequested && browserClose?.acknowledged === true;
+  const failureReasons = [];
+  if (!validTargetPid) failureReasons.push('invalid-spawned-root-pid');
+  if (!ownershipSafeBrowserCloseRequested) failureReasons.push('exact-cdp-browser-close-unavailable');
+  else if (!ownershipSafeBrowserCloseAcknowledged) failureReasons.push('exact-cdp-browser-close-unacknowledged');
+  if (rootExited !== true) failureReasons.push('spawned-browser-root-exit-unconfirmed');
+  if (waitTimedOut === true) failureReasons.push('spawned-browser-root-exit-wait-timed-out');
+  failureReasons.push('windows-process-tree-ownership-unproven-without-job-object');
+  return {
+    ok: false,
+    strategy: 'exact-cdp-browser-close/windows-tree-unproven',
+    targetPid,
+    alreadyExited: alreadyExited === true,
+    rootExited: rootExited === true,
+    exited: rootExited === true,
+    ownershipSafeBrowserCloseRequested,
+    ownershipSafeBrowserCloseAcknowledged,
+    browserClose: browserClose ?? null,
+    launchTimeProcessTreeOwnershipVerified: false,
+    descendantTerminationVerified: false,
+    treeTerminationVerified: false,
+    jobObjectUsed: false,
+    timedOut: waitTimedOut === true,
+    tempRootRemovalAllowed: false,
+    stages: [],
+    failureReasons,
+    warnings: [
+      'Windows launch-time process-tree ownership and descendant termination are unproven without a Job Object; the temporary root must be retained.'
+    ]
+  };
+}
+
+export function selectTerminalMv3Result({ globalResult, storedResult }) {
+  const storedTerminal = storedResult?.phase === 'completed' || storedResult?.phase === 'failed';
+  if (storedTerminal) {
+    return {
+      result: storedResult,
+      source: 'storage',
+      storageTerminalPersisted: true
+    };
+  }
+  const globalTerminal = globalResult?.phase === 'completed' || globalResult?.phase === 'failed';
+  if (globalTerminal) {
+    return {
+      result: globalResult,
+      source: 'global',
+      storageTerminalPersisted: false
+    };
+  }
+  return { result: null, source: null, storageTerminalPersisted: false };
+}
+
 export function evaluateEdgeProcessTreeShutdown({ targetPid, alreadyExited, rootExited, stages }) {
   const validTargetPid = Number.isInteger(targetPid) && targetPid > 0;
   const treeTerminationVerified = stages.some(stage => stage.treeTerminationConfirmed === true);
@@ -920,65 +1035,6 @@ export function evaluateEdgeProcessTreeShutdown({ targetPid, alreadyExited, root
     tempRootRemovalAllowed: ok,
     stages
   };
-}
-
-function runBoundedTreeCommand(action) {
-  const startedAt = performance.now();
-  return new Promise(resolveResult => {
-    let settled = false;
-    let timer = null;
-    let commandChild = null;
-    const settle = result => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolveResult({
-        ...action,
-        ...result,
-        elapsedMs: Math.round(performance.now() - startedAt)
-      });
-    };
-    try {
-      commandChild = spawn(action.command, action.args, {
-        stdio: 'ignore',
-        windowsHide: true,
-        shell: false
-      });
-      commandChild.unref();
-      commandChild.once('error', error =>
-        settle({ ok: false, timedOut: false, exitCode: null, signal: null, error: describeError(error) })
-      );
-      commandChild.once('exit', (exitCode, signal) =>
-        settle({
-          ok: exitCode === 0,
-          timedOut: false,
-          exitCode,
-          signal,
-          error: exitCode === 0 ? null : `command-exit:${exitCode ?? 'null'}:${signal ?? 'none'}`
-        })
-      );
-      timer = setTimeout(() => {
-        let killRequested = false;
-        let killError = null;
-        try {
-          killRequested = commandChild?.kill('SIGTERM') ?? false;
-        } catch (error) {
-          killError = describeError(error);
-        }
-        settle({
-          ok: false,
-          timedOut: true,
-          exitCode: commandChild?.exitCode ?? null,
-          signal: commandChild?.signalCode ?? null,
-          error: `command-timeout:${EDGE_TREE_COMMAND_TIMEOUT_MS}`,
-          killRequested,
-          killError
-        });
-      }, EDGE_TREE_COMMAND_TIMEOUT_MS);
-    } catch (error) {
-      settle({ ok: false, timedOut: false, exitCode: null, signal: null, error: describeError(error) });
-    }
-  });
 }
 
 function runTreeSignal(action) {
@@ -1033,10 +1089,6 @@ async function waitForProcessGroupExit(child, action, waitMs) {
   };
 }
 
-async function runTreeStopAction(action) {
-  return action.kind === 'command' ? runBoundedTreeCommand(action) : runTreeSignal(action);
-}
-
 function observeChildExit(child) {
   let settled = false;
   let resolveExit;
@@ -1062,7 +1114,7 @@ function observeChildExit(child) {
   };
 }
 
-async function stopEdgeProcessTree(child) {
+async function stopEdgeProcessTree(child, { browserClose = null } = {}) {
   if (child.pid == null) {
     return {
       ok: true,
@@ -1083,6 +1135,36 @@ async function stopEdgeProcessTree(child) {
   const observer = observeChildExit(child);
   const targetPid = child.pid;
   const alreadyExited = childHasExited(child);
+  if (process.platform === 'win32') {
+    let observedExit = null;
+    let waitTimedOut = false;
+    let waitError = null;
+    try {
+      observedExit = await withTimeout(
+        observer.promise,
+        EDGE_EXIT_TIMEOUT_MS,
+        `Edge root PID ${targetPid} did not exit after exact CDP Browser.close within ${EDGE_EXIT_TIMEOUT_MS} ms.`
+      );
+    } catch (error) {
+      waitTimedOut = !childHasExited(child);
+      waitError = describeError(error);
+    } finally {
+      observer.cancel();
+    }
+    const evaluation = evaluateWindowsCdpBrowserShutdown({
+      targetPid,
+      alreadyExited,
+      rootExited: Boolean(observedExit) || childHasExited(child),
+      waitTimedOut,
+      browserClose
+    });
+    return {
+      ...evaluation,
+      exitCode: observedExit?.code ?? child.exitCode,
+      signal: observedExit?.signal ?? child.signalCode,
+      waitError
+    };
+  }
   if (alreadyExited) {
     observer.cancel();
     return {
@@ -1109,33 +1191,16 @@ async function stopEdgeProcessTree(child) {
   try {
     for (const action of plan) {
       if (stages.some(stage => stage.treeTerminationConfirmed === true)) break;
-      if (process.platform === 'win32' && childHasExited(child)) break;
-      const stage = await runTreeStopAction(action);
+      const stage = runTreeSignal(action);
       stages.push(stage);
       if (!stage.ok) continue;
       const waitMs = action.force ? EDGE_EXIT_TIMEOUT_MS : EDGE_TREE_GRACE_WAIT_MS;
-      if (action.kind === 'signal') {
-        const groupExit = await waitForProcessGroupExit(child, action, waitMs);
-        Object.assign(stage, groupExit);
-        stage.waitTimedOut = !stage.treeTerminationConfirmed;
-        stage.waitError = stage.waitTimedOut
-          ? `process-group-${Math.abs(action.processGroupId)}-still-active-after-${waitMs}`
-          : null;
-      } else {
-        try {
-          observedExit = await withTimeout(
-            observer.promise,
-            waitMs,
-            `Edge root PID ${targetPid} did not exit after ${action.stage} within ${waitMs} ms.`
-          );
-          stage.rootExitObserved = true;
-        } catch (error) {
-          stage.rootExitObserved = childHasExited(child);
-          stage.waitTimedOut = !stage.rootExitObserved;
-          stage.waitError = stage.rootExitObserved ? null : describeError(error);
-        }
-        stage.treeTerminationConfirmed = stage.rootExitObserved === true;
-      }
+      const groupExit = await waitForProcessGroupExit(child, action, waitMs);
+      Object.assign(stage, groupExit);
+      stage.waitTimedOut = !stage.treeTerminationConfirmed;
+      stage.waitError = stage.waitTimedOut
+        ? `process-group-${Math.abs(action.processGroupId)}-still-active-after-${waitMs}`
+        : null;
       if (stage.treeTerminationConfirmed) break;
     }
     const evaluation = evaluateEdgeProcessTreeShutdown({
@@ -1153,7 +1218,7 @@ async function stopEdgeProcessTree(child) {
         ];
     return {
       ...evaluation,
-      strategy: process.platform === 'win32' ? 'exact-pid-taskkill-tree' : 'detached-process-group-signals',
+      strategy: 'detached-process-group-signals',
       exited: evaluation.rootExited,
       exitCode: observedExit?.code ?? child.exitCode,
       signal: observedExit?.signal ?? child.signalCode,
@@ -1162,7 +1227,7 @@ async function stopEdgeProcessTree(child) {
   } catch (error) {
     return {
       ok: false,
-      strategy: process.platform === 'win32' ? 'exact-pid-taskkill-tree' : 'detached-process-group-signals',
+      strategy: 'detached-process-group-signals',
       targetPid,
       alreadyExited,
       rootExited: childHasExited(child),
@@ -1308,11 +1373,33 @@ async function connectCdp(webSocketUrl) {
   };
 }
 
+async function requestExactCdpBrowserClose(cdp) {
+  const startedAt = performance.now();
+  const evidence = {
+    available: true,
+    requested: false,
+    acknowledged: false,
+    error: null,
+    elapsedMs: null
+  };
+  try {
+    evidence.requested = true;
+    await cdp.send('Browser.close');
+    evidence.acknowledged = true;
+  } catch (error) {
+    evidence.error = describeError(error);
+  } finally {
+    evidence.elapsedMs = Math.round(performance.now() - startedAt);
+  }
+  return evidence;
+}
+
 async function readMv3ResultThroughCdp(endpoint, serviceWorkerFilename, marker, child) {
   const cdp = await connectCdp(endpoint.browserWebSocketUrl);
   const deadline = performance.now() + EDGE_PROBE_TIMEOUT_MS;
   let outcome = null;
   let caughtError = null;
+  let browserClose = null;
   let closeWarning = null;
   try {
     let targetInfo = null;
@@ -1354,15 +1441,21 @@ async function readMv3ResultThroughCdp(endpoint, serviceWorkerFilename, marker, 
           throw new Error(`CDP Runtime.evaluate failed: ${JSON.stringify(evaluation.exceptionDetails)}`);
         }
         const evidence = evaluation.result?.value ?? null;
+        const globalResult = evidence?.globalResult ?? null;
         const storedResult = evidence?.storedResult ?? null;
-        if (storedResult?.phase === 'completed' || storedResult?.phase === 'failed') {
-          const validation = validateMv3SpikeResult(storedResult, marker);
+        const terminal = selectTerminalMv3Result({ globalResult, storedResult });
+        if (terminal.result) {
+          const validation = validateMv3SpikeResult(terminal.result, marker);
+          validation.checks.storageTerminalPersisted = terminal.storageTerminalPersisted;
           validation.checks.globalMarkerMatches = evidence?.globalResult?.marker === marker;
-          validation.checks.globalPhaseMatches = evidence?.globalResult?.phase === storedResult.phase;
+          validation.checks.globalPhaseMatches = evidence?.globalResult?.phase === terminal.result.phase;
           validation.ok = Object.values(validation.checks).every(Boolean);
           outcome = {
             targetInfo,
+            globalResult,
             storedResult,
+            terminalResult: terminal.result,
+            terminalSource: terminal.source,
             validation
           };
           break;
@@ -1378,10 +1471,54 @@ async function readMv3ResultThroughCdp(endpoint, serviceWorkerFilename, marker, 
   } catch (error) {
     caughtError = error;
   } finally {
+    browserClose = await requestExactCdpBrowserClose(cdp);
     closeWarning = await cdp.close();
   }
-  if (caughtError) throw caughtError;
-  return { ...outcome, cdpCloseWarning: closeWarning };
+  return {
+    ...(outcome ?? {}),
+    probeError: caughtError ? describeError(caughtError) : null,
+    browserClose,
+    cdpCloseWarning: closeWarning
+  };
+}
+
+export function createSpikeServiceWorkerSource(marker) {
+  return `
+const RUN_MARKER = ${JSON.stringify(marker)};
+const result = { marker: RUN_MARKER, phase: 'service-worker-started', steps: [] };
+globalThis.ASR_SPIKE_RESULT = result;
+async function persist() {
+  globalThis.ASR_SPIKE_RESULT = result;
+  await chrome.storage.local.set({ ASR_SPIKE_RESULT: result });
+}
+async function run() {
+  await persist();
+  result.steps.push('offscreen-create-requested');
+  await chrome.offscreen.createDocument({
+    url: 'offscreen.html',
+    reasons: ['BLOBS'],
+    justification: 'Validate local ASR WASM and worker container for a spike harness.'
+  });
+  result.steps.push('offscreen-created');
+  const response = await chrome.runtime.sendMessage({ action: 'RUN_ASR_SPIKE_OFFSCREEN', marker: RUN_MARKER });
+  result.response = response;
+  result.phase = 'completed';
+  await persist();
+}
+globalThis.ASR_SPIKE_RUN_PROMISE = run().catch(async error => {
+  result.phase = 'failed';
+  result.error = { name: error?.name ?? 'Error', message: error?.message ?? String(error) };
+  try {
+    await persist();
+  } catch (persistenceError) {
+    result.persistenceFailure = {
+      name: persistenceError?.name ?? 'Error',
+      message: persistenceError?.message ?? String(persistenceError)
+    };
+    globalThis.ASR_SPIKE_RESULT = result;
+  }
+});
+`;
 }
 
 async function launchEdgeHarness() {
@@ -1393,6 +1530,7 @@ async function launchEdgeHarness() {
   let runRoot = null;
   let runRootMarker = null;
   let child = null;
+  let cdpBrowserClose = null;
   let edgeShutdown = null;
   let tempRootRemoved = false;
   let tempRootVerification = null;
@@ -1416,34 +1554,7 @@ async function launchEdgeHarness() {
         extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
       }
     };
-    const sw = `
-const RUN_MARKER = ${JSON.stringify(marker)};
-const result = { marker: RUN_MARKER, phase: 'service-worker-started', steps: [] };
-globalThis.ASR_SPIKE_RESULT = result;
-async function persist() {
-  globalThis.ASR_SPIKE_RESULT = result;
-  await chrome.storage.local.set({ ASR_SPIKE_RESULT: result });
-}
-async function run() {
-  await persist();
-  result.steps.push('offscreen-create-requested');
-  await chrome.offscreen.createDocument({
-    url: 'offscreen.html',
-    reasons: ['BLOBS'],
-    justification: 'Validate local ASR WASM and worker container for a spike harness.'
-  });
-  result.steps.push('offscreen-created');
-  const response = await chrome.runtime.sendMessage({ action: 'RUN_ASR_SPIKE_OFFSCREEN', marker: RUN_MARKER });
-  result.response = response;
-  result.phase = 'completed';
-  await persist();
-}
-run().catch(async error => {
-  result.phase = 'failed';
-  result.error = { name: error?.name ?? 'Error', message: error?.message ?? String(error) };
-  await persist();
-});
-`;
+    const sw = createSpikeServiceWorkerSource(marker);
     const offscreenHtml = '<!doctype html><meta charset="utf-8"><script type="module" src="offscreen.js"></script>';
     const offscreenJs = `
 const RUN_MARKER = ${JSON.stringify(marker)};
@@ -1531,21 +1642,25 @@ self.onmessage = event => {
     });
     const endpoint = await waitForDevToolsEndpoint(userDataDir, child, () => spawnError);
     const evidence = await readMv3ResultThroughCdp(endpoint, serviceWorkerFilename, marker, child);
+    cdpBrowserClose = evidence.browserClose;
     if (evidence.cdpCloseWarning) cleanupWarnings.push(evidence.cdpCloseWarning);
+    if (evidence.probeError) throw new Error(evidence.probeError);
     probeResult = {
       ok: evidence.validation.ok,
       elapsedMs: Math.round(performance.now() - startedAt),
       marker,
       serviceWorkerFile: serviceWorkerFilename,
       serviceWorkerUrl: evidence.targetInfo.url,
-      result: evidence.storedResult,
+      result: evidence.terminalResult,
+      terminalSource: evidence.terminalSource,
       validation: evidence.validation,
       isolation: {
         debuggingPortSource: endpoint.source,
         runtimeAssignedPort: endpoint.port,
         existingBrowserProfilesRead: false,
         exactServiceWorkerFilenameMatched: true,
-        resultReadThroughTargetCdp: true
+        resultReadThroughTargetCdp: true,
+        browserCloseRequestedThroughOwnCdp: evidence.browserClose?.requested === true
       },
       ...(evidence.validation.ok
         ? {}
@@ -1567,7 +1682,7 @@ self.onmessage = event => {
     };
   } finally {
     if (child) {
-      edgeShutdown = await stopEdgeProcessTree(child);
+      edgeShutdown = await stopEdgeProcessTree(child, { browserClose: cdpBrowserClose });
       cleanupWarnings.push(...edgeShutdown.warnings);
     }
     if (runRoot) {
@@ -1597,6 +1712,12 @@ self.onmessage = event => {
       edgeTreeVerifiedBeforeTempRemoval: !child || edgeShutdown?.tempRootRemovalAllowed === true,
       tempRootRemovalAttempted: Boolean(runRoot && (!child || edgeShutdown?.tempRootRemovalAllowed === true)),
       tempRootRemoved,
+      tempRootRetained: Boolean(runRoot && !tempRootRemoved),
+      retainedTempRootName: runRoot && !tempRootRemoved ? basename(runRoot) : null,
+      retentionReason:
+        runRoot && !tempRootRemoved && child && edgeShutdown?.tempRootRemovalAllowed !== true
+          ? 'exact-process-tree-termination-unproven'
+          : null,
       tempRootVerification,
       warnings: cleanupWarnings
     }
