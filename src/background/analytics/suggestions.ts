@@ -14,8 +14,10 @@ import {
   fetchCreatorArchiveCandidatePool,
   fetchCrossRegionCandidatePool,
   fetchRelatedVideoCandidates,
+  pickRandomCandidate,
 } from '../api/video-blind-box-candidates.ts';
 import type {
+  BlindBoxRandomSource,
   CreatorArchiveCandidatePool,
   CrossRegionCandidatePool,
   RelatedVideoSeed,
@@ -45,15 +47,21 @@ interface BlindBoxContext {
   watchCountByBvid: Map<string, number>;
   lastWatchByBvid: Map<string, number>;
   usedBvids: Set<string>;
+  random: BlindBoxRandomSource;
   randomExplorePool?: ExperimentRealCandidatePool;
   crossRegionPool?: CrossRegionCandidatePool;
   creatorArchivePool?: CreatorArchiveCandidatePool;
 }
 
 interface ExperimentBuildOptions {
+  random?: BlindBoxRandomSource;
   randomExplorePool?: ExperimentRealCandidatePool;
   crossRegionPool?: CrossRegionCandidatePool;
   creatorArchivePool?: CreatorArchiveCandidatePool;
+}
+
+interface ExperimentRuntimeOptions {
+  random?: BlindBoxRandomSource;
 }
 
 type BlindBoxBoundaryMeta = Pick<
@@ -61,8 +69,9 @@ type BlindBoxBoundaryMeta = Pick<
   'candidateSource' | 'realCandidateLabel' | 'usesRealBilibiliCandidates'
 >;
 
-export async function getExperimentData(): Promise<ExperimentData> {
+export async function getExperimentData(options: ExperimentRuntimeOptions = {}): Promise<ExperimentData> {
   const nowMs = Date.now();
+  const random = options.random ?? Math.random;
   const [records, favorites, smartIndexByItemKey, followedCreators] = await Promise.all([
     db.watchHistory.toArray(),
     getFavoriteItems(),
@@ -76,13 +85,14 @@ export async function getExperimentData(): Promise<ExperimentData> {
       relatedSeeds,
       { seedLimit: RANDOM_RELATED_SEED_LIMIT },
     ).catch(error => buildRelatedVideoSourceFailure(relatedSeeds, error, { seedLimit: RANDOM_RELATED_SEED_LIMIT })),
-    fetchCrossRegionCandidatePool(records, { nowMs })
-      .catch(error => buildCrossRegionSourceFailure(records, nowMs, error)),
-    fetchCreatorArchiveCandidatePool(followedCreators, { nowMs })
-      .catch(error => buildCreatorArchiveSourceFailure(followedCreators, nowMs, error)),
+    fetchCrossRegionCandidatePool(records, { nowMs, random })
+      .catch(error => buildCrossRegionSourceFailure(records, nowMs, error, { random })),
+    fetchCreatorArchiveCandidatePool(followedCreators, { nowMs, random })
+      .catch(error => buildCreatorArchiveSourceFailure(followedCreators, nowMs, error, { random })),
   ]);
 
   return buildExperimentData(records, favorites, smartIndexByItemKey, nowMs, {
+    random,
     randomExplorePool,
     crossRegionPool,
     creatorArchivePool,
@@ -117,6 +127,7 @@ export function buildExperimentData(
     watchCountByBvid: countByBvid(records),
     lastWatchByBvid: buildLastWatchByBvid(records),
     usedBvids: new Set<string>(),
+    random: options.random ?? Math.random,
     randomExplorePool: options.randomExplorePool,
     crossRegionPool: options.crossRegionPool,
     creatorArchivePool: options.creatorArchivePool,
@@ -220,7 +231,7 @@ function buildCrossRegionBox(ctx: BlindBoxContext): ExperimentBlindBox {
     );
   }
 
-  const pick = candidates[stableHash(`${Math.floor(ctx.nowMs / DAY_MS)}:${pool.selectedRegion.rid}:${candidates.length}`) % candidates.length];
+  const pick = pickRandomCandidate(candidates, ctx.random)!;
   ctx.usedBvids.add(pick.bvid);
 
   return {
@@ -232,7 +243,7 @@ function buildCrossRegionBox(ctx: BlindBoxContext): ExperimentBlindBox {
     reason: buildCrossRegionReason(pool, pick),
     evidence: [
       ...pool.evidence,
-      `这条候选来自公开分区「${pick.regionName ?? pool.selectedRegion.regionName}」，Bili-Bill 只保留 bvid、标题、UP、封面、时长和播放页链接用于展示。`,
+      `这条候选来自公开分区「${pick.regionName ?? pool.selectedRegion.regionName}」，本地只保留打开视频页和展示所需的标题、UP 主、封面、时长等信息。`,
     ],
     state: 'ready',
     statusLabel: '真实候选',
@@ -253,66 +264,32 @@ function buildCrossRegionReason(
 }
 
 function crossRegionEmptyTitle(status: CrossRegionCandidatePool['status']): string {
-  switch (status) {
-    case 'source_failed':
-      return '分区新视频候选源暂不可用';
-    case 'empty':
-    case 'ready':
-      return '这次没有取得可打开的分区新视频';
-    case 'no_available_region':
-      return '本轮没有可漫游的公开分区';
-  }
+  return status === 'no_available_region'
+    ? '本轮没有可漫游的公开分区'
+    : '这次没有取得可打开的分区新视频';
 }
 
 function crossRegionEmptyDescription(pool: CrossRegionCandidatePool): string {
-  switch (pool.status) {
-    case 'source_failed':
-      return `已选择公开分区${pool.selectedRegion ? `「${pool.selectedRegion.regionName}」` : ''}，但 B 站分区新视频候选源请求失败${pool.failureReason ? `：${pool.failureReason}` : ''}。本卡保留说明，不显示空视频。`;
-    case 'empty':
-      return '已请求本轮公开分区新视频候选池，但没有留下可打开视频。刷新后可重试，当前不会改用本地历史或收藏。';
-    case 'ready':
-      return '真实候选池返回了结果，但候选列表为空。当前不显示空卡。';
-    case 'no_available_region':
-      return '固定公开分区目录在排除近期高频分区后没有剩余方向，跨区漫游不会退回近期高频分区或其他盲盒来源。';
+  if (pool.status === 'no_available_region') {
+    return '固定公开分区目录在排除近期高频分区后没有剩余方向，跨区漫游不会退回近期高频分区或其他盲盒来源。';
   }
+  return '这次没有取得可打开的分区新视频。刷新后可重试，当前不会改用本地历史、收藏或其他盲盒来源。';
 }
 
 function crossRegionEmptyReason(pool: CrossRegionCandidatePool): string {
-  switch (pool.status) {
-    case 'source_failed':
-      return '已选择公开分区，但真实分区新视频候选源暂不可用。';
-    case 'empty':
-      return '已请求真实分区新视频候选池，但本轮没有留下可打开候选。';
-    case 'ready':
-      return '真实分区新视频候选池没有返回可展示视频。';
-    case 'no_available_region':
-      return '排除近期高频分区后没有剩余公开分区。';
-  }
+  return pool.status === 'no_available_region'
+    ? '排除近期高频分区后没有剩余公开分区。'
+    : '本轮公开分区新视频候选池没有留下可打开视频。';
 }
 
 function crossRegionRealCandidateUnavailableReason(pool: CrossRegionCandidatePool): string {
-  switch (pool.status) {
-    case 'source_failed':
-      return 'B 站分区新视频候选源暂不可用。';
-    case 'empty':
-      return '候选源本轮没有返回可打开视频。';
-    case 'ready':
-      return '候选列表为空。';
-    case 'no_available_region':
-      return '排除近期高频分区后没有剩余公开分区。';
-  }
+  return pool.status === 'no_available_region'
+    ? '排除近期高频分区后没有剩余公开分区。'
+    : '本轮没有可打开的分区新视频。';
 }
 
 function crossRegionEmptyStatusLabel(status: CrossRegionCandidatePool['status']): string {
-  switch (status) {
-    case 'source_failed':
-      return '候选源暂不可用';
-    case 'empty':
-    case 'ready':
-      return '真实候选为空';
-    case 'no_available_region':
-      return '无可用分区';
-  }
+  return status === 'no_available_region' ? '无可用分区' : '真实候选为空';
 }
 
 function buildHiddenFavoriteBox(ctx: BlindBoxContext): ExperimentBlindBox {
@@ -342,7 +319,6 @@ function buildHiddenFavoriteBox(ctx: BlindBoxContext): ExperimentBlindBox {
       if (favoriteAgeDays < 30) return null;
 
       const lastWatchDays = lastWatchMs > 0 ? Math.max(1, Math.floor((ctx.nowMs - lastWatchMs) / DAY_MS)) : null;
-      const score = favoriteAgeDays * 1.2 + (watchCount === 0 ? 50 : Math.max(0, 24 - watchCount * 8)) + (lastWatchDays ?? 45);
 
       return {
         item,
@@ -350,11 +326,9 @@ function buildHiddenFavoriteBox(ctx: BlindBoxContext): ExperimentBlindBox {
         watchCount,
         lastWatchDays,
         favoriteAgeDays,
-        score,
       };
     })
-    .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
-    .sort((a, b) => b.score - a.score);
+    .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate));
 
   if (candidates.length === 0) {
     return emptyBox(
@@ -371,7 +345,7 @@ function buildHiddenFavoriteBox(ctx: BlindBoxContext): ExperimentBlindBox {
     );
   }
 
-  const pick = candidates[0];
+  const pick = pickRandomCandidate(candidates, ctx.random)!;
   ctx.usedBvids.add(pick.video.bvid);
 
   return {
@@ -449,7 +423,7 @@ function buildCreatorArchiveBox(ctx: BlindBoxContext): ExperimentBlindBox {
     );
   }
 
-  const pick = candidates[stableHash(`${Math.floor(ctx.nowMs / DAY_MS)}:${pool.seedCount}:${candidates.length}`) % candidates.length];
+  const pick = pickRandomCandidate(candidates, ctx.random)!;
   ctx.usedBvids.add(pick.bvid);
 
   return {
@@ -470,66 +444,32 @@ function buildCreatorArchiveBox(ctx: BlindBoxContext): ExperimentBlindBox {
 }
 
 function creatorArchiveEmptyTitle(status: CreatorArchiveCandidatePool['status']): string {
-  switch (status) {
-    case 'no_followed_creator':
-      return '还没有可用于考古的已关注 UP';
-    case 'source_failed':
-      return 'UP 主公开投稿候选源暂不可用';
-    case 'empty':
-    case 'ready':
-      return '这次没有取得可打开的较早投稿';
-  }
+  return status === 'no_followed_creator'
+    ? '还没有可用于考古的已关注 UP'
+    : '这次没有取得可打开的较早投稿';
 }
 
 function creatorArchiveEmptyDescription(pool: CreatorArchiveCandidatePool): string {
-  switch (pool.status) {
-    case 'no_followed_creator':
-      return '需要先同步关注快照，UP 主考古才知道该从哪些已关注 UP 的公开投稿里抽取。';
-    case 'source_failed':
-      return `已选择少量已关注 UP，但公开投稿候选源请求失败${pool.failures.length > 0 ? `：${pool.failures.join('；')}` : ''}。本卡保留说明，不显示空视频。`;
-    case 'empty':
-      return '已请求公开投稿候选池，但排除最近 7 天投稿后没有留下可打开视频。当前不会改用本地历史或动态账单新投稿。';
-    case 'ready':
-      return '公开投稿候选池返回了结果，但候选列表为空。当前不显示空卡。';
+  if (pool.status === 'no_followed_creator') {
+    return '需要先同步关注快照，UP 主考古才知道该从哪些已关注 UP 的公开投稿里抽取。';
   }
+  return '这次没有取得可打开的较早投稿。刷新后可重试，当前不会改用本地历史、收藏或最近 7 天新投稿。';
 }
 
 function creatorArchiveEmptyReason(pool: CreatorArchiveCandidatePool): string {
-  switch (pool.status) {
-    case 'no_followed_creator':
-      return '本地没有已同步关注 UP 快照，暂不请求公开投稿。';
-    case 'source_failed':
-      return '已选择已关注 UP，但公开投稿候选源暂不可用。';
-    case 'empty':
-      return '已请求公开投稿候选池，但本轮没有留下较早投稿。';
-    case 'ready':
-      return '公开投稿候选池没有返回可展示视频。';
-  }
+  return pool.status === 'no_followed_creator'
+    ? '本地没有已同步关注 UP 快照，暂不请求公开投稿。'
+    : '本轮公开投稿候选池没有留下可打开的较早投稿。';
 }
 
 function creatorArchiveRealCandidateUnavailableReason(pool: CreatorArchiveCandidatePool): string {
-  switch (pool.status) {
-    case 'no_followed_creator':
-      return '缺少已同步关注 UP 快照。';
-    case 'source_failed':
-      return 'UP 主公开投稿候选源暂不可用。';
-    case 'empty':
-      return '候选源本轮没有返回可打开的较早投稿。';
-    case 'ready':
-      return '候选列表为空。';
-  }
+  return pool.status === 'no_followed_creator'
+    ? '缺少已同步关注 UP 快照。'
+    : '本轮没有可打开的较早投稿。';
 }
 
 function creatorArchiveEmptyStatusLabel(status: CreatorArchiveCandidatePool['status']): string {
-  switch (status) {
-    case 'no_followed_creator':
-      return '关注快照未同步';
-    case 'source_failed':
-      return '候选源暂不可用';
-    case 'empty':
-    case 'ready':
-      return '真实候选为空';
-  }
+  return status === 'no_followed_creator' ? '关注快照未同步' : '真实候选为空';
 }
 
 function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
@@ -540,19 +480,18 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
       'random_explore',
       '随机探索',
       teaser,
-      ['本地还没有可作为公开相关视频候选种子的 BV 号。'],
+      ['本地还没有可作为公开相关视频候选种子的近期视频。'],
       '真实候选源还没有可用种子',
-      '随机探索现在需要先用最近少量本地历史作为种子，请求 B 站公开视频的相关视频候选池。等本地有可用 BV 号后，它才会开出真实候选。',
+      '随机探索现在需要先用最近少量本地历史作为种子，请求 B 站公开视频的相关视频候选池。等本地有可用于请求的近期视频后，它才会开出真实候选。',
       '候选源未准备好',
       sourceLabel,
       '没有可请求的种子，未生成空白视频卡。',
-      realCandidateUnavailableMeta(RELATED_CANDIDATE_SOURCE, '缺少可请求的本地 BV 种子。'),
+      realCandidateUnavailableMeta(RELATED_CANDIDATE_SOURCE, '缺少可请求的本地近期视频。'),
     );
   }
 
   const pool = ctx.randomExplorePool.candidates
-    .filter(candidate => !ctx.usedBvids.has(candidate.bvid) && !ctx.recentBvids.has(candidate.bvid))
-    .sort((a, b) => a.bvid.localeCompare(b.bvid, 'en'));
+    .filter(candidate => !ctx.usedBvids.has(candidate.bvid) && !ctx.recentBvids.has(candidate.bvid));
 
   if (pool.length === 0) {
     const failureSummary = formatRelatedCandidateFailures(ctx.randomExplorePool);
@@ -574,8 +513,7 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
     );
   }
 
-  const index = stableHash(`${Math.floor(ctx.nowMs / DAY_MS)}:${pool.length}:${pool[0]?.seedBvid ?? ''}`) % pool.length;
-  const pick = pool[index];
+  const pick = pickRandomCandidate(pool, ctx.random)!;
   ctx.usedBvids.add(pick.bvid);
 
   return {
@@ -611,7 +549,7 @@ function selectRelatedVideoSeeds(records: WatchHistoryRecord[], nowMs: number): 
     seen.add(bvid);
     seeds.push({
       bvid,
-      title: cleanText(record.title) || bvid,
+      title: cleanText(record.title) || '近期视频',
     });
     if (seeds.length >= RANDOM_RELATED_SEED_LIMIT) break;
   }
@@ -634,7 +572,7 @@ function formatRelatedCandidateFailures(pool: ExperimentRealCandidatePool): stri
   const parts = [
     counts.request_failed ? `请求失败 ${counts.request_failed} 个` : '',
     counts.empty_response ? `空响应 ${counts.empty_response} 个` : '',
-    counts.no_valid_candidates ? `无有效 BV 候选 ${counts.no_valid_candidates} 个` : '',
+    counts.no_valid_candidates ? `无可打开候选 ${counts.no_valid_candidates} 个` : '',
   ].filter(Boolean);
 
   return `相关视频候选暂不可用：${parts.join('，') || '未返回有效候选'}。`;
@@ -672,7 +610,7 @@ function toFavoriteVideo(item: FavoriteItem): ExperimentVideoCandidate | null {
   return {
     bvid: item.bvid,
     avid: item.avid > 0 ? item.avid : undefined,
-    title: cleanText(item.title) || item.bvid,
+    title: cleanText(item.title) || '未命名收藏视频',
     authorName: cleanText(item.authorName) || '未知 UP',
     cover: cleanText(item.cover),
     url: buildVideoUrl(item.bvid, item.avid),
@@ -743,12 +681,4 @@ function buildVideoUrl(bvid: string, avid?: number): string {
   if (cleanText(bvid)) return `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`;
   if (typeof avid === 'number' && avid > 0) return `https://www.bilibili.com/video/av${encodeURIComponent(String(avid))}`;
   return 'https://www.bilibili.com';
-}
-
-function stableHash(input: string): number {
-  let hash = 0;
-  for (let index = 0; index < input.length; index += 1) {
-    hash = ((hash << 5) - hash + input.charCodeAt(index)) | 0;
-  }
-  return Math.abs(hash);
 }

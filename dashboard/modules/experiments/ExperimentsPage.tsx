@@ -127,7 +127,7 @@ export function ExperimentsPage() {
                       {isReady
                         ? '这盒里是一个可以直接打开的具体视频。揭晓后会显示标题、UP 主、候选来源、真实候选状态、理由和证据。'
                         : dependsOnRealCandidateSource
-                          ? '这盒不会显示空卡，也不会用本地库存冒充真实候选。揭晓后会说明候选源或本轮分区为什么暂时不可用。'
+                          ? '这盒不会显示空卡，也不会用本地库存冒充真实候选。揭晓后会说明为什么当前没有可抽取视频。'
                           : '这盒不会拿泛泛建议充数。揭晓后只会告诉你为什么本地证据还不够。'}
                     </div>
                     <div style={sourceMetaStyle()}>
@@ -219,7 +219,7 @@ export function ExperimentsPage() {
         }}>
           <div style={{ color: '#FFFFFF', fontSize: '13px', fontWeight: 600, marginBottom: '8px' }}>说明</div>
           <div style={{ color: '#A8B0CE', fontSize: '12px', lineHeight: 1.7 }}>
-            随机探索只使用少量本地 BV 号作为种子，请求公开相关视频候选后在本地随机抽取；跨区漫游只把本地近期历史用于识别要避开的高频分区，候选视频来自 B 站公开分区新视频池；冷门收藏的来源是本地收藏；UP 主考古的来源是已关注 UP 的公开较早投稿。打开动作只会新开一个 B 站视频页，不会回写收藏、关注或观看状态。
+            随机探索只使用少量本地近期视频作为种子，请求公开相关视频候选后在本地随机抽取；跨区漫游只把本地近期历史用于识别要避开的高频分区，候选视频来自 B 站公开分区新视频池；冷门收藏的来源是本地收藏；UP 主考古的来源是已关注 UP 的公开较早投稿。打开动作只会新开一个 B 站视频页，不会回写收藏、关注或观看状态。
           </div>
         </section>
       </div>
@@ -230,7 +230,7 @@ export function ExperimentsPage() {
 function formatExperimentLoadError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/document is not defined|window is not defined|ReferenceError/i.test(message)) {
-    return '盲盒候选源暂时不可用，请刷新后重试。';
+    return '盲盒暂时无法生成，请刷新后重试。';
   }
   return message || '盲盒数据读取失败，请稍后重试。';
 }

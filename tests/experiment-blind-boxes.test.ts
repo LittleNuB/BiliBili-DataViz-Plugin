@@ -10,7 +10,12 @@ import {
   type CreatorArchiveCandidatePool,
   type CrossRegionCandidatePool,
 } from '../src/background/api/video-blind-box-candidates.ts';
-import type { ExperimentRealCandidatePool } from '../src/shared/types/analytics';
+import type {
+  ExperimentBlindBox,
+  ExperimentRealCandidatePool,
+  ExperimentRealVideoCandidate,
+  ExperimentVideoCandidate,
+} from '../src/shared/types/analytics';
 import type { FavoriteItem, SmartFavoriteIndex } from '../src/shared/types/favorite';
 import type { WatchHistoryRecord } from '../src/shared/types/watch-event';
 
@@ -87,7 +92,7 @@ test('builds fixed blind boxes with source labels for all four 0.13 sources', ()
   assert.match(creatorArchive.reason, /排除最近 7 天新投稿/);
 
   for (const box of data.blindBoxes) {
-    assertNoForbiddenVisibleText(JSON.stringify(box));
+    assertNoForbiddenVisibleText(visibleBlindBoxText(box));
     assert.ok(box.candidateSource.length > 0);
     assert.ok(box.realCandidateLabel.length > 0);
     assert.ok(box.evidence.length > 0);
@@ -100,6 +105,28 @@ test('builds fixed blind boxes with source labels for all four 0.13 sources', ()
   }
 });
 
+test('uses the injected random source to draw from every fixed candidate pool', () => {
+  const firstDraw = buildRandomContractData(() => 0);
+  const lastDraw = buildRandomContractData(() => 0.999999);
+
+  assert.deepEqual(firstDraw.blindBoxes.map(box => box.video?.bvid), [
+    'BV1RANDOM001',
+    'BV1REGION001',
+    'BV1FAVORIT01',
+    'BV1ARCHIVE01',
+  ]);
+  assert.deepEqual(lastDraw.blindBoxes.map(box => box.video?.bvid), [
+    'BV1RANDOM002',
+    'BV1REGION002',
+    'BV1FAVORIT02',
+    'BV1ARCHIVE02',
+  ]);
+  assert.notDeepEqual(
+    firstDraw.blindBoxes.map(box => box.video?.bvid),
+    lastDraw.blindBoxes.map(box => box.video?.bvid),
+  );
+});
+
 test('cross-region selection uses recent valid watches and ignores invalid records', () => {
   const records = [
     ...createRecentRegionRecords(),
@@ -108,6 +135,8 @@ test('cross-region selection uses recent valid watches and ignores invalid recor
     createRecord({ bvid: 'BV1INVPRG1', tagName: '知识', daysAgo: 1, actualCompletion: 0.95, title: '无效进度', progress: -1 }),
     createRecord({ bvid: 'BV1INVCMP1', tagName: '知识', daysAgo: 1, actualCompletion: 1.2, title: '无效完成度' }),
     createRecord({ bvid: 'BV1OLDWAT1', tagName: '知识', daysAgo: 8, actualCompletion: 0.95, title: '超过七天' }),
+    createRecord({ bvid: 'BV1FUTURE01', tagName: '知识', daysAgo: -1, actualCompletion: 0.95, title: '未来观看一' }),
+    createRecord({ bvid: 'BV1FUTURE02', tagName: '知识', daysAgo: -2, actualCompletion: 0.95, title: '未来观看二' }),
   ];
 
   const highFrequency = buildRecentHighFrequencyRegions(records, NOW_MS);
@@ -122,11 +151,14 @@ test('cross-region selection uses recent valid watches and ignores invalid recor
 });
 
 test('cross-region picks from the full public directory when recent evidence is absent', () => {
-  const selection = selectCrossRegion([], { nowMs: NOW_MS, random: () => 0 });
+  const firstSelection = selectCrossRegion([], { nowMs: NOW_MS, random: () => 0 });
+  const lastSelection = selectCrossRegion([], { nowMs: NOW_MS, random: () => 0.999999 });
 
-  assert.equal(selection.hasRecentRegionEvidence, false);
-  assert.deepEqual(selection.highFrequencyRegions, []);
-  assert.equal(selection.selectedRegion?.regionName, '动画');
+  assert.equal(firstSelection.hasRecentRegionEvidence, false);
+  assert.deepEqual(firstSelection.highFrequencyRegions, []);
+  assert.equal(firstSelection.selectedRegion?.regionName, '动画');
+  assert.equal(lastSelection.selectedRegion?.regionName, '资讯');
+  assert.notEqual(firstSelection.selectedRegion?.rid, lastSelection.selectedRegion?.rid);
 });
 
 test('sanitizes raw runtime errors from cross-region candidate source failures', () => {
@@ -144,7 +176,8 @@ test('sanitizes raw runtime errors from cross-region candidate source failures',
 
   assert.ok(crossRegion);
   assert.equal(crossRegion.state, 'empty');
-  assert.match(crossRegion.emptyDescription ?? '', /候选源|运行环境|暂时不可用/);
+  assert.match(crossRegion.emptyDescription ?? '', /没有取得可打开的分区新视频/);
+  assert.equal(JSON.stringify(failedPool).includes('source_failed'), false);
   assert.equal(JSON.stringify(crossRegion).includes('document is not defined'), false);
   assert.equal(JSON.stringify(crossRegion).includes('ReferenceError'), false);
 });
@@ -174,7 +207,6 @@ test('does not fall back to a local random video when related candidates fail', 
   assert.equal(randomExplore.usesRealBilibiliCandidates, false);
   assert.match(randomExplore.source, /相关视频候选/);
   assert.match(randomExplore.emptyDescription ?? '', /不会用本地库存视频冒充/);
-  assert.ok(randomExplore.evidence.some(line => line.includes('请求失败')));
   assert.equal(JSON.stringify(randomExplore).includes('document is not defined'), false);
 });
 
@@ -199,16 +231,80 @@ test('returns natural Chinese empty states for all four fixed cards', () => {
     assert.ok(box.candidateSource);
     assert.ok(box.realCandidateLabel);
     assert.ok(box.evidence.length > 0);
-    assertNoForbiddenVisibleText(JSON.stringify(box));
+    assertNoForbiddenVisibleText(visibleBlindBoxText(box));
   }
 });
 
 test('keeps blind-box candidate helpers out of service-worker dynamic preload', () => {
   const source = readFileSync(new URL('../src/background/analytics/suggestions.ts', import.meta.url), 'utf8');
+  const mockSource = readFileSync(new URL('./experiment-blind-boxes.mock.html', import.meta.url), 'utf8');
 
   assert.equal(source.includes("await import('../api/video-blind-box-candidates.ts')"), false);
   assert.match(source, /from ['"]\.\.\/api\/video-blind-box-candidates\.ts['"]/);
+  assertNoForbiddenVisibleText(htmlVisibleText(mockSource));
 });
+
+function buildRandomContractData(random: () => number) {
+  const favorites = [
+    createFavorite({
+      itemKey: 'favorite-first',
+      bvid: 'BV1FAVORIT01',
+      title: '第一条冷门收藏',
+      folderTitle: '旧收藏',
+      tagName: '知识',
+      favDaysAgo: 240,
+    }),
+    createFavorite({
+      itemKey: 'favorite-last',
+      bvid: 'BV1FAVORIT02',
+      title: '第二条冷门收藏',
+      folderTitle: '旧收藏',
+      tagName: '生活',
+      favDaysAgo: 480,
+    }),
+  ];
+
+  return buildExperimentData([], favorites, new Map(), NOW_MS, {
+    random,
+    randomExplorePool: createRelatedPool([
+      createRelatedCandidate('BV1RANDOM001', '第一条相关视频'),
+      createRelatedCandidate('BV1RANDOM002', '第二条相关视频'),
+    ]),
+    crossRegionPool: createReadyCrossRegionPool([
+      createRegionCandidate('BV1REGION001', '第一条分区视频'),
+      createRegionCandidate('BV1REGION002', '第二条分区视频'),
+    ]),
+    creatorArchivePool: createReadyCreatorArchivePool([
+      createArchiveCandidate('BV1ARCHIVE01', '第一条较早投稿'),
+      createArchiveCandidate('BV1ARCHIVE02', '第二条较早投稿'),
+    ]),
+  });
+}
+
+function visibleBlindBoxText(box: ExperimentBlindBox): string {
+  return [
+    box.title,
+    box.teaser,
+    box.candidateSource,
+    box.realCandidateLabel,
+    box.source,
+    box.reason,
+    box.statusLabel,
+    box.emptyTitle,
+    box.emptyDescription,
+    ...box.evidence,
+    box.video?.title,
+    box.video?.authorName,
+    box.video?.sourceLabel,
+  ].filter((value): value is string => typeof value === 'string').join('\n');
+}
+
+function htmlVisibleText(source: string): string {
+  return source
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ');
+}
 
 function assertNoForbiddenVisibleText(value: string): void {
   const bannedGuessWord = ['猜你', '喜欢'].join('');
@@ -217,10 +313,23 @@ function assertNoForbiddenVisibleText(value: string): void {
   assert.equal(value.includes(bannedGuessWord), false);
   assert.equal(value.includes(bannedUnconsumedWord), false);
   assert.equal(value.includes(bannedRankingWord), false);
-  assert.equal(value.includes('document is not defined'), false);
-  assert.equal(value.includes('sourceHash'), false);
-  assert.equal(value.includes('segmentId'), false);
-  assert.equal(value.includes('subtitle_url'), false);
+  for (const rawTerm of [
+    'bvid',
+    'BV 号',
+    'BV号',
+    'BV 种子',
+    'fallback',
+    'transcript',
+    'confidence',
+    'sourceHash',
+    'segmentId',
+    'subtitle_url',
+    'source_failed',
+    'document is not defined',
+    'ReferenceError',
+  ]) {
+    assert.equal(value.toLocaleLowerCase().includes(rawTerm.toLocaleLowerCase()), false, rawTerm);
+  }
 }
 
 function createRecentRegionRecords(): WatchHistoryRecord[] {
@@ -231,31 +340,15 @@ function createRecentRegionRecords(): WatchHistoryRecord[] {
   ];
 }
 
-function createReadyCrossRegionPool(): CrossRegionCandidatePool {
+function createReadyCrossRegionPool(
+  candidates: ExperimentVideoCandidate[] = [createRegionCandidate('BV1REAL139A', '真实分区新视频')],
+): CrossRegionCandidatePool {
   return {
     status: 'ready',
     sourceLabel: 'B 站分区新视频',
     selectedRegion: { rid: 36, regionName: '知识', labels: ['知识'] },
     highFrequencyRegions: [{ rid: 4, regionName: '游戏', count: 2 }],
-    candidates: [
-      {
-        bvid: 'BV1REAL139A',
-        avid: 139001,
-        cid: 139002,
-        title: '真实分区新视频',
-        authorName: '公开知识 UP',
-        authorMid: 139003,
-        cover: 'https://example.com/real-region.jpg',
-        url: 'https://www.bilibili.com/video/BV1REAL139A',
-        duration: 900,
-        publishedAt: Math.floor(NOW_MS / 1000),
-        tagName: '知识',
-        sourceKind: 'bili_region_dynamic',
-        sourceLabel: 'B 站分区新视频 / 知识',
-        regionRid: 36,
-        regionName: '知识',
-      },
-    ],
+    candidates,
     evidence: [
       '最近最多 7 天有效观看中，高频分区是：游戏 2 次；本轮从这些分区之外随机选择「知识」。',
       '跨区漫游只使用仓库维护的固定公开分区目录和 B 站分区新视频接口，本轮候选分区为「知识」。',
@@ -263,6 +356,26 @@ function createReadyCrossRegionPool(): CrossRegionCandidatePool {
     ],
     checkedRegionCount: 1,
     excludedInvalidCandidateCount: 0,
+  };
+}
+
+function createRegionCandidate(bvid: string, title: string): ExperimentVideoCandidate {
+  return {
+    bvid,
+    avid: 139001,
+    cid: 139002,
+    title,
+    authorName: '公开知识 UP',
+    authorMid: 139003,
+    cover: 'https://example.com/real-region.jpg',
+    url: `https://www.bilibili.com/video/${bvid}`,
+    duration: 900,
+    publishedAt: Math.floor(NOW_MS / 1000),
+    tagName: '知识',
+    sourceKind: 'bili_region_dynamic',
+    sourceLabel: 'B 站分区新视频 / 知识',
+    regionRid: 36,
+    regionName: '知识',
   };
 }
 
@@ -282,28 +395,14 @@ function emptyCrossRegionPool(): CrossRegionCandidatePool {
   };
 }
 
-function createReadyCreatorArchivePool(): CreatorArchiveCandidatePool {
+function createReadyCreatorArchivePool(
+  candidates: ExperimentVideoCandidate[] = [createArchiveCandidate('BV1ARCOLD1', '公开较早投稿')],
+): CreatorArchiveCandidatePool {
   return {
     status: 'ready',
     sourceLabel: 'UP 主公开较早投稿',
     seedCount: 1,
-    candidates: [
-      {
-        bvid: 'BV1ARCOLD1',
-        avid: 88001,
-        title: '公开较早投稿',
-        authorName: '考古 UP',
-        authorMid: 88002,
-        cover: 'https://example.com/archive.jpg',
-        url: 'https://www.bilibili.com/video/BV1ARCOLD1',
-        duration: 600,
-        pubtime: Math.floor((NOW_MS - 40 * 86_400_000) / 1000),
-        publishedAt: Math.floor((NOW_MS - 40 * 86_400_000) / 1000),
-        tagName: '生活',
-        sourceKind: 'bili_space_archive',
-        sourceLabel: 'UP 主公开较早投稿 / 考古 UP',
-      },
-    ],
+    candidates,
     evidence: [
       '本轮从已同步关注快照中选取 1 位 UP，只请求每位 UP 的公开投稿第一页。',
       '已排除最近 7 天投稿 1 条，避免和动态账单的新投稿重复。',
@@ -313,6 +412,24 @@ function createReadyCreatorArchivePool(): CreatorArchiveCandidatePool {
     checkedCreatorCount: 1,
     excludedRecentSubmissionCount: 1,
     excludedInvalidCandidateCount: 0,
+  };
+}
+
+function createArchiveCandidate(bvid: string, title: string): ExperimentVideoCandidate {
+  return {
+    bvid,
+    avid: 88001,
+    title,
+    authorName: '考古 UP',
+    authorMid: 88002,
+    cover: 'https://example.com/archive.jpg',
+    url: `https://www.bilibili.com/video/${bvid}`,
+    duration: 600,
+    pubtime: Math.floor((NOW_MS - 40 * 86_400_000) / 1000),
+    publishedAt: Math.floor((NOW_MS - 40 * 86_400_000) / 1000),
+    tagName: '生活',
+    sourceKind: 'bili_space_archive',
+    sourceLabel: 'UP 主公开较早投稿 / 考古 UP',
   };
 }
 
@@ -409,29 +526,35 @@ function createSmartIndex(itemKey: string, path: string[]): SmartFavoriteIndex {
   };
 }
 
-function createRelatedPool(): ExperimentRealCandidatePool {
+function createRelatedPool(
+  candidates: ExperimentRealVideoCandidate[] = [createRelatedCandidate('BV1REALRND01', '真实相关候选视频')],
+): ExperimentRealCandidatePool {
   return {
     sourceKind: 'bilibili_related',
     sourceLabel: '相关视频候选',
     seedCount: 2,
-    candidates: [{
-      sourceKind: 'bilibili_related',
-      sourceLabel: '相关视频候选',
-      seedBvid: 'BV1SEED0001',
-      seedTitle: '种子视频',
-      bvid: 'BV1REALRND01',
-      avid: 12345,
-      cid: 54321,
-      title: '真实相关候选视频',
-      authorName: '公开候选UP',
-      authorMid: 67890,
-      cover: 'https://example.com/related.jpg',
-      duration: 960,
-      pubtime: 1_717_000_000,
-      tagName: '科技',
-      url: 'https://www.bilibili.com/video/BV1REALRND01',
-    }],
+    candidates,
     failures: [],
+  };
+}
+
+function createRelatedCandidate(bvid: string, title: string): ExperimentRealVideoCandidate {
+  return {
+    sourceKind: 'bilibili_related',
+    sourceLabel: '相关视频候选',
+    seedBvid: 'BV1SEED0001',
+    seedTitle: '种子视频',
+    bvid,
+    avid: 12345,
+    cid: 54321,
+    title,
+    authorName: '公开候选UP',
+    authorMid: 67890,
+    cover: 'https://example.com/related.jpg',
+    duration: 960,
+    pubtime: 1_717_000_000,
+    tagName: '科技',
+    url: `https://www.bilibili.com/video/${bvid}`,
   };
 }
 

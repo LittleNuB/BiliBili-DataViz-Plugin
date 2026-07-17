@@ -26,6 +26,8 @@ const CREATOR_ARCHIVE_SEED_LIMIT = 3;
 const CREATOR_ARCHIVE_PAGE_SIZE = 30;
 const CREATOR_ARCHIVE_RECENT_BLOCK_DAYS = 7;
 
+export type BlindBoxRandomSource = () => number;
+
 export interface RelatedVideoSeed {
   bvid: string;
   title: string;
@@ -41,7 +43,6 @@ export interface RelatedVideoCandidateOptions {
 export type CrossRegionCandidatePoolStatus =
   | 'ready'
   | 'no_available_region'
-  | 'source_failed'
   | 'empty';
 
 export interface PublicRegion {
@@ -70,7 +71,6 @@ export interface CrossRegionCandidatePool {
   highFrequencyRegions: CrossRegionHighFrequencyRegion[];
   candidates: ExperimentVideoCandidate[];
   evidence: string[];
-  failureReason?: string;
   checkedRegionCount: number;
   excludedInvalidCandidateCount: number;
 }
@@ -78,14 +78,13 @@ export interface CrossRegionCandidatePool {
 interface CrossRegionCandidateOptions {
   nowMs?: number;
   pageSize?: number;
-  random?: () => number;
+  random?: BlindBoxRandomSource;
   signal?: AbortSignal;
 }
 
 export type CreatorArchiveCandidatePoolStatus =
   | 'ready'
   | 'no_followed_creator'
-  | 'source_failed'
   | 'empty';
 
 export interface CreatorArchiveSeed {
@@ -109,7 +108,7 @@ interface CreatorArchiveCandidateOptions {
   nowMs?: number;
   seedLimit?: number;
   pageSize?: number;
-  random?: () => number;
+  random?: BlindBoxRandomSource;
   signal?: AbortSignal;
 }
 
@@ -334,18 +333,17 @@ export async function fetchCrossRegionCandidatePool(
         candidatesByBvid.set(video.bvid, video);
       }
     }
-  } catch (error) {
+  } catch {
     return {
-      status: 'source_failed',
+      status: 'empty',
       sourceLabel: REGION_SOURCE_LABEL,
       selectedRegion: selection.selectedRegion,
       highFrequencyRegions: selection.highFrequencyRegions,
       candidates: [],
       evidence: [
         ...buildCrossRegionSelectionEvidence(selection, 0),
-        `分区新视频候选源暂时不可用：${readableCandidateError(error)}。`,
+        '这次没有取得可打开的分区新视频。',
       ],
-      failureReason: readableCandidateError(error),
       checkedRegionCount,
       excludedInvalidCandidateCount,
     };
@@ -383,22 +381,23 @@ export async function fetchCrossRegionCandidatePool(
 export function buildCrossRegionSourceFailure(
   records: WatchHistoryRecord[],
   nowMs: number,
-  error: unknown,
+  _error: unknown,
+  options: { random?: BlindBoxRandomSource } = {},
 ): CrossRegionCandidatePool {
   const selection = selectCrossRegion(records, {
     nowMs,
+    random: options.random,
   });
   return {
-    status: 'source_failed',
+    status: 'empty',
     sourceLabel: REGION_SOURCE_LABEL,
     selectedRegion: selection.selectedRegion,
     highFrequencyRegions: selection.highFrequencyRegions,
     candidates: [],
     evidence: [
       ...buildCrossRegionSelectionEvidence(selection, 0),
-      `真实候选源请求失败：${readableCandidateError(error)}。`,
+      '这次没有取得可打开的分区新视频。',
     ],
-    failureReason: readableCandidateError(error),
     checkedRegionCount: 0,
     excludedInvalidCandidateCount: 0,
   };
@@ -406,7 +405,7 @@ export function buildCrossRegionSourceFailure(
 
 export function selectCrossRegion(
   records: WatchHistoryRecord[],
-  options: { nowMs?: number; random?: () => number } = {},
+  options: { nowMs?: number; random?: BlindBoxRandomSource } = {},
 ): CrossRegionSelection {
   const nowMs = options.nowMs ?? Date.now();
   const highFrequencyRegions = buildRecentHighFrequencyRegions(records, nowMs);
@@ -414,7 +413,7 @@ export function selectCrossRegion(
   const candidateRegions = highFrequencyRegions.length > 0
     ? REGION_MAPPINGS.filter(region => !excludedRids.has(region.rid))
     : [...REGION_MAPPINGS];
-  const selectedRegion = pickRandom(candidateRegions, options.random) ?? null;
+  const selectedRegion = pickRandomCandidate(candidateRegions, options.random) ?? null;
 
   return {
     selectedRegion,
@@ -434,7 +433,8 @@ export function buildRecentHighFrequencyRegions(
 
   for (const record of records) {
     if (!isValidCrossRegionWatchRecord(record)) continue;
-    if (toEpochMs(record.viewAt) < cutoffMs) continue;
+    const watchedAtMs = toEpochMs(record.viewAt);
+    if (watchedAtMs < cutoffMs || watchedAtMs > nowMs) continue;
     if (!isPositiveRecord(record)) continue;
 
     for (const signal of getRecordRegionSignals(record)) {
@@ -540,18 +540,15 @@ export async function fetchCreatorArchiveCandidatePool(
     };
   }
 
-  const status: CreatorArchiveCandidatePoolStatus = failures.length >= selectedSeeds.length ? 'source_failed' : 'empty';
   return {
-    status,
+    status: 'empty',
     sourceLabel: CREATOR_ARCHIVE_SOURCE_LABEL,
     seedCount: selectedSeeds.length,
     candidates: [],
     evidence: [
       `本轮从已同步关注快照中选取 ${selectedSeeds.length} 位 UP，只请求每位 UP 的公开投稿第一页。`,
       `已排除最近 ${CREATOR_ARCHIVE_RECENT_BLOCK_DAYS} 天投稿 ${excludedRecentSubmissionCount} 条，避免和动态账单的新投稿重复。`,
-      status === 'source_failed'
-        ? `UP 主公开投稿候选源暂时不可用：${failures.join('；') || '请求失败'}。`
-        : '这次没有留下可打开的公开较早投稿。',
+      '这次没有留下可打开的公开较早投稿。',
     ],
     failures,
     checkedCreatorCount: selectedSeeds.length,
@@ -564,19 +561,21 @@ export function buildCreatorArchiveSourceFailure(
   creators: FollowedCreator[],
   _nowMs: number,
   error: unknown,
+  options: { random?: BlindBoxRandomSource } = {},
 ): CreatorArchiveCandidatePool {
   const selectedSeeds = selectCreatorArchiveSeeds(creators, {
     seedLimit: CREATOR_ARCHIVE_SEED_LIMIT,
+    random: options.random,
   });
   return {
-    status: 'source_failed',
+    status: selectedSeeds.length > 0 ? 'empty' : 'no_followed_creator',
     sourceLabel: CREATOR_ARCHIVE_SOURCE_LABEL,
     seedCount: selectedSeeds.length,
     candidates: [],
     evidence: selectedSeeds.length > 0
       ? [
         `本轮从已同步关注快照中选取 ${selectedSeeds.length} 位 UP。`,
-        `UP 主公开投稿候选源暂时不可用：${readableCandidateError(error)}。`,
+        '这次没有留下可打开的公开较早投稿。',
       ]
       : ['本地尚无已同步的已关注 UP 快照，暂时不能请求公开较早投稿。'],
     failures: selectedSeeds.map(seed => `${seed.name}: ${readableCandidateError(error)}`),
@@ -588,7 +587,7 @@ export function buildCreatorArchiveSourceFailure(
 
 export function selectCreatorArchiveSeeds(
   creators: FollowedCreator[],
-  options: { seedLimit?: number; random?: () => number } = {},
+  options: { seedLimit?: number; random?: BlindBoxRandomSource } = {},
 ): CreatorArchiveSeed[] {
   const seedLimit = clampPositive(options.seedLimit, CREATOR_ARCHIVE_SEED_LIMIT);
   const activeCreators = creators
@@ -798,7 +797,7 @@ function normalizeSeeds(seeds: RelatedVideoSeed[]): RelatedVideoSeed[] {
     seen.add(bvid);
     normalized.push({
       bvid,
-      title: cleanText(seed.title) || bvid,
+      title: cleanText(seed.title) || '近期视频',
     });
   }
   return normalized;
@@ -852,9 +851,12 @@ function clampRandom(value: number): number {
   return value;
 }
 
-function pickRandom<T>(items: T[], random?: () => number): T | undefined {
+export function pickRandomCandidate<T>(
+  items: readonly T[],
+  random: BlindBoxRandomSource = Math.random,
+): T | undefined {
   if (items.length === 0) return undefined;
-  const value = random ? random() : Math.random();
+  const value = random();
   return items[Math.floor(clampRandom(value) * items.length)];
 }
 
