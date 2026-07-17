@@ -3,9 +3,11 @@ import test from 'node:test';
 import {
   CurrentVideoFullTextRequestGuard,
   buildCurrentVideoFullTextRequestEnvelope,
+  buildCanonicalTextSourceRecord,
   buildCurrentVideoPrimaryTextState,
   buildCurrentVideoTextSourceIdentity,
   buildPrimaryTextSourceOption,
+  serializeCurrentVideoCanonicalRecord,
 } from '../src/shared/current-video-primary-text.ts';
 import { stableDigestHex } from '../src/shared/stable-digest.ts';
 
@@ -13,6 +15,18 @@ test('stable digest uses a full SHA-256 identity boundary', () => {
   assert.equal(
     stableDigestHex('abc'),
     'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+  );
+  assert.equal(
+    stableDigestHex(''),
+    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+  );
+  assert.equal(
+    stableDigestHex('中文🙂'),
+    '3f7e2b3029a16c844f54b308c8035842509a1a8d8a4f35a7548d2384f3b51901',
+  );
+  assert.equal(
+    stableDigestHex('a\u0000b'),
+    '59b271ae1bbcb1d31d41929817f4b16fb439eb4f31520b5ad1d5ce98920a7138',
   );
 });
 
@@ -110,6 +124,48 @@ test('source identity changes when text or timeline changes', () => {
   assert.match(base.timelineHash, /^[a-f0-9]{64}$/);
   assert.match(base.sourceHash, /^[a-f0-9]{64}$/);
   assert.match(base.sourceIdentityKey, /:[a-f0-9]{64}$/);
+});
+
+test('source identity hash is built from a versioned canonical record', () => {
+  const identity = buildCurrentVideoTextSourceIdentity({
+    bvid: 'BV1Canonical',
+    cid: 515,
+    page: 2,
+    source: 'bilibili_subtitle',
+    sourceType: 'bilibili_player_wbi_v2',
+    language: 'zh-CN',
+    lines: [
+      { startSeconds: 0, endSeconds: 1, text: '同一段 | 含分隔符' },
+      { startSeconds: 1, endSeconds: 2, text: '第二段🙂' },
+    ],
+  });
+  const canonical = buildCanonicalTextSourceRecord({
+    bvid: 'BV1Canonical',
+    cid: 515,
+    page: 2,
+    source: 'bilibili_subtitle',
+    sourceType: 'bilibili_player_wbi_v2',
+    language: 'zh-CN',
+    bodyHash: identity.bodyHash,
+    timelineHash: identity.timelineHash,
+    lineCount: 2,
+  });
+
+  assert.deepEqual(canonical, {
+    version: 1,
+    kind: 'current-video-primary-text-source',
+    bvid: 'BV1Canonical',
+    cid: 515,
+    page: 2,
+    source: 'bilibili_subtitle',
+    sourceType: 'bilibili_player_wbi_v2',
+    language: 'zh-CN',
+    bodyHash: identity.bodyHash,
+    timelineHash: identity.timelineHash,
+    lineCount: 2,
+  });
+  assert.equal(identity.sourceHash, stableDigestHex(serializeCurrentVideoCanonicalRecord(canonical)));
+  assert.match(serializeCurrentVideoCanonicalRecord(canonical), /"version":1/);
 });
 
 test('full text request envelope freezes the submitted snapshot and binds identity', () => {

@@ -26,9 +26,14 @@ import {
   buildCurrentVideoSubtitleDiagnostics,
   type CurrentVideoSubtitleDiagnostics,
 } from '../../shared/current-video-subtitle-diagnostics';
+import {
+  buildCurrentVideoPrimaryTextState,
+  type CurrentVideoPrimaryTextSourceOption,
+} from '../../shared/current-video-primary-text';
 
 const CARD_ID = 'bdc-current-video-assistant';
 const STYLE_ID = 'bdc-current-video-assistant-style';
+const PRIMARY_TEXT_SELECTION_STORAGE_KEY = 'currentVideoPrimaryTextSelections';
 
 const RAW_FIELD_PATTERN = new RegExp(
   `\\b(?:${[
@@ -271,6 +276,37 @@ const CSS = `
   font-size: 11px;
   line-height: 1.45;
   margin-top: 5px;
+}
+#${CARD_ID} .bdc-assistant-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+#${CARD_ID} .bdc-assistant-source-card {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(10, 12, 21, 0.46);
+  padding: 9px;
+}
+#${CARD_ID} .bdc-assistant-source-card-active {
+  border-color: rgba(160, 231, 160, 0.32);
+  background: rgba(160, 231, 160, 0.075);
+}
+#${CARD_ID} .bdc-assistant-source-card-viewing {
+  border-color: rgba(127, 219, 255, 0.34);
+}
+#${CARD_ID} .bdc-assistant-source-title {
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+#${CARD_ID} .bdc-assistant-source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
 }
 #${CARD_ID} .bdc-assistant-status {
   color: #c8e6ff;
@@ -545,10 +581,17 @@ interface AssistantState {
   relatedFavoritesLoading: boolean;
   relatedFavoritesError: string | null;
   relatedFavoritesRequestId: number;
+  primaryTextViewingSourceIdentityKey: string | null;
+  primaryTextStatus: string | null;
+  primaryTextSaving: boolean;
   subtitleRefreshing: boolean;
   subtitleStatus: string | null;
   subtitleRequestId: number;
 }
+
+const primaryTextSelections = new Map<string, string>();
+let primaryTextSelectionsLoaded = false;
+let primaryTextSelectionsLoading = false;
 
 const assistantState: AssistantState = {
   expanded: false,
@@ -580,6 +623,9 @@ const assistantState: AssistantState = {
   relatedFavoritesLoading: false,
   relatedFavoritesError: null,
   relatedFavoritesRequestId: 0,
+  primaryTextViewingSourceIdentityKey: null,
+  primaryTextStatus: null,
+  primaryTextSaving: false,
   subtitleRefreshing: false,
   subtitleStatus: null,
   subtitleRequestId: 0,
@@ -587,6 +633,7 @@ const assistantState: AssistantState = {
 
 export function renderCurrentVideoAssistant(context: CurrentVideoContextResult): void {
   injectStyle();
+  ensurePrimaryTextSelectionsLoaded();
   updateAssistantContext(context);
   renderAssistantShell();
 }
@@ -613,6 +660,8 @@ function updateAssistantContext(context: CurrentVideoContextResult): void {
     assistantState.relatedFavoritesContextKey = '';
     assistantState.relatedFavoritesError = null;
     assistantState.relatedFavoritesLoading = false;
+    assistantState.primaryTextViewingSourceIdentityKey = null;
+    assistantState.primaryTextStatus = null;
     assistantState.subtitleStatus = null;
   }
   assistantState.context = context;
@@ -704,6 +753,8 @@ function renderExpandedPanel(root: HTMLElement): void {
   if (context?.kind === 'video') {
     appendSubtitleDiagnostics(body, context);
     appendVideoIdentity(body, context);
+    appendPrimaryTextSourceSwitcher(body, context);
+    appendSegmentSearch(body, context);
   } else {
     const empty = section('当前视频');
     appendText(empty, 'div', 'bdc-assistant-video-title', '没有当前视频上下文');
@@ -736,6 +787,191 @@ function appendVideoIdentity(parent: HTMLElement, context: CurrentVideoContext):
   appendRow(block, '字幕轨道', availabilityLabel(context.sources.transcript));
   appendRow(block, '字幕正文', transcriptEvidenceLabel(context));
   parent.appendChild(block);
+}
+
+function appendPrimaryTextSourceSwitcher(parent: HTMLElement, context: CurrentVideoContext): void {
+  const block = section('主要文本来源', 'bdc-assistant-section-auxiliary');
+  const sourceState = buildPrimaryTextStateForContext(context);
+  appendText(block, 'div', 'bdc-assistant-subtitle-text', sourceState.state.userMessage);
+  appendText(block, 'div', 'bdc-assistant-subtitle-detail', sourceState.state.action);
+
+  if (!primaryTextSelectionsLoaded) {
+    appendText(block, 'div', 'bdc-assistant-status', '正在读取本页已保存的来源选择...');
+  }
+  if (assistantState.primaryTextStatus) {
+    appendText(block, 'div', 'bdc-assistant-status', assistantState.primaryTextStatus);
+  }
+
+  const list = document.createElement('div');
+  list.className = 'bdc-assistant-source-list';
+  if (sourceState.sources.length === 0) {
+    appendText(list, 'div', 'bdc-assistant-muted', '当前还没有可查看的正文来源。');
+  }
+  for (const source of sourceState.sources) {
+    list.appendChild(primaryTextSourceCard(context, source, sourceState.activeSourceIdentityKey));
+  }
+  list.appendChild(localTranscriptPreparationCard());
+  block.appendChild(list);
+  parent.appendChild(block);
+}
+
+function buildPrimaryTextStateForContext(context: CurrentVideoContext): {
+  sources: CurrentVideoPrimaryTextSourceOption[];
+  state: ReturnType<typeof buildCurrentVideoPrimaryTextState>;
+  selectedSourceIdentityKey: string | null;
+  activeSourceIdentityKey: string | null;
+} {
+  const sources = availablePrimaryTextSources(context);
+  const selectedSourceIdentityKey = selectedPrimaryTextSourceIdentityKey(context);
+  const state = buildCurrentVideoPrimaryTextState({
+    bvid: context.bvid,
+    cid: context.cid,
+    page: context.currentPart.page,
+    sources,
+    selectedSourceIdentityKey,
+  });
+  return {
+    sources: state.sources,
+    state,
+    selectedSourceIdentityKey,
+    activeSourceIdentityKey: state.primarySource?.identity.sourceIdentityKey ?? null,
+  };
+}
+
+function availablePrimaryTextSources(context: CurrentVideoContext): CurrentVideoPrimaryTextSourceOption[] {
+  const evidence = context.transcriptEvidence;
+  if (
+    context.cid
+    && evidence?.active
+    && evidence.source === 'bilibili_subtitle'
+    && evidence.sourceIdentityKey
+    && evidence.sourceHash
+    && evidence.bodyHash
+    && evidence.timelineHash
+  ) {
+    return [{
+      identity: {
+        bvid: context.bvid,
+        cid: context.cid,
+        page: context.currentPart.page,
+        source: 'bilibili_subtitle',
+        sourceType: evidence.sourceType,
+        language: evidence.language,
+        bodyHash: evidence.bodyHash,
+        timelineHash: evidence.timelineHash,
+        sourceHash: evidence.sourceHash,
+        sourceIdentityKey: evidence.sourceIdentityKey,
+        lineCount: evidence.segmentCount,
+      },
+      label: 'B站字幕',
+      status: evidence.temporary ? 'temporary' : 'available',
+      lineCount: evidence.segmentCount,
+      byteSize: evidence.serializedBytes ?? 0,
+      temporary: evidence.temporary === true,
+      selectedByUser: selectedPrimaryTextSourceIdentityKey(context) === evidence.sourceIdentityKey,
+    }];
+  }
+  return [];
+}
+
+function primaryTextSourceCard(
+  context: CurrentVideoContext,
+  source: CurrentVideoPrimaryTextSourceOption,
+  activeSourceIdentityKey: string | null,
+): HTMLElement {
+  const viewingKey = assistantState.primaryTextViewingSourceIdentityKey;
+  const isActive = activeSourceIdentityKey === source.identity.sourceIdentityKey;
+  const isSelectedByUser = selectedPrimaryTextSourceIdentityKey(context) === source.identity.sourceIdentityKey;
+  const isViewing = viewingKey === source.identity.sourceIdentityKey;
+  const card = document.createElement('article');
+  card.className = [
+    'bdc-assistant-source-card',
+    isActive ? 'bdc-assistant-source-card-active' : '',
+    isViewing ? 'bdc-assistant-source-card-viewing' : '',
+  ].filter(Boolean).join(' ');
+
+  appendText(card, 'div', 'bdc-assistant-source-title', source.label);
+  appendText(card, 'div', 'bdc-assistant-subtitle-detail', primaryTextSourceDescription(source));
+  appendText(card, 'div', 'bdc-assistant-muted', isSelectedByUser
+    ? '已由你明确设为当前视频助手来源。'
+    : isActive
+      ? '当前可用于助手；点击“用于视频助手”后会记住这个选择。'
+      : '查看这个来源不会改变主要文本来源。');
+
+  const actions = document.createElement('div');
+  actions.className = 'bdc-assistant-source-actions';
+  actions.appendChild(button(
+    isViewing ? '正在查看' : '查看来源',
+    'bdc-assistant-button bdc-assistant-button-quiet',
+    () => {
+      assistantState.primaryTextViewingSourceIdentityKey = source.identity.sourceIdentityKey;
+      assistantState.primaryTextStatus = '已切换查看的来源；主要文本来源没有改变。';
+      renderAssistantShell();
+    },
+    isViewing,
+  ));
+  actions.appendChild(button(
+    assistantState.primaryTextSaving && isActive ? '保存中...' : isSelectedByUser ? '已用于助手' : '用于视频助手',
+    isSelectedByUser
+      ? 'bdc-assistant-button bdc-assistant-button-quiet'
+      : 'bdc-assistant-button bdc-assistant-button-primary',
+    () => {
+      void selectPrimaryTextSourceForAssistant(context, source.identity.sourceIdentityKey, source.label);
+    },
+    assistantState.primaryTextSaving || isSelectedByUser,
+  ));
+  card.appendChild(actions);
+  return card;
+}
+
+function localTranscriptPreparationCard(): HTMLElement {
+  const card = document.createElement('article');
+  card.className = 'bdc-assistant-source-card';
+  appendText(card, 'div', 'bdc-assistant-source-title', '本地转录');
+  appendText(
+    card,
+    'div',
+    'bdc-assistant-subtitle-detail',
+    '转录模型尚未接入，当前只保留准备态；不会把未生成的转录稿当作可用正文。',
+  );
+  const actions = document.createElement('div');
+  actions.className = 'bdc-assistant-source-actions';
+  actions.appendChild(button('暂不可用', 'bdc-assistant-button bdc-assistant-button-quiet', () => {}, true));
+  card.appendChild(actions);
+  return card;
+}
+
+function primaryTextSourceDescription(source: CurrentVideoPrimaryTextSourceOption): string {
+  const size = source.byteSize > 0 ? `，约 ${formatByteSize(source.byteSize)}` : '';
+  if (source.temporary) {
+    return `本次临时使用的字幕正文，${source.lineCount} 条${size}；离开页面或服务重载后可能需要重新检测。`;
+  }
+  return `当前分 P 可用字幕正文，${source.lineCount} 条${size}。`;
+}
+
+async function selectPrimaryTextSourceForAssistant(
+  context: CurrentVideoContext,
+  sourceIdentityKey: string,
+  label: string,
+): Promise<void> {
+  const partKey = primaryTextPartKey(context);
+  if (!partKey) return;
+  primaryTextSelections.set(partKey, sourceIdentityKey);
+  updateAssistantContext(context);
+  assistantState.primaryTextSaving = true;
+  assistantState.primaryTextViewingSourceIdentityKey = sourceIdentityKey;
+  assistantState.primaryTextStatus = `${label}已用于当前视频助手。`;
+  renderAssistantShell();
+
+  try {
+    await savePrimaryTextSelections();
+    assistantState.primaryTextStatus = `${label}已用于当前视频助手。`;
+  } catch {
+    assistantState.primaryTextStatus = `${label}已在本页用于当前视频助手；保存选择失败，刷新页面后可能需要重新选择。`;
+  } finally {
+    assistantState.primaryTextSaving = false;
+    renderAssistantShell();
+  }
 }
 
 function appendSubtitleDiagnostics(parent: HTMLElement, context: CurrentVideoContext): void {
@@ -1574,6 +1810,16 @@ async function searchCurrentVideoSegmentsFromPage(): Promise<void> {
     renderAssistantShell();
     return;
   }
+  const primaryTextState = buildPrimaryTextStateForContext(assistantState.context);
+  if (
+    primaryTextState.sources.length > 1
+    && !primaryTextState.selectedSourceIdentityKey
+  ) {
+    assistantState.segmentError = '请先明确选择一个主要文本来源，再向当前视频提问。';
+    assistantState.segmentResult = null;
+    renderAssistantShell();
+    return;
+  }
 
   const requestId = assistantState.segmentRequestId + 1;
   const contextKey = assistantState.contextKey;
@@ -1594,6 +1840,7 @@ async function searchCurrentVideoSegmentsFromPage(): Promise<void> {
   try {
     const result = await sendRuntimeRequest<CurrentVideoSegmentRetrievalResult>('SEARCH_CURRENT_VIDEO_SEGMENTS', {
       query,
+      ...currentPrimaryTextRequestParams(),
     });
     if (assistantState.segmentRequestId !== requestId || assistantState.contextKey !== contextKey) return;
     assistantState.segmentResult = result;
@@ -1635,6 +1882,7 @@ async function confirmCurrentVideoSegmentJumpFromPage(
         query: result.query,
         candidateId: candidate.id,
         confirmed: true,
+        ...currentPrimaryTextRequestParams(),
       },
     );
     assistantState.segmentJumpStatus = timestampJumpStatusText(response);
@@ -1734,7 +1982,10 @@ async function loadCurrentVideoSummary(force: boolean): Promise<void> {
   renderAssistantShell();
 
   try {
-    const summary = await sendRuntimeRequest<CurrentVideoSummaryResult>('GET_CURRENT_VIDEO_SUMMARY');
+    const summary = await sendRuntimeRequest<CurrentVideoSummaryResult>(
+      'GET_CURRENT_VIDEO_SUMMARY',
+      currentPrimaryTextRequestParams(),
+    );
     if (assistantState.summaryRequestId !== requestId || assistantState.contextKey !== contextKey) return;
     assistantState.summary = summary;
     assistantState.summaryContextKey = contextKey;
@@ -1768,7 +2019,10 @@ async function loadCurrentVideoKnowledge(force: boolean): Promise<void> {
   renderAssistantShell();
 
   try {
-    const knowledge = await sendRuntimeRequest<VideoKnowledgeResult>('GET_VIDEO_KNOWLEDGE');
+    const knowledge = await sendRuntimeRequest<VideoKnowledgeResult>(
+      'GET_VIDEO_KNOWLEDGE',
+      currentPrimaryTextRequestParams(),
+    );
     if (assistantState.knowledgeRequestId !== requestId || assistantState.contextKey !== contextKey) return;
     assistantState.knowledge = knowledge;
     assistantState.knowledgeContextKey = contextKey;
@@ -1888,13 +2142,73 @@ function contextStateKey(context: CurrentVideoContextResult): string {
     context.bvid,
     context.cid ?? 'cid-unknown',
     context.currentPart.page,
+    selectedPrimaryTextSourceIdentityKey(context) ?? 'no-selected-source',
     context.sources.transcript,
     context.sources.contentText,
     evidence?.status ?? 'no-evidence',
     evidence?.active === true ? 'active' : 'inactive',
+    evidence?.sourceIdentityKey ?? 'no-source-key',
+    evidence?.sourceHash ?? 'no-source-hash',
+    evidence?.bodyHash ?? 'no-body-hash',
+    evidence?.timelineHash ?? 'no-timeline-hash',
     evidence?.segmentCount ?? 0,
     evidence?.updatedAt ?? 0,
   ].join(':');
+}
+
+function ensurePrimaryTextSelectionsLoaded(): void {
+  if (primaryTextSelectionsLoaded || primaryTextSelectionsLoading) return;
+  primaryTextSelectionsLoading = true;
+  chrome.storage?.local?.get(PRIMARY_TEXT_SELECTION_STORAGE_KEY)
+    .then((stored) => {
+      primaryTextSelections.clear();
+      const raw = stored?.[PRIMARY_TEXT_SELECTION_STORAGE_KEY];
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        for (const [partKey, sourceIdentityKey] of Object.entries(raw as Record<string, unknown>)) {
+          if (typeof sourceIdentityKey === 'string' && sourceIdentityKey.trim()) {
+            primaryTextSelections.set(partKey, sourceIdentityKey.trim());
+          }
+        }
+      }
+      primaryTextSelectionsLoaded = true;
+      primaryTextSelectionsLoading = false;
+      if (assistantState.context) {
+        updateAssistantContext(assistantState.context);
+        renderAssistantShell();
+      }
+    })
+    .catch(() => {
+      primaryTextSelectionsLoaded = true;
+      primaryTextSelectionsLoading = false;
+    });
+}
+
+async function savePrimaryTextSelections(): Promise<void> {
+  await chrome.storage.local.set({
+    [PRIMARY_TEXT_SELECTION_STORAGE_KEY]: Object.fromEntries(primaryTextSelections.entries()),
+  });
+}
+
+function primaryTextPartKey(context: CurrentVideoContext): string | null {
+  if (!context.cid) return null;
+  return [context.bvid, context.cid, context.currentPart.page].join(':');
+}
+
+function selectedPrimaryTextSourceIdentityKey(context: CurrentVideoContext): string | null {
+  const partKey = primaryTextPartKey(context);
+  if (!partKey) return null;
+  return primaryTextSelections.get(partKey) ?? null;
+}
+
+function activePrimaryTextSourceIdentityKey(context: CurrentVideoContext): string | null {
+  return buildPrimaryTextStateForContext(context).activeSourceIdentityKey;
+}
+
+function currentPrimaryTextRequestParams(): Record<string, unknown> {
+  const context = assistantState.context;
+  if (context?.kind !== 'video') return {};
+  const selectedSourceIdentityKey = activePrimaryTextSourceIdentityKey(context);
+  return selectedSourceIdentityKey ? { selectedSourceIdentityKey } : {};
 }
 
 function compactStatusText(context: CurrentVideoContextResult | null): string {
@@ -2412,4 +2726,11 @@ function formatDuration(seconds: number | null): string {
     return `${hours}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
   }
   return `${minutes}:${String(rest).padStart(2, '0')}`;
+}
+
+function formatByteSize(bytes: number): string {
+  const safe = Math.max(0, Math.floor(bytes));
+  if (safe >= 1024 * 1024) return `${(safe / 1024 / 1024).toFixed(1)} MB`;
+  if (safe >= 1024) return `${Math.ceil(safe / 1024)} KB`;
+  return `${safe} B`;
 }

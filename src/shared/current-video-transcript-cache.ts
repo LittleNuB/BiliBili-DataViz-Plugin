@@ -88,7 +88,6 @@ export function normalizeBilibiliTranscriptEvidence(
         sourceHash: identity.sourceHash,
         bodyHash: identity.bodyHash,
         timelineHash: identity.timelineHash,
-        serializedBytes: estimateTranscriptSourceBytes(identity, []),
         status: 'malformed',
         segmentCount: 0,
         coverageStartSeconds: null,
@@ -123,7 +122,6 @@ export function normalizeBilibiliTranscriptEvidence(
         sourceHash: identity.sourceHash,
         bodyHash: identity.bodyHash,
         timelineHash: identity.timelineHash,
-        serializedBytes: estimateTranscriptSourceBytes(identity, []),
         status: 'empty',
         segmentCount: 0,
         coverageStartSeconds: null,
@@ -152,7 +150,6 @@ export function normalizeBilibiliTranscriptEvidence(
         sourceHash: malformedIdentity.sourceHash,
         bodyHash: malformedIdentity.bodyHash,
         timelineHash: malformedIdentity.timelineHash,
-        serializedBytes: estimateTranscriptSourceBytes(malformedIdentity, []),
         status: 'malformed',
         segmentCount: 0,
         coverageStartSeconds: null,
@@ -197,23 +194,25 @@ export function normalizeBilibiliTranscriptEvidence(
   }));
 
   return {
-    sourceRecord: sourceRecord({
-      ...base,
-      sourceHash: identity.sourceHash,
-      bodyHash: identity.bodyHash,
-      timelineHash: identity.timelineHash,
-      serializedBytes: estimateTranscriptSourceBytes(identity, normalized),
-      status: 'cached',
-      segmentCount: segments.length,
-      coverageStartSeconds: segments[0]?.startSeconds ?? null,
-      coverageEndSeconds: segments.reduce(
-        (max, segment) => Math.max(max, segment.endSeconds),
-        0,
-      ),
-      reason: 'transcript_segments_cached',
-      message: `已缓存字幕正文证据 ${segments.length} 段${language ? `（${language}）` : ''}；本版本仅作为本地证据，不会默认发送给 AI 或生成完整视频总结。`,
-      warnings,
-    }),
+    sourceRecord: sourceRecord(
+      {
+        ...base,
+        sourceHash: identity.sourceHash,
+        bodyHash: identity.bodyHash,
+        timelineHash: identity.timelineHash,
+        status: 'cached',
+        segmentCount: segments.length,
+        coverageStartSeconds: segments[0]?.startSeconds ?? null,
+        coverageEndSeconds: segments.reduce(
+          (max, segment) => Math.max(max, segment.endSeconds),
+          0,
+        ),
+        reason: 'transcript_segments_cached',
+        message: `已缓存字幕正文证据 ${segments.length} 段${language ? `（${language}）` : ''}；本版本仅作为本地证据，不会默认发送给 AI 或生成完整视频总结。`,
+        warnings,
+      },
+      segments,
+    ),
     segments,
   };
 }
@@ -385,7 +384,7 @@ export function buildTranscriptEvidenceStateFromCache(
         ? activeSegments.length
         : activeSource.segmentCount,
       staleSegmentCount,
-      serializedBytes: activeSource.serializedBytes ?? estimateStoredSourceBytes(activeSource, activeSegments),
+      serializedBytes: activeSource.serializedBytes ?? measureTranscriptPersistentBytes(activeSource, activeSegments),
       coverageStartSeconds: activeSource.coverageStartSeconds,
       coverageEndSeconds: activeSource.coverageEndSeconds,
       fetchedAt: activeSource.fetchedAt,
@@ -567,9 +566,12 @@ interface NormalizedSegmentRow {
   text: string;
 }
 
-function sourceRecord(input: Omit<CurrentVideoTranscriptSourceRecord, 'identityKey' | 'stale'>): CurrentVideoTranscriptSourceRecord {
+function sourceRecord(
+  input: Omit<CurrentVideoTranscriptSourceRecord, 'identityKey' | 'stale' | 'serializedBytes'> & { serializedBytes?: number },
+  segments: CurrentVideoTranscriptSegment[] = [],
+): CurrentVideoTranscriptSourceRecord {
   const identityKey = buildTranscriptIdentityKey(input);
-  return {
+  const record = {
     ...input,
     identityKey,
     sourceIdentityKey: identityKey,
@@ -577,6 +579,10 @@ function sourceRecord(input: Omit<CurrentVideoTranscriptSourceRecord, 'identityK
     stale: false,
     persistent: input.persistent ?? true,
     lastAccessedAt: input.lastAccessedAt ?? input.updatedAt,
+  };
+  return {
+    ...record,
+    serializedBytes: input.serializedBytes ?? measureTranscriptPersistentBytes(record, segments),
   };
 }
 
@@ -783,49 +789,83 @@ function sourceBytes(
   segments: CurrentVideoTranscriptSegment[],
 ): number {
   if (!source) return 0;
-  return source.serializedBytes ?? estimateStoredSourceBytes(source, segments);
+  return source.serializedBytes ?? measureTranscriptPersistentBytes(source, segments);
 }
 
-function estimateTranscriptSourceBytes(
-  identity: Pick<CurrentVideoTextSourceIdentity, 'sourceIdentityKey' | 'bodyHash' | 'timelineHash' | 'sourceHash'>,
-  rows: NormalizedSegmentRow[],
-): number {
-  return serializedSize({
-    identity,
-    rows: rows.map(row => ({
-      startSeconds: row.startSeconds,
-      endSeconds: row.endSeconds,
-      text: row.text,
-    })),
-  });
-}
-
-function estimateStoredSourceBytes(
+export function measureTranscriptPersistentBytes(
   source: CurrentVideoTranscriptSourceRecord,
   segments: CurrentVideoTranscriptSegment[],
 ): number {
+  let serializedBytes = Number.isFinite(source.serializedBytes)
+    ? Math.max(0, Math.floor(source.serializedBytes ?? 0))
+    : 0;
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const measured = serializedSize({
+      source: persistedSourceRecord({ ...source, serializedBytes }),
+      segments: segments.map(persistedSegmentRecord),
+    });
+    if (measured === serializedBytes) return measured;
+    serializedBytes = measured;
+  }
+
   return serializedSize({
-    source: {
-      identityKey: sourceIdentity(source),
-      bvid: source.bvid,
-      cid: source.cid,
-      page: source.page,
-      language: source.language,
-      source: source.source,
-      sourceType: source.sourceType,
-      sourceHash: source.sourceHash,
-      bodyHash: source.bodyHash ?? null,
-      timelineHash: source.timelineHash ?? null,
-      status: source.status,
-    },
-    segments: segments.map(segment => ({
-      startSeconds: segment.startSeconds,
-      endSeconds: segment.endSeconds,
-      text: segment.text,
-      language: segment.language,
-      sourceHash: segment.sourceHash,
-    })),
+    source: persistedSourceRecord({ ...source, serializedBytes }),
+    segments: segments.map(persistedSegmentRecord),
   });
+}
+
+function persistedSourceRecord(source: CurrentVideoTranscriptSourceRecord): CurrentVideoTranscriptSourceRecord {
+  const normalized = normalizeSourceRecordIdentity(source);
+  return {
+    identityKey: normalized.identityKey,
+    sourceIdentityKey: normalized.sourceIdentityKey,
+    partIdentityKey: normalized.partIdentityKey,
+    bvid: normalized.bvid,
+    cid: normalized.cid,
+    page: normalized.page,
+    language: normalized.language,
+    source: normalized.source,
+    sourceType: normalized.sourceType,
+    sourceHash: normalized.sourceHash,
+    bodyHash: normalized.bodyHash ?? null,
+    timelineHash: normalized.timelineHash ?? null,
+    trackId: normalized.trackId,
+    trackUrlHost: normalized.trackUrlHost,
+    segmentCount: normalized.segmentCount,
+    serializedBytes: normalized.serializedBytes ?? 0,
+    coverageStartSeconds: normalized.coverageStartSeconds,
+    coverageEndSeconds: normalized.coverageEndSeconds,
+    status: normalized.status,
+    stale: normalized.stale,
+    persistent: normalized.persistent ?? true,
+    fetchedAt: normalized.fetchedAt,
+    updatedAt: normalized.updatedAt,
+    lastAccessedAt: normalized.lastAccessedAt ?? normalized.updatedAt,
+    reason: normalized.reason,
+    message: normalized.message,
+    warnings: normalized.warnings,
+  };
+}
+
+function persistedSegmentRecord(segment: CurrentVideoTranscriptSegment): CurrentVideoTranscriptSegment {
+  return {
+    segmentId: segment.segmentId,
+    sourceIdentityKey: segment.sourceIdentityKey,
+    bvid: segment.bvid,
+    cid: segment.cid,
+    page: segment.page,
+    startSeconds: segment.startSeconds,
+    endSeconds: segment.endSeconds,
+    text: segment.text,
+    language: segment.language,
+    source: segment.source,
+    sourceType: segment.sourceType,
+    sourceHash: segment.sourceHash,
+    stale: segment.stale,
+    fetchedAt: segment.fetchedAt,
+    updatedAt: segment.updatedAt,
+  };
 }
 
 function serializedSize(value: unknown): number {

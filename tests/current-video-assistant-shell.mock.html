@@ -68,6 +68,12 @@
       let playbackPosition = 12;
       let returnPointSeconds = null;
       let lastSearchResult = null;
+      const subtitleSourceHash = "mock-source-hash-hidden";
+      const subtitleBodyHash = "mock-body-hash-hidden";
+      const subtitleTimelineHash = "mock-timeline-hash-hidden";
+      const subtitleSourceIdentityKey = `primary-text:bilibili_subtitle:${mockBvid}:${mockCid}:1:zh-cn:${subtitleSourceHash}`;
+      const runtimeMessages = [];
+      const extensionStorage = {};
 
       window.__INITIAL_STATE__ = {
         videoData: {
@@ -112,9 +118,13 @@
           language: subtitleCached ? "zh-CN" : null,
           source: subtitleCached ? "bilibili_subtitle" : null,
           sourceType: "bilibili_player_wbi_v2",
-          ["source" + "Hash"]: subtitleCached ? "hash-hidden-in-ui" : null,
+          sourceIdentityKey: subtitleCached ? subtitleSourceIdentityKey : null,
+          ["source" + "Hash"]: subtitleCached ? subtitleSourceHash : null,
+          bodyHash: subtitleCached ? subtitleBodyHash : null,
+          timelineHash: subtitleCached ? subtitleTimelineHash : null,
           segmentCount: subtitleCached ? 2 : 0,
           staleSegmentCount: 0,
+          serializedBytes: subtitleCached ? 3200 : 0,
           coverageStartSeconds: subtitleCached ? 0 : null,
           coverageEndSeconds: subtitleCached ? 8 : null,
           fetchedAt: subtitleCached ? Date.now() : null,
@@ -532,6 +542,8 @@
       }
 
       window.__assistantMockPlaybackPosition = () => playbackPosition;
+      window.__assistantMockMessages = runtimeMessages;
+      window.__assistantMockStorage = extensionStorage;
 
       function searchCurrentVideoSegmentsResult(query) {
         searchReadCount += 1;
@@ -814,6 +826,7 @@
             addListener() {},
           },
           sendMessage(message) {
+            runtimeMessages.push(message);
             if (message.action === "GET_CURRENT_VIDEO_CONTEXT") {
               return Promise.resolve({ success: true, data: currentContext() });
             }
@@ -846,6 +859,32 @@
               });
             }
             return Promise.resolve({ success: true, data: null });
+          },
+        },
+        storage: {
+          local: {
+            get(keys) {
+              if (typeof keys === "string") {
+                return Promise.resolve({ [keys]: extensionStorage[keys] });
+              }
+              if (Array.isArray(keys)) {
+                return Promise.resolve(Object.fromEntries(keys.map((key) => [key, extensionStorage[key]])));
+              }
+              if (keys && typeof keys === "object") {
+                return Promise.resolve(Object.fromEntries(Object.keys(keys).map((key) => [key, extensionStorage[key] ?? keys[key]])));
+              }
+              return Promise.resolve({ ...extensionStorage });
+            },
+            set(values) {
+              Object.assign(extensionStorage, values || {});
+              return Promise.resolve();
+            },
+            remove(keys) {
+              for (const key of Array.isArray(keys) ? keys : [keys]) {
+                delete extensionStorage[key];
+              }
+              return Promise.resolve();
+            },
           },
         },
       };

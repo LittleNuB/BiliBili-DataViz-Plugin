@@ -1,10 +1,12 @@
 from pathlib import Path
+from urllib.parse import urlparse
 
 from playwright.sync_api import expect, sync_playwright
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MOCK_URL = (ROOT / "tests" / "current-video-primary-text.mock.html").as_uri()
+MOCK_HTML = ROOT / "tests" / "current-video-assistant-shell.mock.html"
+MOCK_URL = "https://www.bilibili.com/video/BV1ShellMock9"
 FORBIDDEN_VISIBLE_TERMS = [
     "未消费",
     "猜你喜欢",
@@ -16,6 +18,56 @@ FORBIDDEN_VISIBLE_TERMS = [
     "subtitle_url",
     "document is not defined",
 ]
+FULL_TEXT_OR_SEARCH_ACTIONS = {
+    "GET_CURRENT_VIDEO_SUMMARY",
+    "GET_VIDEO_KNOWLEDGE",
+    "SEARCH_CURRENT_VIDEO_SEGMENTS",
+}
+
+
+def route_mock(route):
+    request = route.request
+    parsed = urlparse(request.url)
+    path = parsed.path
+    if path.startswith("/video/"):
+        route.fulfill(
+            status=200,
+            content_type="text/html; charset=utf-8",
+            body=MOCK_HTML.read_text(encoding="utf-8"),
+        )
+        return
+
+    local_path = ROOT / path.lstrip("/")
+    if local_path.exists() and local_path.is_file():
+        content_type = "application/javascript; charset=utf-8" if local_path.suffix == ".js" else "text/plain; charset=utf-8"
+        route.fulfill(
+            status=200,
+            content_type=content_type,
+            body=local_path.read_bytes(),
+        )
+        return
+
+    route.fulfill(status=404, body="not found")
+
+
+def message_actions(page):
+    return page.evaluate("[...(window.__assistantMockMessages || [])].map((message) => message.action)")
+
+
+def last_message_for(page, action):
+    return page.evaluate(
+        """(action) => {
+            const messages = window.__assistantMockMessages || [];
+            return [...messages].reverse().find((message) => message.action === action) || null;
+        }""",
+        action,
+    )
+
+
+def assert_no_full_text_or_search(page):
+    actions = message_actions(page)
+    leaked = [action for action in actions if action in FULL_TEXT_OR_SEARCH_ACTIONS]
+    assert leaked == [], f"unexpected user-action request before interaction: {leaked}"
 
 
 def assert_clean_visible_text(page):
@@ -30,45 +82,51 @@ def assert_no_horizontal_overflow(page):
 
 
 def run_flow(page):
+    page.route("**/*", route_mock)
     page.goto(MOCK_URL)
-    expect(page.get_by_test_id("subtitle-state")).to_contain_text("可能有 AI 字幕")
-    expect(page.get_by_test_id("primary-state")).to_contain_text("暂无正文")
-    expect(page.get_by_test_id("request-count")).to_have_text("完整文本请求：0")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+    expect(page.get_by_text("展开助手")).to_be_visible()
+    assert_no_full_text_or_search(page)
 
-    page.get_by_test_id("auth-toggle").check()
-    expect(page.get_by_test_id("request-count")).to_have_text("完整文本请求：0")
+    page.get_by_text("展开助手").click()
+    expect(page.get_by_text("主要文本来源").first).to_be_visible()
+    expect(page.get_by_text("本地转录").first).to_be_visible()
+    expect(page.get_by_text("问这个视频", exact=True)).to_be_visible()
+    assert_no_full_text_or_search(page)
 
-    page.get_by_test_id("redetect").click()
-    expect(page.get_by_test_id("subtitle-state")).to_contain_text("没有探测到字幕轨道")
-    expect(page.get_by_test_id("request-count")).to_have_text("完整文本请求：0")
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    expect(page.get_by_text("B站字幕").first).to_be_visible()
+    expect(page.get_by_text("用于视频助手").first).to_be_visible()
+    actions_after_redetect = message_actions(page)
+    assert "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE" in actions_after_redetect
+    assert not any(action in FULL_TEXT_OR_SEARCH_ACTIONS for action in actions_after_redetect)
 
-    page.get_by_test_id("enable-ai-subtitle").click()
-    expect(page.get_by_test_id("subtitle-state")).to_contain_text("已探测到字幕轨道")
-    expect(page.get_by_test_id("primary-state")).to_contain_text("暂无正文")
+    page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕").get_by_text("查看来源").click()
+    expect(page.get_by_text("主要文本来源没有改变")).to_be_visible()
+    storage_before_select = page.evaluate("window.__assistantMockStorage.currentVideoPrimaryTextSelections || null")
+    assert storage_before_select in (None, {}), "viewing a source must not save the assistant source"
 
-    page.get_by_test_id("redetect").click()
-    expect(page.get_by_test_id("subtitle-state")).to_contain_text("已取得")
-    expect(page.get_by_test_id("primary-state")).to_contain_text("B站字幕可用")
-    expect(page.get_by_test_id("switch-hint")).to_contain_text("只有一个来源")
-    expect(page.locator(".source-card")).to_have_count(1)
-    expect(page.get_by_test_id("request-count")).to_have_text("完整文本请求：0")
+    page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕").get_by_role("button", name="用于视频助手").click()
+    expect(page.get_by_text("已用于当前视频助手").first).to_be_visible()
+    storage_after_select = page.evaluate("window.__assistantMockStorage.currentVideoPrimaryTextSelections || {}")
+    assert storage_after_select, "explicit assistant source selection was not saved"
 
-    page.get_by_test_id("add-local").click()
-    expect(page.locator(".source-card")).to_have_count(2)
-    expect(page.get_by_test_id("primary-state")).to_contain_text("请选择")
-    page.locator(".source-card").filter(has_text="本地转录").get_by_text("查看").click()
-    expect(page.get_by_test_id("primary-state")).to_contain_text("请选择")
-    page.locator(".source-card").filter(has_text="本地转录").get_by_text("用于视频助手").click()
-    expect(page.get_by_test_id("primary-state")).to_contain_text("本地转录正在用于视频助手")
+    page.locator("textarea").fill("subagent 在哪里")
+    page.get_by_role("button", name="提问").click()
+    expect(page.get_by_text("回答：有证据")).to_be_visible()
+    expect(page.get_by_text("引用片段", exact=True)).to_be_visible()
+    search_message = last_message_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS")
+    assert search_message["params"].get("selectedSourceIdentityKey"), "selected source key was not sent with search"
 
-    page.get_by_test_id("clear-current").click()
-    expect(page.get_by_test_id("status")).to_contain_text("不会自动切换")
-    expect(page.get_by_test_id("primary-state")).to_contain_text("暂无正文")
-    expect(page.locator(".source-card")).to_have_count(1)
-    expect(page.get_by_test_id("request-count")).to_have_text("完整文本请求：0")
+    page.get_by_role("button", name="预览跳转").first.click()
+    expect(page.get_by_text("确认跳转前预览")).to_be_visible()
+    page.get_by_role("button", name="确认跳转").click()
+    expect(page.get_by_text("返回原位置")).to_be_visible()
+    jump_message = last_message_for(page, "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP")
+    assert jump_message["params"].get("selectedSourceIdentityKey"), "selected source key was not sent with jump"
 
-    page.locator(".source-card").filter(has_text="B站字幕").get_by_text("用于视频助手").click()
-    expect(page.get_by_test_id("primary-state")).to_contain_text("B站字幕正在用于视频助手")
+    page.get_by_role("button", name="返回原位置").click()
+    expect(page.get_by_text("已返回")).to_be_visible()
 
     assert_clean_visible_text(page)
     assert_no_horizontal_overflow(page)
@@ -88,7 +146,7 @@ def main():
             assert not mobile_errors, "\n".join(mobile_errors)
             mobile.close()
 
-            print("current-video primary-text mock QA passed: desktop/mobile states, no full-text auto request, no raw visible leak, no overflow, no console errors")
+            print("current-video primary-text real UI QA passed: desktop/mobile source selection, no automatic full-text request, search/jump/return, no raw visible leak, no overflow, no console errors")
         finally:
             browser.close()
 

@@ -9,6 +9,11 @@ import type {
   CurrentVideoTranscriptSegment,
   CurrentVideoTranscriptSourceRecord,
 } from '../../shared/types/current-video-transcript';
+import {
+  getTemporaryCurrentVideoTranscriptEvidenceState,
+  getTemporaryCurrentVideoTranscriptSegments,
+  putTemporaryCurrentVideoTranscriptEvidence,
+} from '../current-video-temporary-transcript-cache.ts';
 import { db } from './db';
 
 export interface UpsertCurrentVideoTranscriptEvidenceOptions {
@@ -33,6 +38,9 @@ export async function upsertCurrentVideoTranscriptEvidence(
       const plan = planTranscriptEvidenceUpsert(sources, segments, evidence, {
         protectedSourceIdentityKeys: options.protectedSourceIdentityKeys,
       });
+      if (plan.skippedPersistentWrite) {
+        putTemporaryCurrentVideoTranscriptEvidence(evidence);
+      }
 
       if (plan.sourceIdsToDelete.length > 0) {
         await db.currentVideoTranscriptSources.bulkDelete(plan.sourceIdsToDelete);
@@ -68,8 +76,10 @@ export async function getCurrentVideoTranscriptEvidenceState(
   const state = buildTranscriptEvidenceStateFromCache(identity, sources, segments, now);
   if (state.sourceIdentityKey && state.active) {
     await touchTranscriptSource(state.sourceIdentityKey, now);
+    return state;
   }
-  return state;
+  const temporaryState = getTemporaryCurrentVideoTranscriptEvidenceState(identity, now);
+  return temporaryState.active ? temporaryState : state;
 }
 
 export async function getCurrentVideoTranscriptSegments(
@@ -83,7 +93,7 @@ export async function getCurrentVideoTranscriptSegments(
   const expectedSourceHash = identity.sourceHash ?? null;
   const expectedSourceIdentityKey = identity.sourceIdentityKey ?? null;
 
-  return rows
+  const persistentSegments = rows
     .filter(segment =>
       !segment.stale
       && (!identity.language || languageKey(segment.language) === expectedLanguage)
@@ -95,6 +105,8 @@ export async function getCurrentVideoTranscriptSegments(
       || legacySegmentSourceIdentity(segment) === expectedSourceIdentityKey,
     )
     .sort((a, b) => a.startSeconds - b.startSeconds || a.endSeconds - b.endSeconds);
+  if (persistentSegments.length > 0) return persistentSegments;
+  return getTemporaryCurrentVideoTranscriptSegments(identity);
 }
 
 async function touchTranscriptSource(sourceIdentityKey: string, now: number): Promise<void> {

@@ -6,6 +6,7 @@ import type {
   LocalDataPrivacySummary,
 } from '../../shared/types/local-data-privacy.ts';
 import { ensureDynamicBill013Migration } from '../dynamic-bill/migration.ts';
+import { clearTemporaryCurrentVideoTranscriptCache } from '../current-video-temporary-transcript-cache.ts';
 import { getDynamicSyncState } from './dynamic-bill-repo.ts';
 import { db } from './db.ts';
 import { getRegisteredLocalDataCategories } from './local-data-category-registry.ts';
@@ -57,6 +58,7 @@ export async function clearCurrentVideoSubtitleCache(): Promise<LocalDataOperati
       await db.currentVideoTranscriptSegments.clear();
     },
   );
+  clearTemporaryCurrentVideoTranscriptCache();
 
   return {
     operation: 'clear_current_video_subtitle_cache',
@@ -102,6 +104,7 @@ export async function clearAllLocalData(confirmation: unknown): Promise<LocalDat
       }
     });
     await chrome.storage.local.clear();
+    clearTemporaryCurrentVideoTranscriptCache();
 
     return {
       operation: 'clear_all_local_data',

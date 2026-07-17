@@ -30,6 +30,20 @@ export interface CurrentVideoTextSourceIdentity {
   lineCount: number;
 }
 
+export interface CurrentVideoCanonicalTextSourceRecord {
+  version: 1;
+  kind: 'current-video-primary-text-source';
+  bvid: string;
+  cid: number;
+  page: number;
+  source: CurrentVideoPrimaryTextSourceKind;
+  sourceType: CurrentVideoSubtitleSourceType | 'local_transcript';
+  language: string | null;
+  bodyHash: string;
+  timelineHash: string;
+  lineCount: number;
+}
+
 export interface CurrentVideoPrimaryTextSourceOption {
   identity: CurrentVideoTextSourceIdentity;
   label: 'B站字幕' | '本地转录';
@@ -131,21 +145,36 @@ export function buildCurrentVideoTextSourceIdentity(input: {
   lines: CurrentVideoTextLine[];
 }): CurrentVideoTextSourceIdentity {
   const normalizedLines = normalizeTextLines(input.lines);
-  const bodyHash = stableDigestHex(normalizedLines.map(line => `${line.lineNo}:${normalizeLineText(line.text)}`).join('\n'));
-  const timelineHash = stableDigestHex(normalizedLines.map(line =>
-    `${line.lineNo}:${milliseconds(line.startSeconds)}:${milliseconds(line.endSeconds)}`,
-  ).join('\n'));
+  const bodyHash = stableDigestHex(canonicalSerialize({
+    version: 1,
+    kind: 'current-video-primary-text-body',
+    lines: normalizedLines.map(line => ({
+      lineNo: line.lineNo,
+      text: normalizeLineText(line.text),
+    })),
+  }));
+  const timelineHash = stableDigestHex(canonicalSerialize({
+    version: 1,
+    kind: 'current-video-primary-text-timeline',
+    lines: normalizedLines.map(line => ({
+      lineNo: line.lineNo,
+      startMs: milliseconds(line.startSeconds),
+      endMs: milliseconds(line.endSeconds),
+    })),
+  }));
   const language = normalizeLanguage(input.language);
-  const sourceHash = stableDigestHex([
-    input.bvid,
-    input.cid,
-    input.page,
-    input.source,
-    input.sourceType,
-    language ?? '',
+  const canonicalIdentity = buildCanonicalTextSourceRecord({
+    bvid: input.bvid,
+    cid: input.cid,
+    page: input.page,
+    source: input.source,
+    sourceType: input.sourceType,
+    language,
     bodyHash,
     timelineHash,
-  ].join('|'));
+    lineCount: normalizedLines.length,
+  });
+  const sourceHash = stableDigestHex(canonicalSerialize(canonicalIdentity));
 
   return {
     bvid: input.bvid,
@@ -168,6 +197,26 @@ export function buildCurrentVideoTextSourceIdentity(input: {
     ].join(':'),
     lineCount: normalizedLines.length,
   };
+}
+
+export function buildCanonicalTextSourceRecord(input: Omit<CurrentVideoCanonicalTextSourceRecord, 'version' | 'kind'>): CurrentVideoCanonicalTextSourceRecord {
+  return {
+    version: 1,
+    kind: 'current-video-primary-text-source',
+    bvid: input.bvid,
+    cid: input.cid,
+    page: input.page,
+    source: input.source,
+    sourceType: input.sourceType,
+    language: input.language,
+    bodyHash: input.bodyHash,
+    timelineHash: input.timelineHash,
+    lineCount: input.lineCount,
+  };
+}
+
+export function serializeCurrentVideoCanonicalRecord(value: unknown): string {
+  return canonicalSerialize(value);
 }
 
 export function buildPrimaryTextSourceOption(input: {
@@ -407,6 +456,20 @@ function normalizeLanguage(value: string | null | undefined): string | null {
 
 function languageKey(value: string | null | undefined): string {
   return (value ?? 'unknown').trim().toLowerCase() || 'unknown';
+}
+
+function canonicalSerialize(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value ?? null);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(item => canonicalSerialize(item)).join(',')}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map(key => `${JSON.stringify(key)}:${canonicalSerialize(record[key])}`)
+    .join(',')}}`;
 }
 
 function utf8ByteLength(value: string): number {

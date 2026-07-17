@@ -363,18 +363,18 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     case 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE':
       return { success: true, data: await getTranscriptEvidenceForActiveTab(request.params) as T };
     case 'GET_CURRENT_VIDEO_SUMMARY': {
-      const context = await getCurrentVideoContextForActiveTab();
+      const context = await getCurrentVideoContextForActiveTabWithSelection(request.params);
       const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
       return { success: true, data: await generateCurrentVideoSummary(context, { transcriptSegments }) as T };
     }
     case 'GET_VIDEO_KNOWLEDGE': {
-      const context = await getCurrentVideoContextForActiveTab();
+      const context = await getCurrentVideoContextForActiveTabWithSelection(request.params);
       const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
       return { success: true, data: buildVideoKnowledgeResult(context, { transcriptSegments }) as T };
     }
     case 'SEARCH_CURRENT_VIDEO_SEGMENTS': {
       const query = String(request.params?.query ?? '');
-      const context = await getCurrentVideoContextForActiveTab();
+      const context = await getCurrentVideoContextForActiveTabWithSelection(request.params);
       const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
       const videoKnowledge = buildVideoKnowledgeResult(context, { transcriptSegments });
       return {
@@ -596,7 +596,7 @@ async function requestCurrentVideoSegmentJump(
     );
   }
 
-  const context = await getCurrentVideoContextForActiveTab();
+  const context = await getCurrentVideoContextForActiveTabWithSelection(params);
   if (context.kind !== 'video') {
     return blockedTimestampJumpResponse(
       candidateId,
@@ -695,6 +695,13 @@ async function getCurrentVideoContextForActiveTab(
   return await enrichCurrentVideoContextWithTranscriptEvidence(withSubtitle);
 }
 
+async function getCurrentVideoContextForActiveTabWithSelection(
+  params: Record<string, unknown> | undefined,
+): Promise<CurrentVideoContextResult> {
+  const context = await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(params));
+  return await bindSelectedCurrentVideoTranscriptEvidence(context, selectedSourceIdentityKey(params));
+}
+
 async function getRawCurrentVideoContextForActiveTab(
   options: CurrentVideoLookupOptions = {},
 ): Promise<CurrentVideoContextResult> {
@@ -743,6 +750,20 @@ async function getTranscriptEvidenceForActiveTab(
     requestedLanguage,
     protectedSourceIdentityKeys: currentVideoProtectedSourceIdentityKeys(context, params),
   });
+}
+
+async function bindSelectedCurrentVideoTranscriptEvidence(
+  context: CurrentVideoContextResult,
+  sourceIdentityKey: string | null,
+): Promise<CurrentVideoContextResult> {
+  if (context.kind !== 'video' || !sourceIdentityKey || !context.cid) return context;
+  const transcriptEvidence = await getCurrentVideoTranscriptEvidenceState({
+    bvid: context.bvid,
+    cid: context.cid,
+    page: context.currentPart.page,
+    sourceIdentityKey,
+  });
+  return withTranscriptEvidenceState(context, transcriptEvidence);
 }
 
 async function enrichCurrentVideoContextWithSubtitleProbe(
@@ -885,6 +906,13 @@ function currentVideoProtectedSourceIdentityKeys(
   }
 
   return Array.from(keys);
+}
+
+function selectedSourceIdentityKey(params: Record<string, unknown> | undefined): string | null {
+  const value = params?.selectedSourceIdentityKey ?? params?.sourceIdentityKey;
+  return typeof value === 'string' && value.trim()
+    ? value.trim()
+    : null;
 }
 
 async function resolveCurrentVideoLookupState(): Promise<{

@@ -2,12 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { cacheCurrentVideoTranscriptEvidence } from '../src/background/current-video-transcript-cache.ts';
 import {
+  CURRENT_VIDEO_TRANSCRIPT_CACHE_MAX_BYTES,
   CURRENT_VIDEO_TRANSCRIPT_CACHE_MAX_SOURCE_IDENTITIES,
   buildTranscriptEvidenceStateFromCache,
+  measureTranscriptPersistentBytes,
   normalizeBilibiliTranscriptEvidence,
   planTranscriptEvidenceUpsert,
   withTranscriptEvidenceState,
 } from '../src/shared/current-video-transcript-cache.ts';
+import {
+  clearTemporaryCurrentVideoTranscriptCache,
+  getTemporaryCurrentVideoTranscriptEvidenceState,
+  getTemporaryCurrentVideoTranscriptSegments,
+  putTemporaryCurrentVideoTranscriptEvidence,
+} from '../src/background/current-video-temporary-transcript-cache.ts';
 import { clearLegacyCurrentVideoTranscriptCache } from '../src/background/storage/current-video-transcript-migration.ts';
 import {
   assertAssistantPayloadAudit,
@@ -271,6 +279,89 @@ test('keeps oversize subtitle source temporary without evicting existing cache',
   assert.equal(plan.state.temporary, true);
   assert.equal(plan.state.persistent, false);
   assert.ok(plan.state.warnings.includes('transcript_source_temporary_oversize'));
+});
+
+test('uses persisted source and segment records for byte limit boundary planning', () => {
+  const evidence = normalizeBilibiliTranscriptEvidence(
+    {
+      body: [
+        { from: 0, to: 1, content: '边界字幕正文🙂'.repeat(20) },
+        { from: 1, to: 2, content: '第二段用于验证真实落库记录大小'.repeat(15) },
+      ],
+    },
+    baseNormalizeOptions({ bvid: 'BV1ByteLimit', cid: 6101, fetchedAt: 9000 }),
+  );
+  const measured = measureTranscriptPersistentBytes(evidence.sourceRecord, evidence.segments);
+
+  assert.equal(evidence.sourceRecord.serializedBytes, measured);
+  assert.ok(measured > 0);
+
+  const maxMinusOne = planTranscriptEvidenceUpsert([], [], evidence, {
+    maxBytes: measured - 1,
+  });
+  assert.equal(maxMinusOne.skippedPersistentWrite, true);
+  assert.equal(maxMinusOne.sourcesToPut.length, 0);
+  assert.equal(maxMinusOne.segmentsToPut.length, 0);
+
+  const exactMax = planTranscriptEvidenceUpsert([], [], evidence, {
+    maxBytes: measured,
+  });
+  assert.equal(exactMax.skippedPersistentWrite, false);
+  assert.equal(measureTranscriptPersistentBytes(exactMax.sourcesToPut[0], exactMax.segmentsToPut), measured);
+  assert.ok(measureTranscriptPersistentBytes(exactMax.sourcesToPut[0], exactMax.segmentsToPut) <= measured);
+
+  const maxPlusOne = planTranscriptEvidenceUpsert([], [], evidence, {
+    maxBytes: measured + 1,
+  });
+  assert.equal(maxPlusOne.skippedPersistentWrite, false);
+  assert.equal(maxPlusOne.state.active, true);
+  assert.ok(CURRENT_VIDEO_TRANSCRIPT_CACHE_MAX_BYTES > measured);
+});
+
+test('keeps oversize subtitle body readable only in temporary source memory', () => {
+  clearTemporaryCurrentVideoTranscriptCache();
+  const oversize = normalizeBilibiliTranscriptEvidence(
+    {
+      body: [
+        { from: 0, to: 3, content: '这段只允许本次临时使用，不能落库。' },
+        { from: 3, to: 6, content: '切换来源或清理后必须读不到。' },
+      ],
+    },
+    baseNormalizeOptions({ bvid: 'BV1Temporary', cid: 6201, fetchedAt: 9100 }),
+  );
+  const measured = measureTranscriptPersistentBytes(oversize.sourceRecord, oversize.segments);
+  const plan = planTranscriptEvidenceUpsert([], [], oversize, {
+    maxBytes: measured - 1,
+  });
+  assert.equal(plan.skippedPersistentWrite, true);
+
+  putTemporaryCurrentVideoTranscriptEvidence(oversize, 9200);
+  const identity = {
+    bvid: 'BV1Temporary',
+    cid: 6201,
+    page: 1,
+    language: 'zh-CN',
+    sourceIdentityKey: oversize.sourceRecord.sourceIdentityKey,
+    sourceHash: oversize.sourceRecord.sourceHash,
+  };
+  const state = getTemporaryCurrentVideoTranscriptEvidenceState(identity, 9300);
+  const segments = getTemporaryCurrentVideoTranscriptSegments(identity, 9300);
+
+  assert.equal(state.active, true);
+  assert.equal(state.temporary, true);
+  assert.equal(state.persistent, false);
+  assert.equal(segments.length, 2);
+  assert.match(segments.map(segment => segment.text).join('\n'), /本次临时使用/);
+
+  const switched = getTemporaryCurrentVideoTranscriptEvidenceState({
+    ...identity,
+    sourceIdentityKey: 'primary-text:bilibili_subtitle:BV1Temporary:6201:1:zh-cn:other',
+  }, 9400);
+  assert.equal(switched.active, false);
+
+  clearTemporaryCurrentVideoTranscriptCache();
+  const cleared = getTemporaryCurrentVideoTranscriptSegments(identity, 9500);
+  assert.equal(cleared.length, 0);
 });
 
 test('Dexie 0.12 subtitle cache upgrade clears only transcript tables transactionally', async () => {
