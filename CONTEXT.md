@@ -141,8 +141,8 @@ A locally persisted question-and-answer timeline that can remain open while the 
 _Avoid_: fixed main questions, user-visible video branches, video-switch system messages, automatically asking after a video switch, direct seeking from an answer source label, treating another video's answer as current evidence, adding duplicate turns for retries, using failed answers as conversation context, hiding an old text version behind a raw identifier, freezing the whole session after one video's text changes, duplicating full transcripts inside session storage, resending the entire stored conversation on every question
 
 **对话脉络**:
-A bounded, rolling summary of the user's intent, concepts already clarified, and unresolved questions within one 问答会话. It helps later questions retain conversational continuity across page changes but is not video evidence and cannot support an answer or citation by itself. When the current reference video changes, it may preserve intent and terminology but must not carry factual claims from the previous video into the new answer. It changes only after a newly generated answer and all of its citations have passed validation.
-_Avoid_: treating conversation context as video evidence, carrying a previous video's claims into the current answer, preserving unsupported model claims, updating context from a rejected answer
+A bounded, rolling summary used only while consecutive questions share the same active video, part, and exact 主要文本来源 identity. It helps same-evidence follow-up questions retain continuity but is not video evidence and cannot support an answer or citation by itself. When the video, part, or primary-text identity changes, the model-side context resets even though the locally visible 问答会话 timeline remains. It changes only after a newly generated answer and all of its citations have passed validation.
+_Avoid_: treating conversation context as video evidence, carrying any context across a video/part/text-identity change, preserving unsupported model claims, updating context from a rejected answer
 
 **字幕全文**:
 A dedicated view of the active video's selected viewing text source, preserving its time alignment for reading, search, navigation, and export. It can show available Bilibili subtitle body text or a completed local transcript. The viewing source is independent from the 主要文本来源 used by the video assistant. “Available” Bilibili subtitles means readable body text has been obtained and matched to the active part; a subtitle that may exist or a detected track without body text is not yet available. It is an evidence surface, not part of the 辅助摘要.
@@ -200,7 +200,7 @@ Domain expert: "Use 被淹没的关注, 收藏关联更新, and 关注轮换 as 
 
 Developer: "Is every 动态账单 entry just a video?"
 
-Domain expert: "No. A 账单项 may focus on a UP主 and include new or historical representative videos, or focus on a new video while still explaining the creator context."
+Domain expert: "Each 0.13 账单项 focuses on one UP主 and one latest unwatched post from the current dynamic window. Historical videos may support the local evidence explanation, but cannot replace the new post or become the card's primary content."
 
 Developer: "Does opening a new video count as consumption?"
 
