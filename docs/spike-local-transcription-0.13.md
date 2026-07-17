@@ -1,6 +1,6 @@
 # Bili-Bill 0.13 本地转录技术 Spike
 
-状态：待执行。本文定义技术验证，不承诺本地转录一定进入 0.13 普通 UI。
+状态：**已执行 / no-go**。执行证据与最终决定见 [`report-local-transcription-0.13.md`](./report-local-transcription-0.13.md)；本文保留技术验收定义，不承诺本地转录进入 0.13 普通 UI。第六轮安全复核后，Windows 实时 MV3 浏览器 harness 已禁用：当前不启动浏览器、不创建或删除临时目录，静态 MV3 源只作历史参考且不计为当前 machine evidence。
 
 ## 1. 目标
 
