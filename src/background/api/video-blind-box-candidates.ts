@@ -4,23 +4,27 @@ import type {
   ExperimentRealVideoCandidate,
   ExperimentVideoCandidate,
 } from '../../shared/types/analytics';
+import type { FollowedCreator } from '../../shared/types/dynamic-bill';
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
-import { getHistoryCoverageSpan, type HistoryCoverageSpan } from '../analytics/history-coverage.ts';
 
 const DAY_MS = 86_400_000;
 const RELATED_VIDEO_ENDPOINT = '/x/web-interface/archive/related';
+const REGION_DYNAMIC_ENDPOINT = '/x/web-interface/dynamic/region';
+const CREATOR_ARCHIVE_ENDPOINT = '/x/space/wbi/arc/search';
 const DEFAULT_SEED_LIMIT = 3;
 const DEFAULT_PER_SEED_LIMIT = 20;
 const DEFAULT_SEED_TIMEOUT_MS = 8_000;
 
-const LONG_WINDOW_DAYS = 180;
-const RECENT_WINDOW_DAYS = 30;
-const RECENT_VIDEO_BLOCK_DAYS = 90;
+const CROSS_REGION_WINDOW_DAYS = 7;
+const CROSS_REGION_HIGH_FREQUENCY_THRESHOLD = 2;
+const CROSS_REGION_HIGH_FREQUENCY_LIMIT = 3;
 const POSITIVE_COMPLETION = 0.75;
-const MIN_LONG_POSITIVE_COUNT = 2;
-const MAX_REGION_DIRECTIONS = 3;
 const REGION_PAGE_SIZE = 20;
 const REGION_SOURCE_LABEL = 'B 站分区新视频';
+const CREATOR_ARCHIVE_SOURCE_LABEL = 'UP 主公开较早投稿';
+const CREATOR_ARCHIVE_SEED_LIMIT = 3;
+const CREATOR_ARCHIVE_PAGE_SIZE = 30;
+const CREATOR_ARCHIVE_RECENT_BLOCK_DAYS = 7;
 
 export interface RelatedVideoSeed {
   bvid: string;
@@ -34,63 +38,84 @@ export interface RelatedVideoCandidateOptions {
   signal?: AbortSignal;
 }
 
-export type VarietyRegionCandidatePoolStatus =
+export type CrossRegionCandidatePoolStatus =
   | 'ready'
-  | 'insufficient_local_evidence'
-  | 'unmapped_interest'
+  | 'no_available_region'
   | 'source_failed'
   | 'empty';
 
-export type VarietyRegionInterestKind = 'category' | 'tag';
-
-export interface VarietyRegionDirection {
-  key: string;
-  kind: VarietyRegionInterestKind;
-  label: string;
+export interface PublicRegion {
   rid: number;
   regionName: string;
-  longWatchedCount: number;
-  longPositiveCount: number;
-  recentWatchedCount: number;
-  recentPositiveCount: number;
-  expectedRecentPositive: number;
-  cooldownRatio: number;
-  daysSinceLastWatch: number | null;
-  recentHighLabels: string[];
-  score: number;
+  labels: string[];
 }
 
-export interface VarietyRegionCandidatePool {
-  status: VarietyRegionCandidatePoolStatus;
+export interface CrossRegionHighFrequencyRegion {
+  rid: number;
+  regionName: string;
+  count: number;
+}
+
+export interface CrossRegionSelection {
+  selectedRegion: PublicRegion | null;
+  highFrequencyRegions: CrossRegionHighFrequencyRegion[];
+  candidateRegions: PublicRegion[];
+  hasRecentRegionEvidence: boolean;
+}
+
+export interface CrossRegionCandidatePool {
+  status: CrossRegionCandidatePoolStatus;
   sourceLabel: string;
-  directions: VarietyRegionDirection[];
+  selectedRegion: PublicRegion | null;
+  highFrequencyRegions: CrossRegionHighFrequencyRegion[];
   candidates: ExperimentVideoCandidate[];
   evidence: string[];
   failureReason?: string;
   checkedRegionCount: number;
-  excludedRecentBvidCount: number;
   excludedInvalidCandidateCount: number;
 }
 
-interface VarietyRegionCandidateOptions {
+interface CrossRegionCandidateOptions {
   nowMs?: number;
-  maxDirections?: number;
   pageSize?: number;
+  random?: () => number;
   signal?: AbortSignal;
 }
 
-interface InterestSignal {
-  key: string;
-  kind: VarietyRegionInterestKind;
-  label: string;
-  rid: number;
-  regionName: string;
+export type CreatorArchiveCandidatePoolStatus =
+  | 'ready'
+  | 'no_followed_creator'
+  | 'source_failed'
+  | 'empty';
+
+export interface CreatorArchiveSeed {
+  mid: number;
+  name: string;
 }
 
-interface RegionMapping {
+export interface CreatorArchiveCandidatePool {
+  status: CreatorArchiveCandidatePoolStatus;
+  sourceLabel: string;
+  seedCount: number;
+  candidates: ExperimentVideoCandidate[];
+  evidence: string[];
+  failures: string[];
+  checkedCreatorCount: number;
+  excludedRecentSubmissionCount: number;
+  excludedInvalidCandidateCount: number;
+}
+
+interface CreatorArchiveCandidateOptions {
+  nowMs?: number;
+  seedLimit?: number;
+  pageSize?: number;
+  random?: () => number;
+  signal?: AbortSignal;
+}
+
+interface RegionSignal {
   rid: number;
   regionName: string;
-  labels: string[];
 }
 
 interface ArchiveOwner {
@@ -135,7 +160,33 @@ interface BiliRegionResponse {
   result?: BiliRegionArchive[];
 }
 
-const REGION_MAPPINGS: RegionMapping[] = [
+interface SpaceArchiveItem {
+  aid?: number;
+  bvid?: string;
+  title?: string;
+  author?: string;
+  owner?: ArchiveOwner;
+  pic?: string;
+  cover?: string;
+  length?: string | number;
+  duration?: string | number;
+  created?: number;
+  pubdate?: number;
+  ctime?: number;
+  tname?: string;
+}
+
+interface SpaceArchiveList {
+  vlist?: SpaceArchiveItem[];
+}
+
+interface SpaceArchiveResponse {
+  list?: SpaceArchiveList | SpaceArchiveItem[];
+  vlist?: SpaceArchiveItem[];
+  archives?: SpaceArchiveItem[];
+}
+
+const REGION_MAPPINGS: PublicRegion[] = [
   { rid: 1, regionName: '动画', labels: ['动画', 'mad', 'mmd', '手书', '配音'] },
   { rid: 13, regionName: '番剧', labels: ['番剧', '追番', '动漫番剧'] },
   { rid: 167, regionName: '国创', labels: ['国创', '国产动画'] },
@@ -234,59 +285,70 @@ export function buildRelatedVideoSourceFailure(
   };
 }
 
-export async function fetchVarietyRegionCandidatePool(
+export async function fetchCrossRegionCandidatePool(
   records: WatchHistoryRecord[],
-  options: VarietyRegionCandidateOptions = {},
-): Promise<VarietyRegionCandidatePool> {
+  options: CrossRegionCandidateOptions = {},
+): Promise<CrossRegionCandidatePool> {
   const nowMs = options.nowMs ?? Date.now();
-  const directions = buildVarietyRegionDirections(records, {
+  const selection = selectCrossRegion(records, {
     nowMs,
-    maxDirections: options.maxDirections ?? MAX_REGION_DIRECTIONS,
+    random: options.random,
   });
-
-  if (directions.length === 0) {
-    return buildNoDirectionPool(records, nowMs);
+  if (!selection.selectedRegion) {
+    return {
+      status: 'no_available_region',
+      sourceLabel: REGION_SOURCE_LABEL,
+      selectedRegion: null,
+      highFrequencyRegions: selection.highFrequencyRegions,
+      candidates: [],
+      evidence: buildCrossRegionSelectionEvidence(selection, 0),
+      checkedRegionCount: 0,
+      excludedInvalidCandidateCount: 0,
+    };
   }
 
-  const recentBvids = recentWatchedBvids(records, nowMs);
   const candidatesByBvid = new Map<string, ExperimentVideoCandidate>();
-  const failures: string[] = [];
-  let checkedRegionCount = 0;
-  let excludedRecentBvidCount = 0;
   let excludedInvalidCandidateCount = 0;
+  const checkedRegionCount = 1;
   const { biliGet } = await import('./client.ts');
 
-  for (const direction of directions) {
-    checkedRegionCount += 1;
-    try {
-      const data = await biliGet<BiliRegionResponse>(
-        '/x/web-interface/dynamic/region',
-        {
-          rid: String(direction.rid),
-          pn: '1',
-          ps: String(options.pageSize ?? REGION_PAGE_SIZE),
-        },
-        2,
-        false,
-        options.signal,
-      );
-      for (const archive of getRegionArchives(data)) {
-        const video = toRegionVideoCandidate(archive, direction);
-        if (!video) {
-          excludedInvalidCandidateCount += 1;
-          continue;
-        }
-        if (recentBvids.has(video.bvid)) {
-          excludedRecentBvidCount += 1;
-          continue;
-        }
-        if (!candidatesByBvid.has(video.bvid)) {
-          candidatesByBvid.set(video.bvid, video);
-        }
+  try {
+    const data = await biliGet<BiliRegionResponse>(
+      REGION_DYNAMIC_ENDPOINT,
+      {
+        rid: String(selection.selectedRegion.rid),
+        pn: '1',
+        ps: String(options.pageSize ?? REGION_PAGE_SIZE),
+      },
+      2,
+      false,
+      options.signal,
+    );
+    for (const archive of getRegionArchives(data)) {
+      const video = toRegionVideoCandidate(archive, selection.selectedRegion);
+      if (!video) {
+        excludedInvalidCandidateCount += 1;
+        continue;
       }
-    } catch (error) {
-      failures.push(`${direction.regionName}: ${readableCandidateError(error)}`);
+      if (!candidatesByBvid.has(video.bvid)) {
+        candidatesByBvid.set(video.bvid, video);
+      }
     }
+  } catch (error) {
+    return {
+      status: 'source_failed',
+      sourceLabel: REGION_SOURCE_LABEL,
+      selectedRegion: selection.selectedRegion,
+      highFrequencyRegions: selection.highFrequencyRegions,
+      candidates: [],
+      evidence: [
+        ...buildCrossRegionSelectionEvidence(selection, 0),
+        `分区新视频候选源暂时不可用：${readableCandidateError(error)}。`,
+      ],
+      failureReason: readableCandidateError(error),
+      checkedRegionCount,
+      excludedInvalidCandidateCount,
+    };
   }
 
   const candidates = [...candidatesByBvid.values()];
@@ -294,144 +356,260 @@ export async function fetchVarietyRegionCandidatePool(
     return {
       status: 'ready',
       sourceLabel: REGION_SOURCE_LABEL,
-      directions,
+      selectedRegion: selection.selectedRegion,
+      highFrequencyRegions: selection.highFrequencyRegions,
       candidates,
-      evidence: buildDirectionEvidence(directions[0], candidates.length, excludedRecentBvidCount),
+      evidence: buildCrossRegionSelectionEvidence(selection, candidates.length),
       checkedRegionCount,
-      excludedRecentBvidCount,
       excludedInvalidCandidateCount,
     };
   }
 
-  const status = failures.length >= checkedRegionCount ? 'source_failed' : 'empty';
   return {
-    status,
+    status: 'empty',
     sourceLabel: REGION_SOURCE_LABEL,
-    directions,
+    selectedRegion: selection.selectedRegion,
+    highFrequencyRegions: selection.highFrequencyRegions,
     candidates: [],
     evidence: [
-      ...buildDirectionEvidence(directions[0], 0, excludedRecentBvidCount),
-      status === 'source_failed'
-        ? `分区新视频候选源暂时不可用：${failures.join('；') || '请求失败'}。`
-        : '已找到冷却方向，但这次分区新视频候选池没有留下可打开候选。',
+      ...buildCrossRegionSelectionEvidence(selection, 0),
+      '这次分区新视频候选池没有留下可打开视频。',
     ],
-    failureReason: failures.join('；') || undefined,
     checkedRegionCount,
-    excludedRecentBvidCount,
     excludedInvalidCandidateCount,
   };
 }
 
-export function buildVarietyRegionSourceFailure(
+export function buildCrossRegionSourceFailure(
   records: WatchHistoryRecord[],
   nowMs: number,
   error: unknown,
-): VarietyRegionCandidatePool {
-  const directions = buildVarietyRegionDirections(records, {
+): CrossRegionCandidatePool {
+  const selection = selectCrossRegion(records, {
     nowMs,
-    maxDirections: MAX_REGION_DIRECTIONS,
   });
   return {
     status: 'source_failed',
     sourceLabel: REGION_SOURCE_LABEL,
-    directions,
+    selectedRegion: selection.selectedRegion,
+    highFrequencyRegions: selection.highFrequencyRegions,
     candidates: [],
-    evidence: directions[0]
-      ? [
-        ...buildDirectionEvidence(directions[0], 0, 0),
-        `真实候选源请求失败：${readableCandidateError(error)}。`,
-      ]
-      : ['本地历史还没有形成可映射到 B 站分区的冷却方向。'],
+    evidence: [
+      ...buildCrossRegionSelectionEvidence(selection, 0),
+      `真实候选源请求失败：${readableCandidateError(error)}。`,
+    ],
     failureReason: readableCandidateError(error),
     checkedRegionCount: 0,
-    excludedRecentBvidCount: 0,
     excludedInvalidCandidateCount: 0,
   };
 }
 
-export function buildVarietyRegionDirections(
+export function selectCrossRegion(
   records: WatchHistoryRecord[],
-  options: { nowMs?: number; maxDirections?: number } = {},
-): VarietyRegionDirection[] {
+  options: { nowMs?: number; random?: () => number } = {},
+): CrossRegionSelection {
   const nowMs = options.nowMs ?? Date.now();
-  const coverage = getHistoryCoverageSpan(records, nowMs, RECENT_WINDOW_DAYS);
-  if (!coverage.hasEnoughForRecentComparison) return [];
+  const highFrequencyRegions = buildRecentHighFrequencyRegions(records, nowMs);
+  const excludedRids = new Set(highFrequencyRegions.map(region => region.rid));
+  const candidateRegions = highFrequencyRegions.length > 0
+    ? REGION_MAPPINGS.filter(region => !excludedRids.has(region.rid))
+    : [...REGION_MAPPINGS];
+  const selectedRegion = pickRandom(candidateRegions, options.random) ?? null;
 
-  const longCutoffMs = nowMs - LONG_WINDOW_DAYS * DAY_MS;
-  const recentCutoffMs = nowMs - RECENT_WINDOW_DAYS * DAY_MS;
-  const longRecords = records.filter(record => toEpochMs(record.viewAt) >= longCutoffMs);
-  const recentRecords = longRecords.filter(record => toEpochMs(record.viewAt) >= recentCutoffMs);
-  const totalLongPositive = Math.max(1, longRecords.filter(isPositiveRecord).length);
-  const recentHighLabels = buildRecentHighLabels(recentRecords);
-  const recentHighKeys = new Set(recentHighLabels.map(normalizeLabel));
-  const groups = new Map<string, { signal: InterestSignal; records: WatchHistoryRecord[] }>();
+  return {
+    selectedRegion,
+    highFrequencyRegions,
+    candidateRegions,
+    hasRecentRegionEvidence: highFrequencyRegions.length > 0,
+  };
+}
 
-  for (const record of longRecords) {
-    for (const signal of getRecordSignals(record)) {
-      const existing = groups.get(signal.key);
-      if (existing) {
-        existing.records.push(record);
-      } else {
-        groups.set(signal.key, { signal, records: [record] });
-      }
+export function buildRecentHighFrequencyRegions(
+  records: WatchHistoryRecord[],
+  nowMs = Date.now(),
+): CrossRegionHighFrequencyRegion[] {
+  const cutoffMs = nowMs - CROSS_REGION_WINDOW_DAYS * DAY_MS;
+  const counts = new Map<number, CrossRegionHighFrequencyRegion>();
+  const countedVideoRidPairs = new Set<string>();
+
+  for (const record of records) {
+    if (!isValidCrossRegionWatchRecord(record)) continue;
+    if (toEpochMs(record.viewAt) < cutoffMs) continue;
+    if (!isPositiveRecord(record)) continue;
+
+    for (const signal of getRecordRegionSignals(record)) {
+      const pairKey = `${record.bvid}:${signal.rid}`;
+      if (countedVideoRidPairs.has(pairKey)) continue;
+      countedVideoRidPairs.add(pairKey);
+      const existing = counts.get(signal.rid);
+      counts.set(signal.rid, {
+        rid: signal.rid,
+        regionName: existing?.regionName ?? signal.regionName,
+        count: (existing?.count ?? 0) + 1,
+      });
     }
   }
 
-  const directionsByRid = new Map<number, VarietyRegionDirection>();
+  return [...counts.values()]
+    .filter(region => region.count >= CROSS_REGION_HIGH_FREQUENCY_THRESHOLD)
+    .sort((a, b) => b.count - a.count || a.rid - b.rid)
+    .slice(0, CROSS_REGION_HIGH_FREQUENCY_LIMIT);
+}
 
-  for (const group of groups.values()) {
-    const positiveRecords = group.records.filter(isPositiveRecord);
-    if (positiveRecords.length < MIN_LONG_POSITIVE_COUNT) continue;
-    if (recentHighKeys.has(normalizeLabel(group.signal.label))) continue;
+export async function fetchCreatorArchiveCandidatePool(
+  creators: FollowedCreator[],
+  options: CreatorArchiveCandidateOptions = {},
+): Promise<CreatorArchiveCandidatePool> {
+  const nowMs = options.nowMs ?? Date.now();
+  const selectedSeeds = selectCreatorArchiveSeeds(creators, {
+    seedLimit: options.seedLimit ?? CREATOR_ARCHIVE_SEED_LIMIT,
+    random: options.random,
+  });
 
-    const recentGroupRecords = group.records.filter(record => toEpochMs(record.viewAt) >= recentCutoffMs);
-    const recentPositiveRecords = recentGroupRecords.filter(isPositiveRecord);
-    const expectedRecentPositive = positiveRecords.length * (RECENT_WINDOW_DAYS / LONG_WINDOW_DAYS);
-    const cooldownRatio = expectedRecentPositive > 0
-      ? recentPositiveRecords.length / expectedRecentPositive
-      : 0;
-
-    if (cooldownRatio > 0.85) continue;
-
-    const lastWatchMs = Math.max(...group.records.map(record => toEpochMs(record.viewAt)));
-    const daysSinceLastWatch = lastWatchMs > 0
-      ? Math.max(1, Math.floor((nowMs - lastWatchMs) / DAY_MS))
-      : null;
-    const longPositiveShare = positiveRecords.length / totalLongPositive;
-    const cooldownStrength = 1 - Math.min(cooldownRatio, 1);
-    const staleBoost = daysSinceLastWatch == null ? 0 : Math.min(daysSinceLastWatch / RECENT_WINDOW_DAYS, 2);
-    const score = positiveRecords.length * 8
-      + longPositiveShare * 35
-      + cooldownStrength * 24
-      + staleBoost * 4
-      + (group.signal.kind === 'tag' ? 1.5 : 0);
-
-    const direction: VarietyRegionDirection = {
-      key: group.signal.key,
-      kind: group.signal.kind,
-      label: group.signal.label,
-      rid: group.signal.rid,
-      regionName: group.signal.regionName,
-      longWatchedCount: group.records.length,
-      longPositiveCount: positiveRecords.length,
-      recentWatchedCount: recentGroupRecords.length,
-      recentPositiveCount: recentPositiveRecords.length,
-      expectedRecentPositive,
-      cooldownRatio,
-      daysSinceLastWatch,
-      recentHighLabels,
-      score: Math.round(score * 100) / 100,
+  if (selectedSeeds.length === 0) {
+    return {
+      status: 'no_followed_creator',
+      sourceLabel: CREATOR_ARCHIVE_SOURCE_LABEL,
+      seedCount: 0,
+      candidates: [],
+      evidence: ['本地尚无已同步的已关注 UP 快照，暂时不能请求公开较早投稿。'],
+      failures: [],
+      checkedCreatorCount: 0,
+      excludedRecentSubmissionCount: 0,
+      excludedInvalidCandidateCount: 0,
     };
+  }
 
-    const existing = directionsByRid.get(direction.rid);
-    if (!existing || direction.score > existing.score) {
-      directionsByRid.set(direction.rid, direction);
+  const cutoffSeconds = Math.floor((nowMs - CREATOR_ARCHIVE_RECENT_BLOCK_DAYS * DAY_MS) / 1000);
+  const candidatesByBvid = new Map<string, ExperimentVideoCandidate>();
+  const failures: string[] = [];
+  let excludedRecentSubmissionCount = 0;
+  let excludedInvalidCandidateCount = 0;
+  const { biliGet } = await import('./client.ts');
+
+  for (const seed of selectedSeeds) {
+    try {
+      const data = await biliGet<SpaceArchiveResponse>(
+        CREATOR_ARCHIVE_ENDPOINT,
+        {
+          mid: String(seed.mid),
+          pn: '1',
+          ps: String(options.pageSize ?? CREATOR_ARCHIVE_PAGE_SIZE),
+          order: 'pubdate',
+          tid: '0',
+        },
+        2,
+        true,
+        options.signal,
+      );
+      for (const item of getSpaceArchives(data)) {
+        const candidate = toCreatorArchiveCandidate(item, seed);
+        if (!candidate) {
+          excludedInvalidCandidateCount += 1;
+          continue;
+        }
+        if (!candidate.pubtime || candidate.pubtime >= cutoffSeconds) {
+          excludedRecentSubmissionCount += 1;
+          continue;
+        }
+        if (!candidatesByBvid.has(candidate.bvid)) {
+          candidatesByBvid.set(candidate.bvid, candidate);
+        }
+      }
+    } catch (error) {
+      failures.push(`${seed.name}: ${readableCandidateError(error)}`);
     }
   }
 
-  return [...directionsByRid.values()]
-    .sort((a, b) => b.score - a.score || a.regionName.localeCompare(b.regionName, 'zh-CN'))
-    .slice(0, options.maxDirections ?? MAX_REGION_DIRECTIONS);
+  const candidates = [...candidatesByBvid.values()];
+  if (candidates.length > 0) {
+    return {
+      status: 'ready',
+      sourceLabel: CREATOR_ARCHIVE_SOURCE_LABEL,
+      seedCount: selectedSeeds.length,
+      candidates,
+      evidence: [
+        `本轮从已同步关注快照中选取 ${selectedSeeds.length} 位 UP，只请求每位 UP 的公开投稿第一页。`,
+        `已排除最近 ${CREATOR_ARCHIVE_RECENT_BLOCK_DAYS} 天投稿 ${excludedRecentSubmissionCount} 条，避免和动态账单的新投稿重复。`,
+        `公开较早投稿候选池留下 ${candidates.length} 条可打开视频。`,
+      ],
+      failures,
+      checkedCreatorCount: selectedSeeds.length,
+      excludedRecentSubmissionCount,
+      excludedInvalidCandidateCount,
+    };
+  }
+
+  const status: CreatorArchiveCandidatePoolStatus = failures.length >= selectedSeeds.length ? 'source_failed' : 'empty';
+  return {
+    status,
+    sourceLabel: CREATOR_ARCHIVE_SOURCE_LABEL,
+    seedCount: selectedSeeds.length,
+    candidates: [],
+    evidence: [
+      `本轮从已同步关注快照中选取 ${selectedSeeds.length} 位 UP，只请求每位 UP 的公开投稿第一页。`,
+      `已排除最近 ${CREATOR_ARCHIVE_RECENT_BLOCK_DAYS} 天投稿 ${excludedRecentSubmissionCount} 条，避免和动态账单的新投稿重复。`,
+      status === 'source_failed'
+        ? `UP 主公开投稿候选源暂时不可用：${failures.join('；') || '请求失败'}。`
+        : '这次没有留下可打开的公开较早投稿。',
+    ],
+    failures,
+    checkedCreatorCount: selectedSeeds.length,
+    excludedRecentSubmissionCount,
+    excludedInvalidCandidateCount,
+  };
+}
+
+export function buildCreatorArchiveSourceFailure(
+  creators: FollowedCreator[],
+  _nowMs: number,
+  error: unknown,
+): CreatorArchiveCandidatePool {
+  const selectedSeeds = selectCreatorArchiveSeeds(creators, {
+    seedLimit: CREATOR_ARCHIVE_SEED_LIMIT,
+  });
+  return {
+    status: 'source_failed',
+    sourceLabel: CREATOR_ARCHIVE_SOURCE_LABEL,
+    seedCount: selectedSeeds.length,
+    candidates: [],
+    evidence: selectedSeeds.length > 0
+      ? [
+        `本轮从已同步关注快照中选取 ${selectedSeeds.length} 位 UP。`,
+        `UP 主公开投稿候选源暂时不可用：${readableCandidateError(error)}。`,
+      ]
+      : ['本地尚无已同步的已关注 UP 快照，暂时不能请求公开较早投稿。'],
+    failures: selectedSeeds.map(seed => `${seed.name}: ${readableCandidateError(error)}`),
+    checkedCreatorCount: 0,
+    excludedRecentSubmissionCount: 0,
+    excludedInvalidCandidateCount: 0,
+  };
+}
+
+export function selectCreatorArchiveSeeds(
+  creators: FollowedCreator[],
+  options: { seedLimit?: number; random?: () => number } = {},
+): CreatorArchiveSeed[] {
+  const seedLimit = clampPositive(options.seedLimit, CREATOR_ARCHIVE_SEED_LIMIT);
+  const activeCreators = creators
+    .filter(creator => creator.isActive !== false && positiveNumber(creator.mid))
+    .map(creator => ({
+      mid: creator.mid,
+      name: cleanText(creator.name) || `UP ${creator.mid}`,
+      weightKey: `${creator.lastSeenAt || creator.syncedAt || creator.followedAt || 0}:${creator.mid}`,
+    }))
+    .sort((a, b) => a.weightKey.localeCompare(b.weightKey, 'en'));
+
+  if (activeCreators.length <= seedLimit) {
+    return activeCreators.map(({ mid, name }) => ({ mid, name }));
+  }
+
+  const rotated = [...activeCreators];
+  const offset = Math.floor(clampRandom(options.random?.() ?? Math.random()) * rotated.length);
+  return [
+    ...rotated.slice(offset),
+    ...rotated.slice(0, offset),
+  ].slice(0, seedLimit).map(({ mid, name }) => ({ mid, name }));
 }
 
 function toRelatedFailure(
@@ -472,95 +650,51 @@ function toRelatedCandidate(
   };
 }
 
-function buildNoDirectionPool(records: WatchHistoryRecord[], nowMs: number): VarietyRegionCandidatePool {
-  const coverage = getHistoryCoverageSpan(records, nowMs, RECENT_WINDOW_DAYS);
-  const positiveRecords = records
-    .filter(record => toEpochMs(record.viewAt) >= nowMs - LONG_WINDOW_DAYS * DAY_MS)
-    .filter(isPositiveRecord);
-  const mappedSignalCount = positiveRecords
-    .flatMap(record => getRecordSignals(record))
-    .length;
-  const hasShortHistoryCoverage = !coverage.hasEnoughForRecentComparison;
-  const status: VarietyRegionCandidatePoolStatus = hasShortHistoryCoverage || positiveRecords.length < MIN_LONG_POSITIVE_COUNT
-    ? 'insufficient_local_evidence'
-    : mappedSignalCount === 0
-      ? 'unmapped_interest'
-      : 'empty';
-
-  return {
-    status,
-    sourceLabel: REGION_SOURCE_LABEL,
-    directions: [],
-    candidates: [],
-    evidence: [
-      hasShortHistoryCoverage
-        ? formatShortHistoryCoverageEvidence(coverage)
-        : `近 ${LONG_WINDOW_DAYS} 天本地正向观看 ${positiveRecords.length} 条，换口味至少需要 ${MIN_LONG_POSITIVE_COUNT} 条可聚合兴趣证据。`,
-      hasShortHistoryCoverage
-        ? `本地历史覆盖短于最近 ${RECENT_WINDOW_DAYS} 天对比窗口，暂不把这些记录解释成长期兴趣或冷却方向。`
-        : status === 'unmapped_interest'
-        ? '本地长期兴趣还不能保守映射到 B 站公开分区，暂不硬凑真实候选。'
-        : '没有找到长期相关但近期低频的分区方向，避免从近期高频口味里抽。',
-    ],
-    checkedRegionCount: 0,
-    excludedRecentBvidCount: 0,
-    excludedInvalidCandidateCount: 0,
-  };
-}
-
-function formatShortHistoryCoverageEvidence(coverage: HistoryCoverageSpan): string {
-  if (coverage.recordCount === 0) {
-    return `本地观看历史目前还没有可用于长期/近期对比的记录，至少需要覆盖最近 ${coverage.requiredDays} 天。`;
-  }
-  return `本地观看历史目前只覆盖约 ${coverage.spanDays} 天，短于最近 ${coverage.requiredDays} 天对比窗口。`;
-}
-
-function buildDirectionEvidence(
-  direction: VarietyRegionDirection,
+function buildCrossRegionSelectionEvidence(
+  selection: CrossRegionSelection,
   candidateCount: number,
-  excludedRecentBvidCount: number,
 ): string[] {
-  const recentHigh = direction.recentHighLabels.length > 0
-    ? direction.recentHighLabels.join('、')
-    : '暂无明显高频口味';
+  const selectedRegionName = selection.selectedRegion?.regionName ?? '无可用分区';
+  const highFrequencyText = selection.highFrequencyRegions.length > 0
+    ? selection.highFrequencyRegions.map(region => `${region.regionName} ${region.count} 次`).join('、')
+    : '';
+  const basis = selection.hasRecentRegionEvidence
+    ? `最近最多 ${CROSS_REGION_WINDOW_DAYS} 天有效观看中，高频分区是：${highFrequencyText}；本轮从这些分区之外随机选择「${selectedRegionName}」。`
+    : `最近最多 ${CROSS_REGION_WINDOW_DAYS} 天没有达到门槛的高频分区证据，本轮从固定公开分区目录随机选择「${selectedRegionName}」。`;
   return [
-    `长期 ${LONG_WINDOW_DAYS} 天里，「${direction.label}」有 ${direction.longWatchedCount} 条观看、${direction.longPositiveCount} 条正向观看。`,
-    `近期 ${RECENT_WINDOW_DAYS} 天里，这个方向正向观看 ${direction.recentPositiveCount} 条；按长期节奏预期约 ${formatCount(direction.expectedRecentPositive)} 条。`,
-    `最近高频口味是：${recentHigh}；本次只从冷却方向「${direction.regionName}」分区取新视频候选。`,
-    `真实候选池返回 ${candidateCount} 条可打开视频，已排除最近 ${RECENT_VIDEO_BLOCK_DAYS} 天本地看过的同 bvid ${excludedRecentBvidCount} 条。`,
+    basis,
+    `跨区漫游只使用仓库维护的固定公开分区目录和 B 站分区新视频接口，本轮候选分区为「${selectedRegionName}」。`,
+    `真实候选池返回 ${candidateCount} 条可打开视频；本切片不使用最近抽取记录去重，也不改用本地历史或收藏补位。`,
   ];
 }
 
-function getRecordSignals(record: WatchHistoryRecord): InterestSignal[] {
+function getRecordRegionSignals(record: WatchHistoryRecord): RegionSignal[] {
   const signals = [
-    toInterestSignal('category', record.tagName),
-    ...(record.tags ?? []).map(tag => toInterestSignal('tag', tag)),
-  ].filter((signal): signal is InterestSignal => Boolean(signal));
-  const result: InterestSignal[] = [];
-  const seen = new Set<string>();
+    toRegionSignal(record.tagName),
+    ...(record.tags ?? []).map(tag => toRegionSignal(tag)),
+  ].filter((signal): signal is RegionSignal => Boolean(signal));
+  const result: RegionSignal[] = [];
+  const seen = new Set<number>();
   for (const signal of signals) {
-    if (seen.has(signal.key)) continue;
-    seen.add(signal.key);
+    if (seen.has(signal.rid)) continue;
+    seen.add(signal.rid);
     result.push(signal);
   }
   return result;
 }
 
-function toInterestSignal(kind: VarietyRegionInterestKind, rawLabel: string | undefined): InterestSignal | null {
+function toRegionSignal(rawLabel: string | undefined): RegionSignal | null {
   const label = cleanText(rawLabel);
   if (!label) return null;
   const region = resolveRegion(label);
   if (!region) return null;
   return {
-    key: `${kind}:${normalizeLabel(label)}:${region.rid}`,
-    kind,
-    label,
     rid: region.rid,
     regionName: region.regionName,
   };
 }
 
-function resolveRegion(label: string): RegionMapping | null {
+function resolveRegion(label: string): PublicRegion | null {
   const normalized = normalizeLabel(label);
   if (!normalized) return null;
   for (const mapping of REGION_MAPPINGS) {
@@ -573,29 +707,6 @@ function resolveRegion(label: string): RegionMapping | null {
   return null;
 }
 
-function buildRecentHighLabels(records: WatchHistoryRecord[]): string[] {
-  const counts = new Map<string, { label: string; count: number }>();
-  for (const record of records.filter(isPositiveRecord)) {
-    const seenInRecord = new Set<string>();
-    for (const signal of getRecordSignals(record)) {
-      const key = normalizeLabel(signal.label);
-      if (!key || seenInRecord.has(key)) continue;
-      seenInRecord.add(key);
-      const existing = counts.get(key);
-      counts.set(key, {
-        label: existing?.label ?? signal.label,
-        count: (existing?.count ?? 0) + 1,
-      });
-    }
-  }
-
-  return [...counts.values()]
-    .filter(entry => entry.count >= 2)
-    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'zh-CN'))
-    .slice(0, 3)
-    .map(entry => entry.label);
-}
-
 function getRegionArchives(data: BiliRegionResponse): BiliRegionArchive[] {
   if (Array.isArray(data.archives)) return data.archives;
   if (Array.isArray(data.items)) return data.items;
@@ -606,7 +717,7 @@ function getRegionArchives(data: BiliRegionResponse): BiliRegionArchive[] {
 
 function toRegionVideoCandidate(
   archive: BiliRegionArchive,
-  direction: VarietyRegionDirection,
+  region: PublicRegion,
 ): ExperimentVideoCandidate | null {
   const bvid = cleanText(archive.bvid);
   if (!isLikelyBvid(bvid)) return null;
@@ -623,23 +734,59 @@ function toRegionVideoCandidate(
     duration: positiveNumber(archive.duration),
     pubtime: positiveNumber(archive.pubdate ?? archive.ctime),
     publishedAt: positiveNumber(archive.pubdate ?? archive.ctime),
-    tagName: cleanText(archive.tname) || direction.label,
+    tagName: cleanText(archive.tname) || region.regionName,
     sourceKind: 'bili_region_dynamic',
-    sourceLabel: `${REGION_SOURCE_LABEL} / ${direction.regionName}`,
-    regionRid: direction.rid,
-    regionName: direction.regionName,
-    cooldownLabel: direction.label,
+    sourceLabel: `${REGION_SOURCE_LABEL} / ${region.regionName}`,
+    regionRid: region.rid,
+    regionName: region.regionName,
   };
 }
 
-function recentWatchedBvids(records: WatchHistoryRecord[], nowMs: number): Set<string> {
-  const cutoffMs = nowMs - RECENT_VIDEO_BLOCK_DAYS * DAY_MS;
-  return new Set(
-    records
-      .filter(record => toEpochMs(record.viewAt) >= cutoffMs)
-      .map(record => cleanText(record.bvid))
-      .filter(Boolean),
-  );
+function getSpaceArchives(data: SpaceArchiveResponse): SpaceArchiveItem[] {
+  if (Array.isArray(data.archives)) return data.archives;
+  if (Array.isArray(data.vlist)) return data.vlist;
+  if (Array.isArray(data.list)) return data.list;
+  if (data.list && !Array.isArray(data.list) && Array.isArray(data.list.vlist)) return data.list.vlist;
+  return [];
+}
+
+function toCreatorArchiveCandidate(
+  item: SpaceArchiveItem,
+  seed: CreatorArchiveSeed,
+): ExperimentVideoCandidate | null {
+  const bvid = cleanText(item.bvid);
+  const title = stripHtml(cleanText(item.title));
+  const pubtime = positiveNumber(item.created ?? item.pubdate ?? item.ctime);
+  if (!isLikelyBvid(bvid) || !title || !pubtime) return null;
+
+  return {
+    bvid,
+    avid: positiveNumber(item.aid),
+    title,
+    authorName: cleanText(item.author) || cleanText(item.owner?.name) || seed.name,
+    authorMid: positiveNumber(item.owner?.mid) ?? seed.mid,
+    cover: normalizeImageUrl(item.pic || item.cover),
+    url: buildVideoUrl(bvid),
+    duration: parseDurationValue(item.duration ?? item.length),
+    pubtime,
+    publishedAt: pubtime,
+    tagName: cleanText(item.tname),
+    sourceKind: 'bili_space_archive',
+    sourceLabel: `${CREATOR_ARCHIVE_SOURCE_LABEL} / ${seed.name}`,
+  };
+}
+
+function isValidCrossRegionWatchRecord(record: WatchHistoryRecord): boolean {
+  return isLikelyBvid(cleanText(record.bvid))
+    && Number.isFinite(record.viewAt)
+    && record.viewAt > 0
+    && Number.isFinite(record.duration)
+    && record.duration > 0
+    && Number.isFinite(record.progress)
+    && record.progress >= 0
+    && Number.isFinite(record.actualCompletion)
+    && record.actualCompletion >= 0
+    && record.actualCompletion <= 1;
 }
 
 function normalizeSeeds(seeds: RelatedVideoSeed[]): RelatedVideoSeed[] {
@@ -682,10 +829,33 @@ function positiveNumber(value: unknown): number | undefined {
   return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
 }
 
-function clampPositive(value: unknown, fallback: number): number {
+function parseDurationValue(value: unknown): number | undefined {
+  if (typeof value === 'number') return positiveNumber(value);
+  const text = cleanText(value);
+  if (!text) return undefined;
+  if (/^\d+$/.test(text)) return positiveNumber(Number(text));
+  const parts = text.split(':').map(part => Number(part));
+  if (parts.some(part => !Number.isFinite(part) || part < 0)) return undefined;
+  return positiveNumber(parts.reduce((total, part) => total * 60 + part, 0));
+}
+
+function clampPositive(value: unknown, defaultValue: number): number {
   const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return fallback;
+  if (!Number.isFinite(numeric)) return defaultValue;
   return Math.max(1, Math.floor(numeric));
+}
+
+function clampRandom(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (value >= 1) return 0.999999;
+  if (value < 0) return 0;
+  return value;
+}
+
+function pickRandom<T>(items: T[], random?: () => number): T | undefined {
+  if (items.length === 0) return undefined;
+  const value = random ? random() : Math.random();
+  return items[Math.floor(clampRandom(value) * items.length)];
 }
 
 function normalizeImageUrl(value: unknown): string {
@@ -705,10 +875,6 @@ function isLikelyBvid(value: string): boolean {
 
 function buildVideoUrl(bvid: string): string {
   return `https://www.bilibili.com/video/${encodeURIComponent(bvid)}`;
-}
-
-function formatCount(value: number): string {
-  return String(Math.round(value * 10) / 10);
 }
 
 function readableCandidateError(error: unknown): string {

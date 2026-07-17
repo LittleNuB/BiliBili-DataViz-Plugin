@@ -3,34 +3,22 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { buildExperimentData } from '../src/background/analytics/suggestions.ts';
 import {
+  buildCrossRegionSourceFailure,
+  buildRecentHighFrequencyRegions,
   buildRelatedVideoSourceFailure,
-  buildVarietyRegionSourceFailure,
-  buildVarietyRegionDirections,
-  fetchVarietyRegionCandidatePool,
-  type VarietyRegionCandidatePool,
-  type VarietyRegionDirection,
+  selectCrossRegion,
+  type CreatorArchiveCandidatePool,
+  type CrossRegionCandidatePool,
 } from '../src/background/api/video-blind-box-candidates.ts';
-import { getHistoryCoverageSpan } from '../src/background/analytics/history-coverage.ts';
 import type { ExperimentRealCandidatePool } from '../src/shared/types/analytics';
 import type { FavoriteItem, SmartFavoriteIndex } from '../src/shared/types/favorite';
 import type { WatchHistoryRecord } from '../src/shared/types/watch-event';
 
 const NOW_MS = Date.UTC(2026, 5, 13, 12, 0, 0);
 
-test('builds blind boxes with real random explore and real variety candidate sources', () => {
-  const bannedGuessWord = ['猜你', '喜欢'].join('');
-  const bannedRankingWord = ['推荐', '排序'].join('');
-  const records = createMixedTasteRecords();
-
+test('builds fixed blind boxes with source labels for all four 0.13 sources', () => {
+  const records = createRecentRegionRecords();
   const favorites: FavoriteItem[] = [
-    createFavorite({
-      itemKey: 'variety-local-only',
-      bvid: 'BVFAVVAR1',
-      title: '本地收藏不应作为换口味候选',
-      folderTitle: '技术夹',
-      tagName: '科技',
-      favDaysAgo: 240,
-    }),
     createFavorite({
       itemKey: 'hidden',
       bvid: 'BVFAVHID1',
@@ -39,86 +27,67 @@ test('builds blind boxes with real random explore and real variety candidate sou
       tagName: '游戏',
       favDaysAgo: 360,
     }),
-    createFavorite({
-      itemKey: 'random',
-      bvid: 'BVFAVRND1',
-      title: '随机池视频',
-      folderTitle: '杂项',
-      tagName: '生活',
-      favDaysAgo: 120,
-    }),
   ];
-
   const smartIndexByItemKey = new Map<string, SmartFavoriteIndex>([
-    ['variety-local-only', createSmartIndex('variety-local-only', ['科技', '编程'])],
     ['hidden', createSmartIndex('hidden', ['游戏', '攻略'])],
-    ['random', createSmartIndex('random', ['生活', '旅行'])],
   ]);
 
   const data = buildExperimentData(records, favorites, smartIndexByItemKey, NOW_MS, {
     randomExplorePool: createRelatedPool(),
-    varietyRegionPool: createReadyRegionPool(),
+    crossRegionPool: createReadyCrossRegionPool(),
+    creatorArchivePool: createReadyCreatorArchivePool(),
   });
 
   assert.deepEqual(data.blindBoxes.map(box => box.id), [
-    'variety',
-    'hidden_favorite',
-    'revive_interest',
     'random_explore',
+    'cross_region',
+    'hidden_favorite',
+    'creator_archive',
   ]);
 
-  const [variety, hiddenFavorite, reviveInterest, randomExplore] = data.blindBoxes;
+  const [randomExplore, crossRegion, hiddenFavorite, creatorArchive] = data.blindBoxes;
 
-  assert.equal(variety.state, 'ready');
-  assert.equal(variety.statusLabel, '真实候选');
-  assert.equal(variety.candidateSource, 'B 站公开分区新视频候选池');
-  assert.equal(variety.realCandidateLabel, '已使用真实 B 站候选');
-  assert.equal(variety.usesRealBilibiliCandidates, true);
-  assert.equal(variety.video?.bvid, 'BV1REAL139A');
-  assert.equal(variety.video?.sourceKind, 'bili_region_dynamic');
-  assert.notEqual(variety.video?.bvid, 'BVFAVVAR1');
-  assert.match(variety.source, /B 站分区新视频/);
-  assert.match(variety.reason, /长期看过「知识」/);
-  assert.match(variety.reason, /最近 30 天/);
-  assert.match(variety.reason, /游戏/);
-  assert.ok(variety.evidence.some(line => line.includes('本地历史和收藏只参与选择冷却方向与解释')));
-
-  assert.equal(hiddenFavorite.state, 'ready');
-  assert.equal(hiddenFavorite.candidateSource, '本地收藏');
-  assert.equal(hiddenFavorite.realCandidateLabel, '未使用真实 B 站候选：这是本地收藏回访。');
-  assert.equal(hiddenFavorite.usesRealBilibiliCandidates, false);
-  assert.match(hiddenFavorite.source, /^本地收藏/);
-  assert.equal(hiddenFavorite.video?.bvid, 'BVFAVHID1');
-  assert.equal(hiddenFavorite.video?.sourceKind, 'local_favorite');
-  assert.match(hiddenFavorite.reason, /收藏|本地/);
-
-  assert.equal(reviveInterest.state, 'ready');
-  assert.equal(reviveInterest.title, '本地兴趣回顾');
-  assert.equal(reviveInterest.candidateSource, '本地观看历史');
-  assert.equal(reviveInterest.realCandidateLabel, '未使用真实 B 站候选：这是本地历史回顾。');
-  assert.equal(reviveInterest.usesRealBilibiliCandidates, false);
-  assert.equal(reviveInterest.video?.bvid, 'BVKNO002');
-  assert.equal(reviveInterest.video?.sourceKind, 'local_history');
-  assert.match(reviveInterest.source, /本地历史/);
-  assert.match(reviveInterest.reason, /不是动态账单的兴趣再平衡/);
-  assert.match(reviveInterest.reason, /不使用关注新投稿/);
-
+  assert.equal(randomExplore.title, '随机探索');
   assert.equal(randomExplore.state, 'ready');
   assert.equal(randomExplore.candidateSource, 'B 站公开视频的相关视频候选池');
   assert.equal(randomExplore.realCandidateLabel, '已使用真实 B 站候选');
   assert.equal(randomExplore.usesRealBilibiliCandidates, true);
   assert.equal(randomExplore.video?.bvid, 'BV1REALRND01');
   assert.equal(randomExplore.video?.sourceKind, 'bilibili_related');
-  assert.match(randomExplore.source, /相关视频候选/);
   assert.match(randomExplore.source, /种子视频/);
   assert.match(randomExplore.reason, /公开相关视频候选|随机抽取/);
-  assert.notEqual(randomExplore.video?.bvid, variety.video?.bvid);
-  assert.notEqual(randomExplore.video?.bvid, hiddenFavorite.video?.bvid);
-  assert.notEqual(randomExplore.video?.bvid, reviveInterest.video?.bvid);
+
+  assert.equal(crossRegion.title, '跨区漫游');
+  assert.equal(crossRegion.state, 'ready');
+  assert.equal(crossRegion.candidateSource, 'B 站公开分区新视频候选池');
+  assert.equal(crossRegion.realCandidateLabel, '已使用真实 B 站候选');
+  assert.equal(crossRegion.usesRealBilibiliCandidates, true);
+  assert.equal(crossRegion.video?.bvid, 'BV1REAL139A');
+  assert.equal(crossRegion.video?.sourceKind, 'bili_region_dynamic');
+  assert.match(crossRegion.reason, /最近最多 7 天/);
+  assert.match(crossRegion.reason, /游戏/);
+  assert.ok(crossRegion.evidence.some(line => line.includes('固定公开分区目录')));
+
+  assert.equal(hiddenFavorite.title, '冷门收藏');
+  assert.equal(hiddenFavorite.state, 'ready');
+  assert.equal(hiddenFavorite.candidateSource, '本地收藏');
+  assert.equal(hiddenFavorite.realCandidateLabel, '未使用真实 B 站候选：这是本地收藏回访。');
+  assert.equal(hiddenFavorite.usesRealBilibiliCandidates, false);
+  assert.equal(hiddenFavorite.video?.bvid, 'BVFAVHID1');
+  assert.equal(hiddenFavorite.video?.sourceKind, 'local_favorite');
+
+  assert.equal(creatorArchive.title, 'UP 主考古');
+  assert.equal(creatorArchive.state, 'ready');
+  assert.equal(creatorArchive.candidateSource, '已关注 UP 的公开较早投稿');
+  assert.equal(creatorArchive.realCandidateLabel, '已使用真实 B 站候选');
+  assert.equal(creatorArchive.usesRealBilibiliCandidates, true);
+  assert.equal(creatorArchive.video?.bvid, 'BV1ARCOLD1');
+  assert.equal(creatorArchive.video?.sourceKind, 'bili_space_archive');
+  assert.match(creatorArchive.reason, /公开较早投稿/);
+  assert.match(creatorArchive.reason, /排除最近 7 天新投稿/);
 
   for (const box of data.blindBoxes) {
-    assert.equal(box.reason.includes(bannedGuessWord), false);
-    assert.equal(box.reason.includes(bannedRankingWord), false);
+    assertNoForbiddenVisibleText(JSON.stringify(box));
     assert.ok(box.candidateSource.length > 0);
     assert.ok(box.realCandidateLabel.length > 0);
     assert.ok(box.evidence.length > 0);
@@ -131,110 +100,53 @@ test('builds blind boxes with real random explore and real variety candidate sou
   }
 });
 
-test('selects cooled long-term region directions instead of recent high-frequency interests', () => {
-  const directions = buildVarietyRegionDirections(createMixedTasteRecords(), { nowMs: NOW_MS });
+test('cross-region selection uses recent valid watches and ignores invalid records', () => {
+  const records = [
+    ...createRecentRegionRecords(),
+    createRecord({ bvid: 'not-a-bv', tagName: '知识', daysAgo: 1, actualCompletion: 0.95, title: '无效 BV' }),
+    createRecord({ bvid: 'BV1INVDUR1', tagName: '知识', daysAgo: 1, actualCompletion: 0.95, title: '无效时长', duration: 0 }),
+    createRecord({ bvid: 'BV1INVPRG1', tagName: '知识', daysAgo: 1, actualCompletion: 0.95, title: '无效进度', progress: -1 }),
+    createRecord({ bvid: 'BV1INVCMP1', tagName: '知识', daysAgo: 1, actualCompletion: 1.2, title: '无效完成度' }),
+    createRecord({ bvid: 'BV1OLDWAT1', tagName: '知识', daysAgo: 8, actualCompletion: 0.95, title: '超过七天' }),
+  ];
 
-  assert.ok(directions.length > 0);
-  assert.equal(directions[0].regionName, '知识');
-  assert.equal(directions[0].label, '知识');
-  assert.equal(directions[0].recentPositiveCount, 0);
-  assert.ok(directions[0].recentHighLabels.includes('游戏'));
-  assert.equal(directions.some(direction => direction.regionName === '游戏'), false);
+  const highFrequency = buildRecentHighFrequencyRegions(records, NOW_MS);
+  assert.deepEqual(highFrequency.map(region => [region.rid, region.regionName, region.count]), [
+    [4, '游戏', 2],
+  ]);
+
+  const selection = selectCrossRegion(records, { nowMs: NOW_MS, random: () => 0 });
+  assert.equal(selection.hasRecentRegionEvidence, true);
+  assert.equal(selection.selectedRegion?.rid, 1);
+  assert.equal(selection.candidateRegions.some(region => region.rid === 4), false);
 });
 
-test('returns a clear downgrade when the real region candidate source fails', () => {
-  const data = buildExperimentData(
-    createMixedTasteRecords(),
-    [],
-    new Map(),
-    NOW_MS,
-    {
-      randomExplorePool: createRelatedPool(),
-      varietyRegionPool: {
-        status: 'source_failed',
-        sourceLabel: 'B 站分区新视频',
-        directions: [createKnowledgeDirection()],
-        candidates: [],
-        evidence: [
-          '长期 180 天里，「知识」有 4 条观看、4 条正向观看。',
-          '分区新视频候选源暂时不可用：RATE_LIMITED。',
-        ],
-        failureReason: 'RATE_LIMITED',
-        checkedRegionCount: 1,
-        excludedRecentBvidCount: 0,
-        excludedInvalidCandidateCount: 0,
-      },
-    },
-  );
+test('cross-region picks from the full public directory when recent evidence is absent', () => {
+  const selection = selectCrossRegion([], { nowMs: NOW_MS, random: () => 0 });
 
-  const variety = data.blindBoxes[0];
-  assert.equal(variety.id, 'variety');
-  assert.equal(variety.state, 'empty');
-  assert.equal(variety.statusLabel, '候选源暂不可用');
-  assert.equal(variety.candidateSource, 'B 站公开分区新视频候选池');
-  assert.match(variety.realCandidateLabel, /未使用真实 B 站候选/);
-  assert.equal(variety.usesRealBilibiliCandidates, false);
-  assert.equal(variety.source, 'B 站分区新视频');
-  assert.match(variety.emptyTitle ?? '', /候选源暂不可用/);
-  assert.match(variety.emptyDescription ?? '', /不显示空视频/);
-  assert.equal(variety.video, undefined);
+  assert.equal(selection.hasRecentRegionEvidence, false);
+  assert.deepEqual(selection.highFrequencyRegions, []);
+  assert.equal(selection.selectedRegion?.regionName, '动画');
 });
 
-test('sanitizes raw runtime errors from region candidate source failures', () => {
-  const failedPool = buildVarietyRegionSourceFailure(
-    createMixedTasteRecords(),
+test('sanitizes raw runtime errors from cross-region candidate source failures', () => {
+  const failedPool = buildCrossRegionSourceFailure(
+    createRecentRegionRecords(),
     NOW_MS,
     new ReferenceError('document is not defined'),
   );
-  const data = buildExperimentData(createMixedTasteRecords(), [], new Map(), NOW_MS, {
-    randomExplorePool: createRelatedPool(),
-    varietyRegionPool: failedPool,
-  });
-  const variety = data.blindBoxes.find(box => box.id === 'variety');
-
-  assert.ok(variety);
-  assert.equal(variety.state, 'empty');
-  assert.match(variety.emptyDescription ?? '', /候选源|运行环境|暂时不可用/);
-  assert.equal(JSON.stringify(variety).includes('document is not defined'), false);
-  assert.equal(JSON.stringify(variety).includes('ReferenceError'), false);
-});
-
-test('returns Chinese empty states instead of generic filler when local evidence is insufficient', () => {
-  const bannedGuessWord = ['猜你', '喜欢'].join('');
-  const bannedUnconsumedWord = ['未', '消费'].join('');
-  const bannedRankingWord = ['推荐', '排序'].join('');
   const data = buildExperimentData([], [], new Map(), NOW_MS, {
-    randomExplorePool: {
-      sourceKind: 'bilibili_related',
-      sourceLabel: '相关视频候选',
-      seedCount: 0,
-      candidates: [],
-      failures: [],
-    },
-    varietyRegionPool: {
-      status: 'insufficient_local_evidence',
-      sourceLabel: 'B 站分区新视频',
-      directions: [],
-      candidates: [],
-      evidence: ['近 180 天本地正向观看 0 条，换口味至少需要 2 条可聚合兴趣证据。'],
-      checkedRegionCount: 0,
-      excludedRecentBvidCount: 0,
-      excludedInvalidCandidateCount: 0,
-    },
+    randomExplorePool: emptyRelatedPool(),
+    crossRegionPool: failedPool,
+    creatorArchivePool: emptyCreatorArchivePool(),
   });
+  const crossRegion = data.blindBoxes.find(box => box.id === 'cross_region');
 
-  assert.equal(data.blindBoxes.length, 4);
-  for (const box of data.blindBoxes) {
-    assert.equal(box.state, 'empty');
-    assert.ok(box.emptyTitle);
-    assert.ok(box.emptyDescription);
-    assert.ok(box.candidateSource);
-    assert.ok(box.realCandidateLabel);
-    assert.ok(box.evidence.length > 0);
-    assert.equal(box.reason.includes(bannedGuessWord), false);
-    assert.equal(box.reason.includes(bannedUnconsumedWord), false);
-    assert.equal(box.reason.includes(bannedRankingWord), false);
-  }
+  assert.ok(crossRegion);
+  assert.equal(crossRegion.state, 'empty');
+  assert.match(crossRegion.emptyDescription ?? '', /候选源|运行环境|暂时不可用/);
+  assert.equal(JSON.stringify(crossRegion).includes('document is not defined'), false);
+  assert.equal(JSON.stringify(crossRegion).includes('ReferenceError'), false);
 });
 
 test('does not fall back to a local random video when related candidates fail', () => {
@@ -247,7 +159,11 @@ test('does not fall back to a local random video when related candidates fail', 
     new ReferenceError('document is not defined'),
   );
 
-  const data = buildExperimentData(records, [], new Map(), NOW_MS, failedPool);
+  const data = buildExperimentData(records, [], new Map(), NOW_MS, {
+    randomExplorePool: failedPool,
+    crossRegionPool: emptyCrossRegionPool(),
+    creatorArchivePool: emptyCreatorArchivePool(),
+  });
   const randomExplore = data.blindBoxes.find(box => box.id === 'random_explore');
 
   assert.ok(randomExplore);
@@ -262,42 +178,29 @@ test('does not fall back to a local random video when related candidates fail', 
   assert.equal(JSON.stringify(randomExplore).includes('document is not defined'), false);
 });
 
-test('downgrades blind-box long-term surfaces when local history only spans about a week', async () => {
-  const records = createShortCoverageRecords();
-  const coverage = getHistoryCoverageSpan(records, NOW_MS);
-  assert.equal(coverage.spanDays, 7);
-  assert.equal(coverage.hasEnoughForRecentComparison, false);
-
-  assert.deepEqual(buildVarietyRegionDirections(records, { nowMs: NOW_MS }), []);
-  const regionPool = await fetchVarietyRegionCandidatePool(records, { nowMs: NOW_MS });
-  assert.equal(regionPool.status, 'insufficient_local_evidence');
-  assert.ok(regionPool.evidence.some(line => line.includes('本地观看历史目前只覆盖约 7 天')));
-
-  const data = buildExperimentData(records, [], new Map(), NOW_MS, {
-    randomExplorePool: createRelatedPool(),
-    varietyRegionPool: regionPool,
+test('returns natural Chinese empty states for all four fixed cards', () => {
+  const data = buildExperimentData([], [], new Map(), NOW_MS, {
+    randomExplorePool: emptyRelatedPool(),
+    crossRegionPool: emptyCrossRegionPool(),
+    creatorArchivePool: emptyCreatorArchivePool(),
   });
-  const variety = data.blindBoxes.find(box => box.id === 'variety');
-  const reviveInterest = data.blindBoxes.find(box => box.id === 'revive_interest');
 
-  assert.ok(variety);
-  assert.equal(variety.state, 'empty');
-  assert.match(variety.emptyDescription ?? '', /本地观看历史目前只覆盖约 7 天/);
-  assert.equal(variety.title.includes('换口味'), false);
-  assert.ok(reviveInterest);
-  assert.equal(reviveInterest.state, 'empty');
-  assert.match(reviveInterest.emptyDescription ?? '', /不能把最近几天当作长期兴趣/);
-});
-
-test('dynamic bill long-term columns require local history to span the recent comparison window', () => {
-  assert.equal(
-    getHistoryCoverageSpan(createShortCoverageRecords(), NOW_MS).hasEnoughForRecentComparison,
-    false,
-  );
-  assert.equal(
-    getHistoryCoverageSpan(createMixedTasteRecords(), NOW_MS).hasEnoughForRecentComparison,
-    true,
-  );
+  assert.equal(data.blindBoxes.length, 4);
+  assert.deepEqual(data.blindBoxes.map(box => box.title), [
+    '随机探索',
+    '跨区漫游',
+    '冷门收藏',
+    'UP 主考古',
+  ]);
+  for (const box of data.blindBoxes) {
+    assert.equal(box.state, 'empty');
+    assert.ok(box.emptyTitle);
+    assert.ok(box.emptyDescription);
+    assert.ok(box.candidateSource);
+    assert.ok(box.realCandidateLabel);
+    assert.ok(box.evidence.length > 0);
+    assertNoForbiddenVisibleText(JSON.stringify(box));
+  }
 });
 
 test('keeps blind-box candidate helpers out of service-worker dynamic preload', () => {
@@ -307,37 +210,33 @@ test('keeps blind-box candidate helpers out of service-worker dynamic preload', 
   assert.match(source, /from ['"]\.\.\/api\/video-blind-box-candidates\.ts['"]/);
 });
 
-function createMixedTasteRecords(): WatchHistoryRecord[] {
+function assertNoForbiddenVisibleText(value: string): void {
+  const bannedGuessWord = ['猜你', '喜欢'].join('');
+  const bannedUnconsumedWord = ['未', '消费'].join('');
+  const bannedRankingWord = ['推荐', '排序'].join('');
+  assert.equal(value.includes(bannedGuessWord), false);
+  assert.equal(value.includes(bannedUnconsumedWord), false);
+  assert.equal(value.includes(bannedRankingWord), false);
+  assert.equal(value.includes('document is not defined'), false);
+  assert.equal(value.includes('sourceHash'), false);
+  assert.equal(value.includes('segmentId'), false);
+  assert.equal(value.includes('subtitle_url'), false);
+}
+
+function createRecentRegionRecords(): WatchHistoryRecord[] {
   return [
-    createRecord({ bvid: 'BVREC001', tagName: '游戏', daysAgo: 3, actualCompletion: 0.82, title: '最近游戏 1' }),
-    createRecord({ bvid: 'BVREC002', tagName: '游戏', daysAgo: 5, actualCompletion: 0.78, title: '最近游戏 2' }),
-    createRecord({ bvid: 'BVREC003', tagName: '游戏', daysAgo: 8, actualCompletion: 0.75, title: '最近游戏 3' }),
-    createRecord({ bvid: 'BVREC004', tagName: '游戏', daysAgo: 12, actualCompletion: 0.88, title: '最近游戏 4' }),
-    createRecord({ bvid: 'BVREC005', tagName: '游戏', daysAgo: 16, actualCompletion: 0.8, title: '最近游戏 5' }),
-    createRecord({ bvid: 'BVREC006', tagName: '游戏', daysAgo: 22, actualCompletion: 0.79, title: '最近游戏 6' }),
-    createRecord({ bvid: 'BVKNO001', tagName: '知识', daysAgo: 120, actualCompletion: 0.92, title: '旧兴趣 1' }),
-    createRecord({ bvid: 'BVKNO002', tagName: '知识', daysAgo: 145, actualCompletion: 0.94, title: '旧兴趣 2' }),
-    createRecord({ bvid: 'BVKNO003', tagName: '知识', daysAgo: 170, actualCompletion: 0.9, title: '旧兴趣 3' }),
-    createRecord({ bvid: 'BVKNO004', tagName: '知识', daysAgo: 175, actualCompletion: 0.89, title: '旧兴趣 4' }),
+    createRecord({ bvid: 'BV1GAME001', tagName: '游戏', daysAgo: 1, actualCompletion: 0.82, title: '最近游戏 1' }),
+    createRecord({ bvid: 'BV1GAME002', tagName: '游戏', daysAgo: 3, actualCompletion: 0.78, title: '最近游戏 2' }),
+    createRecord({ bvid: 'BV1LOW0001', tagName: '知识', daysAgo: 2, actualCompletion: 0.2, title: '低完成知识', progress: 60 }),
   ];
 }
 
-function createShortCoverageRecords(): WatchHistoryRecord[] {
-  return [
-    createRecord({ bvid: 'BVSHORT001', tagName: '知识', daysAgo: 0, actualCompletion: 0.92, title: '短历史知识 1' }),
-    createRecord({ bvid: 'BVSHORT002', tagName: '知识', daysAgo: 1, actualCompletion: 0.9, title: '短历史知识 2' }),
-    createRecord({ bvid: 'BVSHORT003', tagName: '知识', daysAgo: 2, actualCompletion: 0.88, title: '短历史知识 3' }),
-    createRecord({ bvid: 'BVSHORT004', tagName: '知识', daysAgo: 4, actualCompletion: 0.91, title: '短历史知识 4' }),
-    createRecord({ bvid: 'BVSHORT005', tagName: '知识', daysAgo: 6, actualCompletion: 0.89, title: '短历史知识 5' }),
-  ];
-}
-
-function createReadyRegionPool(): VarietyRegionCandidatePool {
-  const direction = createKnowledgeDirection();
+function createReadyCrossRegionPool(): CrossRegionCandidatePool {
   return {
     status: 'ready',
     sourceLabel: 'B 站分区新视频',
-    directions: [direction],
+    selectedRegion: { rid: 36, regionName: '知识', labels: ['知识'] },
+    highFrequencyRegions: [{ rid: 4, regionName: '游戏', count: 2 }],
     candidates: [
       {
         bvid: 'BV1REAL139A',
@@ -355,37 +254,79 @@ function createReadyRegionPool(): VarietyRegionCandidatePool {
         sourceLabel: 'B 站分区新视频 / 知识',
         regionRid: 36,
         regionName: '知识',
-        cooldownLabel: '知识',
       },
     ],
     evidence: [
-      '长期 180 天里，「知识」有 4 条观看、4 条正向观看。',
-      '近期 30 天里，这个方向正向观看 0 条；按长期节奏预期约 0.7 条。',
-      '最近高频口味是：游戏；本次只从冷却方向「知识」分区取新视频候选。',
-      '真实候选池返回 1 条可打开视频，已排除最近 90 天本地看过的同 bvid 0 条。',
+      '最近最多 7 天有效观看中，高频分区是：游戏 2 次；本轮从这些分区之外随机选择「知识」。',
+      '跨区漫游只使用仓库维护的固定公开分区目录和 B 站分区新视频接口，本轮候选分区为「知识」。',
+      '真实候选池返回 1 条可打开视频；本切片不使用最近抽取记录去重，也不改用本地历史或收藏补位。',
     ],
     checkedRegionCount: 1,
-    excludedRecentBvidCount: 0,
     excludedInvalidCandidateCount: 0,
   };
 }
 
-function createKnowledgeDirection(): VarietyRegionDirection {
+function emptyCrossRegionPool(): CrossRegionCandidatePool {
   return {
-    key: 'category:知识:36',
-    kind: 'category',
-    label: '知识',
-    rid: 36,
-    regionName: '知识',
-    longWatchedCount: 4,
-    longPositiveCount: 4,
-    recentWatchedCount: 0,
-    recentPositiveCount: 0,
-    expectedRecentPositive: 0.7,
-    cooldownRatio: 0,
-    daysSinceLastWatch: 120,
-    recentHighLabels: ['游戏'],
-    score: 100,
+    status: 'empty',
+    sourceLabel: 'B 站分区新视频',
+    selectedRegion: { rid: 1, regionName: '动画', labels: ['动画'] },
+    highFrequencyRegions: [],
+    candidates: [],
+    evidence: [
+      '最近最多 7 天没有达到门槛的高频分区证据，本轮从固定公开分区目录随机选择「动画」。',
+      '这次分区新视频候选池没有留下可打开视频。',
+    ],
+    checkedRegionCount: 1,
+    excludedInvalidCandidateCount: 0,
+  };
+}
+
+function createReadyCreatorArchivePool(): CreatorArchiveCandidatePool {
+  return {
+    status: 'ready',
+    sourceLabel: 'UP 主公开较早投稿',
+    seedCount: 1,
+    candidates: [
+      {
+        bvid: 'BV1ARCOLD1',
+        avid: 88001,
+        title: '公开较早投稿',
+        authorName: '考古 UP',
+        authorMid: 88002,
+        cover: 'https://example.com/archive.jpg',
+        url: 'https://www.bilibili.com/video/BV1ARCOLD1',
+        duration: 600,
+        pubtime: Math.floor((NOW_MS - 40 * 86_400_000) / 1000),
+        publishedAt: Math.floor((NOW_MS - 40 * 86_400_000) / 1000),
+        tagName: '生活',
+        sourceKind: 'bili_space_archive',
+        sourceLabel: 'UP 主公开较早投稿 / 考古 UP',
+      },
+    ],
+    evidence: [
+      '本轮从已同步关注快照中选取 1 位 UP，只请求每位 UP 的公开投稿第一页。',
+      '已排除最近 7 天投稿 1 条，避免和动态账单的新投稿重复。',
+      '公开较早投稿候选池留下 1 条可打开视频。',
+    ],
+    failures: [],
+    checkedCreatorCount: 1,
+    excludedRecentSubmissionCount: 1,
+    excludedInvalidCandidateCount: 0,
+  };
+}
+
+function emptyCreatorArchivePool(): CreatorArchiveCandidatePool {
+  return {
+    status: 'no_followed_creator',
+    sourceLabel: 'UP 主公开较早投稿',
+    seedCount: 0,
+    candidates: [],
+    evidence: ['本地尚无已同步的已关注 UP 快照，暂时不能请求公开较早投稿。'],
+    failures: [],
+    checkedCreatorCount: 0,
+    excludedRecentSubmissionCount: 0,
+    excludedInvalidCandidateCount: 0,
   };
 }
 
@@ -395,7 +336,10 @@ function createRecord(input: {
   daysAgo: number;
   actualCompletion: number;
   title: string;
+  progress?: number;
+  duration?: number;
 }): WatchHistoryRecord {
+  const duration = input.duration ?? 1800;
   const viewedAtSeconds = Math.floor((NOW_MS - input.daysAgo * 86_400_000) / 1000);
   return {
     sessionKey: `${input.bvid}:${viewedAtSeconds}`,
@@ -410,13 +354,13 @@ function createRecord(input: {
     tags: [input.tagName],
     cover: `https://example.com/${input.bvid}.jpg`,
     viewAt: viewedAtSeconds,
-    progress: Math.round(1800 * input.actualCompletion),
-    duration: 1800,
+    progress: input.progress ?? Math.round(duration * input.actualCompletion),
+    duration,
     actualCompletion: input.actualCompletion,
     deviceType: 1,
     isFavorite: false,
     business: 'archive',
-    dt: 1800,
+    dt: duration,
     syncedAt: viewedAtSeconds,
   };
 }
@@ -487,6 +431,16 @@ function createRelatedPool(): ExperimentRealCandidatePool {
       tagName: '科技',
       url: 'https://www.bilibili.com/video/BV1REALRND01',
     }],
+    failures: [],
+  };
+}
+
+function emptyRelatedPool(): ExperimentRealCandidatePool {
+  return {
+    sourceKind: 'bilibili_related',
+    sourceLabel: '相关视频候选',
+    seedCount: 0,
+    candidates: [],
     failures: [],
   };
 }

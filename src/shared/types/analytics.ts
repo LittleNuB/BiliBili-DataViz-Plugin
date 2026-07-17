@@ -170,10 +170,10 @@ export interface BehaviorMetrics {
 }
 
 export type ExperimentBlindBoxId =
-  | 'variety'
+  | 'random_explore'
+  | 'cross_region'
   | 'hidden_favorite'
-  | 'revive_interest'
-  | 'random_explore';
+  | 'creator_archive';
 
 export type ExperimentBlindBoxState = 'ready' | 'empty';
 
@@ -190,20 +190,20 @@ export interface ExperimentVideoCandidate {
   tagName?: string;
   url: string;
   publishedAt?: number;
-  sourceKind?: 'local_history' | 'local_favorite' | 'bilibili_related' | 'bili_region_dynamic';
+  sourceKind?: 'local_history' | 'local_favorite' | 'bilibili_related' | 'bili_region_dynamic' | 'bili_space_archive';
   sourceLabel?: string;
   regionRid?: number;
   regionName?: string;
   cooldownLabel?: string;
 }
 
-export type ExperimentRealCandidateSourceKind = 'bilibili_related' | 'bili_region_dynamic';
+export type ExperimentRealCandidateSourceKind = 'bilibili_related' | 'bili_region_dynamic' | 'bili_space_archive';
 
 export interface ExperimentRealVideoCandidate extends ExperimentVideoCandidate {
   sourceKind: ExperimentRealCandidateSourceKind;
   sourceLabel: string;
-  seedBvid: string;
-  seedTitle: string;
+  seedBvid?: string;
+  seedTitle?: string;
 }
 
 export interface ExperimentRealCandidateFailure {
