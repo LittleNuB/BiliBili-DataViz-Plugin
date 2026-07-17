@@ -14,6 +14,7 @@ import {
   getHistorySyncing,
   getLastSyncTime,
 } from './config-store.ts';
+import { getBlindBoxRecentDrawnBvids } from './blind-box-draw-history-repo.ts';
 
 export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySummary> {
   await ensureDynamicBill013Migration();
@@ -242,6 +243,7 @@ async function collectClearCounts(): Promise<Required<Omit<LocalDataOperationRes
     dynamicBillRotationRecords,
     currentVideoSubtitleSources,
     currentVideoSubtitleSegments,
+    blindBoxDrawHistory,
   ] = await Promise.all([
     db.watchHistory.count(),
     db.playerEvents.count(),
@@ -257,6 +259,7 @@ async function collectClearCounts(): Promise<Required<Omit<LocalDataOperationRes
     db.dynamicBillRotationRecords.count(),
     db.currentVideoTranscriptSources.count(),
     db.currentVideoTranscriptSegments.count(),
+    getBlindBoxRecentDrawnBvids().then(bvids => bvids.length),
   ]);
 
   return {
@@ -274,6 +277,7 @@ async function collectClearCounts(): Promise<Required<Omit<LocalDataOperationRes
     dynamicBillRotationRecords,
     currentVideoSubtitleSources,
     currentVideoSubtitleSegments,
+    blindBoxDrawHistory,
   };
 }
 

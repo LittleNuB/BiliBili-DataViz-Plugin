@@ -5,6 +5,7 @@ import { formatExperimentLoadError } from '../dashboard/modules/experiments/expe
 import {
   buildExperimentData,
   fetchRandomExploreCandidatePool,
+  getSuccessfulBlindBoxDrawBvids,
   selectRelatedVideoSeeds,
 } from '../src/background/analytics/suggestions.ts';
 import {
@@ -17,6 +18,22 @@ import {
   type CreatorArchiveCandidatePool,
   type CrossRegionCandidatePool,
 } from '../src/background/api/video-blind-box-candidates.ts';
+import {
+  BLIND_BOX_DRAW_HISTORY_LIMIT,
+  BLIND_BOX_DRAW_HISTORY_STORAGE_KEY,
+  clearBlindBoxDrawHistory,
+  collectBlindBoxDrawHistoryUsage,
+  mergeBlindBoxDrawHistory,
+  normalizeBlindBoxDrawHistory,
+  readBlindBoxDrawHistoryAfterClear,
+  recordBlindBoxDrawnBvids,
+  type BlindBoxDrawHistoryStorage,
+} from '../src/background/storage/blind-box-draw-history-repo.ts';
+import {
+  createRegisteredLocalDataCategories,
+  type LocalDataCategoryRegistryDependencies,
+  type LocalDataCategoryTable,
+} from '../src/background/storage/local-data-category-registry.ts';
 import type {
   ExperimentBlindBox,
   ExperimentRealCandidatePool,
@@ -33,7 +50,7 @@ test('builds fixed blind boxes with source labels for all four 0.13 sources', ()
   const favorites: FavoriteItem[] = [
     createFavorite({
       itemKey: 'hidden',
-      bvid: 'BVFAVHID1',
+      bvid: 'BVFAVHID01',
       title: '压箱底收藏视频',
       folderTitle: '旧收藏',
       tagName: '游戏',
@@ -85,7 +102,7 @@ test('builds fixed blind boxes with source labels for all four 0.13 sources', ()
   assert.equal(hiddenFavorite.candidateSource, '本地收藏');
   assert.equal(hiddenFavorite.realCandidateLabel, '未使用真实 B 站候选：这是本地收藏回访。');
   assert.equal(hiddenFavorite.usesRealBilibiliCandidates, false);
-  assert.equal(hiddenFavorite.video?.bvid, 'BVFAVHID1');
+  assert.equal(hiddenFavorite.video?.bvid, 'BVFAVHID01');
   assert.equal(hiddenFavorite.video?.sourceKind, 'local_favorite');
 
   assert.equal(creatorArchive.title, 'UP 主考古');
@@ -260,7 +277,7 @@ test('sanitizes raw runtime errors from cross-region candidate source failures',
 
   assert.ok(crossRegion);
   assert.equal(crossRegion.state, 'empty');
-  assert.match(crossRegion.emptyDescription ?? '', /没有取得可打开的分区新视频/);
+  assert.match(crossRegion.emptyDescription ?? '', /没有从 B 站接口取得可打开的分区新视频/);
   assert.equal(JSON.stringify(failedPool).includes('source_failed'), false);
   assert.equal(JSON.stringify(crossRegion).includes('document is not defined'), false);
   assert.equal(JSON.stringify(crossRegion).includes('ReferenceError'), false);
@@ -375,6 +392,201 @@ test('returns natural Chinese empty states for all four fixed cards', () => {
   }
 });
 
+test('distinguishes no seed, no real candidates, upstream failure, and unopenable candidates', async () => {
+  const noSeedPool = await fetchRandomExploreCandidatePool([], NOW_MS, async () => createRelatedPool());
+  const noSeedData = buildExperimentData([], [], new Map(), NOW_MS, {
+    randomExplorePool: noSeedPool,
+    crossRegionPool: emptyCrossRegionPool(),
+    creatorArchivePool: emptyCreatorArchivePool(),
+  });
+  const noSeed = noSeedData.blindBoxes.find(box => box.id === 'random_explore');
+  assert.equal(noSeed?.state, 'empty');
+  assert.equal(noSeed?.emptyTitle, '当前没有可用于探索的近期视频');
+  assert.match(noSeed?.emptyDescription ?? '', /没有合格种子/);
+
+  const noRealCandidateData = buildExperimentData(createRecentRegionRecords(), [], new Map(), NOW_MS, {
+    randomExplorePool: {
+      sourceKind: 'bilibili_related',
+      sourceLabel: '相关视频候选',
+      seedCount: 1,
+      candidates: [],
+      failures: [{ seedBvid: 'BV1SEED0001', seedTitle: '种子视频', reason: 'empty_response' }],
+      failureKind: 'no_real_candidates',
+    },
+    crossRegionPool: emptyCrossRegionPool(),
+    creatorArchivePool: emptyCreatorArchivePool(),
+  });
+  const noRealCandidate = noRealCandidateData.blindBoxes.find(box => box.id === 'random_explore');
+  assert.equal(noRealCandidate?.state, 'empty');
+  assert.equal(noRealCandidate?.statusLabel, '没有真实候选');
+  assert.match(noRealCandidate?.emptyDescription ?? '', /没有返回真实相关视频候选/);
+
+  const upstreamFailureData = buildExperimentData([], [], new Map(), NOW_MS, {
+    randomExplorePool: emptyRelatedPool(),
+    crossRegionPool: buildCrossRegionSourceFailure(
+      createRecentRegionRecords(),
+      NOW_MS,
+      new Error('API Error: -404 raw failure'),
+    ),
+    creatorArchivePool: emptyCreatorArchivePool(),
+  });
+  const upstreamFailure = upstreamFailureData.blindBoxes.find(box => box.id === 'cross_region');
+  assert.equal(upstreamFailure?.state, 'empty');
+  assert.equal(upstreamFailure?.statusLabel, '接口暂时失败');
+  assert.match(upstreamFailure?.emptyDescription ?? '', /没有从 B 站接口取得可打开的分区新视频/);
+  assertNoForbiddenVisibleText(visibleBlindBoxText(upstreamFailure!));
+
+  const unopenablePool = await fetchCrossRegionCandidatePool([], {
+    nowMs: NOW_MS,
+    random: () => 0,
+    request: async () => ({
+      archives: [
+        {
+          bvid: 'not-a-bvid',
+          title: '身份无效的分区候选',
+          owner: { mid: 1001, name: '无效 UP' },
+          duration: 120,
+        },
+        {
+          bvid: 'BV1mK4y1C7Bz',
+          title: '',
+          owner: { mid: 1002, name: '缺标题 UP' },
+          duration: 240,
+        },
+      ],
+    }),
+  });
+  const unopenableData = buildExperimentData([], [], new Map(), NOW_MS, {
+    randomExplorePool: emptyRelatedPool(),
+    crossRegionPool: unopenablePool,
+    creatorArchivePool: emptyCreatorArchivePool(),
+  });
+  const unopenable = unopenableData.blindBoxes.find(box => box.id === 'cross_region');
+  assert.equal(unopenablePool.failureKind, 'no_openable_candidates');
+  assert.equal(unopenable?.state, 'empty');
+  assert.equal(unopenable?.statusLabel, '候选不可打开');
+  assert.match(unopenable?.emptyDescription ?? '', /返回了候选，但没有留下可打开的视频/);
+  assertNoForbiddenVisibleText(visibleBlindBoxText(unopenable!));
+});
+
+test('shared recent draw history prefers unseen candidates across all four cards', () => {
+  const data = buildRandomContractData(() => 0, {
+    recentDrawnBvids: ['BV1RANDOM001', 'BV1REGION001', 'BV1FAVORIT01', 'BV1ARCHIVE01'],
+  });
+
+  assert.deepEqual(data.blindBoxes.map(box => box.video?.bvid), [
+    'BV1RANDOM002',
+    'BV1REGION002',
+    'BV1FAVORIT02',
+    'BV1ARCHIVE02',
+  ]);
+});
+
+test('all-repeated valid pools draw from the full valid pool instead of becoming empty', () => {
+  const data = buildRandomContractData(() => 0.999999, {
+    recentDrawnBvids: [
+      'BV1RANDOM001',
+      'BV1RANDOM002',
+      'BV1REGION001',
+      'BV1REGION002',
+      'BV1FAVORIT01',
+      'BV1FAVORIT02',
+      'BV1ARCHIVE01',
+      'BV1ARCHIVE02',
+    ],
+  });
+
+  assert.equal(data.blindBoxes.every(box => box.state === 'ready'), true);
+  assert.deepEqual(data.blindBoxes.map(box => box.video?.bvid), [
+    'BV1RANDOM002',
+    'BV1REGION002',
+    'BV1FAVORIT02',
+    'BV1ARCHIVE02',
+  ]);
+});
+
+test('records only successful openable blind-box draws', () => {
+  const data = buildRandomContractData(() => 0);
+  const readyBox = data.blindBoxes[0];
+  const invalidBox: ExperimentBlindBox = {
+    ...readyBox,
+    video: readyBox.video ? {
+      ...readyBox.video,
+      bvid: 'not-a-bvid',
+      url: 'https://www.bilibili.com/video/not-a-bvid',
+    } : undefined,
+  };
+  const emptyBox: ExperimentBlindBox = {
+    ...readyBox,
+    state: 'empty',
+    video: readyBox.video,
+  };
+
+  assert.deepEqual(getSuccessfulBlindBoxDrawBvids([
+    ...data.blindBoxes,
+    invalidBox,
+    emptyBox,
+    data.blindBoxes[0],
+  ]), [
+    'BV1RANDOM001',
+    'BV1REGION001',
+    'BV1FAVORIT01',
+    'BV1ARCHIVE01',
+  ]);
+});
+
+test('blind-box draw history keeps the latest 50 normalized BVIDs and clears with readback', async () => {
+  const storage = createMemoryStorage({
+    [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: Array.from({ length: 55 }, (_, index) => testBvid(index)),
+  });
+  const newest = ['BV1LATEST01', 'BV1LATEST02'];
+  const merged = mergeBlindBoxDrawHistory(
+    Array.from({ length: 55 }, (_, index) => testBvid(index)),
+    [...newest, 'not-a-bvid', testBvid(1)],
+  );
+
+  assert.equal(merged.length, BLIND_BOX_DRAW_HISTORY_LIMIT);
+  assert.deepEqual(merged.slice(0, 3), ['BV1LATEST01', 'BV1LATEST02', testBvid(1)]);
+  assert.equal(normalizeBlindBoxDrawHistory(['bad', 'BV1LATEST01', 'BV1LATEST01']).length, 1);
+
+  const afterRecord = await recordBlindBoxDrawnBvids(newest, storage);
+  assert.equal(afterRecord.length, BLIND_BOX_DRAW_HISTORY_LIMIT);
+  assert.deepEqual(afterRecord.slice(0, 2), newest);
+
+  const usage = await collectBlindBoxDrawHistoryUsage(storage);
+  assert.equal(usage.count, BLIND_BOX_DRAW_HISTORY_LIMIT);
+  assert.ok(usage.usageBytes > 0);
+
+  const clearedCount = await clearBlindBoxDrawHistory(storage);
+  assert.equal(clearedCount, BLIND_BOX_DRAW_HISTORY_LIMIT);
+  assert.deepEqual(await readBlindBoxDrawHistoryAfterClear(storage), {
+    count: 0,
+    usageBytes: 0,
+    empty: true,
+  });
+});
+
+test('blind-box draw history is registered for per-category clear and clear-all orchestration', async () => {
+  const dependencies = createRegistryDependenciesForBlindBox(['BV1LATEST01', 'BV1LATEST02']);
+  const categories = createRegisteredLocalDataCategories(dependencies);
+  const category = categories.find(item => item.id === 'blindBoxDrawHistory');
+
+  assert.ok(category);
+  assert.equal(category.includeInClearAll, true);
+  assert.deepEqual(await category.collectUsage(), {
+    count: 2,
+    usageBytes: JSON.stringify({ [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1LATEST01', 'BV1LATEST02'] }).length,
+  });
+  assert.deepEqual(await category.clear(), {
+    cleared: { blindBoxDrawHistory: 2 },
+  });
+  assert.deepEqual(await category.readAfterClear(), {
+    count: 0,
+    usageBytes: 0,
+    empty: true,
+  });
+});
+
 test('formats experiment load errors without exposing runtime messages or raw fields', () => {
   const failures: unknown[] = [
     new Error('sourceHash=internal-hash'),
@@ -400,7 +612,10 @@ test('keeps blind-box candidate helpers out of service-worker dynamic preload', 
   assertNoForbiddenVisibleText(htmlVisibleText(mockSource));
 });
 
-function buildRandomContractData(random: () => number) {
+function buildRandomContractData(
+  random: () => number,
+  options: { recentDrawnBvids?: string[] } = {},
+) {
   const favorites = [
     createFavorite({
       itemKey: 'favorite-first',
@@ -434,6 +649,7 @@ function buildRandomContractData(random: () => number) {
       createArchiveCandidate('BV1ARCHIVE01', '第一条较早投稿'),
       createArchiveCandidate('BV1ARCHIVE02', '第二条较早投稿'),
     ]),
+    recentDrawnBvids: options.recentDrawnBvids,
   });
 }
 
@@ -510,7 +726,7 @@ function createReadyCrossRegionPool(
     evidence: [
       '最近最多 7 天有效观看中，高频分区是：游戏 2 次；本轮从这些分区之外随机选择「知识」。',
       '跨区漫游只使用仓库维护的固定公开分区目录和 B 站分区新视频接口，本轮候选分区为「知识」。',
-      '真实候选池返回 1 条可打开视频；本切片不使用最近抽取记录去重，也不改用本地历史或收藏补位。',
+      '真实候选池返回 1 条可打开视频；抽取时会优先避开最近抽中过的视频，但不会改用本地历史或收藏补位。',
     ],
     checkedRegionCount: 1,
     excludedInvalidCandidateCount: 0,
@@ -724,4 +940,64 @@ function emptyRelatedPool(): ExperimentRealCandidatePool {
     candidates: [],
     failures: [],
   };
+}
+
+function createMemoryStorage(initial: Record<string, unknown> = {}): BlindBoxDrawHistoryStorage {
+  const values = new Map<string, unknown>(Object.entries(initial));
+  return {
+    get: async keys => Object.fromEntries(keys.map(key => [key, values.get(key)])),
+    set: async items => {
+      for (const [key, value] of Object.entries(items)) {
+        values.set(key, value);
+      }
+    },
+    remove: async keys => {
+      for (const key of keys) {
+        values.delete(key);
+      }
+    },
+  };
+}
+
+function createRegistryDependenciesForBlindBox(bvids: string[]): LocalDataCategoryRegistryDependencies {
+  const tableNames: Array<keyof LocalDataCategoryRegistryDependencies['tables']> = [
+    'watchHistory',
+    'playerEvents',
+    'dailyAggregates',
+    'favoriteFolders',
+    'favoriteItems',
+    'smartFavoriteIndex',
+    'currentVideoTranscriptSources',
+    'currentVideoTranscriptSegments',
+    'followedCreators',
+    'followedVideoUpdates',
+    'dynamicBillItems',
+    'dynamicBillExplanations',
+    'dynamicBillFeedback',
+  ];
+  const tables = Object.fromEntries(
+    tableNames.map(name => [name, memoryTable([{ id: name }])]),
+  ) as LocalDataCategoryRegistryDependencies['tables'];
+  const storage = createMemoryStorage({ [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: bvids });
+
+  return {
+    tables,
+    storage,
+    transaction: async (_tables, operation) => operation(),
+  };
+}
+
+function memoryTable(initialRows: unknown[]): LocalDataCategoryTable {
+  let rows = [...initialRows];
+  return {
+    count: async () => rows.length,
+    toArray: async () => [...rows],
+    clear: async () => {
+      rows = [];
+    },
+  };
+}
+
+function testBvid(index: number): string {
+  return `BVTEST${String(index).padStart(6, '0')}`;
 }

@@ -199,6 +199,12 @@ export interface ExperimentVideoCandidate {
 
 export type ExperimentRealCandidateSourceKind = 'bilibili_related' | 'bili_region_dynamic' | 'bili_space_archive';
 
+export type ExperimentCandidateFailureKind =
+  | 'no_seed'
+  | 'no_real_candidates'
+  | 'upstream_failed'
+  | 'no_openable_candidates';
+
 export interface ExperimentRealVideoCandidate extends ExperimentVideoCandidate {
   sourceKind: ExperimentRealCandidateSourceKind;
   sourceLabel: string;
@@ -218,6 +224,7 @@ export interface ExperimentRealCandidatePool {
   seedCount: number;
   candidates: ExperimentRealVideoCandidate[];
   failures: ExperimentRealCandidateFailure[];
+  failureKind?: ExperimentCandidateFailureKind;
 }
 
 export interface ExperimentBlindBox {

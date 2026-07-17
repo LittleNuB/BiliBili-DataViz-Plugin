@@ -66,7 +66,7 @@ export function buildLocalDataOperationMessage(result: LocalDataOperationResult)
   }
 
   return [
-    `已清理本地数据：观看历史 ${result.cleared.historyRecords ?? 0} 条、收藏 ${result.cleared.favoriteItems ?? 0} 条、字幕正文 ${result.cleared.currentVideoSubtitleSegments ?? 0} 段、动态账单 ${result.cleared.dynamicBillItems ?? 0} 项。`,
+    `已清理本地数据：观看历史 ${result.cleared.historyRecords ?? 0} 条、收藏 ${result.cleared.favoriteItems ?? 0} 条、字幕正文 ${result.cleared.currentVideoSubtitleSegments ?? 0} 段、动态账单 ${result.cleared.dynamicBillItems ?? 0} 项、盲盒抽取记录 ${result.cleared.blindBoxDrawHistory ?? 0} 条。`,
     result.cleared.localSettings ? '本地 AI 设置和功能开关也已恢复为默认状态。' : '',
   ].filter(Boolean).join(' ');
 }
@@ -82,7 +82,7 @@ export function dangerousLocalDataClearScope(): string[] {
   return [
     '观看历史、播放器事件和统计聚合。',
     '收藏夹快照、智能收藏索引和收藏问答本地依据。',
-    '当前视频字幕缓存、动态账单记录、动态账单反馈和解释。',
+    '当前视频字幕缓存、动态账单记录、动态账单反馈和解释、盲盒抽取记录。',
     '本地 AI 服务设置、API Key 保存状态和功能开关。',
   ];
 }

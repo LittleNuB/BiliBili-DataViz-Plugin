@@ -197,7 +197,7 @@
           <div class="reason">理由：最近最多 7 天的高频分区是「游戏」，本轮避开这些方向，随机选择 B 站「知识」分区，并从公开新视频候选池里抽取这条视频。</div>
           <ul>
             <li>跨区漫游只使用固定公开分区目录和 B 站分区新视频接口。</li>
-            <li>本切片不使用最近抽取记录去重，也不改用本地历史或收藏补位。</li>
+            <li>抽取时会优先避开最近抽中过的视频，但不会改用本地历史或收藏补位。</li>
           </ul>
         </div>
         <a href="https://www.bilibili.com/video/BV1REAL139A" target="_blank" rel="noopener noreferrer">打开 B 站视频页</a>
@@ -289,6 +289,44 @@
         <div class="content">
           <div class="title">这次没有取得可打开的分区新视频</div>
           <div class="reason">已请求本轮公开分区新视频候选池，但没有留下可打开视频。当前不会改用本地历史或收藏。</div>
+        </div>
+        <button type="button">重新生成这一页</button>
+      </article>
+
+      <article class="empty" style="--accent: #7fd1ff" data-box-id="creator_archive_upstream_failed">
+        <div class="top">
+          <div>
+            <h2>UP 主考古</h2>
+            <div class="teaser">从已关注 UP 的公开较早投稿里随机开一条。</div>
+          </div>
+          <span class="badge">接口暂时失败</span>
+        </div>
+        <div class="meta">
+          <div>候选来源：已关注 UP 的公开较早投稿</div>
+          <div>真实 B 站候选：未使用真实 B 站候选：公开候选接口暂时不可用。</div>
+        </div>
+        <div class="content">
+          <div class="title">暂时无法取得 UP 主公开投稿</div>
+          <div class="reason">本轮只请求公开投稿候选，接口暂时失败时不会改用本地历史、收藏或其他盲盒来源。</div>
+        </div>
+        <button type="button">重新生成这一页</button>
+      </article>
+
+      <article class="empty" style="--accent: #ffd166" data-box-id="hidden_favorite_no_real_candidates">
+        <div class="top">
+          <div>
+            <h2>隐藏收藏</h2>
+            <div class="teaser">只从本地收藏回访池里随机开一条。</div>
+          </div>
+          <span class="badge">没有真实候选</span>
+        </div>
+        <div class="meta">
+          <div>候选来源：本地收藏</div>
+          <div>真实 B 站候选：未使用真实 B 站候选：本地收藏回访池本轮没有可抽视频。</div>
+        </div>
+        <div class="content">
+          <div class="title">这次没有可回访的收藏视频</div>
+          <div class="reason">隐藏收藏只使用本地收藏回访候选；候选为空时不会借用其他盲盒来源。</div>
         </div>
         <button type="button">重新生成这一页</button>
       </article>
