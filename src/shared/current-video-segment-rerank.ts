@@ -6,10 +6,6 @@ import type {
   CurrentVideoSegmentRetrievalCandidate,
   CurrentVideoSegmentRetrievalResult,
 } from './types/current-video-segment-retrieval.ts';
-import {
-  assertAssistantPayloadAudit,
-  currentVideoSegmentRerankPayloadContract,
-} from './assistant-payload-audit.ts';
 
 const DEFAULT_RERANK_CANDIDATE_LIMIT = 5;
 const PAYLOAD_QUERY_LIMIT = 160;
@@ -138,56 +134,12 @@ export async function rerankCurrentVideoSegmentCandidates(
     }));
   }
 
-  if (!options.config.assistant.currentVideoAiAssistantEnabled) {
-    return withAiRerank(local, aiState({
-      status: 'disabled',
-      model,
-      note: '当前视频 AI 助手未在设置中开启，当前显示本地候选顺序。',
-      now,
-    }));
-  }
-
-  if (!options.config.ai.apiKey.trim()) {
-    return withAiRerank(local, aiState({
-      status: 'not_configured',
-      model,
-      note: '当前视频 AI 助手已开启但尚未配置 API Key，当前显示本地候选顺序。',
-      now,
-    }));
-  }
-
-  try {
-    const built = buildCurrentVideoSegmentRerankAiPayload(context, local, {
-      candidateLimit: options.candidateLimit,
-    });
-    (options.auditPayload ?? defaultAuditPayload)(built.payload);
-    const ai = await options.chat(options.config.ai, buildCurrentVideoSegmentRerankAiMessages(built.payload));
-    const guarded = guardCurrentVideoSegmentRerankAiOutput(ai, built.payload);
-    if (!guarded.ok) {
-      const status = guarded.reason === 'AI_LOW_CONFIDENCE' ? 'low_confidence' : 'rejected';
-      const note = status === 'low_confidence'
-        ? 'AI 返回置信度较低，当前显示本地候选顺序。'
-        : 'AI 结果未采用，当前显示本地候选顺序。';
-      return withAiRerank(local, aiState({
-        status,
-        model,
-        note,
-        error: guarded.error,
-        now,
-        payloadCandidateCount: built.payload.candidates.length,
-      }));
-    }
-
-    return applyGuardedRerank(local, built, guarded, model, now);
-  } catch (error) {
-    return withAiRerank(local, aiState({
-      status: 'failed',
-      model,
-      note: 'AI 重排请求失败，当前显示本地候选顺序。',
-      error: errorMessage(error),
-      now,
-    }));
-  }
+  return withAiRerank(local, aiState({
+    status: 'disabled',
+    model,
+    note: '片段排序保持本地处理，本次没有请求 AI，候选顺序不变。',
+    now,
+  }));
 }
 
 export function buildCurrentVideoSegmentRerankAiPayload(
@@ -553,10 +505,6 @@ function rejected(reason: string, error: string): RerankGuardResult {
     reason,
     error,
   };
-}
-
-function defaultAuditPayload(payload: CurrentVideoSegmentRerankAiPayload): void {
-  assertAssistantPayloadAudit(payload, currentVideoSegmentRerankPayloadContract);
 }
 
 function collectStrings(value: unknown): string[] {

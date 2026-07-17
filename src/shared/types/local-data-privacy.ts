@@ -1,5 +1,5 @@
 import type { DynamicSyncStatus } from './dynamic-bill';
-import type { LocalDataCategoryId } from '../local-data-category-contract';
+import type { LocalDataClearedCounts } from '../local-data-category-contract';
 
 export interface LocalDataPrivacySummary {
   checkedAt: number;
@@ -53,37 +53,7 @@ export type LocalDataOperationKind =
 export interface LocalDataOperationResult {
   operation: LocalDataOperationKind;
   completedAt: number;
-  cleared: {
-    historyRecords?: number;
-    playerEvents?: number;
-    dailyAggregates?: number;
-    favoriteFolders?: number;
-    favoriteItems?: number;
-    smartFavoriteIndexes?: number;
-    followedCreators?: number;
-    followedVideoUpdates?: number;
-    dynamicBillItems?: number;
-    dynamicBillExplanations?: number;
-    dynamicBillFeedback?: number;
-    currentVideoSubtitleSources?: number;
-    currentVideoSubtitleSegments?: number;
-    localSettings?: boolean;
-  };
-  categories?: LocalDataCategoryOperationResult[];
-}
-
-export interface LocalDataCategoryOperationResult {
-  id: LocalDataCategoryId;
-  label: string;
-  before: {
-    count: number;
-    usageBytes: number;
-  };
-  after: {
-    count: number;
-    usageBytes: number;
-    empty: boolean;
-  };
+  cleared: LocalDataClearedCounts;
 }
 
 export interface SmartFavoriteIndexRebuildResult {

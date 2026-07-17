@@ -10,10 +10,6 @@ import {
   getHistorySyncing,
   getLastSyncTime,
 } from './config-store.ts';
-import {
-  clearRegisteredLocalDataCategories,
-  clearRegisteredLocalDataCategory,
-} from './local-data-category-registry.ts';
 
 export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySummary> {
   const [
@@ -38,12 +34,28 @@ export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySumm
 }
 
 export async function clearCurrentVideoSubtitleCache(): Promise<LocalDataOperationResult> {
-  const result = await clearRegisteredLocalDataCategory('currentVideoSubtitles');
+  const [sourceCount, segmentCount] = await Promise.all([
+    db.currentVideoTranscriptSources.count(),
+    db.currentVideoTranscriptSegments.count(),
+  ]);
+
+  await db.transaction(
+    'rw',
+    db.currentVideoTranscriptSources,
+    db.currentVideoTranscriptSegments,
+    async () => {
+      await db.currentVideoTranscriptSources.clear();
+      await db.currentVideoTranscriptSegments.clear();
+    },
+  );
+
   return {
     operation: 'clear_current_video_subtitle_cache',
     completedAt: Date.now(),
-    cleared: result.cleared,
-    categories: [result.category],
+    cleared: {
+      currentVideoSubtitleSources: sourceCount,
+      currentVideoSubtitleSegments: segmentCount,
+    },
   };
 }
 
@@ -55,16 +67,21 @@ export async function clearAllLocalData(confirmation: unknown): Promise<LocalDat
     throw new Error('HISTORY_SYNC_IN_PROGRESS');
   }
 
-  const result = await clearRegisteredLocalDataCategories();
+  const counts = await collectClearCounts();
+  await db.transaction('rw', db.tables, async () => {
+    for (const table of db.tables) {
+      await table.clear();
+    }
+  });
+  await chrome.storage.local.clear();
 
   return {
     operation: 'clear_all_local_data',
     completedAt: Date.now(),
     cleared: {
-      ...result.cleared,
+      ...counts,
       localSettings: true,
     },
-    categories: result.categories,
   };
 }
 
@@ -172,6 +189,54 @@ async function summarizeDynamicBill(): Promise<LocalDataPrivacySummary['dynamicB
     lastGeneratedAt: normalizeNullableTimestamp(lastGeneratedAt),
     lastSyncedAt: normalizeNullableTimestamp(syncState.lastSuccessAt),
     syncStatus: syncState.status,
+  };
+}
+
+async function collectClearCounts(): Promise<Required<Omit<LocalDataOperationResult['cleared'], 'localSettings'>>> {
+  const [
+    historyRecords,
+    playerEvents,
+    dailyAggregates,
+    favoriteFolders,
+    favoriteItems,
+    smartFavoriteIndexes,
+    followedCreators,
+    followedVideoUpdates,
+    dynamicBillItems,
+    dynamicBillExplanations,
+    dynamicBillFeedback,
+    currentVideoSubtitleSources,
+    currentVideoSubtitleSegments,
+  ] = await Promise.all([
+    db.watchHistory.count(),
+    db.playerEvents.count(),
+    db.dailyAggregates.count(),
+    db.favoriteFolders.count(),
+    db.favoriteItems.count(),
+    db.smartFavoriteIndex.count(),
+    db.followedCreators.count(),
+    db.followedVideoUpdates.count(),
+    db.dynamicBillItems.count(),
+    db.dynamicBillExplanations.count(),
+    db.dynamicBillFeedback.count(),
+    db.currentVideoTranscriptSources.count(),
+    db.currentVideoTranscriptSegments.count(),
+  ]);
+
+  return {
+    historyRecords,
+    playerEvents,
+    dailyAggregates,
+    favoriteFolders,
+    favoriteItems,
+    smartFavoriteIndexes,
+    followedCreators,
+    followedVideoUpdates,
+    dynamicBillItems,
+    dynamicBillExplanations,
+    dynamicBillFeedback,
+    currentVideoSubtitleSources,
+    currentVideoSubtitleSegments,
   };
 }
 

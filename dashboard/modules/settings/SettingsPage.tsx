@@ -145,7 +145,6 @@ export function SettingsPage() {
       applyConfig(nextConfig);
       setNotice('设置已保存。后续 AI 功能会从这里读取同一套服务配置和开关。');
     } catch (err) {
-      await refreshConfig();
       setError(formatSettingsError(err));
     } finally {
       setBusy('');
@@ -602,11 +601,12 @@ function isLocalHttpHost(hostname: string): boolean {
 
 function formatSettingsError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  if (message === 'AI_BASE_URL_INVALID') return 'AI 服务地址格式不正确。';
-  if (message === 'AI_BASE_URL_UNSUPPORTED') return 'AI 服务地址只支持 http 或 https。';
-  if (message === 'AI_HTTP_HOST_UNSUPPORTED') return 'HTTP 服务地址仅限本机调试地址。';
-  if (message === 'AI_PERMISSION_DENIED') return '没有获得该 AI 服务地址的访问权限，设置尚未保存。';
-  return '设置保存失败，请检查服务地址、模型名和浏览器授权后重试。';
+  const retained = '设置未保存，当前输入已保留。';
+  if (message === 'AI_BASE_URL_INVALID') return `${retained} AI 服务地址格式不正确。`;
+  if (message === 'AI_BASE_URL_UNSUPPORTED') return `${retained} AI 服务地址只支持 http 或 https。`;
+  if (message === 'AI_HTTP_HOST_UNSUPPORTED') return `${retained} HTTP 服务地址仅限本机调试地址。`;
+  if (message === 'AI_PERMISSION_DENIED') return `${retained} 没有获得该 AI 服务地址的访问权限。`;
+  return `${retained} 请检查服务地址、模型名和浏览器授权后重试。`;
 }
 
 function formatConnectionError(error: unknown): string {
