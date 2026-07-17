@@ -40,9 +40,7 @@ export interface LocalDataPrivacySummary {
     openedItems: number;
     consumedItems: number;
     processedItems: number;
-    feedbackCount: number;
     explanationCount: number;
-    migrationRecordCount: number;
     lastGeneratedAt: number | null;
     lastSyncedAt: number | null;
     syncStatus: DynamicSyncStatus;

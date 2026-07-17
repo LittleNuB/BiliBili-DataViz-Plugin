@@ -9,6 +9,7 @@ export const DYNAMIC_BILL_COLUMNS = [
 
 export const DYNAMIC_BILL_MIGRATION_VERSION = 'dynamic-bill-0.13-fixed-columns';
 export const DYNAMIC_BILL_UPGRADE_FAILED_MESSAGE = '动态账单本地数据升级失败，请稍后重试。';
+export const DYNAMIC_BILL_MIGRATION_CREATOR_PAUSE_DAYS = 30;
 
 export const DYNAMIC_BILL_STRATEGY = {
   longWindowDays: 180,
@@ -22,7 +23,6 @@ export const DYNAMIC_BILL_STRATEGY = {
   minBuriedWeakWatchCount: 1,
   maxBuriedRecentWatchCount: 1,
   maxBuriedRecentPositiveWatchCount: 0,
-  lessRemindPauseDays: 30,
   maxHighlightsPerItem: 3,
   maxItemsPerColumn: 5,
   maxItemsTotal: 15,
@@ -41,7 +41,6 @@ export function getDynamicBillThresholdEvidence(): DynamicBillThresholdEvidence 
     minBuriedWeakWatchCount: DYNAMIC_BILL_STRATEGY.minBuriedWeakWatchCount,
     maxBuriedRecentWatchCount: DYNAMIC_BILL_STRATEGY.maxBuriedRecentWatchCount,
     maxBuriedRecentPositiveWatchCount: DYNAMIC_BILL_STRATEGY.maxBuriedRecentPositiveWatchCount,
-    lessRemindPauseDays: DYNAMIC_BILL_STRATEGY.lessRemindPauseDays,
     maxItemsPerColumn: DYNAMIC_BILL_STRATEGY.maxItemsPerColumn,
     maxItemsTotal: DYNAMIC_BILL_STRATEGY.maxItemsTotal,
   };

@@ -9,6 +9,7 @@ import {
   getRecentFollowedVideoUpdates,
   replaceAllDynamicBillItems,
 } from '../storage/dynamic-bill-repo.ts';
+import { ensureDynamicBill013Migration } from './migration.ts';
 import { planFixedDynamicBillItems } from './planner.ts';
 import {
   DYNAMIC_BILL_COLUMNS,
@@ -19,6 +20,7 @@ import {
 const SECONDS_PER_DAY = 86_400;
 
 export async function generateFixedDynamicBillItems(): Promise<DynamicBillGenerateResult> {
+  await ensureDynamicBill013Migration();
   const generatedAt = Date.now();
   const nowSeconds = Math.floor(generatedAt / 1000);
   const longCutoff = nowSeconds - DYNAMIC_BILL_STRATEGY.longWindowDays * SECONDS_PER_DAY;

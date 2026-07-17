@@ -109,7 +109,7 @@ test('registered categories collect usage, clear independently, and read back th
   const categories = createRegisteredLocalDataCategories(dependencies);
   const usageBefore = await Promise.all(categories.map(category => category.collectUsage()));
 
-  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 2, 5, 2]);
+  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 2, 6, 2]);
   assert.ok(usageBefore.every(usage => usage.usageBytes > 0));
 
   const history = categories[0];
@@ -126,10 +126,16 @@ test('registered categories collect usage, clear independently, and read back th
   for (const category of categories.slice(1)) {
     const clearResult = await category.clear();
     assert.ok(Object.keys(clearResult.cleared).length > 0);
+    if (category.id === 'dynamicBill') {
+      assert.equal(clearResult.cleared.dynamicBillCreatorPauses, 1);
+      assert.equal(clearResult.cleared.dynamicBillRotationRecords, 1);
+      assert.equal('dynamicBillFeedback' in clearResult.cleared, false);
+    }
     const readback = await category.readAfterClear();
     assert.equal(readback.count, 0, category.label);
     assert.equal(readback.empty, true, category.label);
   }
+  assert.equal(await dependencies.tables.dynamicBillFeedback.count(), 0);
 });
 
 test('lifecycle results retain completed categories and name a failed category in natural Chinese', async () => {
@@ -248,9 +254,7 @@ function makeSummary(): LocalDataPrivacySummary {
       openedItems: 1,
       consumedItems: 2,
       processedItems: 1,
-      feedbackCount: 3,
       explanationCount: 5,
-      migrationRecordCount: 1,
       lastGeneratedAt: 1_718_000_000_000,
       lastSyncedAt: 1_718_000_000_000,
       syncStatus: 'success',
@@ -273,6 +277,8 @@ function createRegistryDependencies(): LocalDataCategoryRegistryDependencies {
     'dynamicBillItems',
     'dynamicBillExplanations',
     'dynamicBillFeedback',
+    'dynamicBillCreatorPauses',
+    'dynamicBillRotationRecords',
   ];
   const tables = Object.fromEntries(
     tableNames.map(name => [name, memoryTable([{ id: name, value: `row-${name}` }])]),

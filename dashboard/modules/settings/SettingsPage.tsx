@@ -418,7 +418,7 @@ export function SettingsPage() {
             <DataStat label="待索引收藏" value={localData.favorites.pendingIndexItems} />
             <DataStat label="索引失败" value={localData.favorites.failedIndexItems} />
             <DataStat label="过期字幕片段" value={localData.currentVideoSubtitles.staleSegmentCount} />
-            <DataStat label="暂停提醒 UP" value={localData.dynamicBill.creatorPauseCount} />
+            <DataStat label="账单暂停记录" value={localData.dynamicBill.creatorPauseCount} />
             <DataStat label="账单轮换记录" value={localData.dynamicBill.rotationRecordCount} />
           </div>
         )}

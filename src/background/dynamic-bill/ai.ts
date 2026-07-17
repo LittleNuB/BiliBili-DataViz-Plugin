@@ -14,6 +14,7 @@ import {
   getDynamicBillItems,
   putDynamicBillExplanation,
 } from '../storage/dynamic-bill-repo';
+import { ensureDynamicBill013Migration } from './migration';
 
 interface BuildDynamicBillExplanationOptions {
   maxItems?: number;
@@ -86,6 +87,7 @@ const AI_FACT_EXCLUDED_TERMS = [
 export async function buildDynamicBillExplanations(
   options: BuildDynamicBillExplanationOptions = {},
 ): Promise<DynamicBillExplanationResult> {
+  await ensureDynamicBill013Migration();
   const config = await loadConfig();
   const items = await getDynamicBillItems();
   const maxItems = Math.max(
@@ -193,6 +195,7 @@ export async function buildDynamicBillExplanations(
 export async function buildDynamicBillExplanationPayload(
   item: DynamicBillItem,
 ): Promise<DynamicBillExplanationPayload> {
+  await ensureDynamicBill013Migration();
   const update = await db.followedVideoUpdates
     .where('updateKey')
     .equals(item.updateKey)

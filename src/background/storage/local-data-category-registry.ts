@@ -43,7 +43,9 @@ export type LocalDataCategoryTableName =
   | 'followedVideoUpdates'
   | 'dynamicBillItems'
   | 'dynamicBillExplanations'
-  | 'dynamicBillFeedback';
+  | 'dynamicBillFeedback'
+  | 'dynamicBillCreatorPauses'
+  | 'dynamicBillRotationRecords';
 
 export interface LocalDataCategoryTable {
   count: () => Promise<number>;
@@ -67,6 +69,7 @@ export interface LocalDataCategoryRegistryDependencies {
 
 interface CategoryTableGroup {
   tables: LocalDataCategoryTable[];
+  clearOnlyTables?: LocalDataCategoryTable[];
   storageKeys?: string[];
 }
 
@@ -86,6 +89,8 @@ export function getRegisteredLocalDataCategories(): LocalDataCategoryRegistratio
       dynamicBillItems: db.dynamicBillItems,
       dynamicBillExplanations: db.dynamicBillExplanations,
       dynamicBillFeedback: db.dynamicBillFeedback,
+      dynamicBillCreatorPauses: db.dynamicBillCreatorPauses,
+      dynamicBillRotationRecords: db.dynamicBillRotationRecords,
     },
     storage: {
       get: keys => chrome.storage.local.get(keys),
@@ -129,15 +134,18 @@ export function createRegisteredLocalDataCategories(
         tables.followedVideoUpdates,
         tables.dynamicBillItems,
         tables.dynamicBillExplanations,
-        tables.dynamicBillFeedback,
+        tables.dynamicBillCreatorPauses,
+        tables.dynamicBillRotationRecords,
       ],
+      clearOnlyTables: [tables.dynamicBillFeedback],
       storageKeys: DYNAMIC_BILL_STORAGE_KEYS,
     }, counts => ({
       followedCreators: counts[0] ?? 0,
       followedVideoUpdates: counts[1] ?? 0,
       dynamicBillItems: counts[2] ?? 0,
       dynamicBillExplanations: counts[3] ?? 0,
-      dynamicBillFeedback: counts[4] ?? 0,
+      dynamicBillCreatorPauses: counts[4] ?? 0,
+      dynamicBillRotationRecords: counts[5] ?? 0,
     })),
     storageCategory(dependencies, 'localSettings', '本地 AI 设置', LOCAL_SETTING_STORAGE_KEYS),
   ];
@@ -157,8 +165,9 @@ function tableCategory(
     collectUsage: () => collectTableUsage(dependencies.storage, group),
     clear: async () => {
       const counts = await countTables(group.tables);
-      await dependencies.transaction(group.tables, async () => {
-        for (const table of group.tables) {
+      const tablesToClear = [...group.tables, ...(group.clearOnlyTables ?? [])];
+      await dependencies.transaction(tablesToClear, async () => {
+        for (const table of tablesToClear) {
           await table.clear();
         }
       });

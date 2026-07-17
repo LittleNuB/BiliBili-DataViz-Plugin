@@ -3,11 +3,7 @@ import type {
   DynamicBillColumn,
   DynamicBillCreatorPauseRecord,
   DynamicBillExplanation,
-  DynamicBillFeedbackRecord,
-  DynamicBillFeedbackResult,
   DynamicBillFeedbackScope,
-  DynamicBillFeedbackSummary,
-  DynamicBillFeedbackThresholds,
   DynamicBillFilterPreference,
   DynamicBillItem,
   DynamicBillOverview,
@@ -230,6 +226,7 @@ export async function putDynamicBillExplanation(
 }
 
 export async function getDynamicBillFilterPreference(): Promise<DynamicBillFilterPreference> {
+  await ensureDynamicBill013Migration();
   const result = await chrome.storage.local.get(DYNAMIC_BILL_FILTER_KEY);
   const stored = result[DYNAMIC_BILL_FILTER_KEY] as Partial<DynamicBillFilterPreference> | undefined;
   if (!stored || !isDynamicBillStatusFilter(stored.status)) {
@@ -245,6 +242,7 @@ export async function getDynamicBillFilterPreference(): Promise<DynamicBillFilte
 export async function setDynamicBillFilterPreference(
   status: DynamicBillStatusFilter,
 ): Promise<DynamicBillFilterPreference> {
+  await ensureDynamicBill013Migration();
   const preference: DynamicBillFilterPreference = {
     status,
     updatedAt: Date.now(),
@@ -253,39 +251,25 @@ export async function setDynamicBillFilterPreference(
   return preference;
 }
 
-export async function addDynamicBillFeedback(
-  billKey: string,
-  scope: DynamicBillFeedbackScope,
-  createdAt = Date.now(),
-): Promise<DynamicBillFeedbackResult> {
+export async function clearDynamicBillStoredState(): Promise<void> {
   await ensureDynamicBill013Migration();
-  if (scope !== 'creator') throw new Error('0.13 只支持“少提醒这个 UP”。');
+  await chrome.storage.local.remove([
+    DYNAMIC_SYNC_STATE_KEY,
+    DYNAMIC_BILL_FILTER_KEY,
+  ]);
+}
 
-  let result: DynamicBillFeedbackResult | null = null;
-  await db.transaction('rw', db.dynamicBillItems, db.dynamicBillCreatorPauses, async () => {
-    const item = await db.dynamicBillItems.where('billKey').equals(billKey).first();
-    if (!item) throw new Error('DYNAMIC_BILL_ITEM_NOT_FOUND');
-
-    const pause = await upsertCreatorPauseInCurrentTransaction(item, createdAt);
-    const patch = buildStatusPatch(item, 'processed', createdAt) ?? {};
-    const nextItem = { ...item, ...patch };
-    if (item.id !== undefined && Object.keys(patch).length > 0) {
-      await db.dynamicBillItems.update(item.id, patch);
-    }
-
-    const feedback = buildDynamicBillFeedbackRecord(item, createdAt);
-    result = {
-      feedback,
-      summary: buildDynamicBillFeedbackSummary(feedback, pause),
-      item: nextItem,
-    };
-  });
-
-  if (!result) throw new Error('DYNAMIC_BILL_ITEM_NOT_FOUND');
-  return result;
+export async function addDynamicBillFeedback(
+  _billKey: string,
+  _scope: DynamicBillFeedbackScope,
+): Promise<never> {
+  await ensureDynamicBill013Migration();
+  // DB-013-B owns creation of new pause records; DB-013-A keeps this protocol path inert.
+  throw new Error('当前版本不提供创建新的 UP 暂停记录。');
 }
 
 export async function getDynamicBillFeedbackProfile(): Promise<DynamicBillFeedbackProfile> {
+  await ensureDynamicBill013Migration();
   const pauses = await getActiveDynamicBillCreatorPauses();
   return {
     pausedCreatorMids: new Set(pauses.map(pause => pause.creatorMid)),
@@ -366,6 +350,7 @@ export async function getDynamicBillOverview(windowDays = DYNAMIC_UPDATE_WINDOW_
 }
 
 export async function getDynamicSyncState(): Promise<DynamicSyncState> {
+  await ensureDynamicBill013Migration();
   const result = await chrome.storage.local.get(DYNAMIC_SYNC_STATE_KEY);
   const state: DynamicSyncState = {
     ...DEFAULT_SYNC_STATE,
@@ -385,6 +370,7 @@ export async function getDynamicSyncState(): Promise<DynamicSyncState> {
 }
 
 export async function setDynamicSyncState(state: DynamicSyncState): Promise<void> {
+  await ensureDynamicBill013Migration();
   await chrome.storage.local.set({ [DYNAMIC_SYNC_STATE_KEY]: state });
 }
 
@@ -460,71 +446,6 @@ function buildStatusPatch(
   }
 
   return Object.keys(patch).length > 0 ? patch : null;
-}
-
-async function upsertCreatorPauseInCurrentTransaction(
-  item: DynamicBillItem,
-  startedAt: number,
-): Promise<DynamicBillCreatorPauseRecord> {
-  const expiresAt = startedAt + DYNAMIC_BILL_STRATEGY.lessRemindPauseDays * 86_400_000;
-  const existing = await db.dynamicBillCreatorPauses
-    .where('creatorMid')
-    .equals(item.creatorMid)
-    .first();
-  const next: DynamicBillCreatorPauseRecord = {
-    id: existing?.id,
-    creatorMid: item.creatorMid,
-    creatorName: item.creatorName,
-    startedAt,
-    expiresAt: Math.max(expiresAt, existing?.expiresAt ?? 0),
-    source: 'less_remind',
-    billKey: item.billKey,
-    createdAt: existing?.createdAt ?? startedAt,
-    updatedAt: startedAt,
-  };
-  await db.dynamicBillCreatorPauses.put(next);
-  return next;
-}
-
-function buildDynamicBillFeedbackRecord(
-  item: DynamicBillItem,
-  createdAt: number,
-): DynamicBillFeedbackRecord {
-  return {
-    scope: 'creator',
-    key: String(item.creatorMid),
-    label: item.creatorName || String(item.creatorMid),
-    billKey: item.billKey,
-    column: item.column,
-    creatorMid: item.creatorMid,
-    creatorName: item.creatorName,
-    createdAt,
-  };
-}
-
-function buildDynamicBillFeedbackSummary(
-  feedback: DynamicBillFeedbackRecord,
-  pause: DynamicBillCreatorPauseRecord,
-): DynamicBillFeedbackSummary {
-  return {
-    scope: 'creator',
-    key: feedback.key,
-    label: feedback.label,
-    count: 1,
-    isDampened: true,
-    isBlocked: true,
-    shouldShowCreatorReviewPrompt: false,
-    pauseStartedAt: pause.startedAt,
-    pauseExpiresAt: pause.expiresAt,
-    thresholds: getDynamicBillFeedbackThresholds(),
-  };
-}
-
-function getDynamicBillFeedbackThresholds(): DynamicBillFeedbackThresholds {
-  return {
-    pauseDays: DYNAMIC_BILL_STRATEGY.lessRemindPauseDays,
-    creatorReviewPromptCount: 3,
-  };
 }
 
 function isEffectiveHistoryRecord(record: WatchHistoryRecord): boolean {

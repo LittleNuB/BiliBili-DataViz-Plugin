@@ -50,7 +50,7 @@ export function buildLocalDataSummaryCards(summary: LocalDataPrivacySummary): Lo
       title: '动态账单',
       value: `${summary.dynamicBill.billItemCount} 项`,
       detail: `关注快照 ${summary.dynamicBill.activeFollowedCreatorCount} 位，最近视频投稿 ${summary.dynamicBill.followedVideoUpdateCount} 条，轮换记录 ${summary.dynamicBill.rotationRecordCount} 位。`,
-      meta: `暂停提醒 ${summary.dynamicBill.creatorPauseCount} 位；最近生成：${formatLocalDate(summary.dynamicBill.lastGeneratedAt, 'milliseconds')}`,
+      meta: `本地暂停记录 ${summary.dynamicBill.creatorPauseCount} 位；最近生成：${formatLocalDate(summary.dynamicBill.lastGeneratedAt, 'milliseconds')}`,
     },
   ];
 }

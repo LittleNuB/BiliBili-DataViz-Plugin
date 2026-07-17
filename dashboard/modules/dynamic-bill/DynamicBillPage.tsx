@@ -3,8 +3,6 @@ import type {
   DynamicBillColumn,
   DynamicBillExplanation,
   DynamicBillExplanationResult,
-  DynamicBillFeedbackResult,
-  DynamicBillFeedbackScope,
   DynamicBillFilterPreference,
   DynamicBillGenerateResult,
   DynamicBillEvidence,
@@ -189,29 +187,6 @@ export function DynamicBillPage() {
     }
   }
 
-  async function handleAddFeedback(
-    item: DynamicBillItem,
-    scope: DynamicBillFeedbackScope,
-  ) {
-    setProcessingBillKey(item.billKey);
-    setNotice("");
-    try {
-      const result = await requestSW<DynamicBillFeedbackResult>(
-        "ADD_DYNAMIC_BILL_FEEDBACK",
-        {
-          billKey: item.billKey,
-          scope,
-        },
-      );
-      await refreshBillItems();
-      setNotice(describeFeedbackResult(result));
-    } catch (error) {
-      setNotice(`保存少提醒反馈失败：${describeError(error)}`);
-    } finally {
-      setProcessingBillKey("");
-    }
-  }
-
   async function handleGenerate() {
     setGenerating(true);
     setNotice("");
@@ -390,7 +365,7 @@ export function DynamicBillPage() {
       <section className="dynamic-bill-status-copy" aria-label="动态账单同步说明">
         <strong>{notice || overviewNotice}</strong>
         <span>
-          每轮每位 UP 最多一项，每栏最多 5 项，总计最多 15 项；三栏共用一份本地轮换记录，少提醒只会在本地暂停该 UP 进入账单。
+          每轮每位 UP 最多一项，每栏最多 5 项，总计最多 15 项；三栏共用一份本地轮换记录。
         </span>
       </section>
 
@@ -502,7 +477,6 @@ export function DynamicBillPage() {
               <BillItemDetail
                 item={selectedItem}
                 busy={processingBillKey === selectedItem.billKey}
-                onAddFeedback={handleAddFeedback}
                 onMarkProcessed={handleMarkProcessed}
                 onOpenVideo={handleOpenVideo}
                 aiAvailability={{
@@ -525,7 +499,6 @@ function BillItemDetail({
   aiAvailability,
   busy,
   item,
-  onAddFeedback,
   onMarkProcessed,
   onOpenVideo,
 }: {
@@ -536,7 +509,6 @@ function BillItemDetail({
   };
   busy: boolean;
   item: DynamicBillItem;
-  onAddFeedback: (item: DynamicBillItem, scope: DynamicBillFeedbackScope) => void;
   onMarkProcessed: (item: DynamicBillItem) => void;
   onOpenVideo: (item: DynamicBillItem) => void;
 }) {
@@ -610,14 +582,6 @@ function BillItemDetail({
           onClick={() => onMarkProcessed(item)}
         >
           {isProcessed ? "已处理" : "标记已处理"}
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          data-testid="dynamic-bill-less-creator"
-          onClick={() => onAddFeedback(item, "creator")}
-        >
-          少提醒这个 UP
         </button>
         <a href={spaceUrl(item.creatorMid)} target="_blank" rel="noreferrer">
           打开 UP 主页
@@ -759,7 +723,7 @@ function describeSyncResult(result: DynamicSyncResult): string {
 }
 
 function describeGenerateResult(result: DynamicBillGenerateResult): string {
-  return `本地账单生成 ${result.itemCount} 项：被淹没的关注 ${result.columnItemCounts.buried_follow} 项，收藏关联更新 ${result.columnItemCounts.favorite_related} 项，关注轮换 ${result.columnItemCounts.follow_rotation} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除近期已看同视频 ${result.excludedRecentSameVideoCount} 条，本地少提醒暂停排除 ${result.excludedByFeedbackCount} 条。`;
+  return `本地账单生成 ${result.itemCount} 项：被淹没的关注 ${result.columnItemCounts.buried_follow} 项，收藏关联更新 ${result.columnItemCounts.favorite_related} 项，关注轮换 ${result.columnItemCounts.follow_rotation} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除近期已看同视频 ${result.excludedRecentSameVideoCount} 条，本地暂停记录排除 ${result.excludedByFeedbackCount} 条。`;
 }
 
 function describeExplanationResult(result: DynamicBillExplanationResult): string {
@@ -771,10 +735,6 @@ function describeExplanationResult(result: DynamicBillExplanationResult): string
   }
   const pending = result.pending > 0 ? `，剩余 ${result.pending} 个待处理` : "";
   return `AI 解释处理 ${result.processed} 项：成功 ${result.generated} 项，失败 ${result.failed} 项，跳过 ${result.skipped} 项${pending}；失败项仍展示本地证据说明。`;
-}
-
-function describeFeedbackResult(result: DynamicBillFeedbackResult): string {
-  return `已在本地暂停提醒「${result.summary.label}」到 ${formatTime(result.summary.pauseExpiresAt)}，当前账单项已标记为已处理。这个动作不会修改 B 站关注关系，也不会影响其他 UP。`;
 }
 
 function getColumnEmptyCopy(
@@ -816,7 +776,7 @@ function getColumnEmptyCopy(
   if (column === "buried_follow") {
     return {
       title: `暂无${statusLabel}被淹没的关注`,
-      detail: "可能是关注记忆证据不足、近期仍有观看，或该 UP 正处于本地少提醒暂停期。",
+      detail: "可能是关注记忆证据不足、近期仍有观看，或迁移保留的本地暂停记录仍在有效期内。",
     };
   }
   return {
@@ -913,15 +873,14 @@ function thresholdCopy(evidence: DynamicBillEvidence): string {
   const positiveRule = `有效观看为完成度不少于 ${formatPercent(evidence.thresholds.positiveCompletionRate)}、观看不少于 ${formatDuration(evidence.thresholds.minPositiveWatchSeconds)} 或已收藏`;
   const sameVideoRule = `同一新视频排除窗口为 ${evidence.thresholds.recentSameVideoWindowDays} 天`;
   const capacityRule = `每栏最多 ${evidence.thresholds.maxItemsPerColumn} 项，总计最多 ${evidence.thresholds.maxItemsTotal} 项`;
-  const pauseRule = `少提醒会在本地暂停该 UP ${evidence.thresholds.lessRemindPauseDays} 天`;
 
   if (evidence.kind === "favorite_related") {
-    return `本地已同步收藏中存在同 UP 作品，且最近 ${evidence.thresholds.updateWindowDays} 天有未观看新投稿；${sameVideoRule}；${capacityRule}；${pauseRule}。`;
+    return `本地已同步收藏中存在同 UP 作品，且最近 ${evidence.thresholds.updateWindowDays} 天有未观看新投稿；${sameVideoRule}；${capacityRule}。`;
   }
   if (evidence.kind === "buried_follow") {
-    return `基础入选必须是已关注 UP、最近 ${evidence.thresholds.updateWindowDays} 天有新视频投稿、近期 ${evidence.thresholds.recentWindowDays} 天观看不超过 ${evidence.thresholds.maxBuriedRecentWatchCount} 次且有效观看不超过 ${evidence.thresholds.maxBuriedRecentPositiveWatchCount} 次；关注记忆信号至少满足长期关注、特别关注、本地连续观察或近期窗口以前有观看记录之一；${positiveRule}；${sameVideoRule}；${capacityRule}；${pauseRule}。`;
+    return `基础入选必须是已关注 UP、最近 ${evidence.thresholds.updateWindowDays} 天有新视频投稿、近期 ${evidence.thresholds.recentWindowDays} 天观看不超过 ${evidence.thresholds.maxBuriedRecentWatchCount} 次且有效观看不超过 ${evidence.thresholds.maxBuriedRecentPositiveWatchCount} 次；关注记忆信号至少满足长期关注、特别关注、本地连续观察或近期窗口以前有观看记录之一；${positiveRule}；${sameVideoRule}；${capacityRule}。`;
   }
-  return `在前两栏归属后，剩余已关注 UP 的最近未观看投稿按全局轮换展示；${sameVideoRule}；${capacityRule}；${pauseRule}。`;
+  return `在前两栏归属后，剩余已关注 UP 的最近未观看投稿按全局轮换展示；${sameVideoRule}；${capacityRule}。`;
 }
 
 function followEvidenceCopy(evidence: DynamicBillEvidence): string {

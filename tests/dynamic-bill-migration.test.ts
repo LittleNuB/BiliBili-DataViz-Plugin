@@ -1,0 +1,582 @@
+import 'fake-indexeddb/auto';
+
+import assert from 'node:assert/strict';
+import { registerHooks } from 'node:module';
+import test from 'node:test';
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    try {
+      return nextResolve(specifier, context);
+    } catch (error) {
+      if (!specifier.startsWith('.') || /\.[cm]?[jt]sx?$/.test(specifier)) throw error;
+      for (const candidate of [`${specifier}.ts`, `${specifier}.tsx`, `${specifier}/index.ts`]) {
+        try {
+          return nextResolve(candidate, context);
+        } catch {
+          // Try the next TypeScript source shape.
+        }
+      }
+      throw error;
+    }
+  },
+});
+
+const { default: Dexie } = await import('dexie');
+const { db } = await import('../src/background/storage/db.ts');
+const migration = await import('../src/background/dynamic-bill/migration.ts');
+const generator = await import('../src/background/dynamic-bill/generator.ts');
+const dynamicBillAi = await import('../src/background/dynamic-bill/ai.ts');
+const dynamicBillSync = await import('../src/background/dynamic-bill/sync.ts');
+const dynamicBillRepo = await import('../src/background/storage/dynamic-bill-repo.ts');
+const localDataRepo = await import('../src/background/storage/local-data-privacy-repo.ts');
+const {
+  DYNAMIC_BILL_MIGRATION_VERSION,
+  DYNAMIC_BILL_UPGRADE_FAILED_MESSAGE,
+} = await import('../src/background/dynamic-bill/strategy.ts');
+
+const DB_NAME = 'BiliAnalyticsDB';
+const DAY_MS = 86_400_000;
+const storageData = new Map<string, unknown>();
+const sideEffects = {
+  fetch: 0,
+  storageGet: 0,
+  storageSet: 0,
+  storageRemove: 0,
+  storageClear: 0,
+};
+
+Object.defineProperty(globalThis, 'chrome', {
+  configurable: true,
+  value: {
+    storage: {
+      local: {
+        async get(keys?: string | string[] | Record<string, unknown> | null) {
+          sideEffects.storageGet++;
+          if (typeof keys === 'string') {
+            return storageData.has(keys) ? { [keys]: storageData.get(keys) } : {};
+          }
+          if (Array.isArray(keys)) {
+            return Object.fromEntries(
+              keys.filter(key => storageData.has(key)).map(key => [key, storageData.get(key)]),
+            );
+          }
+          if (keys && typeof keys === 'object') {
+            return Object.fromEntries(
+              Object.entries(keys).map(([key, fallback]) => [
+                key,
+                storageData.has(key) ? storageData.get(key) : fallback,
+              ]),
+            );
+          }
+          return Object.fromEntries(storageData);
+        },
+        async set(values: Record<string, unknown>) {
+          sideEffects.storageSet++;
+          for (const [key, value] of Object.entries(values)) storageData.set(key, value);
+        },
+        async remove(keys: string | string[]) {
+          sideEffects.storageRemove++;
+          for (const key of Array.isArray(keys) ? keys : [keys]) storageData.delete(key);
+        },
+        async clear() {
+          sideEffects.storageClear++;
+          storageData.clear();
+        },
+      },
+    },
+  },
+});
+
+Object.defineProperty(globalThis, 'fetch', {
+  configurable: true,
+  value: async () => {
+    sideEffects.fetch++;
+    throw new Error('TEST_NETWORK_SHOULD_NOT_RUN');
+  },
+});
+
+test.beforeEach(async () => {
+  db.close();
+  await Dexie.delete(DB_NAME);
+  storageData.clear();
+  resetSideEffects();
+});
+
+test.after(async () => {
+  db.close();
+  await Dexie.delete(DB_NAME);
+});
+
+test('first 0.13 read migrates a real 0.12 database before returning any bill data', async () => {
+  const now = Date.now();
+  await seedLegacyDatabase({
+    feedback: [
+      legacyCreatorFeedback(7, now - 10 * DAY_MS, 'older'),
+      legacyCreatorFeedback(7, now - 5 * DAY_MS, 'newer'),
+      legacyCreatorFeedback(8, now - 31 * DAY_MS, 'expired'),
+      legacyCreatorFeedback(9, 'invalid', 'invalid'),
+      legacyTopicFeedback(now - DAY_MS),
+    ],
+  });
+
+  const items = await dynamicBillRepo.getDynamicBillItems();
+  const pauses = await db.dynamicBillCreatorPauses.toArray();
+
+  assert.deepEqual(items, []);
+  assert.equal(await db.dynamicBillItems.count(), 0);
+  assert.equal(await db.dynamicBillExplanations.count(), 0);
+  assert.equal(await db.dynamicBillFeedback.count(), 0);
+  assert.equal(await db.dynamicBillMigrations.count(), 1);
+  assert.equal((await db.dynamicBillMigrations.toArray())[0].version, DYNAMIC_BILL_MIGRATION_VERSION);
+  assert.equal(pauses.length, 1);
+  assert.equal(pauses[0].creatorMid, 7);
+  assert.equal(pauses[0].startedAt, now - 5 * DAY_MS);
+  assert.equal(pauses[0].expiresAt, now + 25 * DAY_MS);
+  assert.equal(pauses[0].source, 'migration');
+});
+
+test('failed migration rolls back every table and a later retry completes cleanly', async () => {
+  const now = Date.now();
+  await seedLegacyDatabase({
+    feedback: [legacyCreatorFeedback(7, now - DAY_MS, 'retry')],
+  });
+  const failMarkerWrite = () => {
+    throw new Error('TEST_ABORT_MIGRATION');
+  };
+  db.dynamicBillMigrations.hook('creating', failMarkerWrite);
+
+  try {
+    await assert.rejects(
+      dynamicBillRepo.getDynamicBillItems(),
+      hasMessage(DYNAMIC_BILL_UPGRADE_FAILED_MESSAGE),
+    );
+    assert.equal(await db.dynamicBillItems.count(), 1);
+    assert.equal(await db.dynamicBillExplanations.count(), 1);
+    assert.equal(await db.dynamicBillFeedback.count(), 1);
+    assert.equal(await db.dynamicBillCreatorPauses.count(), 0);
+    assert.equal(await db.dynamicBillMigrations.count(), 0);
+  } finally {
+    db.dynamicBillMigrations.hook('creating').unsubscribe(failMarkerWrite);
+  }
+
+  assert.deepEqual(await dynamicBillRepo.getDynamicBillItems(), []);
+  assert.equal(await db.dynamicBillItems.count(), 0);
+  assert.equal(await db.dynamicBillExplanations.count(), 0);
+  assert.equal(await db.dynamicBillFeedback.count(), 0);
+  assert.equal(await db.dynamicBillCreatorPauses.count(), 1);
+  assert.equal(await db.dynamicBillMigrations.count(), 1);
+});
+
+test('concurrent and repeated gates create one pause and one marker', async () => {
+  const now = Date.now();
+  await seedLegacyDatabase({
+    feedback: [
+      legacyCreatorFeedback(7, now - 3 * DAY_MS, 'older'),
+      legacyCreatorFeedback(7, now - DAY_MS, 'newer'),
+    ],
+  });
+
+  await Promise.all([
+    dynamicBillRepo.getDynamicBillItems(),
+    dynamicBillRepo.getDynamicBillExplanationMap(['legacy-card']),
+    dynamicBillRepo.getDynamicBillFeedbackProfile(),
+    dynamicBillSync.getDynamicOverview(),
+    migration.ensureDynamicBill013Migration(),
+  ]);
+  await Promise.all([
+    migration.ensureDynamicBill013Migration(),
+    dynamicBillRepo.getDynamicBillItems(),
+    dynamicBillRepo.getDynamicBillFeedbackProfile(),
+  ]);
+
+  assert.equal(await db.dynamicBillCreatorPauses.count(), 1);
+  assert.equal(await db.dynamicBillMigrations.count(), 1);
+  assert.equal((await db.dynamicBillCreatorPauses.toArray())[0].startedAt, now - DAY_MS);
+});
+
+test('legacy feedback injected after the marker cannot change candidates, pauses, or settings counts', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  await seedCurrentCandidate(now, 101);
+
+  const beforeItems = await generator.generateDynamicBillItems();
+  const beforePauses = await dynamicBillRepo.getActiveDynamicBillCreatorPauses(now);
+  const beforeSummary = (await localDataRepo.getLocalDataPrivacySummary()).dynamicBill;
+
+  await db.dynamicBillFeedback.bulkAdd([
+    legacyCreatorFeedback(101, now, 'post-marker-creator'),
+    legacyTopicFeedback(now),
+  ]);
+
+  const afterPauses = await dynamicBillRepo.getActiveDynamicBillCreatorPauses(now);
+  const afterSummary = (await localDataRepo.getLocalDataPrivacySummary()).dynamicBill;
+  const afterItems = await generator.generateDynamicBillItems();
+
+  assert.deepEqual(afterPauses, beforePauses);
+  assert.deepEqual(afterSummary, beforeSummary);
+  assert.deepEqual(
+    afterItems.items.map(item => [item.creatorMid, item.column]),
+    beforeItems.items.map(item => [item.creatorMid, item.column]),
+  );
+  assert.equal(await db.dynamicBillFeedback.count(), 2);
+  assert.equal(await db.dynamicBillMigrations.count(), 1);
+});
+
+test('dynamic bill clear counts only 0.13 data and removes hidden legacy feedback', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  await seedCurrentCandidate(now, 202);
+  const generated = await generator.generateDynamicBillItems();
+  const item = generated.items[0];
+  await db.dynamicBillExplanations.put({
+    billKey: item.billKey,
+    status: 'disabled',
+    summary: '本地说明',
+    reason: '本地规则',
+    viewingAngle: '按需查看',
+    keywords: [],
+    confidence: 0,
+    model: '',
+    generatedAt: now,
+    contentHash: 'fixture',
+  });
+  await db.dynamicBillCreatorPauses.put({
+    creatorMid: 303,
+    creatorName: '迁移暂停 UP',
+    startedAt: now - DAY_MS,
+    expiresAt: now + DAY_MS,
+    source: 'migration',
+    createdAt: now,
+    updatedAt: now,
+  });
+  await db.dynamicBillFeedback.add(legacyCreatorFeedback(202, now, 'ignored-after-marker'));
+  await dynamicBillRepo.setDynamicSyncState({
+    status: 'success',
+    stage: 'complete',
+    lastStartedAt: now - 1_000,
+    lastFinishedAt: now,
+    lastSuccessAt: now,
+  });
+  await dynamicBillRepo.setDynamicBillFilterPreference('processed');
+
+  const result = await localDataRepo.clearDynamicBillLocalData();
+  const summary = (await localDataRepo.getLocalDataPrivacySummary()).dynamicBill;
+  const filter = await dynamicBillRepo.getDynamicBillFilterPreference();
+
+  assert.deepEqual(result.cleared, {
+    followedCreators: 1,
+    followedVideoUpdates: 1,
+    dynamicBillItems: 1,
+    dynamicBillExplanations: 1,
+    dynamicBillCreatorPauses: 1,
+    dynamicBillRotationRecords: 1,
+  });
+  assert.deepEqual(summary, {
+    activeFollowedCreatorCount: 0,
+    followedVideoUpdateCount: 0,
+    billItemCount: 0,
+    rotationRecordCount: 0,
+    creatorPauseCount: 0,
+    unopenedItems: 0,
+    openedItems: 0,
+    consumedItems: 0,
+    processedItems: 0,
+    explanationCount: 0,
+    lastGeneratedAt: null,
+    lastSyncedAt: null,
+    syncStatus: 'idle',
+  });
+  assert.deepEqual(filter, { status: 'active', updatedAt: 0 });
+  assert.equal(await db.dynamicBillMigrations.count(), 1);
+  assert.equal(await db.dynamicBillFeedback.count(), 0);
+});
+
+test('every protected entry fails with one Chinese error before reads, writes, or network work', async () => {
+  const now = Date.now();
+  await seedLegacyDatabase({
+    feedback: [legacyCreatorFeedback(7, now - DAY_MS, 'failure')],
+    seedUnrelatedRows: true,
+  });
+  const failMarkerWrite = () => {
+    throw new Error('TEST_ABORT_MIGRATION');
+  };
+  db.dynamicBillMigrations.hook('creating', failMarkerWrite);
+
+  let unrelatedReads = 0;
+  const countRead = <T>(value: T): T => {
+    unrelatedReads++;
+    return value;
+  };
+  const readTables = [
+    db.watchHistory,
+    db.favoriteItems,
+    db.currentVideoTranscriptSources,
+  ];
+  for (const table of readTables) table.hook('reading', countRead);
+  resetSideEffects();
+
+  const entries: Array<[string, () => Promise<unknown>]> = [
+    ['overview', () => dynamicBillSync.getDynamicOverview()],
+    ['sync', () => dynamicBillSync.syncDynamicBillUpdates()],
+    ['generate', () => generator.generateDynamicBillItems()],
+    ['explanations', () => dynamicBillAi.buildDynamicBillExplanations()],
+    ['items', () => dynamicBillRepo.getDynamicBillItems()],
+    ['explanation read', () => dynamicBillRepo.getDynamicBillExplanationMap(['legacy-card'])],
+    ['explanation write', () => dynamicBillRepo.putDynamicBillExplanation(fixtureExplanation(now))],
+    ['feedback read', () => dynamicBillRepo.getDynamicBillFeedbackProfile()],
+    ['feedback write', () => dynamicBillRepo.addDynamicBillFeedback('legacy-card', 'creator')],
+    ['opened state', () => dynamicBillRepo.markDynamicBillItemOpened('legacy-card')],
+    ['processed state', () => dynamicBillRepo.markDynamicBillItemProcessed('legacy-card')],
+    ['consumed state', () => dynamicBillRepo.markDynamicBillItemsConsumedByBvid('BV1legacy')],
+    ['filter read', () => dynamicBillRepo.getDynamicBillFilterPreference()],
+    ['filter write', () => dynamicBillRepo.setDynamicBillFilterPreference('active')],
+    ['sync state read', () => dynamicBillRepo.getDynamicSyncState()],
+    ['sync state write', () => dynamicBillRepo.setDynamicSyncState(fixtureSyncState())],
+    ['stored state clear', () => dynamicBillRepo.clearDynamicBillStoredState()],
+    ['settings stats', () => localDataRepo.getLocalDataPrivacySummary()],
+    ['dynamic clear', () => localDataRepo.clearDynamicBillLocalData()],
+  ];
+  const outcomes: string[] = [];
+
+  try {
+    for (const [name, run] of entries) {
+      try {
+        await run();
+        outcomes.push(`${name}:resolved`);
+      } catch (error) {
+        outcomes.push(`${name}:${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 20));
+  } finally {
+    for (const table of readTables) table.hook('reading').unsubscribe(countRead);
+    db.dynamicBillMigrations.hook('creating').unsubscribe(failMarkerWrite);
+  }
+
+  assert.deepEqual(
+    outcomes,
+    entries.map(([name]) => `${name}:${DYNAMIC_BILL_UPGRADE_FAILED_MESSAGE}`),
+  );
+  assert.deepEqual(sideEffects, {
+    fetch: 0,
+    storageGet: 0,
+    storageSet: 0,
+    storageRemove: 0,
+    storageClear: 0,
+  });
+  assert.equal(unrelatedReads, 0);
+  assert.equal(await db.dynamicBillItems.count(), 1);
+  assert.equal(await db.dynamicBillExplanations.count(), 1);
+  assert.equal(await db.dynamicBillFeedback.count(), 1);
+  assert.equal(await db.dynamicBillCreatorPauses.count(), 0);
+  assert.equal(await db.dynamicBillMigrations.count(), 0);
+});
+
+function resetSideEffects(): void {
+  sideEffects.fetch = 0;
+  sideEffects.storageGet = 0;
+  sideEffects.storageSet = 0;
+  sideEffects.storageRemove = 0;
+  sideEffects.storageClear = 0;
+}
+
+function hasMessage(message: string): (error: unknown) => boolean {
+  return error => error instanceof Error && error.message === message;
+}
+
+async function seedLegacyDatabase(options: {
+  feedback?: Array<Record<string, unknown>>;
+  seedUnrelatedRows?: boolean;
+} = {}): Promise<void> {
+  const fixture = new Dexie(DB_NAME);
+  fixture.version(8).stores({
+    watchHistory: '++id, kid, &sessionKey, avid, bvid, [avid+cid+viewAt], authorMid, tagName, viewAt, dt',
+    playerEvents: '++id, [bvid+cid], eventType, timestamp, tabId',
+    dailyAggregates: '++id, &date',
+    favoriteFolders: '++id, &mediaId, title, syncedAt',
+    favoriteItems: '++id, &itemKey, mediaId, avid, bvid, authorMid, tagName, favTime, syncedAt',
+    smartFavoriteIndex: '++id, &itemKey, status, indexedAt, contentHash',
+    followedCreators: '++id, &mid, followedAt, followAgeKnown, isActive, syncedAt, lastSeenAt',
+    followedVideoUpdates: '++id, &updateKey, dynamicId, bvid, authorMid, dynamicTime, pubtime, syncedAt',
+    dynamicBillItems: '++id, &billKey, column, status, creatorMid, updateKey, generatedAt, localRank',
+    dynamicBillFeedback: '++id, [scope+key], scope, key, creatorMid, billKey, column, createdAt',
+    dynamicBillExplanations: '++id, &billKey, status, generatedAt, model, contentHash',
+    currentVideoTranscriptSources: '++id, &identityKey, bvid, [bvid+cid+page], [bvid+cid+page+language], sourceHash, stale, updatedAt',
+    currentVideoTranscriptSegments: '++id, &segmentId, bvid, [bvid+cid+page], [bvid+cid+page+language], sourceHash, stale, updatedAt',
+  });
+  await fixture.open();
+  await fixture.table('dynamicBillItems').add({
+    billKey: 'legacy-card',
+    column: 'afk_update',
+    status: 'unopened',
+    creatorMid: 7,
+    updateKey: 'legacy-update',
+    generatedAt: Date.now() - 1_000,
+    localRank: 0,
+  });
+  await fixture.table('dynamicBillExplanations').add({
+    billKey: 'legacy-card',
+    status: 'generated',
+    generatedAt: Date.now() - 1_000,
+    model: 'legacy-model',
+    contentHash: 'legacy-hash',
+  });
+  if (options.feedback?.length) {
+    await fixture.table('dynamicBillFeedback').bulkAdd(options.feedback);
+  }
+  if (options.seedUnrelatedRows) {
+    await fixture.table('watchHistory').add(fixtureHistory());
+    await fixture.table('favoriteItems').add(fixtureFavorite());
+    await fixture.table('currentVideoTranscriptSources').add(fixtureTranscriptSource());
+  }
+  fixture.close();
+  await db.open();
+}
+
+async function seedCurrentCandidate(now: number, creatorMid: number): Promise<void> {
+  const nowSeconds = Math.floor(now / 1000);
+  await db.followedCreators.put({
+    mid: creatorMid,
+    name: `UP ${creatorMid}`,
+    face: '',
+    sign: '',
+    followAgeKnown: false,
+    special: false,
+    attribute: 0,
+    tagId: 0,
+    isActive: true,
+    firstSeenAt: now,
+    syncedAt: now,
+    lastSeenAt: now,
+  });
+  await db.followedVideoUpdates.put({
+    updateKey: `update-${creatorMid}`,
+    dynamicId: `dynamic-${creatorMid}`,
+    bvid: `BV1fixture${creatorMid}`,
+    avid: creatorMid,
+    title: `fixture video ${creatorMid}`,
+    intro: '',
+    cover: '',
+    duration: 120,
+    pubtime: nowSeconds - 60,
+    dynamicTime: nowSeconds - 60,
+    authorMid: creatorMid,
+    authorName: `UP ${creatorMid}`,
+    authorFace: '',
+    tagName: '知识',
+    tags: [],
+    syncedAt: now,
+  });
+}
+
+function legacyCreatorFeedback(
+  creatorMid: number,
+  createdAt: number | string,
+  suffix: string,
+): Record<string, unknown> {
+  return {
+    scope: 'creator',
+    key: String(creatorMid),
+    label: `legacy creator ${creatorMid}`,
+    billKey: `legacy-${suffix}`,
+    column: 'afk_update',
+    creatorMid,
+    creatorName: `UP ${creatorMid}`,
+    createdAt,
+  };
+}
+
+function legacyTopicFeedback(createdAt: number): Record<string, unknown> {
+  return {
+    scope: 'topic',
+    key: 'category:legacy',
+    label: 'legacy topic',
+    billKey: 'legacy-topic',
+    column: 'variety',
+    creatorMid: 88,
+    creatorName: 'legacy topic UP',
+    topicKind: 'category',
+    topicLabel: 'legacy',
+    createdAt,
+  };
+}
+
+function fixtureExplanation(now: number) {
+  return {
+    billKey: 'legacy-card',
+    status: 'disabled' as const,
+    summary: 'fixture',
+    reason: 'fixture',
+    viewingAngle: 'fixture',
+    keywords: [],
+    confidence: 0,
+    model: '',
+    generatedAt: now,
+    contentHash: 'fixture',
+  };
+}
+
+function fixtureSyncState() {
+  return {
+    status: 'idle' as const,
+    stage: 'idle' as const,
+    lastStartedAt: 0,
+    lastFinishedAt: 0,
+    lastSuccessAt: 0,
+  };
+}
+
+function fixtureHistory(): Record<string, unknown> {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  return {
+    sessionKey: `fixture:${nowSeconds}`,
+    kid: 1,
+    avid: 1,
+    bvid: 'BV1history',
+    cid: 1,
+    title: 'fixture history',
+    authorName: 'fixture UP',
+    authorMid: 404,
+    tagName: '知识',
+    tags: [],
+    cover: '',
+    viewAt: nowSeconds,
+    progress: 10,
+    duration: 100,
+    actualCompletion: 0.1,
+    deviceType: 2,
+    isFavorite: false,
+    business: 'archive',
+    dt: 2,
+    syncedAt: Date.now(),
+  };
+}
+
+function fixtureFavorite(): Record<string, unknown> {
+  return {
+    itemKey: 'fixture-favorite',
+    mediaId: 1,
+    avid: 1,
+    bvid: 'BV1favorite',
+    authorMid: 505,
+    tagName: '知识',
+    favTime: Math.floor(Date.now() / 1000),
+    syncedAt: Date.now(),
+  };
+}
+
+function fixtureTranscriptSource(): Record<string, unknown> {
+  return {
+    identityKey: 'BV1transcript:1:1:zh-CN',
+    bvid: 'BV1transcript',
+    cid: 1,
+    page: 1,
+    language: 'zh-CN',
+    sourceHash: 'fixture',
+    stale: false,
+    updatedAt: Date.now(),
+  };
+}

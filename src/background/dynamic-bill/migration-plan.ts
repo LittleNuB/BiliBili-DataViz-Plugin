@@ -2,12 +2,12 @@ import type {
   DynamicBillCreatorPauseRecord,
   DynamicBillFeedbackRecord,
 } from '../../shared/types/dynamic-bill.ts';
-import { DYNAMIC_BILL_STRATEGY } from './strategy.ts';
+import { DYNAMIC_BILL_MIGRATION_CREATOR_PAUSE_DAYS } from './strategy.ts';
 
 export function deriveLegacyCreatorPauses(
   feedback: DynamicBillFeedbackRecord[],
   now: number,
-  pauseDays = DYNAMIC_BILL_STRATEGY.lessRemindPauseDays,
+  pauseDays = DYNAMIC_BILL_MIGRATION_CREATOR_PAUSE_DAYS,
 ): DynamicBillCreatorPauseRecord[] {
   const pauseMs = pauseDays * 86_400_000;
   const pausesByCreator = new Map<number, DynamicBillCreatorPauseRecord>();

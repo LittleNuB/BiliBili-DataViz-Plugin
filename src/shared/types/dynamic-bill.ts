@@ -96,7 +96,7 @@ export interface DynamicBillCreatorPauseRecord {
   creatorName: string;
   startedAt: number;
   expiresAt: number;
-  source: 'migration' | 'less_remind';
+  source: 'migration';
   billKey?: string;
   createdAt: number;
   updatedAt: number;
@@ -119,20 +119,21 @@ export interface DynamicBillMigrationRecord {
 }
 
 export interface DynamicBillFeedbackThresholds {
-  pauseDays: number;
+  dampenCount: number;
+  creatorBlockCount: number;
+  topicBlockCount: number;
   creatorReviewPromptCount: number;
+  scoreMultiplier: number;
 }
 
 export interface DynamicBillFeedbackSummary {
-  scope: 'creator';
+  scope: DynamicBillFeedbackScope;
   key: string;
   label: string;
   count: number;
   isDampened: boolean;
   isBlocked: boolean;
   shouldShowCreatorReviewPrompt: boolean;
-  pauseStartedAt: number;
-  pauseExpiresAt: number;
   thresholds: DynamicBillFeedbackThresholds;
 }
 
@@ -235,7 +236,6 @@ export interface DynamicBillThresholdEvidence {
   minBuriedWeakWatchCount: number;
   maxBuriedRecentWatchCount: number;
   maxBuriedRecentPositiveWatchCount: number;
-  lessRemindPauseDays: number;
   maxItemsPerColumn: number;
   maxItemsTotal: number;
 }

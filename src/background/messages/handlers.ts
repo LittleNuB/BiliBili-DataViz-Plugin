@@ -1,4 +1,4 @@
-import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse, PlayerActionPayload, PlayerHeartbeatPayload, SyncNowResult } from '../../shared/types/messages';
+import type { BiliVizRequest, BiliVizContentMessage, BiliVizResponse, PlayerActionPayload, PlayerHeartbeatPayload, RequestAction, SyncNowResult } from '../../shared/types/messages';
 import type { HistorySyncStatus } from '../../shared/types/history-sync';
 import type {
   CurrentVideoContext,
@@ -70,6 +70,7 @@ import { buildSmartFavoriteIndex, getSmartFavoriteOverview, getSmartFavoritesByP
 import { answerSmartFavoriteQuestion } from '../favorites/qa';
 import { buildDynamicBillExplanations } from '../dynamic-bill/ai';
 import { generateDynamicBillItems } from '../dynamic-bill/generator';
+import { ensureDynamicBill013Migration } from '../dynamic-bill/migration';
 import { DYNAMIC_BILL_STRATEGY } from '../dynamic-bill/strategy';
 import { getDynamicOverview, syncDynamicBillUpdates } from '../dynamic-bill/sync';
 import {
@@ -104,6 +105,19 @@ import { testAiConnection } from '../ai/openai-compatible';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
 const SUBTITLE_PROBE_CACHE_MS = 5 * 60 * 1000;
+const DYNAMIC_BILL_MIGRATION_GATED_ACTIONS = new Set<RequestAction>([
+  'GET_LOCAL_DATA_PRIVACY_SUMMARY',
+  'GET_DYNAMIC_BILL_OVERVIEW',
+  'SYNC_DYNAMIC_UPDATES',
+  'GENERATE_DYNAMIC_BILL',
+  'BUILD_DYNAMIC_BILL_EXPLANATIONS',
+  'GET_DYNAMIC_BILL_ITEMS',
+  'GET_DYNAMIC_BILL_FILTER',
+  'UPDATE_DYNAMIC_BILL_FILTER',
+  'ADD_DYNAMIC_BILL_FEEDBACK',
+  'OPEN_DYNAMIC_BILL_VIDEO',
+  'MARK_DYNAMIC_BILL_ITEM_PROCESSED',
+]);
 const currentVideoContexts = new Map<number, CurrentVideoContextResult>();
 const currentVideoSubtitleProbes = new Map<string, CurrentVideoSubtitleSourceState>();
 const currentVideoSubtitleProbeRequests = new Map<string, Promise<CurrentVideoSubtitleSourceState>>();
@@ -203,6 +217,9 @@ async function handleContentMessage(msg: BiliVizContentMessage, tabId: number): 
 }
 
 async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizResponse<T>> {
+  if (DYNAMIC_BILL_MIGRATION_GATED_ACTIONS.has(request.action)) {
+    await ensureDynamicBill013Migration();
+  }
   switch (request.action) {
     case 'GET_QUICK_STATS':
       return { success: true, data: await getQuickStats() as T };

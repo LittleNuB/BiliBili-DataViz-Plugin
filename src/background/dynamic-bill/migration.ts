@@ -55,23 +55,15 @@ async function runDynamicBill013Migration(): Promise<void> {
 
         const legacyFeedback = await db.dynamicBillFeedback.toArray();
         const migratedPauses = deriveLegacyCreatorPauses(legacyFeedback, now);
-        const existingPauses = await db.dynamicBillCreatorPauses.toArray();
-        const existingPauseIds = new Map(
-          existingPauses.map((pause) => [pause.creatorMid, pause.id]),
-        );
 
         await db.dynamicBillItems.clear();
         await db.dynamicBillExplanations.clear();
         await db.dynamicBillFeedback.clear();
+        await db.dynamicBillCreatorPauses.clear();
         await db.dynamicBillRotationRecords.clear();
 
         if (migratedPauses.length > 0) {
-          await db.dynamicBillCreatorPauses.bulkPut(
-            migratedPauses.map((pause) => ({
-              ...pause,
-              id: existingPauseIds.get(pause.creatorMid),
-            })),
-          );
+          await db.dynamicBillCreatorPauses.bulkPut(migratedPauses);
         }
 
         await db.dynamicBillMigrations.put({
