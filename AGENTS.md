@@ -6,7 +6,7 @@ This repository is worked on by multiple Codex development threads. Follow this 
 
 - Bili-Bill is a personal content ledger for local Bilibili consumption, not a replacement for Bilibili search, recommendation, dynamic feed, or creator relationship management.
 - Dynamic Bill is for interest rebalancing. Do not describe it as "猜你喜欢", click prediction, or engagement-ranking.
-- The AI assistant is a local ledger and knowledge helper. It must explain what evidence it used and fall back to local evidence when AI is unavailable.
+- The AI assistant is a local ledger and knowledge helper. It must explain what evidence it used. Smart Favorites and Dynamic Bill remain usable from local evidence when AI is unavailable; current-video full-text generation must fail honestly instead of reviving a partial-evidence answer path.
 
 ## Safety Boundaries
 
@@ -19,12 +19,13 @@ This repository is worked on by multiple Codex development threads. Follow this 
 ## Language And UX Invariants
 
 - Dynamic Bill status copy is fixed: `未打开 / 已打开 / 已消费 / 已处理`.
-- Do not reintroduce `未消费` in `dashboard`, `popup`, `public`, `src`, `README.md`, or new docs.
-- If a video has no reliable subtitles, transcript, chapters, or text source, do not claim a full-video summary.
-- Current-video assistant answers must label their source tier: metadata summary, description summary, or transcript summary.
+- Do not reintroduce `未消费` as ordinary user-facing copy in `dashboard`, `popup`, `public`, `src`, `README.md`, or new docs. Tests and product contracts may name it only as an explicit prohibition or scan target.
+- If the active part has no reliable primary text source, do not claim a full-video summary, highlights, or answer.
+- Current-video assistant answers must label the source video, part when relevant, and natural text source name (`B站字幕` or `本地转录`).
 - Smart Favorites Q&A answers must cite source videos and explain why each cited video is relevant.
 - Video key nodes must have evidence. Do not fabricate timestamps.
 - Auto-jump behavior must be disabled by default and require explicit user confirmation.
+- User-visible copy must not expose raw engineering fields or runtime errors such as `fallback`, `transcript`, `confidence`, `sourceHash`, `segmentId`, or `subtitle_url`.
 
 ## Worktree And PR Workflow
 
@@ -49,12 +50,15 @@ The existing Vite large chunk warning for `chunks/theme-*.js` is known build hyg
 
 ## AI Feature Rules
 
-- AI requests must use minimal, intent-specific payloads.
+- AI requests must use intent-specific payloads. Current-video summary, highlights, and Q&A may include the active part's full primary text only when the 0.13 full-text authorization is enabled and the user explicitly triggers the request.
 - Payloads must not include full history, full favorites, full following lists, full feedback records, Cookie data, user profile data, local key paths, or unrelated local database rows.
 - AI must not decide Dynamic Bill eligibility, ordering, status progression, or feedback suppression unless a future accepted PRD explicitly changes that.
 - For current-video help:
-  - metadata and description summaries may ship before transcript support.
-  - transcript summaries require a reliable transcript source and source labeling.
+  - one default-off `当前视频 AI 助手` setting is the full-text authorization for summary, highlights, and Q&A.
+  - enabling the setting sends nothing by itself; opening a page, restoring a session, or switching videos must not send a request.
+  - the active part must have a reliable primary text source: matched Bilibili subtitle body text or a completed, user-selected local transcript.
+  - title, description, metadata, old keyword retrieval, or another video's answer must not be presented as a full-video fallback.
+  - every generated timestamp must map to the captured video, part, exact text version, and real time range.
 - For Smart Favorites Q&A:
   - local prefilter/ranking must run before AI.
   - AI may only synthesize an answer from cited videos supplied in the top-N context.
