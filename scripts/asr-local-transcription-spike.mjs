@@ -10,7 +10,12 @@ const SPIKE_OWNERSHIP_FILE = '.bili-bill-asr-spike-owner';
 const EDGE_START_TIMEOUT_MS = 15_000;
 const EDGE_PROBE_TIMEOUT_MS = 20_000;
 const EDGE_EXIT_TIMEOUT_MS = 5_000;
+const EDGE_TREE_COMMAND_TIMEOUT_MS = 2_000;
+const EDGE_TREE_GRACE_WAIT_MS = 1_000;
 const CDP_COMMAND_TIMEOUT_MS = 5_000;
+const JSON_REQUEST_TIMEOUT_MS = 20_000;
+const RANGE_REQUEST_TIMEOUT_MS = 30_000;
+const FULL_STREAM_TIMEOUT_MS = 180_000;
 
 const API_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -117,18 +122,58 @@ function describeError(error) {
   return `${error?.name ?? 'Error'}:${error?.message ?? String(error)}`;
 }
 
-async function fetchJson(url, headers = API_HEADERS) {
+function createAbortableDeadline(timeoutMs) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    get timedOut() {
+      return timedOut;
+    },
+    clear() {
+      clearTimeout(timer);
+    }
+  };
+}
+
+export async function fetchJson(url, headers = API_HEADERS, { timeoutMs = JSON_REQUEST_TIMEOUT_MS } = {}) {
   const startedAt = performance.now();
-  const response = await fetch(url, { headers });
-  const text = await response.text();
-  const elapsedMs = Math.round(performance.now() - startedAt);
-  let body;
+  const deadline = createAbortableDeadline(timeoutMs);
+  let status = null;
   try {
-    body = JSON.parse(text);
-  } catch {
-    body = { code: 'parse_failed', bodyPreview: text.slice(0, 160) };
+    const response = await fetch(url, { headers, signal: deadline.signal });
+    status = response.status;
+    const text = await response.text();
+    let body;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = { code: 'parse_failed', bodyPreview: text.slice(0, 160) };
+    }
+    return {
+      status,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      timeoutMs,
+      timedOut: false,
+      error: null,
+      body
+    };
+  } catch (error) {
+    return {
+      status,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      timeoutMs,
+      timedOut: deadline.timedOut,
+      error: describeError(error),
+      body: null
+    };
+  } finally {
+    deadline.clear();
   }
-  return { status: response.status, elapsedMs, body };
 }
 
 function getAudioUrl(playurlBody) {
@@ -194,23 +239,64 @@ async function readBodyEvidence(response) {
   return { firstChunkBytes, bytesRead, bodyComplete, readError };
 }
 
-export async function fetchRangeEvidence(sample, audioUrl, endByte) {
-  const headers = buildAudioHeaders(sample, `bytes=0-${endByte}`);
+export async function fetchRangeEvidence(
+  sample,
+  audioUrl,
+  endByte,
+  { timeoutMs = RANGE_REQUEST_TIMEOUT_MS } = {}
+) {
+  const requestedRangeStart = 0;
+  const requestedRangeEnd = endByte;
+  const requestedLengthBytes = requestedRangeEnd - requestedRangeStart + 1;
+  const headers = buildAudioHeaders(sample, `bytes=${requestedRangeStart}-${requestedRangeEnd}`);
   const startedAt = performance.now();
-  const response = await fetch(audioUrl, { headers });
-  const body = await readBodyEvidence(response);
-  const contentRange = response.headers.get('content-range');
-  const contentLength = response.headers.get('content-length');
-  return {
-    status: response.status,
-    elapsedMs: Math.round(performance.now() - startedAt),
-    contentType: response.headers.get('content-type'),
-    contentRange,
-    contentLength,
-    contentLengthBytes: parseContentLength(contentLength),
-    ...parseContentRange(contentRange),
-    ...body
+  const deadline = createAbortableDeadline(timeoutMs);
+  const evidence = {
+    requestedRangeStart,
+    requestedRangeEnd,
+    requestedLengthBytes,
+    status: null,
+    elapsedMs: null,
+    timeoutMs,
+    timedOut: false,
+    error: null,
+    contentType: null,
+    contentRange: null,
+    contentLength: null,
+    contentLengthBytes: null,
+    rangeStart: null,
+    rangeEnd: null,
+    totalBytes: null,
+    firstChunkBytes: 0,
+    bytesRead: 0,
+    bodyComplete: false,
+    readError: null
   };
+  try {
+    const response = await fetch(audioUrl, { headers, signal: deadline.signal });
+    const body = await readBodyEvidence(response);
+    const contentRange = response.headers.get('content-range');
+    const contentLength = response.headers.get('content-length');
+    Object.assign(evidence, {
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+      contentRange,
+      contentLength,
+      contentLengthBytes: parseContentLength(contentLength),
+      ...parseContentRange(contentRange),
+      ...body,
+      timedOut: deadline.timedOut,
+      error: deadline.timedOut ? body.readError ?? 'AbortError:network deadline exceeded' : null
+    });
+  } catch (error) {
+    evidence.timedOut = deadline.timedOut;
+    evidence.error = describeError(error);
+    evidence.readError = describeError(error);
+  } finally {
+    deadline.clear();
+    evidence.elapsedMs = Math.round(performance.now() - startedAt);
+  }
+  return evidence;
 }
 
 export async function cancelReadAfterFirstChunk(sample, audioUrl, { safetyTimeoutMs = 15_000 } = {}) {
@@ -284,26 +370,56 @@ export async function cancelReadAfterFirstChunk(sample, audioUrl, { safetyTimeou
   }
 }
 
-export async function streamAndDiscard(sample, audioUrl) {
+export async function streamAndDiscard(sample, audioUrl, { timeoutMs = FULL_STREAM_TIMEOUT_MS } = {}) {
   const headers = buildAudioHeaders(sample);
   const beforeMemory = process.memoryUsage().rss;
   const startedAt = performance.now();
-  const response = await fetch(audioUrl, { headers });
-  const body = await readBodyEvidence(response);
-  const afterMemory = process.memoryUsage().rss;
-  const contentRange = response.headers.get('content-range');
-  const contentLength = response.headers.get('content-length');
-  return {
-    status: response.status,
-    elapsedMs: Math.round(performance.now() - startedAt),
-    contentType: response.headers.get('content-type'),
-    contentRange,
-    contentLength,
-    contentLengthBytes: parseContentLength(contentLength),
-    ...parseContentRange(contentRange),
-    ...body,
-    rssDeltaBytes: afterMemory - beforeMemory
+  const deadline = createAbortableDeadline(timeoutMs);
+  const evidence = {
+    status: null,
+    elapsedMs: null,
+    timeoutMs,
+    timedOut: false,
+    error: null,
+    contentType: null,
+    contentRange: null,
+    contentLength: null,
+    contentLengthBytes: null,
+    rangeStart: null,
+    rangeEnd: null,
+    totalBytes: null,
+    firstChunkBytes: 0,
+    bytesRead: 0,
+    bodyComplete: false,
+    readError: null,
+    rssDeltaBytes: null
   };
+  try {
+    const response = await fetch(audioUrl, { headers, signal: deadline.signal });
+    const body = await readBodyEvidence(response);
+    const contentRange = response.headers.get('content-range');
+    const contentLength = response.headers.get('content-length');
+    Object.assign(evidence, {
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+      contentRange,
+      contentLength,
+      contentLengthBytes: parseContentLength(contentLength),
+      ...parseContentRange(contentRange),
+      ...body,
+      timedOut: deadline.timedOut,
+      error: deadline.timedOut ? body.readError ?? 'AbortError:network deadline exceeded' : null
+    });
+  } catch (error) {
+    evidence.timedOut = deadline.timedOut;
+    evidence.error = describeError(error);
+    evidence.readError = describeError(error);
+  } finally {
+    deadline.clear();
+    evidence.elapsedMs = Math.round(performance.now() - startedAt);
+    evidence.rssDeltaBytes = process.memoryUsage().rss - beforeMemory;
+  }
+  return evidence;
 }
 
 function mimeMatches(actual, expected) {
@@ -334,11 +450,35 @@ function knownLengthsMatch(stream) {
   return true;
 }
 
+function rangeResponseMatchesRequest(range) {
+  if (
+    !Number.isSafeInteger(range?.requestedRangeStart) ||
+    !Number.isSafeInteger(range?.requestedRangeEnd) ||
+    !Number.isSafeInteger(range?.requestedLengthBytes) ||
+    !Number.isSafeInteger(range?.totalBytes) ||
+    range.requestedRangeStart < 0 ||
+    range.requestedRangeEnd < range.requestedRangeStart ||
+    range.requestedLengthBytes !== range.requestedRangeEnd - range.requestedRangeStart + 1 ||
+    range.totalBytes <= range.requestedRangeStart
+  ) {
+    return false;
+  }
+  const expectedResponseEnd = Math.min(range.requestedRangeEnd, range.totalBytes - 1);
+  const expectedResponseLength = expectedResponseEnd - range.requestedRangeStart + 1;
+  return (
+    range.rangeStart === range.requestedRangeStart &&
+    range.rangeEnd === expectedResponseEnd &&
+    range.contentLengthBytes === expectedResponseLength &&
+    range.bytesRead === expectedResponseLength
+  );
+}
+
 export function evaluatePublicSampleEvidence(evidence) {
   const { sample, view, subtitle, playurl, range, cancellation, fullStream } = evidence;
   const fullStreamMustValidate = sample?.requireFullStream === true || fullStream !== null;
   const checks = {
     viewHttpOk: view?.httpStatus === 200,
+    viewWithinDeadline: view?.timedOut === false,
     viewApiOk: view?.apiCode === 0,
     bvidMatches: view?.bvid === sample?.bvid,
     titleMatches: view?.title === sample?.expectedTitle,
@@ -348,16 +488,20 @@ export function evaluatePublicSampleEvidence(evidence) {
       view?.currentPageDurationSeconds === sample?.expectedDurationSeconds,
     longDurationOk: sample?.requireLongDuration !== true || view?.currentPageDurationSeconds >= 5_400,
     subtitleHttpOk: subtitle?.httpStatus === 200,
+    subtitleWithinDeadline: subtitle?.timedOut === false,
     subtitleApiOk: subtitle?.apiCode === 0,
     noSubtitles: subtitle?.count === 0,
     playurlHttpOk: playurl?.httpStatus === 200,
+    playurlWithinDeadline: playurl?.timedOut === false,
     playurlApiOk: playurl?.apiCode === 0,
     audioPresent: playurl?.audioCount > 0,
     audioCodecMatches: playurl?.firstAudioCodec === sample?.expectedAudioCodec,
     rangeHttpPartial: range?.status === 206,
+    rangeWithinDeadline: range?.timedOut === false,
     rangeMimeMatches: mimeMatches(range?.contentType, sample?.expectedAudioMime),
     rangeBodyComplete: range?.bodyComplete === true && range?.readError === null,
     rangeFirstChunkNonEmpty: range?.firstChunkBytes > 0 && range?.bytesRead > 0,
+    rangeRequestContractMatches: rangeResponseMatchesRequest(range),
     rangeLengthMatches:
       Number.isSafeInteger(range?.contentLengthBytes) &&
       range.contentLengthBytes > 0 &&
@@ -374,6 +518,7 @@ export function evaluatePublicSampleEvidence(evidence) {
       cancellation?.status === 206,
     fullStreamPresent: sample?.requireFullStream !== true || fullStream !== null,
     fullStreamStatusOk: !fullStreamMustValidate || fullStream?.status === 200 || fullStream?.status === 206,
+    fullStreamWithinDeadline: !fullStreamMustValidate || fullStream?.timedOut === false,
     fullStreamMimeMatches: !fullStreamMustValidate || mimeMatches(fullStream?.contentType, sample?.expectedAudioMime),
     fullStreamFirstChunkNonEmpty:
       !fullStreamMustValidate || (fullStream?.firstChunkBytes > 0 && fullStream?.bytesRead > 0),
@@ -412,6 +557,7 @@ export function summarizeHarnessGates({ mv3Only, publicSamplesGate, modelRuntime
     evidenceGatesOk: failedGates.length === 0,
     asrProductGatesOk: false,
     decision: 'no-go',
+    exitCode: failedGates.length === 0 ? 0 : 1,
     requestedGates: Object.keys(requested),
     failedGates
   };
@@ -437,6 +583,9 @@ async function probePublicAudio() {
       sample,
       view: {
         httpStatus: view.status,
+        timeoutMs: view.timeoutMs,
+        timedOut: view.timedOut,
+        error: view.error,
         apiCode: view.body?.code,
         bvid: view.body?.data?.bvid ?? null,
         title: view.body?.data?.title ?? null,
@@ -447,12 +596,18 @@ async function probePublicAudio() {
       },
       subtitle: {
         httpStatus: subtitle.status,
+        timeoutMs: subtitle.timeoutMs,
+        timedOut: subtitle.timedOut,
+        error: subtitle.error,
         apiCode: subtitle.body?.code,
         count: subtitle.body?.data?.subtitle?.subtitles?.length ?? null,
         languages: (subtitle.body?.data?.subtitle?.subtitles ?? []).map(item => `${item.lan}:${item.lan_doc}`)
       },
       playurl: {
         httpStatus: playurl.status,
+        timeoutMs: playurl.timeoutMs,
+        timedOut: playurl.timedOut,
+        error: playurl.error,
         apiCode: playurl.body?.code,
         audioCount: playurl.body?.data?.dash?.audio?.length ?? 0,
         firstAudioCodec: playurl.body?.data?.dash?.audio?.[0]?.codecs ?? null,
@@ -500,12 +655,14 @@ export function evaluateModelRuntimeEvidence(evidence, candidate, expectedFiles)
   const expectedTotalBytes = expectedFiles.reduce((sum, file) => sum + file.size, 0);
   const checks = {
     runtimeHttpOk: evidence?.runtime?.httpStatus === 200,
+    runtimeWithinDeadline: evidence?.runtime?.timedOut === false,
     runtimeNameMatches: evidence?.runtime?.name === candidate.runtimePackage,
     runtimeVersionMatches: evidence?.runtime?.version === candidate.runtimeVersion,
     runtimeLicenseMatches:
       typeof evidence?.runtime?.license === 'string' &&
       evidence.runtime.license.toLowerCase() === candidate.runtimeLicense.toLowerCase(),
     modelHttpOk: evidence?.model?.httpStatus === 200,
+    modelWithinDeadline: evidence?.model?.timedOut === false,
     modelIdMatches: evidence?.model?.id === candidate.modelId,
     modelRevisionMatches: evidence?.model?.sha === candidate.modelRevision,
     modelLicenseMatches:
@@ -559,6 +716,9 @@ async function probeModelCandidate() {
     candidate: MODEL_CANDIDATE,
     runtime: {
       httpStatus: npmPackage.status,
+      timeoutMs: npmPackage.timeoutMs,
+      timedOut: npmPackage.timedOut,
+      error: npmPackage.error,
       name: npmPackage.body?.name ?? null,
       version: npmPackage.body?.version ?? null,
       license: npmPackage.body?.license ?? null,
@@ -568,6 +728,9 @@ async function probeModelCandidate() {
     },
     model: {
       httpStatus: model.status,
+      timeoutMs: model.timeoutMs,
+      timedOut: model.timedOut,
+      error: model.error,
       metadataUrl,
       id: model.body?.id ?? null,
       sha: model.body?.sha ?? null,
@@ -696,6 +859,184 @@ function childHasExited(child) {
   return child.pid == null || child.exitCode !== null || child.signalCode !== null;
 }
 
+export function buildEdgeProcessTreeStopPlan(platform, pid) {
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error('Process-tree stop requires a positive integer PID.');
+  if (platform === 'win32') {
+    return [
+      {
+        stage: 'graceful-tree',
+        kind: 'command',
+        command: 'taskkill.exe',
+        args: ['/PID', String(pid), '/T'],
+        targetPid: pid,
+        tree: true,
+        force: false
+      },
+      {
+        stage: 'force-tree',
+        kind: 'command',
+        command: 'taskkill.exe',
+        args: ['/PID', String(pid), '/T', '/F'],
+        targetPid: pid,
+        tree: true,
+        force: true
+      }
+    ];
+  }
+  return [
+    {
+      stage: 'graceful-group',
+      kind: 'signal',
+      targetPid: pid,
+      processGroupId: -pid,
+      signal: 'SIGTERM',
+      tree: true,
+      force: false
+    },
+    {
+      stage: 'force-group',
+      kind: 'signal',
+      targetPid: pid,
+      processGroupId: -pid,
+      signal: 'SIGKILL',
+      tree: true,
+      force: true
+    }
+  ];
+}
+
+export function evaluateEdgeProcessTreeShutdown({ targetPid, alreadyExited, rootExited, stages }) {
+  const validTargetPid = Number.isInteger(targetPid) && targetPid > 0;
+  const treeTerminationVerified = stages.some(stage => stage.treeTerminationConfirmed === true);
+  const timedOut = stages.some(stage => stage.timedOut === true || stage.waitTimedOut === true);
+  const ok = validTargetPid && rootExited === true && treeTerminationVerified;
+  return {
+    ok,
+    targetPid,
+    alreadyExited: alreadyExited === true,
+    rootExited: rootExited === true,
+    treeTerminationVerified,
+    timedOut,
+    tempRootRemovalAllowed: ok,
+    stages
+  };
+}
+
+function runBoundedTreeCommand(action) {
+  const startedAt = performance.now();
+  return new Promise(resolveResult => {
+    let settled = false;
+    let timer = null;
+    let commandChild = null;
+    const settle = result => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult({
+        ...action,
+        ...result,
+        elapsedMs: Math.round(performance.now() - startedAt)
+      });
+    };
+    try {
+      commandChild = spawn(action.command, action.args, {
+        stdio: 'ignore',
+        windowsHide: true,
+        shell: false
+      });
+      commandChild.unref();
+      commandChild.once('error', error =>
+        settle({ ok: false, timedOut: false, exitCode: null, signal: null, error: describeError(error) })
+      );
+      commandChild.once('exit', (exitCode, signal) =>
+        settle({
+          ok: exitCode === 0,
+          timedOut: false,
+          exitCode,
+          signal,
+          error: exitCode === 0 ? null : `command-exit:${exitCode ?? 'null'}:${signal ?? 'none'}`
+        })
+      );
+      timer = setTimeout(() => {
+        let killRequested = false;
+        let killError = null;
+        try {
+          killRequested = commandChild?.kill('SIGTERM') ?? false;
+        } catch (error) {
+          killError = describeError(error);
+        }
+        settle({
+          ok: false,
+          timedOut: true,
+          exitCode: commandChild?.exitCode ?? null,
+          signal: commandChild?.signalCode ?? null,
+          error: `command-timeout:${EDGE_TREE_COMMAND_TIMEOUT_MS}`,
+          killRequested,
+          killError
+        });
+      }, EDGE_TREE_COMMAND_TIMEOUT_MS);
+    } catch (error) {
+      settle({ ok: false, timedOut: false, exitCode: null, signal: null, error: describeError(error) });
+    }
+  });
+}
+
+function runTreeSignal(action) {
+  const startedAt = performance.now();
+  try {
+    process.kill(action.processGroupId, action.signal);
+    return {
+      ...action,
+      ok: true,
+      timedOut: false,
+      exitCode: null,
+      error: null,
+      elapsedMs: Math.round(performance.now() - startedAt)
+    };
+  } catch (error) {
+    return {
+      ...action,
+      ok: false,
+      timedOut: false,
+      exitCode: null,
+      error: describeError(error),
+      elapsedMs: Math.round(performance.now() - startedAt)
+    };
+  }
+}
+
+function processGroupExists(processGroupId) {
+  try {
+    process.kill(processGroupId, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== 'ESRCH';
+  }
+}
+
+async function waitForProcessGroupExit(child, action, waitMs) {
+  const deadline = performance.now() + waitMs;
+  while (performance.now() < deadline) {
+    const rootExited = childHasExited(child);
+    const groupAlive = processGroupExists(action.processGroupId);
+    if (rootExited && !groupAlive) {
+      return { rootExitObserved: true, processGroupAlive: false, treeTerminationConfirmed: true };
+    }
+    await delay(50);
+  }
+  const rootExitObserved = childHasExited(child);
+  const groupAlive = processGroupExists(action.processGroupId);
+  return {
+    rootExitObserved,
+    processGroupAlive: groupAlive,
+    treeTerminationConfirmed: rootExitObserved && !groupAlive
+  };
+}
+
+async function runTreeStopAction(action) {
+  return action.kind === 'command' ? runBoundedTreeCommand(action) : runTreeSignal(action);
+}
+
 function observeChildExit(child) {
   let settled = false;
   let resolveExit;
@@ -721,36 +1062,117 @@ function observeChildExit(child) {
   };
 }
 
-async function stopEdgeChild(child) {
-  const observer = observeChildExit(child);
-  const alreadyExited = childHasExited(child);
-  let killRequested = false;
-  try {
-    if (!alreadyExited) {
-      killRequested = child.kill();
-    }
-    const exit = await withTimeout(
-      observer.promise,
-      EDGE_EXIT_TIMEOUT_MS,
-      `Edge did not exit within ${EDGE_EXIT_TIMEOUT_MS} ms.`
-    );
+async function stopEdgeProcessTree(child) {
+  if (child.pid == null) {
     return {
-      alreadyExited: exit.alreadyExited,
-      killRequested,
+      ok: true,
+      strategy: 'not-started',
+      targetPid: null,
+      alreadyExited: true,
+      rootExited: true,
       exited: true,
-      exitCode: exit.code,
-      signal: exit.signal,
+      treeTerminationVerified: true,
       timedOut: false,
+      tempRootRemovalAllowed: true,
+      stages: [],
+      exitCode: child.exitCode,
+      signal: child.signalCode,
       warnings: []
+    };
+  }
+  const observer = observeChildExit(child);
+  const targetPid = child.pid;
+  const alreadyExited = childHasExited(child);
+  if (alreadyExited) {
+    observer.cancel();
+    return {
+      ok: false,
+      strategy: 'root-already-exited-tree-unverified',
+      targetPid,
+      alreadyExited: true,
+      rootExited: true,
+      exited: true,
+      treeTerminationVerified: false,
+      timedOut: false,
+      tempRootRemovalAllowed: false,
+      stages: [],
+      exitCode: child.exitCode,
+      signal: child.signalCode,
+      warnings: [
+        `Edge root PID ${targetPid} exited before exact-tree termination; refusing PID reuse risk and temp-root removal.`
+      ]
+    };
+  }
+  const plan = buildEdgeProcessTreeStopPlan(process.platform, targetPid);
+  const stages = [];
+  let observedExit = null;
+  try {
+    for (const action of plan) {
+      if (stages.some(stage => stage.treeTerminationConfirmed === true)) break;
+      if (process.platform === 'win32' && childHasExited(child)) break;
+      const stage = await runTreeStopAction(action);
+      stages.push(stage);
+      if (!stage.ok) continue;
+      const waitMs = action.force ? EDGE_EXIT_TIMEOUT_MS : EDGE_TREE_GRACE_WAIT_MS;
+      if (action.kind === 'signal') {
+        const groupExit = await waitForProcessGroupExit(child, action, waitMs);
+        Object.assign(stage, groupExit);
+        stage.waitTimedOut = !stage.treeTerminationConfirmed;
+        stage.waitError = stage.waitTimedOut
+          ? `process-group-${Math.abs(action.processGroupId)}-still-active-after-${waitMs}`
+          : null;
+      } else {
+        try {
+          observedExit = await withTimeout(
+            observer.promise,
+            waitMs,
+            `Edge root PID ${targetPid} did not exit after ${action.stage} within ${waitMs} ms.`
+          );
+          stage.rootExitObserved = true;
+        } catch (error) {
+          stage.rootExitObserved = childHasExited(child);
+          stage.waitTimedOut = !stage.rootExitObserved;
+          stage.waitError = stage.rootExitObserved ? null : describeError(error);
+        }
+        stage.treeTerminationConfirmed = stage.rootExitObserved === true;
+      }
+      if (stage.treeTerminationConfirmed) break;
+    }
+    const evaluation = evaluateEdgeProcessTreeShutdown({
+      targetPid,
+      alreadyExited,
+      rootExited: Boolean(observedExit) || childHasExited(child),
+      stages
+    });
+    const warnings = evaluation.ok
+      ? []
+      : [
+          `Edge process-tree shutdown was not verified for exact PID ${targetPid}: ${stages
+            .map(stage => `${stage.stage}=${stage.ok ? 'ok' : stage.error ?? 'failed'}`)
+            .join(', ')}`
+        ];
+    return {
+      ...evaluation,
+      strategy: process.platform === 'win32' ? 'exact-pid-taskkill-tree' : 'detached-process-group-signals',
+      exited: evaluation.rootExited,
+      exitCode: observedExit?.code ?? child.exitCode,
+      signal: observedExit?.signal ?? child.signalCode,
+      warnings
     };
   } catch (error) {
     return {
+      ok: false,
+      strategy: process.platform === 'win32' ? 'exact-pid-taskkill-tree' : 'detached-process-group-signals',
+      targetPid,
       alreadyExited,
-      killRequested,
+      rootExited: childHasExited(child),
       exited: childHasExited(child),
+      treeTerminationVerified: stages.some(stage => stage.treeTerminationConfirmed === true),
+      tempRootRemovalAllowed: false,
+      stages,
       exitCode: child.exitCode,
       signal: child.signalCode,
-      timedOut: error?.message === `Edge did not exit within ${EDGE_EXIT_TIMEOUT_MS} ms.`,
+      timedOut: stages.some(stage => stage.timedOut === true),
       warnings: [describeError(error)]
     };
   } finally {
@@ -1099,7 +1521,11 @@ self.onmessage = event => {
       'about:blank'
     ];
     let spawnError = null;
-    child = spawn(edgePath, args, { stdio: 'ignore' });
+    child = spawn(edgePath, args, {
+      stdio: 'ignore',
+      windowsHide: true,
+      detached: process.platform !== 'win32'
+    });
     child.once('error', error => {
       spawnError = error;
     });
@@ -1141,19 +1567,23 @@ self.onmessage = event => {
     };
   } finally {
     if (child) {
-      edgeShutdown = await stopEdgeChild(child);
+      edgeShutdown = await stopEdgeProcessTree(child);
       cleanupWarnings.push(...edgeShutdown.warnings);
     }
     if (runRoot) {
-      const removal = await removeOwnedSpikeTempRoot(runRoot, runRootMarker);
-      tempRootVerification = removal.verification;
-      tempRootRemoved = removal.removed;
-      if (!removal.removed) cleanupWarnings.push(`${basename(runRoot)}:${removal.error}`);
+      if (!child || edgeShutdown?.tempRootRemovalAllowed === true) {
+        const removal = await removeOwnedSpikeTempRoot(runRoot, runRootMarker);
+        tempRootVerification = removal.verification;
+        tempRootRemoved = removal.removed;
+        if (!removal.removed) cleanupWarnings.push(`${basename(runRoot)}:${removal.error}`);
+      } else {
+        cleanupWarnings.push(`${basename(runRoot)}:temp-root-removal-refused:edge-process-tree-not-verified`);
+      }
     }
   }
 
   const cleanupOk = Boolean(
-    edgeShutdown?.exited && !edgeShutdown.timedOut && tempRootRemoved && cleanupWarnings.length === 0
+    (!child || edgeShutdown?.ok) && tempRootRemoved && cleanupWarnings.length === 0
   );
   if (probeResult?.ok && !cleanupOk) {
     probeResult.ok = false;
@@ -1164,6 +1594,8 @@ self.onmessage = event => {
     cleanup: {
       ok: cleanupOk,
       edge: edgeShutdown,
+      edgeTreeVerifiedBeforeTempRemoval: !child || edgeShutdown?.tempRootRemovalAllowed === true,
+      tempRootRemovalAttempted: Boolean(runRoot && (!child || edgeShutdown?.tempRootRemovalAllowed === true)),
       tempRootRemoved,
       tempRootVerification,
       warnings: cleanupWarnings
@@ -1238,10 +1670,10 @@ async function main() {
     mv3OffscreenWasmProbe: mv3,
     machineGates,
     overall,
-    harnessExitCode: overall.ok ? 0 : 1
+    harnessExitCode: overall.exitCode
   };
   console.log(JSON.stringify(output, null, 2));
-  if (!overall.ok) process.exitCode = 1;
+  if (overall.exitCode !== 0) process.exitCode = overall.exitCode;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

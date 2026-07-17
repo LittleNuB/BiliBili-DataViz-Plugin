@@ -7,10 +7,13 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  buildEdgeProcessTreeStopPlan,
   cancelReadAfterFirstChunk,
   createOwnedSpikeTempRoot,
+  evaluateEdgeProcessTreeShutdown,
   evaluateModelRuntimeEvidence,
   evaluatePublicSampleEvidence,
+  fetchJson,
   fetchRangeEvidence,
   isOwnedSpikeTempRoot,
   removeOwnedSpikeTempRoot,
@@ -46,6 +49,7 @@ function validPublicSampleEvidence({ long = false } = {}) {
     sample,
     view: {
       httpStatus: 200,
+      timedOut: false,
       apiCode: 0,
       bvid: sample.bvid,
       title: sample.expectedTitle,
@@ -53,10 +57,20 @@ function validPublicSampleEvidence({ long = false } = {}) {
       currentPageCid: sample.cid,
       currentPageDurationSeconds: durationSeconds
     },
-    subtitle: { httpStatus: 200, apiCode: 0, count: 0 },
-    playurl: { httpStatus: 200, apiCode: 0, audioCount: 1, firstAudioCodec: sample.expectedAudioCodec },
+    subtitle: { httpStatus: 200, timedOut: false, apiCode: 0, count: 0 },
+    playurl: {
+      httpStatus: 200,
+      timedOut: false,
+      apiCode: 0,
+      audioCount: 1,
+      firstAudioCodec: sample.expectedAudioCodec
+    },
     range: {
+      requestedRangeStart: 0,
+      requestedRangeEnd: 3,
+      requestedLengthBytes: 4,
       status: 206,
+      timedOut: false,
       contentType: sample.expectedAudioMime,
       contentRange: 'bytes 0-3/10',
       contentLength: '4',
@@ -79,6 +93,7 @@ function validPublicSampleEvidence({ long = false } = {}) {
     fullStream: long
       ? {
           status: 200,
+          timedOut: false,
           contentType: sample.expectedAudioMime,
           contentRange: null,
           contentLength: '10',
@@ -117,12 +132,14 @@ function validModelRuntimeEvidence() {
     evidence: {
       runtime: {
         httpStatus: 200,
+        timedOut: false,
         name: candidate.runtimePackage,
         version: candidate.runtimeVersion,
         license: candidate.runtimeLicense
       },
       model: {
         httpStatus: 200,
+        timedOut: false,
         id: candidate.modelId,
         sha: candidate.modelRevision,
         license: candidate.modelLicense,
@@ -168,9 +185,23 @@ test('runtime/model gate requires successful identities, licenses, all 12 hashes
 test('public sample gate requires every declared identity, media, cancellation, and length check', () => {
   const shortGate = evaluatePublicSampleEvidence(validPublicSampleEvidence());
   const longGate = evaluatePublicSampleEvidence(validPublicSampleEvidence({ long: true }));
+  const clippedAtKnownTotal = validPublicSampleEvidence();
+  clippedAtKnownTotal.range = {
+    ...clippedAtKnownTotal.range,
+    requestedRangeEnd: 99,
+    requestedLengthBytes: 100,
+    contentRange: 'bytes 0-9/10',
+    contentLength: '10',
+    contentLengthBytes: 10,
+    rangeEnd: 9,
+    totalBytes: 10,
+    firstChunkBytes: 10,
+    bytesRead: 10
+  };
 
   assert.equal(shortGate.ok, true);
   assert.equal(longGate.ok, true);
+  assert.equal(evaluatePublicSampleEvidence(clippedAtKnownTotal).ok, true);
 
   const wrongPage = validPublicSampleEvidence();
   wrongPage.view = {
@@ -247,6 +278,132 @@ test('local media probes reject error pages, empty bodies, and truncated content
   assert.equal(evaluatePublicSampleEvidence(truncatedEvidence).ok, false);
 });
 
+test('range gate rejects a well-formed 206 that is shorter than the requested range', async t => {
+  const server = createServer((request, response) => {
+    assert.equal(request.headers.range, 'bytes=0-1048575');
+    response.writeHead(206, {
+      'Content-Type': 'video/mp4',
+      'Content-Range': 'bytes 0-3/10485760',
+      'Content-Length': '4'
+    });
+    response.end(Buffer.from([1, 2, 3, 4]));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => closeTestServer(server));
+  const address = server.address();
+  assert.equal(typeof address, 'object');
+
+  const range = await fetchRangeEvidence(
+    { bvid: 'BV1ShortRangeTest' },
+    `http://127.0.0.1:${address.port}/audio.m4s`,
+    1_048_575
+  );
+  const evidence = validPublicSampleEvidence();
+  evidence.range = range;
+  const gate = evaluatePublicSampleEvidence(evidence);
+
+  assert.equal(range.requestedRangeStart, 0);
+  assert.equal(range.requestedRangeEnd, 1_048_575);
+  assert.equal(range.requestedLengthBytes, 1_048_576);
+  assert.equal(gate.checks.rangeRequestContractMatches, false);
+  assert.equal(gate.ok, false);
+});
+
+test('metadata JSON probe returns explicit timeout evidence when the server stalls', async t => {
+  const server = createServer(() => {
+    // Intentionally withhold headers and body until the probe deadline aborts the request.
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => closeTestServer(server));
+  const address = server.address();
+  assert.equal(typeof address, 'object');
+
+  const evidence = await fetchJson(
+    `http://127.0.0.1:${address.port}/metadata.json`,
+    { Accept: 'application/json' },
+    { timeoutMs: 25 }
+  );
+
+  assert.equal(evidence.timedOut, true);
+  assert.equal(evidence.status, null);
+  assert.equal(evidence.body, null);
+  assert.match(evidence.error, /^AbortError:/);
+});
+
+test('range probe aborts a stalled body and fails the sample deadline gate', async t => {
+  const server = createServer((_request, response) => {
+    response.writeHead(206, {
+      'Content-Type': 'video/mp4',
+      'Content-Range': 'bytes 0-9/10',
+      'Content-Length': '10'
+    });
+    response.flushHeaders();
+    response.write(Buffer.from([1]));
+    const fallback = setTimeout(() => response.destroy(), 500);
+    response.on('close', () => clearTimeout(fallback));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => closeTestServer(server));
+  const address = server.address();
+  assert.equal(typeof address, 'object');
+
+  const range = await fetchRangeEvidence(
+    { bvid: 'BV1StalledRangeTest' },
+    `http://127.0.0.1:${address.port}/audio.m4s`,
+    9,
+    { timeoutMs: 25 }
+  );
+  const evidence = validPublicSampleEvidence();
+  evidence.range = range;
+  const gate = evaluatePublicSampleEvidence(evidence);
+
+  assert.equal(range.status, 206);
+  assert.equal(range.timedOut, true);
+  assert.equal(range.timeoutMs, 25);
+  assert.equal(range.bodyComplete, false);
+  assert.match(range.readError, /^AbortError:/);
+  assert.equal(gate.checks.rangeWithinDeadline, false);
+  assert.equal(gate.ok, false);
+});
+
+test('full-stream probe aborts a stalled body and fails the long-sample deadline gate', async t => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, {
+      'Content-Type': 'video/mp4',
+      'Content-Length': '10'
+    });
+    response.flushHeaders();
+    response.write(Buffer.from([1]));
+    const fallback = setTimeout(() => response.destroy(), 200);
+    response.on('close', () => clearTimeout(fallback));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => closeTestServer(server));
+  const address = server.address();
+  assert.equal(typeof address, 'object');
+
+  const fullStream = await streamAndDiscard(
+    { bvid: 'BV1StalledFullStreamTest' },
+    `http://127.0.0.1:${address.port}/audio.m4s`,
+    { timeoutMs: 100 }
+  );
+  const evidence = validPublicSampleEvidence({ long: true });
+  evidence.fullStream = fullStream;
+  const gate = evaluatePublicSampleEvidence(evidence);
+
+  assert.equal(fullStream.status, 200);
+  assert.equal(fullStream.timedOut, true);
+  assert.equal(fullStream.timeoutMs, 100);
+  assert.equal(fullStream.bodyComplete, false);
+  assert.match(fullStream.readError, /^AbortError:/);
+  assert.equal(gate.checks.fullStreamWithinDeadline, false);
+  assert.equal(gate.ok, false);
+});
+
 test('harness overall is false when any requested machine gate fails while decision remains no-go', () => {
   const passed = summarizeHarnessGates({
     mv3Only: false,
@@ -266,6 +423,34 @@ test('harness overall is false when any requested machine gate fails while decis
   assert.equal(passed.asrProductGatesOk, false);
   assert.equal(failed.ok, false);
   assert.deepEqual(failed.failedGates, ['publicSamples']);
+});
+
+test('network timeout evidence fails sample/model gates and produces a nonzero harness exit', () => {
+  const sampleEvidence = validPublicSampleEvidence();
+  sampleEvidence.view.timedOut = true;
+  const publicSamplesGate = evaluatePublicSampleEvidence(sampleEvidence);
+
+  const modelFixture = validModelRuntimeEvidence();
+  modelFixture.evidence.model.timedOut = true;
+  const modelRuntimeGate = evaluateModelRuntimeEvidence(
+    modelFixture.evidence,
+    modelFixture.candidate,
+    modelFixture.expectedFiles
+  );
+
+  const overall = summarizeHarnessGates({
+    mv3Only: false,
+    publicSamplesGate,
+    modelRuntimeGate,
+    mv3Gate: { ok: true }
+  });
+
+  assert.equal(publicSamplesGate.checks.viewWithinDeadline, false);
+  assert.equal(modelRuntimeGate.checks.modelWithinDeadline, false);
+  assert.deepEqual(overall.failedGates, ['publicSamples', 'modelRuntime']);
+  assert.equal(overall.ok, false);
+  assert.equal(overall.exitCode, 1);
+  assert.equal(overall.decision, 'no-go');
 });
 
 test('public sample summary cannot pass when one sample gate fails', () => {
@@ -304,6 +489,97 @@ test('MV3 result requires the exact run marker and real WASM/worker evidence', (
     validateMv3SpikeResult({ ...validResult, response: { marker, ok: true } }, marker).ok,
     false
   );
+});
+
+test('Edge process-tree stop plans target only the exact spawned PID with bounded escalation', () => {
+  assert.deepEqual(buildEdgeProcessTreeStopPlan('win32', 4321), [
+    {
+      stage: 'graceful-tree',
+      kind: 'command',
+      command: 'taskkill.exe',
+      args: ['/PID', '4321', '/T'],
+      targetPid: 4321,
+      tree: true,
+      force: false
+    },
+    {
+      stage: 'force-tree',
+      kind: 'command',
+      command: 'taskkill.exe',
+      args: ['/PID', '4321', '/T', '/F'],
+      targetPid: 4321,
+      tree: true,
+      force: true
+    }
+  ]);
+  assert.deepEqual(buildEdgeProcessTreeStopPlan('linux', 4321), [
+    {
+      stage: 'graceful-group',
+      kind: 'signal',
+      targetPid: 4321,
+      processGroupId: -4321,
+      signal: 'SIGTERM',
+      tree: true,
+      force: false
+    },
+    {
+      stage: 'force-group',
+      kind: 'signal',
+      targetPid: 4321,
+      processGroupId: -4321,
+      signal: 'SIGKILL',
+      tree: true,
+      force: true
+    }
+  ]);
+  assert.throws(() => buildEdgeProcessTreeStopPlan('win32', 0), /positive integer PID/);
+});
+
+test('temp-root removal requires machine-readable process-tree termination proof', () => {
+  const verified = evaluateEdgeProcessTreeShutdown({
+    targetPid: 4321,
+    alreadyExited: false,
+    rootExited: true,
+    stages: [
+      {
+        stage: 'graceful-tree',
+        tree: true,
+        ok: true,
+        timedOut: false,
+        treeTerminationConfirmed: true
+      }
+    ]
+  });
+  const directOnly = evaluateEdgeProcessTreeShutdown({
+    targetPid: 4321,
+    alreadyExited: false,
+    rootExited: true,
+    stages: [{ stage: 'direct-child-kill', tree: false, ok: true, timedOut: false }]
+  });
+  const timedOut = evaluateEdgeProcessTreeShutdown({
+    targetPid: 4321,
+    alreadyExited: false,
+    rootExited: false,
+    stages: [{ stage: 'force-tree', tree: true, ok: false, timedOut: true }]
+  });
+  const alreadyExitedWithoutTreeProof = evaluateEdgeProcessTreeShutdown({
+    targetPid: 4321,
+    alreadyExited: true,
+    rootExited: true,
+    stages: []
+  });
+
+  assert.equal(verified.ok, true);
+  assert.equal(verified.treeTerminationVerified, true);
+  assert.equal(verified.tempRootRemovalAllowed, true);
+  assert.equal(directOnly.ok, false);
+  assert.equal(directOnly.treeTerminationVerified, false);
+  assert.equal(directOnly.tempRootRemovalAllowed, false);
+  assert.equal(timedOut.ok, false);
+  assert.equal(timedOut.timedOut, true);
+  assert.equal(timedOut.tempRootRemovalAllowed, false);
+  assert.equal(alreadyExitedWithoutTreeProof.ok, false);
+  assert.equal(alreadyExitedWithoutTreeProof.tempRootRemovalAllowed, false);
 });
 
 test('model metadata must identify the declared repository and exact revision', () => {
