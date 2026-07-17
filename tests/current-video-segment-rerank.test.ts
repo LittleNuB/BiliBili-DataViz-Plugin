@@ -31,211 +31,34 @@ test('builds a bounded fuzzy segment rerank payload without internal or sensitiv
   assert.equal('startSeconds' in built.payload.candidates[0], false);
 });
 
-test('applies valid AI rerank without changing local candidate evidence or jump preview', async () => {
+test('new current-video authorization does not call the legacy segment-rerank chat path', async () => {
   const context = withTranscriptEvidence(videoContext());
   const local = localSegmentResult(context);
   const firstLocalOrder = local.candidates.map(candidate => candidate.id);
+  let chatCalls = 0;
+  let auditCalls = 0;
 
   const result = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
-    chat: async (_config, messages) => {
-      const payload = JSON.parse(messages[1].content);
-      assert.equal(JSON.stringify(payload).includes('sourceHash'), false);
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
+    chat: async () => {
+      chatCalls += 1;
       return {
-        rankedCandidates: [
-          {
-            candidateId: 'candidate-2',
-            explanation: '这条候选更贴近用户说的架构线索。',
-            reason: '有界证据片段直接提到架构。',
-            confidence: 0.84,
-          },
-          {
-            candidateId: 'candidate-1',
-            explanation: '这条也相关，但更像上下文铺垫。',
-            reason: '命中问题词但细节较少。',
-            confidence: 0.72,
-          },
-        ],
-        overallConfidence: 0.81,
+        rankedCandidates: [],
+        overallConfidence: 0.9,
       };
     },
-    now: 5000,
-  });
-
-  assert.equal(result.aiRerank.status, 'generated');
-  assert.equal(result.candidates[0].id, firstLocalOrder[1]);
-  assert.equal(result.candidates[0].timeRangeLabel, local.candidates[1].timeRangeLabel);
-  assert.equal(result.candidates[0].evidenceText, local.candidates[1].evidenceText);
-  assert.deepEqual(result.candidates[0].jumpPreview, local.candidates[1].jumpPreview);
-  assert.equal(result.aiRerank.explanations[0].candidateId, firstLocalOrder[1]);
-  assert.ok(result.aiRerank.note.includes('跳转前必须确认'));
-});
-
-test('rejects unknown AI candidate IDs and keeps local candidate order visible', async () => {
-  const context = withTranscriptEvidence(videoContext());
-  const local = localSegmentResult(context);
-  const result = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
-    chat: async () => ({
-      rankedCandidates: [
-        {
-          candidateId: 'candidate-99',
-          explanation: '看起来相关。',
-          reason: '模型词重合。',
-          confidence: 0.9,
-        },
-      ],
-      overallConfidence: 0.9,
-    }),
-    now: 5000,
-  });
-
-  assert.equal(result.aiRerank.status, 'rejected');
-  assert.match(result.aiRerank.error ?? '', /AI_UNKNOWN_CANDIDATE_ID/);
-  assert.deepEqual(result.candidates.map(candidate => candidate.id), local.candidates.map(candidate => candidate.id));
-});
-
-test('rejects invented timestamp text from AI output', async () => {
-  const context = withTranscriptEvidence(videoContext());
-  const local = localSegmentResult(context);
-  const result = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
-    chat: async () => ({
-      rankedCandidates: [
-        {
-          candidateId: 'candidate-1',
-          explanation: '应该跳到 0:24 附近。',
-          reason: 'AI 试图输出时间点。',
-          confidence: 0.9,
-        },
-      ],
-      overallConfidence: 0.9,
-    }),
-    now: 5000,
-  });
-
-  assert.equal(result.aiRerank.status, 'rejected');
-  assert.match(result.aiRerank.error ?? '', /AI_TIMESTAMP_OUT_OF_SCHEMA/);
-  assert.deepEqual(result.candidates.map(candidate => candidate.id), local.candidates.map(candidate => candidate.id));
-});
-
-test('rejects outside titles, unavailable sources, and extra evidence fields', async () => {
-  const context = withTranscriptEvidence(videoContext());
-  const local = localSegmentResult(context);
-
-  const outsideTitle = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
-    chat: async () => ({
-      rankedCandidates: [
-        {
-          candidateId: 'candidate-1',
-          explanation: '参考《外部视频标题》判断相关。',
-          reason: '标题看似相关。',
-          confidence: 0.9,
-        },
-      ],
-      overallConfidence: 0.9,
-    }),
-    now: 5000,
-  });
-  const unavailableSource = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
-    chat: async () => ({
-      rankedCandidates: [
-        {
-          candidateId: 'candidate-1',
-          explanation: '根据评论和弹幕判断相关。',
-          reason: '引用了未提供来源。',
-          confidence: 0.9,
-        },
-      ],
-      overallConfidence: 0.9,
-    }),
-    now: 5000,
-  });
-  const extraEvidence = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
-    chat: async () => ({
-      rankedCandidates: [
-        {
-          candidateId: 'candidate-1',
-          explanation: '看起来相关。',
-          reason: '模型词重合。',
-          confidence: 0.9,
-          evidence: 'AI 自己补充的外部证据',
-        },
-      ],
-      overallConfidence: 0.9,
-    }),
-    now: 5000,
-  });
-
-  assert.equal(outsideTitle.aiRerank.status, 'rejected');
-  assert.match(outsideTitle.aiRerank.error ?? '', /AI_OUTSIDE_TITLE_REFERENCE/);
-  assert.equal(unavailableSource.aiRerank.status, 'rejected');
-  assert.match(unavailableSource.aiRerank.error ?? '', /AI_UNAVAILABLE_SOURCE_REFERENCE/);
-  assert.equal(extraEvidence.aiRerank.status, 'rejected');
-  assert.match(extraEvidence.aiRerank.error ?? '', /AI_SCHEMA_VIOLATION/);
-});
-
-test('AI disabled, not configured, and failed states keep local candidates visible', async () => {
-  const context = withTranscriptEvidence(videoContext());
-  const local = localSegmentResult(context);
-  const disabled = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: false, apiKey: 'test-key' }),
-    chat: async () => {
-      throw new Error('should not call chat');
-    },
-    now: 5000,
-  });
-  const notConfigured = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: '' }),
-    chat: async () => {
-      throw new Error('should not call chat');
-    },
-    now: 5000,
-  });
-  const failed = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
-    chat: async () => {
-      throw new Error('AI_TEST_FAILURE');
+    auditPayload: () => {
+      auditCalls += 1;
     },
     now: 5000,
   });
 
-  assert.equal(disabled.aiRerank.status, 'disabled');
-  assert.equal(notConfigured.aiRerank.status, 'not_configured');
-  assert.equal(failed.aiRerank.status, 'failed');
-  assert.match(failed.aiRerank.error ?? '', /AI_TEST_FAILURE/);
-  for (const result of [disabled, notConfigured, failed]) {
-    assert.deepEqual(result.candidates.map(candidate => candidate.id), local.candidates.map(candidate => candidate.id));
-    assert.equal(result.candidates.length > 0, true);
-    assert.ok(result.aiRerank.note.includes('本地候选顺序'));
-  }
-});
-
-test('low-confidence AI output falls back to local candidate order', async () => {
-  const context = withTranscriptEvidence(videoContext());
-  const local = localSegmentResult(context);
-  const result = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
-    chat: async () => ({
-      rankedCandidates: [
-        {
-          candidateId: 'candidate-2',
-          explanation: '可能相关，但证据不够稳。',
-          reason: '只是弱重合。',
-          confidence: 0.31,
-        },
-      ],
-      overallConfidence: 0.32,
-    }),
-    now: 5000,
-  });
-
-  assert.equal(result.aiRerank.status, 'low_confidence');
-  assert.match(result.aiRerank.error ?? '', /AI_LOW_CONFIDENCE/);
+  assert.equal(chatCalls, 0);
+  assert.equal(auditCalls, 0);
+  assert.equal(result.aiRerank.status, 'disabled');
+  assert.match(result.aiRerank.note, /片段排序.*本地处理.*没有请求 AI/);
   assert.deepEqual(result.candidates.map(candidate => candidate.id), local.candidates.map(candidate => candidate.id));
+  assert.deepEqual(result.candidates.map(candidate => candidate.id), firstLocalOrder);
 });
 
 function localSegmentResult(context: CurrentVideoContext) {
@@ -348,7 +171,7 @@ function transcriptSegments(): CurrentVideoTranscriptSegment[] {
 }
 
 function userConfig(overrides: {
-  currentVideoSegmentRerankAiEnabled: boolean;
+  currentVideoAiAssistantEnabled: boolean;
   apiKey: string;
 }): UserConfig {
   return {
@@ -365,10 +188,8 @@ function userConfig(overrides: {
       chatModel: 'test-model',
     },
     assistant: {
-      aiSummariesEnabled: false,
+      currentVideoAiAssistantEnabled: overrides.currentVideoAiAssistantEnabled,
       smartFavoritesQaAiEnabled: false,
-      currentVideoSegmentRerankAiEnabled: overrides.currentVideoSegmentRerankAiEnabled,
-      currentVideoQaAiEnabled: false,
     },
     dynamicBill: {
       aiExplanationsEnabled: false,

@@ -10,10 +10,6 @@ import type {
   CurrentVideoSegmentRetrievalConfidenceLabel,
   CurrentVideoSegmentRetrievalResult,
 } from './types/current-video-segment-retrieval.ts';
-import {
-  assertAssistantPayloadAudit,
-  currentVideoQaPayloadContract,
-} from './assistant-payload-audit.ts';
 
 const DEFAULT_QA_CANDIDATE_LIMIT = 5;
 const PAYLOAD_QUESTION_LIMIT = 180;
@@ -185,95 +181,15 @@ export async function answerCurrentVideoQuestion(
     });
   }
 
-  if (!options.config.assistant.currentVideoQaAiEnabled) {
-    return withQa(local, {
-      ...localQa,
-      aiState: aiState({
-        status: 'disabled',
-        model,
-        note: '当前视频问答 AI 未在设置中启用，因此显示本地证据回答。',
-        now,
-      }),
-    });
-  }
-
-  if (!options.config.ai.apiKey.trim()) {
-    return withQa(local, {
-      ...localQa,
-      aiState: aiState({
-        status: 'not_configured',
-        model,
-        note: '当前视频问答 AI 已启用但尚未配置 API Key，因此显示本地证据回答。',
-        now,
-      }),
-    });
-  }
-
-  try {
-    const built = buildCurrentVideoQaAiPayload(context, local, {
-      candidateLimit: options.candidateLimit,
-    });
-    (options.auditPayload ?? defaultAuditPayload)(built.payload);
-    const ai = await options.chat(options.config.ai, buildCurrentVideoQaAiMessages(built.payload));
-    const guarded = guardCurrentVideoQaAiOutput(ai, built.payload);
-    if (!guarded.ok) {
-      const status = guarded.reason === 'AI_LOW_CONFIDENCE' ? 'low_confidence' : 'rejected';
-      return withQa(local, {
-        ...localQa,
-        aiState: aiState({
-          status,
-          model,
-          note: status === 'low_confidence'
-            ? 'AI 回答置信度较低，因此显示本地证据回答。'
-            : 'AI 回答没有通过引用边界检查，因此显示本地证据回答。',
-          error: guarded.error,
-          now,
-          payloadCandidateCount: built.payload.candidates.length,
-        }),
-      });
-    }
-
-    const localIdByPayloadId = new Map(built.refs.map(ref => [ref.payloadCandidateId, ref.localCandidateId]));
-    const citedLocalIds = guarded.citedPayloadCandidateIds
-      .map(id => localIdByPayloadId.get(id) ?? null)
-      .filter((id): id is string => Boolean(id));
-    const citedByLocalId = new Map(localQa.citedSegments.map(segment => [segment.candidateId, segment]));
-    const citedSegments = citedLocalIds
-      .map(id => citedByLocalId.get(id) ?? null)
-      .filter((segment): segment is CurrentVideoQaCitedSegment => Boolean(segment));
-
-    return withQa(local, {
-      ...localQa,
-      status: guarded.status,
-      answer: guarded.answer,
-      confidence: guarded.confidence,
-      confidenceLabel: confidenceLabel(guarded.confidence),
-      citedSegments,
-      aiState: aiState({
-        status: 'generated',
-        model,
-        note: 'AI 只基于本次 top-N 本地引用片段整理回答；时间点和跳转入口仍来自本地候选。',
-        now,
-        payloadCandidateCount: built.payload.candidates.length,
-        citedCandidateIds: citedLocalIds,
-      }),
-      limitations: uniqueText([
-        ...localQa.limitations,
-        'AI 只整理本次提供的当前视频引用片段，不会生成新的时间点、证据或外部来源。',
-      ]),
-    });
-  } catch (error) {
-    return withQa(local, {
-      ...localQa,
-      aiState: aiState({
-        status: 'failed',
-        model,
-        note: 'AI 回答请求失败，因此显示本地证据回答。',
-        error: errorMessage(error),
-        now,
-      }),
-    });
-  }
+  return withQa(local, {
+    ...localQa,
+    aiState: aiState({
+      status: 'disabled',
+      model,
+      note: '当前只显示本地证据回答，本次没有向聊天服务发送视频内容。',
+      now,
+    }),
+  });
 }
 
 export function buildCurrentVideoQaAiPayload(
@@ -667,10 +583,6 @@ function rejected(reason: string, error: string): QaGuardResult {
     reason,
     error,
   };
-}
-
-function defaultAuditPayload(payload: CurrentVideoQaAiPayload): void {
-  assertAssistantPayloadAudit(payload, currentVideoQaPayloadContract);
 }
 
 function isCitableCandidate(candidate: CurrentVideoSegmentRetrievalCandidate): boolean {

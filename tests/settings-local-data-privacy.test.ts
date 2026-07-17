@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   buildLocalDataOperationMessage,
@@ -7,6 +8,19 @@ import {
   dangerousLocalDataClearScope,
   LOCAL_DATA_CLEAR_CONFIRMATION,
 } from '../src/shared/local-data-privacy.ts';
+import {
+  runLocalDataCategoryLifecycle,
+  runLocalDataCategoryLifecycles,
+  validateLocalDataCategoryRegistration,
+  type LocalDataCategoryRegistration,
+  type LocalDataCategoryReadback,
+} from '../src/shared/local-data-category-contract.ts';
+import {
+  createRegisteredLocalDataCategories,
+  getRegisteredLocalDataCategories,
+  type LocalDataCategoryRegistryDependencies,
+  type LocalDataCategoryTable,
+} from '../src/background/storage/local-data-category-registry.ts';
 import type {
   LocalDataOperationResult,
   LocalDataPrivacySummary,
@@ -74,6 +88,126 @@ test('settings smart favorite rebuild message summarizes the run', () => {
   assertCleanUserCopy(message);
 });
 
+test('local data categories expose the shared lifecycle contract', () => {
+  const categories = getRegisteredLocalDataCategories();
+  assert.deepEqual(categories.map(category => category.id), [
+    'history',
+    'favorites',
+    'currentVideoSubtitles',
+    'dynamicBill',
+    'localSettings',
+  ]);
+
+  for (const category of categories) {
+    assert.deepEqual(validateLocalDataCategoryRegistration(category), []);
+    assert.equal(category.includeInClearAll, true);
+  }
+});
+
+test('registered categories collect usage, clear independently, and read back the cleared state', async () => {
+  const dependencies = createRegistryDependencies();
+  const categories = createRegisteredLocalDataCategories(dependencies);
+  const usageBefore = await Promise.all(categories.map(category => category.collectUsage()));
+
+  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 2, 5, 2]);
+  assert.ok(usageBefore.every(usage => usage.usageBytes > 0));
+
+  const history = categories[0];
+  const favorites = categories[1];
+  const historyClear = await history.clear();
+  assert.equal(historyClear.cleared.historyRecords, 1);
+  assert.deepEqual(await history.readAfterClear(), {
+    count: 0,
+    usageBytes: 0,
+    empty: true,
+  });
+  assert.equal((await favorites.collectUsage()).count, 3, 'independent clear must not touch another category');
+
+  for (const category of categories.slice(1)) {
+    const clearResult = await category.clear();
+    assert.ok(Object.keys(clearResult.cleared).length > 0);
+    const readback = await category.readAfterClear();
+    assert.equal(readback.count, 0, category.label);
+    assert.equal(readback.empty, true, category.label);
+  }
+});
+
+test('lifecycle results retain completed categories and name a failed category in natural Chinese', async () => {
+  const calls: string[] = [];
+  const registrations = [
+    lifecycleRegistration('history', '观看历史', calls),
+    lifecycleRegistration('favorites', '收藏与智能索引', calls, 'clear'),
+    lifecycleRegistration('dynamicBill', '动态账单', calls),
+  ];
+
+  const results = await runLocalDataCategoryLifecycles(registrations);
+
+  assert.deepEqual(results.map(result => result.status), ['success', 'failure', 'success']);
+  assert.deepEqual(calls, [
+    '观看历史:usage',
+    '观看历史:clear',
+    '观看历史:readback',
+    '收藏与智能索引:usage',
+    '收藏与智能索引:clear',
+    '动态账单:usage',
+    '动态账单:clear',
+    '动态账单:readback',
+  ]);
+  assert.equal(results[0].status === 'success' && results[0].after.empty, true);
+  assert.equal(results[1].status, 'failure');
+  if (results[1].status === 'failure') {
+    assert.equal(results[1].failedStage, 'clear');
+    assert.match(results[1].message, /收藏与智能索引清理失败/);
+    assert.equal(results[1].before?.count, 1);
+  }
+});
+
+test('lifecycle reports a readback failure whenever cleared data remains', async t => {
+  const cases: Array<{ name: string; after: LocalDataCategoryReadback }> = [
+    {
+      name: 'empty is false',
+      after: { count: 0, usageBytes: 0, empty: false },
+    },
+    {
+      name: 'count is non-zero',
+      after: { count: 1, usageBytes: 0, empty: true },
+    },
+    {
+      name: 'usage is non-zero',
+      after: { count: 0, usageBytes: 16, empty: true },
+    },
+  ];
+
+  for (const currentCase of cases) {
+    await t.test(currentCase.name, async () => {
+      const registration = lifecycleRegistration('history', '观看历史', []);
+      registration.readAfterClear = async () => currentCase.after;
+
+      const result = await runLocalDataCategoryLifecycle(registration);
+
+      assert.equal(result.status, 'failure');
+      if (result.status === 'failure') {
+        assert.equal(result.failedStage, 'readback');
+        assert.equal(result.failureReason, 'data_remaining');
+        assert.deepEqual(result.after, currentCase.after);
+        assert.match(result.message, /观看历史已执行清理，但回读后仍有本地数据/);
+        assertCleanUserCopy(result.message);
+      }
+    });
+  }
+});
+
+test('SET-013-A keeps the existing clear-all production transaction', async () => {
+  const source = await readFile(
+    new URL('../src/background/storage/local-data-privacy-repo.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(source, /db\.transaction\(\s*'rw',\s*db\.tables/);
+  assert.match(source, /chrome\.storage\.local\.clear\(\)/);
+  assert.doesNotMatch(source, /clearRegisteredLocalDataCategories/);
+});
+
 function makeSummary(): LocalDataPrivacySummary {
   return {
     checkedAt: 1_718_000_000_000,
@@ -117,6 +251,83 @@ function makeSummary(): LocalDataPrivacySummary {
       lastGeneratedAt: 1_718_000_000_000,
       lastSyncedAt: 1_718_000_000_000,
       syncStatus: 'success',
+    },
+  };
+}
+
+function createRegistryDependencies(): LocalDataCategoryRegistryDependencies {
+  const tableNames: Array<keyof LocalDataCategoryRegistryDependencies['tables']> = [
+    'watchHistory',
+    'playerEvents',
+    'dailyAggregates',
+    'favoriteFolders',
+    'favoriteItems',
+    'smartFavoriteIndex',
+    'currentVideoTranscriptSources',
+    'currentVideoTranscriptSegments',
+    'followedCreators',
+    'followedVideoUpdates',
+    'dynamicBillItems',
+    'dynamicBillExplanations',
+    'dynamicBillFeedback',
+  ];
+  const tables = Object.fromEntries(
+    tableNames.map(name => [name, memoryTable([{ id: name, value: `row-${name}` }])]),
+  ) as LocalDataCategoryRegistryDependencies['tables'];
+  const storage = new Map<string, unknown>([
+    ['lastSyncTime', 100],
+    ['dynamicBillSyncState', { status: 'success' }],
+    ['userConfig', { assistant: {} }],
+    ['floatingPopupWindowId', 7],
+  ]);
+
+  return {
+    tables,
+    storage: {
+      get: async keys => Object.fromEntries(keys.map(key => [key, storage.get(key)])),
+      remove: async keys => {
+        for (const key of keys) storage.delete(key);
+      },
+    },
+    transaction: async (_tables, operation) => operation(),
+  };
+}
+
+function memoryTable(initialRows: unknown[]): LocalDataCategoryTable {
+  let rows = [...initialRows];
+  return {
+    count: async () => rows.length,
+    toArray: async () => [...rows],
+    clear: async () => {
+      rows = [];
+    },
+  };
+}
+
+function lifecycleRegistration(
+  id: LocalDataCategoryRegistration['id'],
+  label: string,
+  calls: string[],
+  failAt?: 'usage' | 'clear' | 'readback',
+): LocalDataCategoryRegistration {
+  return {
+    id,
+    label,
+    includeInClearAll: true,
+    collectUsage: async () => {
+      calls.push(`${label}:usage`);
+      if (failAt === 'usage') throw new Error('raw usage failure');
+      return { count: 1, usageBytes: 10 };
+    },
+    clear: async () => {
+      calls.push(`${label}:clear`);
+      if (failAt === 'clear') throw new Error('raw clear failure');
+      return { cleared: {} };
+    },
+    readAfterClear: async () => {
+      calls.push(`${label}:readback`);
+      if (failAt === 'readback') throw new Error('raw readback failure');
+      return { count: 0, usageBytes: 0, empty: true };
     },
   };
 }

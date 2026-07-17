@@ -272,92 +272,25 @@ test('current video AI payload audit reports sensitive fields and tokens', () =>
   );
 });
 
-test('AI disabled and not configured keep transcript local evidence summary', async () => {
+test('new current-video authorization does not call the legacy bounded summary chat path', async () => {
   const context = withTranscriptEvidence(videoContext({}));
-  const segments = transcriptSegments();
-  const disabled = await generateCurrentVideoSummary(context, {
-    config: userConfig({ aiSummariesEnabled: false, apiKey: 'test-key' }),
-    transcriptSegments: segments,
-    now: 4000,
-  });
-  const notConfigured = await generateCurrentVideoSummary(context, {
-    config: userConfig({ aiSummariesEnabled: true, apiKey: '' }),
-    transcriptSegments: segments,
-    now: 4000,
-  });
-
-  assert.equal(disabled.sourceTier, 'transcript_summary');
-  assert.equal(disabled.generationMode, 'local_fallback');
-  assert.equal(disabled.ai.status, 'disabled');
-  assert.equal(notConfigured.sourceTier, 'transcript_summary');
-  assert.equal(notConfigured.ai.status, 'not_configured');
-});
-
-test('AI failed and low confidence keep transcript local evidence summary', async () => {
-  const context = withTranscriptEvidence(videoContext({}));
-  const failed = await generateCurrentVideoSummary(context, {
-    config: userConfig({ aiSummariesEnabled: true, apiKey: 'test-key' }),
-    transcriptSegments: transcriptSegments(),
-    chat: async () => {
-      throw new Error('AI_TEST_FAILURE');
-    },
-    now: 5000,
-  });
-  const lowConfidence = await generateCurrentVideoSummary(context, {
-    config: userConfig({ aiSummariesEnabled: true, apiKey: 'test-key' }),
-    transcriptSegments: transcriptSegments(),
-    chat: async () => ({
-      summary: 'AI low confidence answer',
-      bullets: ['AI low confidence bullet'],
-      confidence: 0.2,
-    }),
-    now: 5000,
-  });
-
-  assert.equal(failed.sourceTier, 'transcript_summary');
-  assert.equal(failed.ai.status, 'failed');
-  assert.equal(failed.summary.includes('字幕正文证据'), true);
-  assert.equal(lowConfidence.sourceTier, 'transcript_summary');
-  assert.equal(lowConfidence.ai.status, 'low_confidence');
-  assert.equal(lowConfidence.generationMode, 'local_fallback');
-});
-
-test('rejects AI segment or timestamp references outside payload and keeps local transcript result', async () => {
-  const context = withTranscriptEvidence(videoContext({}));
+  let chatCalls = 0;
   const summary = await generateCurrentVideoSummary(context, {
-    config: userConfig({ aiSummariesEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     transcriptSegments: transcriptSegments(),
     chat: async () => ({
-      summary: 'AI tries to cite transcript:outside:segment at 9:59.',
-      bullets: ['This should be rejected.'],
-      confidence: 0.91,
-    }),
-    now: 6000,
-  });
-
-  assert.equal(summary.sourceTier, 'transcript_summary');
-  assert.equal(summary.generationMode, 'local_fallback');
-  assert.equal(summary.ai.status, 'invalid_output');
-  assert.match(summary.ai.error ?? '', /AI_SEGMENT_OUT_OF_PAYLOAD|AI_TIMESTAMP_OUT_OF_PAYLOAD/);
-  assert.ok(summary.evidence.some(item => item.source === 'transcript'));
-});
-
-test('accepts valid AI transcript summary without replacing local evidence ranges', async () => {
-  const context = withTranscriptEvidence(videoContext({}));
-  const summary = await generateCurrentVideoSummary(context, {
-    config: userConfig({ aiSummariesEnabled: true, apiKey: 'test-key' }),
-    transcriptSegments: transcriptSegments(),
-    chat: async () => ({
-      summary: 'AI based on the supplied subtitle evidence around 0:00.',
-      bullets: ['0:00 starts from the provided subtitle range.'],
-      confidence: 0.78,
+      summary: `${++chatCalls}`,
+      bullets: ['legacy response'],
+      confidence: 0.9,
     }),
     now: 7000,
   });
 
+  assert.equal(chatCalls, 0);
   assert.equal(summary.sourceTier, 'transcript_summary');
-  assert.equal(summary.generationMode, 'ai');
-  assert.equal(summary.ai.status, 'generated');
+  assert.equal(summary.generationMode, 'local_fallback');
+  assert.equal(summary.ai.status, 'disabled');
+  assert.match(summary.ai.note, /没有向聊天服务发送视频内容/);
   assert.equal(summary.timestampRanges[0].label, '0:00-0:19');
   assert.ok(summary.evidence.some(item => item.source === 'transcript'));
 });
@@ -482,7 +415,7 @@ function transcriptSegments(options: {
 }
 
 function userConfig(overrides: {
-  aiSummariesEnabled: boolean;
+  currentVideoAiAssistantEnabled: boolean;
   apiKey: string;
 }): UserConfig {
   return {
@@ -499,10 +432,8 @@ function userConfig(overrides: {
       chatModel: 'test-model',
     },
     assistant: {
-      aiSummariesEnabled: overrides.aiSummariesEnabled,
+      currentVideoAiAssistantEnabled: overrides.currentVideoAiAssistantEnabled,
       smartFavoritesQaAiEnabled: false,
-      currentVideoSegmentRerankAiEnabled: false,
-      currentVideoQaAiEnabled: false,
     },
     dynamicBill: {
       aiExplanationsEnabled: false,

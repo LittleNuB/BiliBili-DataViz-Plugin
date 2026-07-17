@@ -67,115 +67,32 @@ test('does not generate a full answer without subtitle body or local nodes', () 
   assert.ok(result.qa.limitations.some(item => item.includes('不能生成完整视频回答')));
 });
 
-test('generates AI answer only from top-N local cited candidates', async () => {
+test('new current-video authorization does not call the legacy cited-fragment QA chat path', async () => {
   const context = withTranscriptEvidence(videoContext());
   const local = localQaResult(context);
   const localOrder = local.candidates.map(candidate => candidate.id);
+  let chatCalls = 0;
 
   const result = await answerCurrentVideoQuestion(context, local, {
-    config: userConfig({ currentVideoQaAiEnabled: true, apiKey: 'test-key' }),
-    chat: async (_config, messages) => {
-      const payload = JSON.parse(messages[1].content);
-      const rawPayload = JSON.stringify(payload);
-      assert.equal(payload.intent, 'current_video_qa_v1');
-      assert.equal(payload.candidates[0].candidateId, 'candidate-1');
-      assert.doesNotMatch(rawPayload, /sourceHash|segmentId|authorMid|watchHistory|favorites|following|Cookie|Key\.txt/i);
-      assert.equal(rawPayload.includes(local.candidates[0].id), false);
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
+    chat: async () => {
+      chatCalls += 1;
       return {
-        answer: '有。当前引用片段说明了子代理如何拆分任务并协作。',
+        answer: 'legacy response',
         status: 'answered',
-        confidence: 0.86,
+        confidence: 0.9,
         citedCandidateIds: ['candidate-1'],
       };
     },
     now: 5000,
   });
 
-  assert.equal(result.qa.aiState.status, 'generated');
-  assert.equal(result.qa.status, 'answered');
-  assert.match(result.qa.answer, /^有。/);
-  assert.deepEqual(result.qa.aiState.citedCandidateIds, [localOrder[0]]);
-  assert.equal(result.qa.citedSegments[0].candidateId, localOrder[0]);
+  assert.equal(chatCalls, 0);
+  assert.equal(result.qa.aiState.status, 'disabled');
+  assert.match(result.qa.aiState.note, /没有向聊天服务发送视频内容/);
+  assert.equal(result.qa.answer, local.qa.answer);
+  assert.deepEqual(result.qa.citedSegments, local.qa.citedSegments);
   assert.deepEqual(result.candidates.map(candidate => candidate.id), localOrder);
-  assert.deepEqual(result.candidates[0].jumpPreview, local.candidates[0].jumpPreview);
-});
-
-test('AI disabled, not configured, failed, and low-confidence states keep local evidence answer', async () => {
-  const context = withTranscriptEvidence(videoContext());
-  const local = localQaResult(context);
-  const disabled = await answerCurrentVideoQuestion(context, local, {
-    config: userConfig({ currentVideoQaAiEnabled: false, apiKey: 'test-key' }),
-    chat: async () => {
-      throw new Error('should not call chat');
-    },
-    now: 5000,
-  });
-  const notConfigured = await answerCurrentVideoQuestion(context, local, {
-    config: userConfig({ currentVideoQaAiEnabled: true, apiKey: '' }),
-    chat: async () => {
-      throw new Error('should not call chat');
-    },
-    now: 5000,
-  });
-  const failed = await answerCurrentVideoQuestion(context, local, {
-    config: userConfig({ currentVideoQaAiEnabled: true, apiKey: 'test-key' }),
-    chat: async () => {
-      throw new Error('AI_TEST_FAILURE');
-    },
-    now: 5000,
-  });
-  const lowConfidence = await answerCurrentVideoQuestion(context, local, {
-    config: userConfig({ currentVideoQaAiEnabled: true, apiKey: 'test-key' }),
-    chat: async () => ({
-      answer: '有。可能相关。',
-      status: 'answered',
-      confidence: 0.2,
-      citedCandidateIds: ['candidate-1'],
-    }),
-    now: 5000,
-  });
-
-  assert.equal(disabled.qa.aiState.status, 'disabled');
-  assert.equal(notConfigured.qa.aiState.status, 'not_configured');
-  assert.equal(failed.qa.aiState.status, 'failed');
-  assert.match(failed.qa.aiState.error ?? '', /AI_TEST_FAILURE/);
-  assert.equal(lowConfidence.qa.aiState.status, 'low_confidence');
-  for (const result of [disabled, notConfigured, failed, lowConfidence]) {
-    assert.equal(result.qa.answer, local.qa.answer);
-    assert.equal(result.qa.citedSegments.length, local.qa.citedSegments.length);
-  }
-});
-
-test('rejects AI unknown candidate references and invented timestamps', async () => {
-  const context = withTranscriptEvidence(videoContext());
-  const local = localQaResult(context);
-  const unknown = await answerCurrentVideoQuestion(context, local, {
-    config: userConfig({ currentVideoQaAiEnabled: true, apiKey: 'test-key' }),
-    chat: async () => ({
-      answer: '有。当前证据可以回答。',
-      status: 'answered',
-      confidence: 0.9,
-      citedCandidateIds: ['candidate-99'],
-    }),
-    now: 5000,
-  });
-  const inventedTime = await answerCurrentVideoQuestion(context, local, {
-    config: userConfig({ currentVideoQaAiEnabled: true, apiKey: 'test-key' }),
-    chat: async () => ({
-      answer: '有。建议直接看 0:42 的解释。',
-      status: 'answered',
-      confidence: 0.9,
-      citedCandidateIds: ['candidate-1'],
-    }),
-    now: 5000,
-  });
-
-  assert.equal(unknown.qa.aiState.status, 'rejected');
-  assert.match(unknown.qa.aiState.error ?? '', /AI_UNKNOWN_CANDIDATE_ID/);
-  assert.equal(inventedTime.qa.aiState.status, 'rejected');
-  assert.match(inventedTime.qa.aiState.error ?? '', /AI_TIMESTAMP_OUT_OF_SCHEMA/);
-  assert.equal(unknown.qa.answer, local.qa.answer);
-  assert.equal(inventedTime.qa.answer, local.qa.answer);
 });
 
 test('audits current-video QA AI payload allowlist and rejects sensitive fields', () => {
@@ -344,7 +261,7 @@ function subagentSegments(): CurrentVideoTranscriptSegment[] {
 }
 
 function userConfig(overrides: {
-  currentVideoQaAiEnabled: boolean;
+  currentVideoAiAssistantEnabled: boolean;
   apiKey: string;
 }): UserConfig {
   return {
@@ -361,10 +278,8 @@ function userConfig(overrides: {
       chatModel: 'test-model',
     },
     assistant: {
-      aiSummariesEnabled: false,
+      currentVideoAiAssistantEnabled: overrides.currentVideoAiAssistantEnabled,
       smartFavoritesQaAiEnabled: false,
-      currentVideoSegmentRerankAiEnabled: false,
-      currentVideoQaAiEnabled: overrides.currentVideoQaAiEnabled,
     },
     dynamicBill: {
       aiExplanationsEnabled: false,
