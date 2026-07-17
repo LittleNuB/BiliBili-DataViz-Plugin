@@ -1,33 +1,28 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { access, mkdtemp, rename, rm, symlink } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 
 import {
-  buildEdgeProcessTreeStopPlan,
   cancelReadAfterFirstChunk,
-  createOwnedSpikeTempRoot,
   createSpikeServiceWorkerSource,
-  evaluateEdgeProcessTreeShutdown,
   evaluateModelRuntimeEvidence,
   evaluatePublicSampleEvidence,
-  evaluateWindowsCdpBrowserShutdown,
   fetchJson,
   fetchRangeEvidence,
-  isOwnedSpikeTempRoot,
-  removeOwnedSpikeTempRoot,
-  selectTerminalMv3Result,
+  getMv3LifecycleUnavailableEvidence,
   streamAndDiscard,
   summarizeHarnessGates,
   summarizePublicSampleEvidence,
-  verifyOwnedSpikeTempRoot,
   validateModelRevision,
   validateMv3SpikeResult
 } from './asr-local-transcription-spike.mjs';
+
+const SPIKE_SCRIPT_PATH = fileURLToPath(new URL('./asr-local-transcription-spike.mjs', import.meta.url));
 
 async function closeTestServer(server) {
   server.closeAllConnections();
@@ -473,7 +468,7 @@ test('public sample summary cannot pass when one sample gate fails', () => {
   assert.deepEqual(summary.failedSampleIds, ['failed-sample']);
 });
 
-test('MV3 result requires the exact run marker and real WASM/worker evidence', () => {
+test('historical static MV3 result validation requires exact marker and WASM/worker evidence', () => {
   const marker = 'run-marker-123';
   const validResult = {
     marker,
@@ -493,6 +488,78 @@ test('MV3 result requires the exact run marker and real WASM/worker evidence', (
     validateMv3SpikeResult({ ...validResult, response: { marker, ok: true } }, marker).ok,
     false
   );
+});
+
+test('current Windows MV3 lifecycle performs no live operation and fails with the exact reason', () => {
+  const evidence = getMv3LifecycleUnavailableEvidence('win32');
+  const overall = summarizeHarnessGates({
+    mv3Only: true,
+    publicSamplesGate: null,
+    modelRuntimeGate: null,
+    mv3Gate: { ok: evidence.ok, failures: [evidence.reason] }
+  });
+
+  assert.deepEqual(evidence, {
+    ok: false,
+    executed: false,
+    platform: 'win32',
+    reason: 'mv3-lifecycle-ownership-binding-unavailable',
+    ownershipSafeLifecycleAvailable: false,
+    launchAttempted: false,
+    tempRootCreationAttempted: false,
+    cdpConnectionAttempted: false,
+    browserCloseAttempted: false,
+    recursiveDeletionAttempted: false,
+    staticSourceEvidence: {
+      available: true,
+      historicalOnly: true,
+      countedAsCurrentMachineEvidence: false
+    }
+  });
+  assert.equal(overall.ok, false);
+  assert.deepEqual(overall.failedGates, ['mv3']);
+  assert.equal(overall.exitCode, 1);
+  assert.equal(overall.asrProductGatesOk, false);
+  assert.equal(overall.decision, 'no-go');
+});
+
+test('mv3-only CLI performs no browser or temp-root operation and exits nonzero', async () => {
+  const source = await readFile(SPIKE_SCRIPT_PATH, 'utf8');
+  for (const forbidden of [
+    "from 'node:child_process'",
+    'spawn(',
+    'DevToolsActivePort',
+    'Browser.close',
+    'launchEdgeHarness',
+    'recursive: true'
+  ]) {
+    assert.equal(source.includes(forbidden), false, `production harness must not contain ${forbidden}`);
+  }
+
+  const execution = await new Promise(resolveExecution => {
+    execFile(
+      process.execPath,
+      [SPIKE_SCRIPT_PATH, '--mv3-only'],
+      { encoding: 'utf8', timeout: 5_000, windowsHide: true },
+      (error, stdout, stderr) => resolveExecution({ error, stdout, stderr })
+    );
+  });
+
+  assert.equal(execution.error?.code, 1);
+  assert.equal(execution.error?.killed, false);
+  assert.equal(execution.stderr, '');
+  const output = JSON.parse(execution.stdout);
+  assert.equal(output.mv3Lifecycle.reason, 'mv3-lifecycle-ownership-binding-unavailable');
+  assert.equal(output.mv3Lifecycle.launchAttempted, false);
+  assert.equal(output.mv3Lifecycle.tempRootCreationAttempted, false);
+  assert.equal(output.mv3Lifecycle.cdpConnectionAttempted, false);
+  assert.equal(output.mv3Lifecycle.browserCloseAttempted, false);
+  assert.equal(output.mv3Lifecycle.recursiveDeletionAttempted, false);
+  assert.deepEqual(output.machineGates.mv3.failures, ['mv3-lifecycle-ownership-binding-unavailable']);
+  assert.deepEqual(output.overall.failedGates, ['mv3']);
+  assert.equal(output.overall.asrProductGatesOk, false);
+  assert.equal(output.overall.decision, 'no-go');
+  assert.equal(output.harnessExitCode, 1);
 });
 
 test('service-worker persistence failure is terminal and contained without an unobserved rejection', async () => {
@@ -527,117 +594,6 @@ test('service-worker persistence failure is terminal and contained without an un
   assert.equal(context.ASR_SPIKE_RESULT.phase, 'failed');
   assert.equal(context.ASR_SPIKE_RESULT.error.message, 'storage unavailable');
   assert.equal(context.ASR_SPIKE_RESULT.persistenceFailure.message, 'storage unavailable');
-
-  const terminal = selectTerminalMv3Result({
-    globalResult: context.ASR_SPIKE_RESULT,
-    storedResult: { marker, phase: 'service-worker-started' }
-  });
-  assert.equal(terminal.source, 'global');
-  assert.equal(terminal.storageTerminalPersisted, false);
-  assert.equal(terminal.result.phase, 'failed');
-});
-
-test('Windows cleanup uses no PID tree command and fails closed after exact CDP browser closure', () => {
-  assert.deepEqual(buildEdgeProcessTreeStopPlan('win32', 4321), []);
-  assert.deepEqual(buildEdgeProcessTreeStopPlan('linux', 4321), [
-    {
-      stage: 'graceful-group',
-      kind: 'signal',
-      targetPid: 4321,
-      processGroupId: -4321,
-      signal: 'SIGTERM',
-      tree: true,
-      force: false
-    },
-    {
-      stage: 'force-group',
-      kind: 'signal',
-      targetPid: 4321,
-      processGroupId: -4321,
-      signal: 'SIGKILL',
-      tree: true,
-      force: true
-    }
-  ]);
-  assert.throws(() => buildEdgeProcessTreeStopPlan('win32', 0), /positive integer PID/);
-
-  const shutdown = evaluateWindowsCdpBrowserShutdown({
-    targetPid: 4321,
-    alreadyExited: false,
-    rootExited: true,
-    waitTimedOut: false,
-    browserClose: {
-      available: true,
-      requested: true,
-      acknowledged: true,
-      error: null
-    }
-  });
-  const overall = summarizeHarnessGates({
-    mv3Only: true,
-    publicSamplesGate: null,
-    modelRuntimeGate: null,
-    mv3Gate: { ok: shutdown.ok }
-  });
-
-  assert.equal(shutdown.ok, false);
-  assert.equal(shutdown.ownershipSafeBrowserCloseAcknowledged, true);
-  assert.equal(shutdown.launchTimeProcessTreeOwnershipVerified, false);
-  assert.equal(shutdown.descendantTerminationVerified, false);
-  assert.equal(shutdown.treeTerminationVerified, false);
-  assert.equal(shutdown.jobObjectUsed, false);
-  assert.equal(shutdown.tempRootRemovalAllowed, false);
-  assert.deepEqual(shutdown.failureReasons, ['windows-process-tree-ownership-unproven-without-job-object']);
-  assert.equal(overall.ok, false);
-  assert.deepEqual(overall.failedGates, ['mv3']);
-  assert.equal(overall.exitCode, 1);
-});
-
-test('temp-root removal requires machine-readable process-tree termination proof', () => {
-  const verified = evaluateEdgeProcessTreeShutdown({
-    targetPid: 4321,
-    alreadyExited: false,
-    rootExited: true,
-    stages: [
-      {
-        stage: 'graceful-tree',
-        tree: true,
-        ok: true,
-        timedOut: false,
-        treeTerminationConfirmed: true
-      }
-    ]
-  });
-  const directOnly = evaluateEdgeProcessTreeShutdown({
-    targetPid: 4321,
-    alreadyExited: false,
-    rootExited: true,
-    stages: [{ stage: 'direct-child-kill', tree: false, ok: true, timedOut: false }]
-  });
-  const timedOut = evaluateEdgeProcessTreeShutdown({
-    targetPid: 4321,
-    alreadyExited: false,
-    rootExited: false,
-    stages: [{ stage: 'force-tree', tree: true, ok: false, timedOut: true }]
-  });
-  const alreadyExitedWithoutTreeProof = evaluateEdgeProcessTreeShutdown({
-    targetPid: 4321,
-    alreadyExited: true,
-    rootExited: true,
-    stages: []
-  });
-
-  assert.equal(verified.ok, true);
-  assert.equal(verified.treeTerminationVerified, true);
-  assert.equal(verified.tempRootRemovalAllowed, true);
-  assert.equal(directOnly.ok, false);
-  assert.equal(directOnly.treeTerminationVerified, false);
-  assert.equal(directOnly.tempRootRemovalAllowed, false);
-  assert.equal(timedOut.ok, false);
-  assert.equal(timedOut.timedOut, true);
-  assert.equal(timedOut.tempRootRemovalAllowed, false);
-  assert.equal(alreadyExitedWithoutTreeProof.ok, false);
-  assert.equal(alreadyExitedWithoutTreeProof.tempRootRemovalAllowed, false);
 });
 
 test('model metadata must identify the declared repository and exact revision', () => {
@@ -653,103 +609,6 @@ test('model metadata must identify the declared repository and exact revision', 
   });
   assert.equal(validateModelRevision({ id: candidate.modelId, sha: 'main' }, candidate).verified, false);
   assert.equal(validateModelRevision({ id: 'other/model', sha: candidate.modelRevision }, candidate).verified, false);
-});
-
-test('cleanup ownership accepts only direct spike roots created under the system temp directory', () => {
-  const owned = join(tmpdir(), 'bili-bill-asr-spike-abc123');
-
-  assert.equal(isOwnedSpikeTempRoot(owned), true);
-  assert.equal(isOwnedSpikeTempRoot(join(owned, 'edge-profile')), false);
-  assert.equal(isOwnedSpikeTempRoot(join(tmpdir(), 'unrelated-profile')), false);
-});
-
-test('owned temp root deletion requires the exact random marker and removes only that root', async () => {
-  const owned = await createOwnedSpikeTempRoot();
-  const verification = await verifyOwnedSpikeTempRoot(owned.path, owned.marker);
-  assert.equal(verification.ok, true);
-
-  const removal = await removeOwnedSpikeTempRoot(owned.path, owned.marker);
-  assert.equal(removal.removed, true);
-  assert.equal(removal.quarantined, true);
-  assert.equal(removal.initialVerification.ok, true);
-  assert.equal(removal.postRenameVerification.ok, true);
-  await assert.rejects(access(owned.path));
-  await assert.rejects(access(removal.quarantinePath));
-});
-
-test('owned temp root deletion retains a whole-path replacement detected after quarantine rename', async t => {
-  const owned = await createOwnedSpikeTempRoot();
-  const replacement = await createOwnedSpikeTempRoot();
-  let quarantinePath = null;
-  t.after(async () => {
-    await rm(owned.path, { recursive: true, force: true });
-    await rm(replacement.path, { recursive: true, force: true });
-    if (quarantinePath) await rm(quarantinePath, { recursive: true, force: true });
-  });
-
-  const removal = await removeOwnedSpikeTempRoot(owned.path, owned.marker, {
-    afterQuarantineRename: async renamedPath => {
-      quarantinePath = renamedPath;
-      await rm(renamedPath, { recursive: true, force: false });
-      await rename(replacement.path, renamedPath);
-    }
-  });
-
-  assert.equal(removal.removed, false);
-  assert.equal(removal.retained, true);
-  assert.equal(removal.quarantined, true);
-  assert.equal(removal.quarantinePath, quarantinePath);
-  assert.equal(removal.initialVerification.ok, true);
-  assert.equal(removal.postRenameVerification.ok, false);
-  assert.equal(removal.postRenameVerification.checks.markerMatches, false);
-  assert.match(removal.error, /^quarantine-verification-failed:/);
-  await assert.rejects(access(owned.path));
-  await access(quarantinePath);
-});
-
-test('owned temp root deletion refuses a wrong marker and a same-prefix unrelated directory', async t => {
-  const owned = await createOwnedSpikeTempRoot();
-  const unrelated = await mkdtemp(join(tmpdir(), 'bili-bill-asr-spike-'));
-  t.after(async () => {
-    await rm(owned.path, { recursive: true, force: true });
-    await rm(unrelated, { recursive: true, force: true });
-  });
-
-  const wrongMarker = await removeOwnedSpikeTempRoot(owned.path, 'wrong-marker');
-  const missingMarker = await removeOwnedSpikeTempRoot(unrelated, owned.marker);
-
-  assert.equal(wrongMarker.removed, false);
-  assert.equal(wrongMarker.verification.checks.markerMatches, false);
-  assert.equal(missingMarker.removed, false);
-  assert.equal(missingMarker.verification.checks.markerExists, false);
-  await access(owned.path);
-  await access(unrelated);
-});
-
-test('owned temp root deletion refuses linked roots and linked marker replacements', async t => {
-  const linkTarget = await mkdtemp(join(tmpdir(), 'bili-bill-asr-link-target-'));
-  const rootLink = join(tmpdir(), `bili-bill-asr-spike-link-${process.pid}-${Date.now()}`);
-  await symlink(linkTarget, rootLink, 'junction');
-  const owned = await createOwnedSpikeTempRoot();
-  const markerLinkTarget = await mkdtemp(join(tmpdir(), 'bili-bill-asr-marker-target-'));
-  await rm(owned.markerPath, { force: true });
-  await symlink(markerLinkTarget, owned.markerPath, 'junction');
-  t.after(async () => {
-    await rm(rootLink, { recursive: true, force: true });
-    await rm(linkTarget, { recursive: true, force: true });
-    await rm(owned.path, { recursive: true, force: true });
-    await rm(markerLinkTarget, { recursive: true, force: true });
-  });
-
-  const linkedRoot = await removeOwnedSpikeTempRoot(rootLink, owned.marker);
-  const linkedMarker = await removeOwnedSpikeTempRoot(owned.path, owned.marker);
-
-  assert.equal(linkedRoot.removed, false);
-  assert.equal(linkedRoot.verification.checks.rootNotSymbolicLink, false);
-  assert.equal(linkedMarker.removed, false);
-  assert.equal(linkedMarker.verification.checks.markerNotSymbolicLink, false);
-  await access(linkTarget);
-  await access(owned.path);
 });
 
 test('cancellation keeps reading until AbortController produces AbortError', async t => {
