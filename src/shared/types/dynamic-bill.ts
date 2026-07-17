@@ -10,6 +10,7 @@ export interface FollowedCreator {
   attribute: number;
   tagId: number;
   isActive: boolean;
+  firstSeenAt?: number;
   syncedAt: number;
   lastSeenAt: number;
 }
@@ -34,11 +35,15 @@ export interface FollowedVideoUpdate {
   syncedAt: number;
 }
 
-export type DynamicBillColumn = 'afk_update' | 'variety' | 'buried_follow';
+export type DynamicBillColumn = 'buried_follow' | 'favorite_related' | 'follow_rotation';
 export type DynamicBillStatus = 'unopened' | 'opened' | 'consumed' | 'processed';
 export type DynamicBillStatusFilter = 'active' | DynamicBillStatus;
 export type DynamicBillInterestKind = 'category' | 'tag';
-export type DynamicBillFollowMemorySignal = 'long_follow' | 'special_follow' | 'weak_watch';
+export type DynamicBillFollowMemorySignal =
+  | 'long_follow'
+  | 'special_follow'
+  | 'observed_follow'
+  | 'weak_watch';
 export type DynamicBillFeedbackScope = 'creator' | 'topic';
 export type DynamicBillExplanationStatus = 'generated' | 'failed' | 'not_configured' | 'disabled';
 export type DynamicBillExplanationRunStatus = 'idle' | DynamicBillExplanationStatus;
@@ -77,7 +82,7 @@ export interface DynamicBillFeedbackRecord {
   key: string;
   label: string;
   billKey: string;
-  column: DynamicBillColumn;
+  column: DynamicBillColumn | string;
   creatorMid: number;
   creatorName: string;
   topicKind?: DynamicBillInterestKind;
@@ -85,22 +90,49 @@ export interface DynamicBillFeedbackRecord {
   createdAt: number;
 }
 
+export interface DynamicBillCreatorPauseRecord {
+  id?: number;
+  creatorMid: number;
+  creatorName: string;
+  startedAt: number;
+  expiresAt: number;
+  source: 'migration' | 'less_remind';
+  billKey?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DynamicBillRotationRecord {
+  id?: number;
+  creatorMid: number;
+  creatorName: string;
+  lastShownAt: number;
+  lastBillKey: string;
+  lastColumn: DynamicBillColumn;
+  updatedAt: number;
+}
+
+export interface DynamicBillMigrationRecord {
+  id?: number;
+  version: string;
+  completedAt: number;
+}
+
 export interface DynamicBillFeedbackThresholds {
-  dampenCount: number;
-  creatorBlockCount: number;
-  topicBlockCount: number;
+  pauseDays: number;
   creatorReviewPromptCount: number;
-  scoreMultiplier: number;
 }
 
 export interface DynamicBillFeedbackSummary {
-  scope: DynamicBillFeedbackScope;
+  scope: 'creator';
   key: string;
   label: string;
   count: number;
   isDampened: boolean;
   isBlocked: boolean;
   shouldShowCreatorReviewPrompt: boolean;
+  pauseStartedAt: number;
+  pauseExpiresAt: number;
   thresholds: DynamicBillFeedbackThresholds;
 }
 
@@ -196,22 +228,16 @@ export interface DynamicBillThresholdEvidence {
   recentWindowDays: number;
   updateWindowDays: number;
   recentSameVideoWindowDays: number;
-  minCreatorPositiveViews: number;
-  minInterestPositiveViews: number;
-  minInterestLongPositiveShare: number;
-  maxInterestRecentPositiveRatio: number;
   positiveCompletionRate: number;
   minPositiveWatchSeconds: number;
-  recentCooldownRatio: number;
   minBuriedFollowAgeDays: number;
+  minObservedFollowDays: number;
   minBuriedWeakWatchCount: number;
   maxBuriedRecentWatchCount: number;
   maxBuriedRecentPositiveWatchCount: number;
-  feedbackDampenCount: number;
-  feedbackCreatorBlockCount: number;
-  feedbackTopicBlockCount: number;
-  feedbackCreatorReviewPromptCount: number;
-  feedbackScoreMultiplier: number;
+  lessRemindPauseDays: number;
+  maxItemsPerColumn: number;
+  maxItemsTotal: number;
 }
 
 export interface DynamicBillInterestEvidence {

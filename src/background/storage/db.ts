@@ -2,9 +2,12 @@ import Dexie, { type Table } from 'dexie';
 import type { WatchHistoryRecord, PlayerEvent, DailyAggregate } from '../../shared/types/watch-event.ts';
 import type { FavoriteFolder, FavoriteItem, SmartFavoriteIndex } from '../../shared/types/favorite.ts';
 import type {
+  DynamicBillCreatorPauseRecord,
   DynamicBillExplanation,
   DynamicBillFeedbackRecord,
   DynamicBillItem,
+  DynamicBillMigrationRecord,
+  DynamicBillRotationRecord,
   FollowedCreator,
   FollowedVideoUpdate,
 } from '../../shared/types/dynamic-bill.ts';
@@ -25,6 +28,9 @@ export class BiliAnalyticsDB extends Dexie {
   dynamicBillItems!: Table<DynamicBillItem, number>;
   dynamicBillExplanations!: Table<DynamicBillExplanation, number>;
   dynamicBillFeedback!: Table<DynamicBillFeedbackRecord, number>;
+  dynamicBillCreatorPauses!: Table<DynamicBillCreatorPauseRecord, number>;
+  dynamicBillRotationRecords!: Table<DynamicBillRotationRecord, number>;
+  dynamicBillMigrations!: Table<DynamicBillMigrationRecord, number>;
   currentVideoTranscriptSources!: Table<CurrentVideoTranscriptSourceRecord, number>;
   currentVideoTranscriptSegments!: Table<CurrentVideoTranscriptSegment, number>;
 
@@ -187,6 +193,48 @@ export class BiliAnalyticsDB extends Dexie {
         '++id, &identityKey, bvid, [bvid+cid+page], [bvid+cid+page+language], sourceHash, stale, updatedAt',
       currentVideoTranscriptSegments:
         '++id, &segmentId, bvid, [bvid+cid+page], [bvid+cid+page+language], sourceHash, stale, updatedAt',
+    });
+
+    this.version(9).stores({
+      watchHistory:
+        '++id, kid, &sessionKey, avid, bvid, [avid+cid+viewAt], authorMid, tagName, viewAt, dt',
+      playerEvents:
+        '++id, [bvid+cid], eventType, timestamp, tabId',
+      dailyAggregates:
+        '++id, &date',
+      favoriteFolders:
+        '++id, &mediaId, title, syncedAt',
+      favoriteItems:
+        '++id, &itemKey, mediaId, avid, bvid, authorMid, tagName, favTime, syncedAt',
+      smartFavoriteIndex:
+        '++id, &itemKey, status, indexedAt, contentHash',
+      followedCreators:
+        '++id, &mid, followedAt, followAgeKnown, isActive, firstSeenAt, syncedAt, lastSeenAt',
+      followedVideoUpdates:
+        '++id, &updateKey, dynamicId, bvid, authorMid, dynamicTime, pubtime, syncedAt',
+      dynamicBillItems:
+        '++id, &billKey, column, status, creatorMid, updateKey, generatedAt, localRank',
+      dynamicBillFeedback:
+        '++id, [scope+key], scope, key, creatorMid, billKey, column, createdAt',
+      dynamicBillExplanations:
+        '++id, &billKey, status, generatedAt, model, contentHash',
+      dynamicBillCreatorPauses:
+        '++id, &creatorMid, expiresAt, startedAt, source, updatedAt',
+      dynamicBillRotationRecords:
+        '++id, &creatorMid, lastShownAt, lastColumn, updatedAt',
+      dynamicBillMigrations:
+        '++id, &version, completedAt',
+      currentVideoTranscriptSources:
+        '++id, &identityKey, bvid, [bvid+cid+page], [bvid+cid+page+language], sourceHash, stale, updatedAt',
+      currentVideoTranscriptSegments:
+        '++id, &segmentId, bvid, [bvid+cid+page], [bvid+cid+page+language], sourceHash, stale, updatedAt',
+    }).upgrade(async (tx) => {
+      const followedCreators = tx.table('followedCreators');
+      await followedCreators.toCollection().modify((creator) => {
+        if (!creator.firstSeenAt) {
+          creator.firstSeenAt = creator.syncedAt || creator.lastSeenAt || Date.now();
+        }
+      });
     });
   }
 }

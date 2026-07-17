@@ -34,12 +34,15 @@ export interface LocalDataPrivacySummary {
     activeFollowedCreatorCount: number;
     followedVideoUpdateCount: number;
     billItemCount: number;
+    rotationRecordCount: number;
+    creatorPauseCount: number;
     unopenedItems: number;
     openedItems: number;
     consumedItems: number;
     processedItems: number;
     feedbackCount: number;
     explanationCount: number;
+    migrationRecordCount: number;
     lastGeneratedAt: number | null;
     lastSyncedAt: number | null;
     syncStatus: DynamicSyncStatus;
@@ -48,6 +51,7 @@ export interface LocalDataPrivacySummary {
 
 export type LocalDataOperationKind =
   | 'clear_current_video_subtitle_cache'
+  | 'clear_dynamic_bill_data'
   | 'clear_all_local_data';
 
 export interface LocalDataOperationResult {

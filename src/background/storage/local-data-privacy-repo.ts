@@ -3,6 +3,7 @@ import type {
   LocalDataOperationResult,
   LocalDataPrivacySummary,
 } from '../../shared/types/local-data-privacy.ts';
+import { ensureDynamicBill013Migration } from '../dynamic-bill/migration.ts';
 import { getDynamicSyncState } from './dynamic-bill-repo.ts';
 import { db } from './db.ts';
 import {
@@ -55,6 +56,68 @@ export async function clearCurrentVideoSubtitleCache(): Promise<LocalDataOperati
     cleared: {
       currentVideoSubtitleSources: sourceCount,
       currentVideoSubtitleSegments: segmentCount,
+    },
+  };
+}
+
+export async function clearDynamicBillLocalData(): Promise<LocalDataOperationResult> {
+  await ensureDynamicBill013Migration();
+  const [
+    followedCreators,
+    followedVideoUpdates,
+    dynamicBillItems,
+    dynamicBillExplanations,
+    dynamicBillFeedback,
+    dynamicBillCreatorPauses,
+    dynamicBillRotationRecords,
+    dynamicBillMigrations,
+  ] = await Promise.all([
+    db.followedCreators.count(),
+    db.followedVideoUpdates.count(),
+    db.dynamicBillItems.count(),
+    db.dynamicBillExplanations.count(),
+    db.dynamicBillFeedback.count(),
+    db.dynamicBillCreatorPauses.count(),
+    db.dynamicBillRotationRecords.count(),
+    db.dynamicBillMigrations.count(),
+  ]);
+
+  await db.transaction(
+    'rw',
+    [
+      db.followedCreators,
+      db.followedVideoUpdates,
+      db.dynamicBillItems,
+      db.dynamicBillExplanations,
+      db.dynamicBillFeedback,
+      db.dynamicBillCreatorPauses,
+      db.dynamicBillRotationRecords,
+      db.dynamicBillMigrations,
+    ],
+    async () => {
+      await db.followedCreators.clear();
+      await db.followedVideoUpdates.clear();
+      await db.dynamicBillItems.clear();
+      await db.dynamicBillExplanations.clear();
+      await db.dynamicBillFeedback.clear();
+      await db.dynamicBillCreatorPauses.clear();
+      await db.dynamicBillRotationRecords.clear();
+      await db.dynamicBillMigrations.clear();
+    },
+  );
+
+  return {
+    operation: 'clear_dynamic_bill_data',
+    completedAt: Date.now(),
+    cleared: {
+      followedCreators,
+      followedVideoUpdates,
+      dynamicBillItems,
+      dynamicBillExplanations,
+      dynamicBillFeedback,
+      dynamicBillCreatorPauses,
+      dynamicBillRotationRecords,
+      dynamicBillMigrations,
     },
   };
 }
@@ -162,12 +225,26 @@ async function summarizeCurrentVideoSubtitles(): Promise<LocalDataPrivacySummary
 }
 
 async function summarizeDynamicBill(): Promise<LocalDataPrivacySummary['dynamicBill']> {
-  const [creators, updatesCount, items, feedbackCount, explanationCount, syncState] = await Promise.all([
+  await ensureDynamicBill013Migration();
+  const [
+    creators,
+    updatesCount,
+    items,
+    feedbackCount,
+    explanationCount,
+    pauseCount,
+    rotationRecordCount,
+    migrationRecordCount,
+    syncState,
+  ] = await Promise.all([
     db.followedCreators.toArray(),
     db.followedVideoUpdates.count(),
     db.dynamicBillItems.toArray(),
     db.dynamicBillFeedback.count(),
     db.dynamicBillExplanations.count(),
+    db.dynamicBillCreatorPauses.count(),
+    db.dynamicBillRotationRecords.count(),
+    db.dynamicBillMigrations.count(),
     getDynamicSyncState(),
   ]);
   const statusCounts = items.reduce<Record<string, number>>((counts, item) => {
@@ -180,12 +257,15 @@ async function summarizeDynamicBill(): Promise<LocalDataPrivacySummary['dynamicB
     activeFollowedCreatorCount: creators.filter(creator => creator.isActive !== false).length,
     followedVideoUpdateCount: updatesCount,
     billItemCount: items.length,
+    rotationRecordCount,
+    creatorPauseCount: pauseCount,
     unopenedItems: statusCounts.unopened ?? 0,
     openedItems: statusCounts.opened ?? 0,
     consumedItems: statusCounts.consumed ?? 0,
     processedItems: statusCounts.processed ?? 0,
     feedbackCount,
     explanationCount,
+    migrationRecordCount,
     lastGeneratedAt: normalizeNullableTimestamp(lastGeneratedAt),
     lastSyncedAt: normalizeNullableTimestamp(syncState.lastSuccessAt),
     syncStatus: syncState.status,
@@ -205,6 +285,9 @@ async function collectClearCounts(): Promise<Required<Omit<LocalDataOperationRes
     dynamicBillItems,
     dynamicBillExplanations,
     dynamicBillFeedback,
+    dynamicBillCreatorPauses,
+    dynamicBillRotationRecords,
+    dynamicBillMigrations,
     currentVideoSubtitleSources,
     currentVideoSubtitleSegments,
   ] = await Promise.all([
@@ -219,6 +302,9 @@ async function collectClearCounts(): Promise<Required<Omit<LocalDataOperationRes
     db.dynamicBillItems.count(),
     db.dynamicBillExplanations.count(),
     db.dynamicBillFeedback.count(),
+    db.dynamicBillCreatorPauses.count(),
+    db.dynamicBillRotationRecords.count(),
+    db.dynamicBillMigrations.count(),
     db.currentVideoTranscriptSources.count(),
     db.currentVideoTranscriptSegments.count(),
   ]);
@@ -235,6 +321,9 @@ async function collectClearCounts(): Promise<Required<Omit<LocalDataOperationRes
     dynamicBillItems,
     dynamicBillExplanations,
     dynamicBillFeedback,
+    dynamicBillCreatorPauses,
+    dynamicBillRotationRecords,
+    dynamicBillMigrations,
     currentVideoSubtitleSources,
     currentVideoSubtitleSegments,
   };

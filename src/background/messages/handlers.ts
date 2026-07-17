@@ -121,7 +121,7 @@ export function setupMessageHandlers(): void {
       handleContentMessage(contentMsg, sender.tab?.id ?? 0).then(() => {
         sendResponse({ success: true });
       }).catch((err) => {
-        sendResponse({ success: false, error: String(err) });
+        sendResponse({ success: false, error: errorMessage(err) });
       });
       return true; // keep channel open
     }
@@ -130,7 +130,7 @@ export function setupMessageHandlers(): void {
     const request = message as BiliVizRequest;
     if (request.action) {
       handleRequest(request).then(sendResponse).catch((err) => {
-        sendResponse({ success: false, error: String(err) });
+        sendResponse({ success: false, error: errorMessage(err) });
       });
       return true;
     }
@@ -972,4 +972,14 @@ function normalizePositiveInteger(value: unknown, fallback: number): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(1, Math.floor(numeric));
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
 }

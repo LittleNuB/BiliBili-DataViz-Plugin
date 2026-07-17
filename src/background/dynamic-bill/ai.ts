@@ -365,13 +365,13 @@ function fallbackReason(item: DynamicBillItem): string {
 }
 
 function fallbackViewingAngle(item: DynamicBillItem): string {
-  if (item.column === 'variety' && item.evidence.interest) {
-    return `把它当作回到「${item.evidence.interest.label}」这个长期兴趣的一次口味切换。`;
+  if (item.column === 'favorite_related') {
+    return '把它当作一次从本地收藏关系出发的回访，看看这个 UP 的新投稿是否仍值得关注。';
   }
   if (item.column === 'buried_follow') {
-    return '把它当作一次低压力回访，判断这个长期关注是否仍值得保留注意力。';
+    return '把它当作一次低压力回访，判断这个关注是否仍值得保留注意力。';
   }
-  return '先看它是否能补回一条近期冷却的历史兴趣线。';
+  return '把它当作一次关注轮换，先看一个较少出现在账单里的已关注 UP。';
 }
 
 function fallbackKeywords(item: DynamicBillItem): string[] {
@@ -384,13 +384,13 @@ function fallbackKeywords(item: DynamicBillItem): string[] {
 }
 
 function cardReason(item: DynamicBillItem): string {
-  if (item.column === 'variety' && item.evidence.interest) {
-    return `长期兴趣「${item.evidence.interest.label}」近期下降，但最近有已关注 UP 新投稿命中。`;
+  if (item.column === 'favorite_related') {
+    return '本地已同步收藏中有这个 UP 的既有作品，且最近有新投稿。';
   }
   if (item.column === 'buried_follow') {
     return '关注关系仍在，本地近期观看缺席或近乎缺席，且最近有新投稿。';
   }
-  return '长期窗口有正反馈、近期冷却，且最近有新投稿。';
+  return '这条来自剩余已关注 UP 的最近新投稿，按全局轮换扩大创作者覆盖。';
 }
 
 function compactFacts(facts: string[]): string[] {
@@ -402,12 +402,12 @@ function compactFacts(facts: string[]): string[] {
 
 function columnTitle(column: DynamicBillColumn): string {
   switch (column) {
-    case 'afk_update':
-      return '久违更新';
-    case 'variety':
-      return '换换口味';
     case 'buried_follow':
       return '被淹没的关注';
+    case 'favorite_related':
+      return '收藏关联更新';
+    case 'follow_rotation':
+      return '关注轮换';
     default:
       return column;
   }
