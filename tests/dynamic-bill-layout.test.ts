@@ -3,12 +3,14 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 test('partial empty Dynamic Bill columns use a compact class and weighted desktop layout', async () => {
-  const [source, styles, mock] = await Promise.all([
+  const [source, styles, mock, fullEmptyMock] = await Promise.all([
     readFile(new URL('../dashboard/modules/dynamic-bill/DynamicBillPage.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../dashboard/styles/dashboard.css', import.meta.url), 'utf8'),
     readFile(new URL('./dynamic-bill-partial-empty.mock.html', import.meta.url), 'utf8'),
+    readFile(new URL('./dynamic-bill-full-empty.mock.html', import.meta.url), 'utf8'),
   ]);
 
+  assert.match(source, /resolveDynamicBillLayoutState\(items, statusFilter, selectedBillKey\)/);
   assert.match(source, /dynamic-bill-column[^`]*is-empty/);
   assert.match(source, /className="dynamic-bill-column-empty"/);
   assert.match(styles, /\.dynamic-bill-board\s*\{[^}]*display:\s*flex/s);
@@ -23,4 +25,10 @@ test('partial empty Dynamic Bill columns use a compact class and weighted deskto
   assert.match(mock, /: "one-empty"/);
   assert.match(mock, /compactHeight < 120/);
   assert.match(mock, /hasHorizontalOverflow/);
+  assert.match(fullEmptyMock, /__dynamicBillFullEmptyQa/);
+  assert.match(fullEmptyMock, /emptyStates\.length === 1/);
+  assert.match(fullEmptyMock, /!board/);
+  assert.match(fullEmptyMock, /!detail/);
+  assert.match(fullEmptyMock, /同步并刷新/);
+  assert.match(fullEmptyMock, /重新生成本地账单/);
 });

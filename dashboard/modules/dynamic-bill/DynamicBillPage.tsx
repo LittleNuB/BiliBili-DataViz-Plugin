@@ -15,6 +15,10 @@ import type {
 import type { UserConfig } from "../../../src/shared/types/config";
 import { requestSW } from "../../utils/messaging";
 import { dynamicBillFailureCopy, explanationStateCopy } from "./failure-copy";
+import {
+  chooseDynamicBillSelectedKey,
+  resolveDynamicBillLayoutState,
+} from "./layout-state";
 
 const STATUS_FILTERS: Array<{
   key: DynamicBillStatusFilter;
@@ -75,16 +79,14 @@ export function DynamicBillPage() {
   const overviewNotice = overview
     ? describeOverview(overview)
     : "正在读取动态账单同步状态。";
-  const visibleItems = useMemo(
-    () => items.filter((item) => matchesStatusFilter(item, statusFilter)),
-    [items, statusFilter],
+  const layoutState = useMemo(
+    () => resolveDynamicBillLayoutState(items, statusFilter, selectedBillKey),
+    [items, selectedBillKey, statusFilter],
   );
-  const selectedItem =
-    visibleItems.find((item) => item.billKey === selectedBillKey) ??
-    visibleItems[0] ??
-    null;
+  const visibleItems = layoutState.visibleItems;
+  const selectedItem = layoutState.selectedItem;
   const statusCounts = useMemo(() => countByStatus(items), [items]);
-  const allColumnsEmpty = items.length === 0;
+  const allColumnsEmpty = layoutState.allColumnsEmpty;
 
   useEffect(() => {
     refreshConfig().catch((error) => {
@@ -103,7 +105,7 @@ export function DynamicBillPage() {
 
   useEffect(() => {
     setSelectedBillKey((current) =>
-      chooseSelectedBillKey(current, items, statusFilter),
+      chooseDynamicBillSelectedKey(current, items, statusFilter),
     );
   }, [items, statusFilter]);
 
@@ -127,7 +129,7 @@ export function DynamicBillPage() {
     const next = await requestSW<DynamicBillItem[]>("GET_DYNAMIC_BILL_ITEMS");
     setItems(next);
     setSelectedBillKey((current) =>
-      chooseSelectedBillKey(current, next, statusFilter),
+      chooseDynamicBillSelectedKey(current, next, statusFilter),
     );
   }
 
@@ -136,7 +138,7 @@ export function DynamicBillPage() {
     setOverview(result.overview);
     setItems(result.items);
     setSelectedBillKey((current) =>
-      chooseSelectedBillKey(current, result.items, statusFilter),
+      chooseDynamicBillSelectedKey(current, result.items, statusFilter),
     );
     return result;
   }
@@ -144,7 +146,7 @@ export function DynamicBillPage() {
   async function handleStatusFilterChange(nextStatus: DynamicBillStatusFilter) {
     setStatusFilter(nextStatus);
     setSelectedBillKey((current) =>
-      chooseSelectedBillKey(current, items, nextStatus),
+      chooseDynamicBillSelectedKey(current, items, nextStatus),
     );
     try {
       await requestSW<DynamicBillFilterPreference>("UPDATE_DYNAMIC_BILL_FILTER", {
@@ -727,7 +729,7 @@ function describeSyncResult(result: DynamicSyncResult): string {
 }
 
 function describeGenerateResult(result: DynamicBillGenerateResult): string {
-  return `本地账单生成 ${result.itemCount} 项：被淹没的关注 ${result.columnItemCounts.buried_follow} 项，收藏关联更新 ${result.columnItemCounts.favorite_related} 项，关注轮换 ${result.columnItemCounts.follow_rotation} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除本地已记录同视频 ${result.excludedRecentSameVideoCount} 条，本地暂停记录排除 ${result.excludedByFeedbackCount} 条。`;
+  return `本地账单生成 ${result.itemCount} 项：被淹没的关注 ${result.columnItemCounts.buried_follow} 项，收藏关联更新 ${result.columnItemCounts.favorite_related} 项，关注轮换 ${result.columnItemCounts.follow_rotation} 项；扫描最近投稿 ${result.candidatesScanned} 条，排除本地已记录同视频 ${result.excludedRecentSameVideoCount} 条。`;
 }
 
 function describeExplanationResult(result: DynamicBillExplanationResult): string {
@@ -783,7 +785,7 @@ function getColumnEmptyCopy(
   if (column === "buried_follow") {
     return {
       title: `暂无${statusLabel}被淹没的关注`,
-      detail: "可能是关注记忆证据不足、近期仍有观看，或迁移保留的本地暂停记录仍在有效期内。",
+      detail: "可能是关注记忆证据不足、近期仍有观看，或本轮没有满足该栏目条件的新投稿。",
     };
   }
   return {
@@ -897,24 +899,6 @@ function followMemorySignalsCopy(signals: NonNullable<DynamicBillEvidence["follo
         return signal;
     }
   }).join("、");
-}
-
-function matchesStatusFilter(item: DynamicBillItem, statusFilter: DynamicBillStatusFilter): boolean {
-  if (statusFilter === "active") {
-    return item.status === "unopened" || item.status === "opened";
-  }
-  return item.status === statusFilter;
-}
-
-function chooseSelectedBillKey(
-  current: string,
-  items: DynamicBillItem[],
-  statusFilter: DynamicBillStatusFilter,
-): string {
-  const visible = items.filter((item) => matchesStatusFilter(item, statusFilter));
-  return current && visible.some((item) => item.billKey === current)
-    ? current
-    : visible[0]?.billKey ?? "";
 }
 
 function countByStatus(items: DynamicBillItem[]): Record<DynamicBillStatusFilter, number> {

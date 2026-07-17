@@ -22,7 +22,7 @@ export function evaluateDynamicBillFeedback(
   return {
     blocked: true,
     facts: [
-      `这个 UP 的迁移暂停记录有效到 ${new Date(pause.expiresAt).toLocaleString('zh-CN')}，有效期内不进入动态账单三栏。`,
+      `这个 UP 当前不进入动态账单候选，${new Date(pause.expiresAt).toLocaleString('zh-CN')} 后会按普通本地规则参与。`,
     ],
   };
 }

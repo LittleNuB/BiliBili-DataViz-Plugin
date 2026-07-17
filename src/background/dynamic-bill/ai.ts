@@ -45,6 +45,8 @@ interface FallbackExplanationWriteResult {
 
 const DEFAULT_EXPLANATION_BATCH_SIZE = 6;
 const MAX_EXPLANATION_BATCH_SIZE = 12;
+const UNSAFE_AI_VISIBLE_TEXT_PATTERN =
+  /fallback|transcript|confidence|sourceHash|segmentId|subtitle_url|\bBVID\b|\bBV[0-9A-Za-z]{8,}\b/i;
 
 export async function buildDynamicBillExplanations(
   options: BuildDynamicBillExplanationOptions = {},
@@ -297,6 +299,7 @@ function normalizeAiExplanation(
   model: string,
   contentHash: string,
 ): DynamicBillExplanation {
+  assertSafeAiExplanationResponse(ai);
   return {
     billKey: item.billKey,
     status: 'generated',
@@ -309,6 +312,18 @@ function normalizeAiExplanation(
     generatedAt: Date.now(),
     contentHash,
   };
+}
+
+function assertSafeAiExplanationResponse(ai: AiExplanationResponse): void {
+  const values = [
+    ai.summary,
+    ai.reason,
+    ai.viewingAngle,
+    ...(Array.isArray(ai.keywords) ? ai.keywords : []),
+  ];
+  if (values.some(value => typeof value === 'string' && UNSAFE_AI_VISIBLE_TEXT_PATTERN.test(value))) {
+    throw new Error('AI 返回内容未通过本地安全校验');
+  }
 }
 
 function buildFallbackExplanation(

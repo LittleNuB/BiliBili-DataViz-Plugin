@@ -348,6 +348,177 @@ for (const staleStatus of ['generated', 'failed', 'disabled', 'not_configured'] 
   });
 }
 
+test('no-generation explanation writes are discarded after a tracked attempt starts', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  await seedCurrentCandidate(now, 626);
+  const item = (await generator.generateDynamicBillItems()).items[0];
+  assert.ok(item);
+  const update = await db.followedVideoUpdates
+    .where('updateKey')
+    .equals(item.updateKey)
+    .first();
+  const { contentHash } = buildDynamicBillExplanationContent(item, update);
+  const trackedAttempt = await dynamicBillRepo.beginDynamicBillExplanationAttempt(
+    item.billKey,
+    contentHash,
+    'new-model',
+  );
+  assert.ok(trackedAttempt);
+
+  const oldBefore = await dynamicBillRepo.putDynamicBillExplanation({
+    ...fixtureExplanation(now + 1, item.billKey),
+    status: 'generated',
+    summary: 'old no-generation before',
+    reason: 'old reason before',
+    viewingAngle: 'old angle before',
+    model: 'old-model',
+    contentHash,
+  });
+  const newWrite = await dynamicBillRepo.putDynamicBillExplanation({
+    ...fixtureExplanation(now + 2, item.billKey),
+    status: 'generated',
+    summary: 'tracked new result',
+    reason: 'tracked new reason',
+    viewingAngle: 'tracked new angle',
+    model: 'new-model',
+    contentHash,
+    attemptGeneration: trackedAttempt.generation,
+  });
+  const oldAfter = await dynamicBillRepo.putDynamicBillExplanation({
+    ...fixtureExplanation(now + 3, item.billKey),
+    status: 'generated',
+    summary: 'old no-generation after',
+    reason: 'old reason after',
+    viewingAngle: 'old angle after',
+    model: 'old-model',
+    contentHash,
+  });
+  const stored = await db.dynamicBillExplanations
+    .where('billKey')
+    .equals(item.billKey)
+    .first();
+  const returned = (await dynamicBillRepo.getDynamicBillItems())[0].explanation;
+
+  assert.equal(oldBefore.status, 'discarded');
+  assert.equal(newWrite.status, 'written');
+  assert.equal(oldAfter.status, 'discarded');
+  assert.equal(stored?.summary, 'tracked new result');
+  assert.equal(stored?.model, 'new-model');
+  assert.equal(stored?.attemptGeneration, trackedAttempt.generation);
+  assert.equal(returned?.summary, 'tracked new result');
+});
+
+test('no-generation bootstrap writes only once when no attempt metadata exists', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  await seedCurrentCandidate(now, 627);
+  const item = (await generator.generateDynamicBillItems()).items[0];
+  assert.ok(item);
+  const update = await db.followedVideoUpdates
+    .where('updateKey')
+    .equals(item.updateKey)
+    .first();
+  const { contentHash } = buildDynamicBillExplanationContent(item, update);
+
+  const first = await dynamicBillRepo.putDynamicBillExplanation({
+    ...fixtureExplanation(now + 1, item.billKey),
+    status: 'generated',
+    summary: 'first bootstrap result',
+    reason: 'first bootstrap reason',
+    viewingAngle: 'first bootstrap angle',
+    model: 'bootstrap-model',
+    contentHash,
+  });
+  const second = await dynamicBillRepo.putDynamicBillExplanation({
+    ...fixtureExplanation(now + 2, item.billKey),
+    status: 'generated',
+    summary: 'second bootstrap result',
+    reason: 'second bootstrap reason',
+    viewingAngle: 'second bootstrap angle',
+    model: 'bootstrap-model',
+    contentHash,
+  });
+  const stored = await db.dynamicBillExplanations
+    .where('billKey')
+    .equals(item.billKey)
+    .first();
+  const reloadedItem = (await db.dynamicBillItems.where('billKey').equals(item.billKey).first());
+
+  assert.equal(first.status, 'written');
+  assert.equal(second.status, 'discarded');
+  assert.equal(first.status === 'written' ? first.explanation.attemptGeneration : undefined, 1);
+  assert.equal(stored?.summary, 'first bootstrap result');
+  assert.equal(stored?.attemptGeneration, 1);
+  assert.equal(reloadedItem?.explanationAttemptGeneration, 1);
+});
+
+test('unsafe but valid AI explanation JSON is rejected without storing visible raw tokens', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  await seedCurrentCandidate(now, 628);
+  const item = (await generator.generateDynamicBillItems()).items[0];
+  assert.ok(item);
+  enableFixtureAi();
+  fetchHandler = () => Promise.resolve(aiResponse({
+    summary: '这段解释包含 sourceHash=internal 和 BV1UnsafeToken',
+    reason: '不要展示 transcript 或 segmentId',
+    viewingAngle: 'confidence 不应出现在可见说明里',
+    keywords: ['subtitle_url', 'local_fallback'],
+    confidence: 0.9,
+  }));
+
+  const result = await dynamicBillAi.buildDynamicBillExplanations({ maxItems: 1 });
+  const explanation = result.items[0]?.explanation;
+  assert.ok(explanation);
+  const visibleCopy = [
+    explanation.summary,
+    explanation.reason,
+    explanation.viewingAngle,
+    ...explanation.keywords,
+    explanation.error ?? '',
+  ].join('\n');
+
+  assert.equal(result.generated, 0);
+  assert.equal(result.failed, 1);
+  assert.equal(explanation.status, 'failed');
+  assert.doesNotMatch(
+    visibleCopy,
+    /fallback|transcript|confidence|sourceHash|segmentId|subtitle_url|BV1UnsafeToken/i,
+  );
+  assert.match(visibleCopy, /来自已关注 UP|这个视频出现|把它当作/);
+});
+
+test('safe AI explanation JSON is stored as generated output', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  await seedCurrentCandidate(now, 629);
+  const item = (await generator.generateDynamicBillItems()).items[0];
+  assert.ok(item);
+  enableFixtureAi();
+  fetchHandler = () => Promise.resolve(aiResponse({
+    summary: '这是一条围绕新投稿主题的简短说明',
+    reason: '本地证据显示这个 UP 最近有新投稿，适合作为本轮关注回访。',
+    viewingAngle: '先看标题和简介，再决定是否打开完整视频。',
+    keywords: ['关注回访', '新投稿'],
+    confidence: 0.82,
+  }));
+
+  const result = await dynamicBillAi.buildDynamicBillExplanations({ maxItems: 1 });
+  const explanation = result.items[0]?.explanation;
+
+  assert.equal(result.generated, 1);
+  assert.equal(result.failed, 0);
+  assert.equal(explanation?.status, 'generated');
+  assert.equal(explanation?.summary, '这是一条围绕新投稿主题的简短说明');
+  assert.deepEqual(explanation?.keywords, ['关注回访', '新投稿']);
+  assert.equal(explanation?.confidence, 0.82);
+});
+
 test('regeneration deletes removed and orphaned explanations and privacy count follows readback', async () => {
   await seedLegacyDatabase();
   await migration.ensureDynamicBill013Migration();
@@ -882,6 +1053,12 @@ async function assertLateAiResponseDiscarded(
     .equals(reclassified.updateKey)
     .first();
   const { contentHash } = buildDynamicBillExplanationContent(reclassified, currentUpdate);
+  const newerAttempt = await dynamicBillRepo.beginDynamicBillExplanationAttempt(
+    reclassified.billKey,
+    contentHash,
+    'fixture-model',
+  );
+  assert.ok(newerAttempt);
   const newerWrite = await dynamicBillRepo.putDynamicBillExplanation({
     ...fixtureExplanation(now + 1, reclassified.billKey),
     status: 'generated',
@@ -889,6 +1066,7 @@ async function assertLateAiResponseDiscarded(
     reason: '新的本地证据解释',
     model: 'fixture-model',
     contentHash,
+    attemptGeneration: newerAttempt.generation,
   });
 
   if (outcome === 'generated') {
@@ -917,6 +1095,7 @@ async function assertLateAiResponseDiscarded(
   assert.equal(result.discarded, 1);
   assert.equal(stored?.summary, '新的收藏关联解释');
   assert.equal(stored?.contentHash, contentHash);
+  assert.equal(stored?.attemptGeneration, newerAttempt.generation);
   assert.equal(returned?.summary, '新的收藏关联解释');
   assert.equal(returned?.contentHash, contentHash);
 }

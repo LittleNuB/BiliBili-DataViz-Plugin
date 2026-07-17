@@ -369,6 +369,9 @@ export async function putDynamicBillExplanation(
           return { status: 'discarded' };
         }
       } else {
+        if (hasDynamicBillExplanationAttemptMetadata(item, existing)) {
+          return { status: 'discarded' };
+        }
         nextGeneration = nextDynamicBillExplanationAttemptGeneration(
           item.explanationAttemptGeneration,
           existing?.attemptGeneration,
@@ -574,6 +577,16 @@ function nextDynamicBillExplanationAttemptGeneration(
   ...values: Array<number | undefined>
 ): number {
   return Math.max(0, ...values.map(value => normalizeAttemptGeneration(value) ?? 0)) + 1;
+}
+
+function hasDynamicBillExplanationAttemptMetadata(
+  item: DynamicBillItem,
+  existing?: DynamicBillExplanation,
+): boolean {
+  return normalizeAttemptGeneration(item.explanationAttemptGeneration) !== null
+    || typeof item.explanationAttemptContentHash === 'string'
+    || typeof item.explanationAttemptModel === 'string'
+    || normalizeAttemptGeneration(existing?.attemptGeneration) !== null;
 }
 
 function normalizeAttemptGeneration(value: unknown): number | null {

@@ -97,7 +97,7 @@
         ? "两栏为空，一栏有内容"
         : "一栏为空，两栏有内容";
 
-      requestAnimationFrame(() => {
+      function runPartialEmptyQa() {
         const articles = [...document.querySelectorAll(".dynamic-bill-column")];
         const compactRows = [...document.querySelectorAll(".dynamic-bill-column-empty")];
         const populated = articles.filter((article) => !article.classList.contains("is-empty"));
@@ -135,7 +135,10 @@
         document.querySelector("#qa-status").textContent = passed
           ? "布局检查通过"
           : "布局检查未通过";
-      });
+      }
+
+      runPartialEmptyQa();
+      requestAnimationFrame(runPartialEmptyQa);
     </script>
   </body>
 </html>
