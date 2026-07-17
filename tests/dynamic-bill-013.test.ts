@@ -136,10 +136,40 @@ test('excludes same-video BVIDs from all available history without changing dete
     assert.equal(plan.excludedRecentSameVideoCount, 1);
     assert.match(
       plan.items[0].evidence.facts.join('\n'),
-      /可用本地观看记录中未发现同一新视频 BV1-b/,
+      /可用本地观看记录中未发现同一新视频。/,
     );
+    assert.doesNotMatch(plan.items[0].evidence.facts.join('\n'), /BV1-b/);
     assert.doesNotMatch(plan.items[0].evidence.facts.join('\n'), /最近 30 天未发现/);
   }
+});
+
+test('planner visible facts use titles or natural untitled copy without raw BVID', () => {
+  const untitledUpdate = {
+    ...update(2, 'untitled', 2),
+    title: '',
+    bvid: 'BV2-raw-visible-leak',
+  };
+  const plan = planFixedDynamicBillItems({
+    now: NOW,
+    creators: [creator(1), creator(2)],
+    updates: [
+      update(1, 'titled', 1),
+      untitledUpdate,
+    ],
+    historyRecords: [],
+    favoriteItems: [],
+    rotationRecords: [],
+    pausedCreatorMids: new Set(),
+  });
+
+  assert.equal(plan.items.length, 2);
+  const titledFacts = plan.items.find(item => item.creatorMid === 1)?.evidence.facts.join('\n') ?? '';
+  const untitledFacts = plan.items.find(item => item.creatorMid === 2)?.evidence.facts.join('\n') ?? '';
+
+  assert.match(titledFacts, /新视频《Video 1 titled》/);
+  assert.match(untitledFacts, /新视频《视频标题暂缺》/);
+  assert.doesNotMatch(`${titledFacts}\n${untitledFacts}`, /BV\d|raw-visible-leak/);
+  assert.match(`${titledFacts}\n${untitledFacts}`, /可用本地观看记录中未发现同一新视频。/);
 });
 
 test('uses one global rotation record and caps a column at five items', () => {

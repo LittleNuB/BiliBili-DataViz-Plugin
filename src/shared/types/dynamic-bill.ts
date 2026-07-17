@@ -155,6 +155,7 @@ export interface DynamicBillExplanation {
   model: string;
   generatedAt: number;
   contentHash: string;
+  attemptGeneration?: number;
   error?: string;
 }
 
@@ -279,6 +280,9 @@ export interface DynamicBillItem {
   openedAt?: number;
   consumedAt?: number;
   processedAt?: number;
+  explanationAttemptGeneration?: number;
+  explanationAttemptContentHash?: string;
+  explanationAttemptModel?: string;
   generatedAt: number;
   explanation?: DynamicBillExplanation;
 }

@@ -342,6 +342,94 @@ test('late failed AI response cannot overwrite a newer explanation after reclass
   await assertLateAiResponseDiscarded('failed');
 });
 
+for (const staleStatus of ['generated', 'failed', 'disabled', 'not_configured'] as const) {
+  test(`same-hash stale ${staleStatus} explanation cannot overwrite a newer generated explanation`, async () => {
+    await assertSameHashStaleExplanationDiscarded(staleStatus);
+  });
+}
+
+test('regeneration deletes removed and orphaned explanations and privacy count follows readback', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  await seedCurrentCandidate(now, 624);
+  const initial = (await generator.generateDynamicBillItems()).items[0];
+  assert.ok(initial);
+  const update = await db.followedVideoUpdates
+    .where('updateKey')
+    .equals(initial.updateKey)
+    .first();
+  const { contentHash } = buildDynamicBillExplanationContent(initial, update);
+  await dynamicBillRepo.putDynamicBillExplanation({
+    ...fixtureExplanation(now, initial.billKey),
+    summary: '保留的解释',
+    model: 'fixture-model',
+    contentHash,
+  });
+  await db.dynamicBillExplanations.put({
+    ...fixtureExplanation(now, 'orphaned-bill-key'),
+    summary: '旧孤儿解释',
+    model: 'fixture-model',
+    contentHash: 'orphaned-hash',
+  });
+
+  assert.equal((await localDataRepo.getLocalDataPrivacySummary()).dynamicBill.explanationCount, 2);
+
+  await dynamicBillRepo.replaceAllDynamicBillItems([initial], now + 1);
+  const afterSameItems = await dynamicBillRepo.getDynamicBillItems();
+
+  assert.equal(await db.dynamicBillExplanations.count(), 1);
+  assert.equal((await localDataRepo.getLocalDataPrivacySummary()).dynamicBill.explanationCount, 1);
+  assert.equal(afterSameItems[0]?.explanation?.summary, '保留的解释');
+  assert.equal(
+    await db.dynamicBillExplanations.where('billKey').equals('orphaned-bill-key').count(),
+    0,
+  );
+
+  await dynamicBillRepo.replaceAllDynamicBillItems([], now + 2);
+
+  assert.equal(await db.dynamicBillItems.count(), 0);
+  assert.equal(await db.dynamicBillExplanations.count(), 0);
+  assert.equal((await localDataRepo.getLocalDataPrivacySummary()).dynamicBill.explanationCount, 0);
+});
+
+test('fallback explanation copy uses natural untitled text without raw BVID', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  const creatorMid = 625;
+  await seedCurrentCandidate(now, creatorMid);
+  await db.followedVideoUpdates
+    .where('updateKey')
+    .equals(`update-${creatorMid}`)
+    .modify({
+      bvid: 'BV1RawFallback625',
+      title: '',
+    });
+  storageData.set('userConfig', {
+    ...DEFAULT_CONFIG,
+    dynamicBill: {
+      ...DEFAULT_CONFIG.dynamicBill,
+      aiExplanationsEnabled: false,
+    },
+  });
+
+  const item = (await generator.generateDynamicBillItems()).items[0];
+  assert.ok(item);
+  const result = await dynamicBillAi.buildDynamicBillExplanations({ maxItems: 1 });
+  const explanation = result.items[0]?.explanation;
+  assert.ok(explanation);
+  const visibleCopy = [
+    explanation.summary,
+    explanation.reason,
+    explanation.viewingAngle,
+    ...explanation.keywords,
+  ].join('\n');
+
+  assert.match(explanation.summary, /《视频标题暂缺》/);
+  assert.doesNotMatch(visibleCopy, /BV1RawFallback625|BVID/);
+});
+
 test('AI explanation payload excludes rotation ledger facts and creator identifiers', async () => {
   await seedLegacyDatabase();
   await migration.ensureDynamicBill013Migration();
@@ -831,6 +919,69 @@ async function assertLateAiResponseDiscarded(
   assert.equal(stored?.contentHash, contentHash);
   assert.equal(returned?.summary, '新的收藏关联解释');
   assert.equal(returned?.contentHash, contentHash);
+}
+
+async function assertSameHashStaleExplanationDiscarded(
+  staleStatus: 'generated' | 'failed' | 'disabled' | 'not_configured',
+): Promise<void> {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  const creatorMid = 620 + ['generated', 'failed', 'disabled', 'not_configured'].indexOf(staleStatus);
+  await seedCurrentCandidate(now, creatorMid);
+  const item = (await generator.generateDynamicBillItems()).items[0];
+  assert.ok(item);
+  const update = await db.followedVideoUpdates
+    .where('updateKey')
+    .equals(item.updateKey)
+    .first();
+  const { contentHash } = buildDynamicBillExplanationContent(item, update);
+
+  const staleAttempt = await dynamicBillRepo.beginDynamicBillExplanationAttempt(
+    item.billKey,
+    contentHash,
+    'fixture-model',
+  );
+  const newerAttempt = await dynamicBillRepo.beginDynamicBillExplanationAttempt(
+    item.billKey,
+    contentHash,
+    'fixture-model',
+  );
+  assert.ok(staleAttempt);
+  assert.ok(newerAttempt);
+  assert.ok(newerAttempt.generation > staleAttempt.generation);
+
+  const newerWrite = await dynamicBillRepo.putDynamicBillExplanation({
+    ...fixtureExplanation(now + 2, item.billKey),
+    status: 'generated',
+    summary: `newer generated ${staleStatus}`,
+    reason: 'newer reason',
+    viewingAngle: 'newer angle',
+    model: 'fixture-model',
+    contentHash,
+    attemptGeneration: newerAttempt.generation,
+  });
+  const staleWrite = await dynamicBillRepo.putDynamicBillExplanation({
+    ...fixtureExplanation(now + 1, item.billKey),
+    status: staleStatus,
+    summary: `stale ${staleStatus}`,
+    reason: 'stale reason',
+    viewingAngle: 'stale angle',
+    model: 'fixture-model',
+    contentHash,
+    attemptGeneration: staleAttempt.generation,
+  });
+  const stored = await db.dynamicBillExplanations
+    .where('billKey')
+    .equals(item.billKey)
+    .first();
+  const returned = (await dynamicBillRepo.getDynamicBillItems())[0].explanation;
+
+  assert.equal(newerWrite.status, 'written');
+  assert.equal(staleWrite.status, 'discarded');
+  assert.equal(stored?.summary, `newer generated ${staleStatus}`);
+  assert.equal(stored?.attemptGeneration, newerAttempt.generation);
+  assert.equal(returned?.summary, `newer generated ${staleStatus}`);
 }
 
 function enableFixtureAi(): void {

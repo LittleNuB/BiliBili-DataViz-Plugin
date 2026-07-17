@@ -344,11 +344,11 @@ function toBillItem(candidate: FixedBillCandidate, localRank: number, generatedA
 }
 
 function buildFacts(candidate: FixedBillCandidate): string[] {
-  const title = candidate.update.title || candidate.update.bvid;
+  const title = candidate.update.title || '视频标题暂缺';
   const creatorName = candidate.creator.name || candidate.update.authorName;
   const baseFacts = [
     `最近 ${DYNAMIC_BILL_STRATEGY.updateWindowDays} 天，已关注 UP「${creatorName}」发布了新视频《${title}》。`,
-    `可用本地观看记录中未发现同一新视频 ${candidate.update.bvid}。`,
+    '可用本地观看记录中未发现同一新视频。',
     '本轮先为每位 UP 选择可用本地观看记录中未出现的最新投稿，再按固定三栏唯一归属展示；AI 不参与入选、归属、轮换或状态。',
   ];
 

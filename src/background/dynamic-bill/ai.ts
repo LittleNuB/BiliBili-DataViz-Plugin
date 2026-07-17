@@ -11,6 +11,7 @@ import { chatJson } from '../ai/openai-compatible';
 import { loadConfig } from '../storage/config-store';
 import { db } from '../storage/db';
 import {
+  beginDynamicBillExplanationAttempt,
   getDynamicBillItems,
   putDynamicBillExplanation,
 } from '../storage/dynamic-bill-repo';
@@ -120,6 +121,16 @@ export async function buildDynamicBillExplanations(
 
     if (processed >= maxItems) continue;
 
+    const attempt = await beginDynamicBillExplanationAttempt(
+      item.billKey,
+      contentHash,
+      config.ai.chatModel,
+    );
+    if (!attempt) {
+      discarded++;
+      processed++;
+      continue;
+    }
     attemptedContent.add(explanationAttemptKey(item.billKey, contentHash));
     let explanation: DynamicBillExplanation;
     try {
@@ -140,7 +151,10 @@ export async function buildDynamicBillExplanations(
       );
     }
 
-    const write = await putDynamicBillExplanation(explanation);
+    const write = await putDynamicBillExplanation({
+      ...explanation,
+      attemptGeneration: attempt.generation,
+    });
     if (write.status === 'discarded') {
       discarded++;
     } else if (explanation.status === 'generated') {
@@ -247,13 +261,26 @@ async function writeFallbackExplanations(
       skipped++;
       continue;
     }
-    const write = await putDynamicBillExplanation(buildFallbackExplanation(
-      item,
-      status,
-      model,
+    const attempt = await beginDynamicBillExplanationAttempt(
+      item.billKey,
       contentHash,
-      error,
-    ));
+      model,
+    );
+    if (!attempt) {
+      processed++;
+      discarded++;
+      continue;
+    }
+    const write = await putDynamicBillExplanation({
+      ...buildFallbackExplanation(
+        item,
+        status,
+        model,
+        contentHash,
+        error,
+      ),
+      attemptGeneration: attempt.generation,
+    });
     processed++;
     if (write.status === 'written') {
       written++;
@@ -307,7 +334,7 @@ function buildFallbackExplanation(
 }
 
 function fallbackSummary(item: DynamicBillItem): string {
-  return `来自已关注 UP「${item.creatorName}」的新投稿《${item.evidence.newVideo.title || item.evidence.newVideo.bvid}》。`;
+  return `来自已关注 UP「${item.creatorName}」的新投稿《${item.evidence.newVideo.title || '视频标题暂缺'}》。`;
 }
 
 function fallbackReason(item: DynamicBillItem): string {

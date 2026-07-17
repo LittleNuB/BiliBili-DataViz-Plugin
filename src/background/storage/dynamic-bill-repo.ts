@@ -45,6 +45,13 @@ export type DynamicBillExplanationWriteResult =
   | { status: 'written'; explanation: DynamicBillExplanation }
   | { status: 'discarded' };
 
+export interface DynamicBillExplanationAttempt {
+  billKey: string;
+  contentHash: string;
+  model: string;
+  generation: number;
+}
+
 export async function replaceFollowedCreatorSnapshot(creators: FollowedCreator[], syncedAt: number): Promise<number> {
   await ensureDynamicBill013Migration();
   const activeMids = new Set(creators.map(creator => creator.mid));
@@ -162,19 +169,23 @@ export async function replaceAllDynamicBillItems(
         ? await db.followedVideoUpdates.where('updateKey').anyOf(updateKeys).toArray()
         : [];
       const updatesByKey = new Map(updates.map(update => [update.updateKey, update]));
-      const billKeys = nextItems.map(item => item.billKey);
-      const explanations = billKeys.length > 0
-        ? await db.dynamicBillExplanations.where('billKey').anyOf(billKeys).toArray()
-        : [];
+      const explanations = await db.dynamicBillExplanations.toArray();
       const nextItemsByKey = new Map(nextItems.map(item => [item.billKey, item]));
       for (const explanation of explanations) {
         const item = nextItemsByKey.get(explanation.billKey);
-        if (!item) continue;
+        if (!item) {
+          await db.dynamicBillExplanations
+            .where('billKey')
+            .equals(explanation.billKey)
+            .delete();
+          continue;
+        }
         const { contentHash } = buildDynamicBillExplanationContent(
           item,
           updatesByKey.get(item.updateKey),
         );
         if (explanation.contentHash !== contentHash) {
+          clearDynamicBillExplanationAttempt(item);
           await db.dynamicBillExplanations
             .where('billKey')
             .equals(explanation.billKey)
@@ -269,6 +280,55 @@ export async function getDynamicBillExplanationMap(
   return new Map(explanations.map(explanation => [explanation.billKey, explanation]));
 }
 
+export async function beginDynamicBillExplanationAttempt(
+  billKey: string,
+  contentHash: string,
+  model: string,
+): Promise<DynamicBillExplanationAttempt | null> {
+  await ensureDynamicBill013Migration();
+  return db.transaction(
+    'rw',
+    db.dynamicBillItems,
+    db.followedVideoUpdates,
+    db.dynamicBillExplanations,
+    async () => {
+      const item = await db.dynamicBillItems
+        .where('billKey')
+        .equals(billKey)
+        .first();
+      if (!item) return null;
+
+      const update = await db.followedVideoUpdates
+        .where('updateKey')
+        .equals(item.updateKey)
+        .first();
+      const current = buildDynamicBillExplanationContent(item, update);
+      if (current.contentHash !== contentHash) return null;
+
+      const existing = await db.dynamicBillExplanations
+        .where('billKey')
+        .equals(billKey)
+        .first();
+      const generation = nextDynamicBillExplanationAttemptGeneration(
+        item.explanationAttemptGeneration,
+        existing?.attemptGeneration,
+      );
+      await db.dynamicBillItems.put({
+        ...item,
+        explanationAttemptGeneration: generation,
+        explanationAttemptContentHash: contentHash,
+        explanationAttemptModel: model,
+      });
+      return {
+        billKey,
+        contentHash,
+        model,
+        generation,
+      };
+    },
+  );
+}
+
 export async function putDynamicBillExplanation(
   explanation: DynamicBillExplanation,
 ): Promise<DynamicBillExplanationWriteResult> {
@@ -298,9 +358,32 @@ export async function putDynamicBillExplanation(
         .where('billKey')
         .equals(explanation.billKey)
         .first();
+      const requestedGeneration = normalizeAttemptGeneration(explanation.attemptGeneration);
+      let nextGeneration = requestedGeneration;
+      if (requestedGeneration !== null) {
+        if (
+          item.explanationAttemptGeneration !== requestedGeneration
+          || item.explanationAttemptContentHash !== explanation.contentHash
+          || item.explanationAttemptModel !== explanation.model
+        ) {
+          return { status: 'discarded' };
+        }
+      } else {
+        nextGeneration = nextDynamicBillExplanationAttemptGeneration(
+          item.explanationAttemptGeneration,
+          existing?.attemptGeneration,
+        );
+        await db.dynamicBillItems.put({
+          ...item,
+          explanationAttemptGeneration: nextGeneration,
+          explanationAttemptContentHash: explanation.contentHash,
+          explanationAttemptModel: explanation.model,
+        });
+      }
       const next: DynamicBillExplanation = {
         ...explanation,
         id: existing?.id,
+        attemptGeneration: nextGeneration ?? undefined,
       };
       await db.dynamicBillExplanations.put(next);
       return { status: 'written', explanation: next };
@@ -475,7 +558,28 @@ function mergeExistingDynamicBillState(
     openedAt: existing.openedAt,
     consumedAt: existing.consumedAt,
     processedAt: existing.processedAt,
+    explanationAttemptGeneration: existing.explanationAttemptGeneration,
+    explanationAttemptContentHash: existing.explanationAttemptContentHash,
+    explanationAttemptModel: existing.explanationAttemptModel,
   };
+}
+
+function clearDynamicBillExplanationAttempt(item: DynamicBillItem): void {
+  delete item.explanationAttemptGeneration;
+  delete item.explanationAttemptContentHash;
+  delete item.explanationAttemptModel;
+}
+
+function nextDynamicBillExplanationAttemptGeneration(
+  ...values: Array<number | undefined>
+): number {
+  return Math.max(0, ...values.map(value => normalizeAttemptGeneration(value) ?? 0)) + 1;
+}
+
+function normalizeAttemptGeneration(value: unknown): number | null {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  return Math.floor(numeric);
 }
 
 async function advanceDynamicBillItemsByBvid(
