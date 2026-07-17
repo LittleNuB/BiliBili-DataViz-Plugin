@@ -441,10 +441,8 @@ function makeConfig(overrides: {
       chatModel: 'test-model',
     },
     assistant: {
-      aiSummariesEnabled: false,
+      currentVideoAiAssistantEnabled: false,
       smartFavoritesQaAiEnabled: overrides.smartFavoritesQaAiEnabled,
-      currentVideoSegmentRerankAiEnabled: false,
-      currentVideoQaAiEnabled: false,
     },
     dynamicBill: {
       aiExplanationsEnabled: false,

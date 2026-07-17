@@ -37,7 +37,7 @@ test('applies valid AI rerank without changing local candidate evidence or jump 
   const firstLocalOrder = local.candidates.map(candidate => candidate.id);
 
   const result = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     chat: async (_config, messages) => {
       const payload = JSON.parse(messages[1].content);
       assert.equal(JSON.stringify(payload).includes('sourceHash'), false);
@@ -75,7 +75,7 @@ test('rejects unknown AI candidate IDs and keeps local candidate order visible',
   const context = withTranscriptEvidence(videoContext());
   const local = localSegmentResult(context);
   const result = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     chat: async () => ({
       rankedCandidates: [
         {
@@ -99,7 +99,7 @@ test('rejects invented timestamp text from AI output', async () => {
   const context = withTranscriptEvidence(videoContext());
   const local = localSegmentResult(context);
   const result = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     chat: async () => ({
       rankedCandidates: [
         {
@@ -124,7 +124,7 @@ test('rejects outside titles, unavailable sources, and extra evidence fields', a
   const local = localSegmentResult(context);
 
   const outsideTitle = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     chat: async () => ({
       rankedCandidates: [
         {
@@ -139,7 +139,7 @@ test('rejects outside titles, unavailable sources, and extra evidence fields', a
     now: 5000,
   });
   const unavailableSource = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     chat: async () => ({
       rankedCandidates: [
         {
@@ -154,7 +154,7 @@ test('rejects outside titles, unavailable sources, and extra evidence fields', a
     now: 5000,
   });
   const extraEvidence = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     chat: async () => ({
       rankedCandidates: [
         {
@@ -182,21 +182,21 @@ test('AI disabled, not configured, and failed states keep local candidates visib
   const context = withTranscriptEvidence(videoContext());
   const local = localSegmentResult(context);
   const disabled = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: false, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: false, apiKey: 'test-key' }),
     chat: async () => {
       throw new Error('should not call chat');
     },
     now: 5000,
   });
   const notConfigured = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: '' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: '' }),
     chat: async () => {
       throw new Error('should not call chat');
     },
     now: 5000,
   });
   const failed = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     chat: async () => {
       throw new Error('AI_TEST_FAILURE');
     },
@@ -218,7 +218,7 @@ test('low-confidence AI output falls back to local candidate order', async () =>
   const context = withTranscriptEvidence(videoContext());
   const local = localSegmentResult(context);
   const result = await rerankCurrentVideoSegmentCandidates(context, local, {
-    config: userConfig({ currentVideoSegmentRerankAiEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     chat: async () => ({
       rankedCandidates: [
         {
@@ -348,7 +348,7 @@ function transcriptSegments(): CurrentVideoTranscriptSegment[] {
 }
 
 function userConfig(overrides: {
-  currentVideoSegmentRerankAiEnabled: boolean;
+  currentVideoAiAssistantEnabled: boolean;
   apiKey: string;
 }): UserConfig {
   return {
@@ -365,10 +365,8 @@ function userConfig(overrides: {
       chatModel: 'test-model',
     },
     assistant: {
-      aiSummariesEnabled: false,
+      currentVideoAiAssistantEnabled: overrides.currentVideoAiAssistantEnabled,
       smartFavoritesQaAiEnabled: false,
-      currentVideoSegmentRerankAiEnabled: overrides.currentVideoSegmentRerankAiEnabled,
-      currentVideoQaAiEnabled: false,
     },
     dynamicBill: {
       aiExplanationsEnabled: false,

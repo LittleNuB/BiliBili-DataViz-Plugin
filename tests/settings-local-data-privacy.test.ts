@@ -7,6 +7,8 @@ import {
   dangerousLocalDataClearScope,
   LOCAL_DATA_CLEAR_CONFIRMATION,
 } from '../src/shared/local-data-privacy.ts';
+import { validateLocalDataCategoryRegistration } from '../src/shared/local-data-category-contract.ts';
+import { getRegisteredLocalDataCategories } from '../src/background/storage/local-data-category-registry.ts';
 import type {
   LocalDataOperationResult,
   LocalDataPrivacySummary,
@@ -72,6 +74,22 @@ test('settings smart favorite rebuild message summarizes the run', () => {
   assert.match(message, /本地收藏 24 条/);
   assert.match(message, /失败项可在确认 AI 设置后再次重建/);
   assertCleanUserCopy(message);
+});
+
+test('local data categories expose the shared lifecycle contract', () => {
+  const categories = getRegisteredLocalDataCategories();
+  assert.deepEqual(categories.map(category => category.id), [
+    'history',
+    'favorites',
+    'currentVideoSubtitles',
+    'dynamicBill',
+    'localSettings',
+  ]);
+
+  for (const category of categories) {
+    assert.deepEqual(validateLocalDataCategoryRegistration(category), []);
+    assert.equal(category.includeInClearAll, true);
+  }
 });
 
 function makeSummary(): LocalDataPrivacySummary {

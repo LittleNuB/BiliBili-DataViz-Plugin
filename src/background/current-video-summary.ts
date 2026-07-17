@@ -34,7 +34,7 @@ export async function generateCurrentVideoSummary(
   const local = buildLocalCurrentVideoSummary(context, {
     aiStatus: 'disabled',
     aiModel: config.ai.chatModel,
-    aiNote: 'AI 摘要未在设置中启用，当前显示本地证据结果。',
+    aiNote: '当前视频 AI 助手未在设置中开启，当前显示本地证据结果。',
     transcriptSegments: options.transcriptSegments,
     now,
   });
@@ -49,7 +49,7 @@ export async function generateCurrentVideoSummary(
     });
   }
 
-  if (!config.assistant.aiSummariesEnabled) {
+  if (!config.assistant.currentVideoAiAssistantEnabled) {
     return local;
   }
 
@@ -57,7 +57,7 @@ export async function generateCurrentVideoSummary(
     return buildLocalCurrentVideoSummary(context, {
       aiStatus: 'not_configured',
       aiModel: config.ai.chatModel,
-      aiNote: 'AI 摘要已启用但尚未在设置中配置 API Key，当前显示本地证据结果。',
+      aiNote: '当前视频 AI 助手已开启但尚未配置 API Key，当前显示本地证据结果。',
       transcriptSegments: options.transcriptSegments,
       now,
     });

@@ -9,29 +9,18 @@ const HISTORY_SYNC_LOCK_TIMEOUT_MS = 30 * 60 * 1000;
 export async function loadConfig(): Promise<UserConfig> {
   const result = await chrome.storage.local.get(CONFIG_KEY);
   if (result[CONFIG_KEY]) {
-    return {
-      ...DEFAULT_CONFIG,
-      ...result[CONFIG_KEY],
-      ai: {
-        ...DEFAULT_CONFIG.ai,
-        ...(result[CONFIG_KEY].ai ?? {}),
-      },
-      assistant: {
-        ...DEFAULT_CONFIG.assistant,
-        ...(result[CONFIG_KEY].assistant ?? {}),
-      },
-      dynamicBill: {
-        ...DEFAULT_CONFIG.dynamicBill,
-        ...(result[CONFIG_KEY].dynamicBill ?? {}),
-      },
-    };
+    const normalized = normalizeUserConfig(result[CONFIG_KEY]);
+    if (shouldPersistNormalizedConfig(result[CONFIG_KEY], normalized)) {
+      await chrome.storage.local.set({ [CONFIG_KEY]: normalized });
+    }
+    return normalized;
   }
   return DEFAULT_CONFIG;
 }
 
 export async function saveConfig(config: Partial<UserConfig>): Promise<void> {
   const current = await loadConfig();
-  const updated = {
+  const updated = normalizeUserConfig({
     ...current,
     ...config,
     ai: {
@@ -46,8 +35,64 @@ export async function saveConfig(config: Partial<UserConfig>): Promise<void> {
       ...current.dynamicBill,
       ...(config.dynamicBill ?? {}),
     },
-  };
+  });
   await chrome.storage.local.set({ [CONFIG_KEY]: updated });
+}
+
+export function normalizeUserConfig(value: unknown): UserConfig {
+  const raw = isRecord(value) ? value : {};
+  return {
+    dailyWatchGoal: finiteNumber(raw.dailyWatchGoal, DEFAULT_CONFIG.dailyWatchGoal),
+    weeklyWatchGoal: finiteNumber(raw.weeklyWatchGoal, DEFAULT_CONFIG.weeklyWatchGoal),
+    overDependencyThreshold: finiteNumber(raw.overDependencyThreshold, DEFAULT_CONFIG.overDependencyThreshold),
+    syncIntervalMinutes: finiteNumber(raw.syncIntervalMinutes, DEFAULT_CONFIG.syncIntervalMinutes),
+    retentionDays: finiteNumber(raw.retentionDays, DEFAULT_CONFIG.retentionDays),
+    showSidebar: typeof raw.showSidebar === 'boolean' ? raw.showSidebar : DEFAULT_CONFIG.showSidebar,
+    theme: raw.theme === 'light' || raw.theme === 'dark' ? raw.theme : DEFAULT_CONFIG.theme,
+    ai: normalizeAiConfig(raw.ai),
+    assistant: normalizeAssistantConfig(raw.assistant),
+    dynamicBill: normalizeDynamicBillConfig(raw.dynamicBill),
+  };
+}
+
+function normalizeAiConfig(value: unknown): UserConfig['ai'] {
+  const raw = isRecord(value) ? value : {};
+  return {
+    baseURL: stringValue(raw.baseURL, DEFAULT_CONFIG.ai.baseURL),
+    apiKey: stringValue(raw.apiKey, DEFAULT_CONFIG.ai.apiKey),
+    chatModel: stringValue(raw.chatModel, DEFAULT_CONFIG.ai.chatModel),
+  };
+}
+
+function normalizeAssistantConfig(value: unknown): UserConfig['assistant'] {
+  const raw = isRecord(value) ? value : {};
+  return {
+    currentVideoAiAssistantEnabled: raw.currentVideoAiAssistantEnabled === true,
+    smartFavoritesQaAiEnabled: raw.smartFavoritesQaAiEnabled === true,
+  };
+}
+
+function normalizeDynamicBillConfig(value: unknown): UserConfig['dynamicBill'] {
+  const raw = isRecord(value) ? value : {};
+  return {
+    aiExplanationsEnabled: raw.aiExplanationsEnabled === true,
+  };
+}
+
+function shouldPersistNormalizedConfig(original: unknown, normalized: UserConfig): boolean {
+  return JSON.stringify(original) !== JSON.stringify(normalized);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stringValue(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
 export async function getLastSyncTime(): Promise<number> {

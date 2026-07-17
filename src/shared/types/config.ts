@@ -25,10 +25,8 @@ export interface AiConnectionTestResult {
 }
 
 export interface AssistantConfig {
-  aiSummariesEnabled: boolean;
+  currentVideoAiAssistantEnabled: boolean;
   smartFavoritesQaAiEnabled: boolean;
-  currentVideoSegmentRerankAiEnabled: boolean;
-  currentVideoQaAiEnabled: boolean;
 }
 
 export interface DynamicBillConfig {
@@ -49,10 +47,8 @@ export const DEFAULT_CONFIG: UserConfig = {
     chatModel: 'deepseek-v4-flash',
   },
   assistant: {
-    aiSummariesEnabled: false,
+    currentVideoAiAssistantEnabled: false,
     smartFavoritesQaAiEnabled: false,
-    currentVideoSegmentRerankAiEnabled: false,
-    currentVideoQaAiEnabled: false,
   },
   dynamicBill: {
     aiExplanationsEnabled: false,

@@ -138,11 +138,11 @@ export async function rerankCurrentVideoSegmentCandidates(
     }));
   }
 
-  if (!options.config.assistant.currentVideoSegmentRerankAiEnabled) {
+  if (!options.config.assistant.currentVideoAiAssistantEnabled) {
     return withAiRerank(local, aiState({
       status: 'disabled',
       model,
-      note: 'AI 重排未在设置中启用，当前显示本地候选顺序。',
+      note: '当前视频 AI 助手未在设置中开启，当前显示本地候选顺序。',
       now,
     }));
   }
@@ -151,7 +151,7 @@ export async function rerankCurrentVideoSegmentCandidates(
     return withAiRerank(local, aiState({
       status: 'not_configured',
       model,
-      note: 'AI 重排已启用但尚未在设置中配置 API Key，当前显示本地候选顺序。',
+      note: '当前视频 AI 助手已开启但尚未配置 API Key，当前显示本地候选顺序。',
       now,
     }));
   }

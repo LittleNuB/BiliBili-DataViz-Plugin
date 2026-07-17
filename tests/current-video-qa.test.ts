@@ -73,7 +73,7 @@ test('generates AI answer only from top-N local cited candidates', async () => {
   const localOrder = local.candidates.map(candidate => candidate.id);
 
   const result = await answerCurrentVideoQuestion(context, local, {
-    config: userConfig({ currentVideoQaAiEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     chat: async (_config, messages) => {
       const payload = JSON.parse(messages[1].content);
       const rawPayload = JSON.stringify(payload);
@@ -104,28 +104,28 @@ test('AI disabled, not configured, failed, and low-confidence states keep local 
   const context = withTranscriptEvidence(videoContext());
   const local = localQaResult(context);
   const disabled = await answerCurrentVideoQuestion(context, local, {
-    config: userConfig({ currentVideoQaAiEnabled: false, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: false, apiKey: 'test-key' }),
     chat: async () => {
       throw new Error('should not call chat');
     },
     now: 5000,
   });
   const notConfigured = await answerCurrentVideoQuestion(context, local, {
-    config: userConfig({ currentVideoQaAiEnabled: true, apiKey: '' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: '' }),
     chat: async () => {
       throw new Error('should not call chat');
     },
     now: 5000,
   });
   const failed = await answerCurrentVideoQuestion(context, local, {
-    config: userConfig({ currentVideoQaAiEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     chat: async () => {
       throw new Error('AI_TEST_FAILURE');
     },
     now: 5000,
   });
   const lowConfidence = await answerCurrentVideoQuestion(context, local, {
-    config: userConfig({ currentVideoQaAiEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     chat: async () => ({
       answer: '有。可能相关。',
       status: 'answered',
@@ -150,7 +150,7 @@ test('rejects AI unknown candidate references and invented timestamps', async ()
   const context = withTranscriptEvidence(videoContext());
   const local = localQaResult(context);
   const unknown = await answerCurrentVideoQuestion(context, local, {
-    config: userConfig({ currentVideoQaAiEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     chat: async () => ({
       answer: '有。当前证据可以回答。',
       status: 'answered',
@@ -160,7 +160,7 @@ test('rejects AI unknown candidate references and invented timestamps', async ()
     now: 5000,
   });
   const inventedTime = await answerCurrentVideoQuestion(context, local, {
-    config: userConfig({ currentVideoQaAiEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     chat: async () => ({
       answer: '有。建议直接看 0:42 的解释。',
       status: 'answered',
@@ -344,7 +344,7 @@ function subagentSegments(): CurrentVideoTranscriptSegment[] {
 }
 
 function userConfig(overrides: {
-  currentVideoQaAiEnabled: boolean;
+  currentVideoAiAssistantEnabled: boolean;
   apiKey: string;
 }): UserConfig {
   return {
@@ -361,10 +361,8 @@ function userConfig(overrides: {
       chatModel: 'test-model',
     },
     assistant: {
-      aiSummariesEnabled: false,
+      currentVideoAiAssistantEnabled: overrides.currentVideoAiAssistantEnabled,
       smartFavoritesQaAiEnabled: false,
-      currentVideoSegmentRerankAiEnabled: false,
-      currentVideoQaAiEnabled: overrides.currentVideoQaAiEnabled,
     },
     dynamicBill: {
       aiExplanationsEnabled: false,

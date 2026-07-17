@@ -165,7 +165,7 @@
         </div>
         <div class="panel">
           <h2>AI 功能开关</h2>
-          <label class="toggle"><input id="current" type="checkbox" /> <span>当前视频摘要<br /><small class="muted">关闭后显示本地证据结果。</small></span></label>
+          <label class="toggle"><input id="current" type="checkbox" /> <span>当前视频 AI 助手<br /><small class="muted">开启后仅在用户主动生成或提问时使用当前分 P 的主要文本。</small></span></label>
           <label class="toggle"><input id="smart" type="checkbox" /> <span>智能收藏问答<br /><small class="muted">关闭后显示本地引用结果。</small></span></label>
           <label class="toggle"><input id="dynamic" type="checkbox" /> <span>动态账单解释<br /><small class="muted">关闭后写入本地证据说明。</small></span></label>
         </div>
@@ -184,7 +184,7 @@
       <section id="prompts-page" class="hidden">
         <div class="panel">
           <h1>未配置提示</h1>
-          <p id="current-prompt" class="warn">当前视频 AI 摘要已启用但尚未在设置中配置 API Key，当前显示本地证据结果。</p>
+          <p id="current-prompt" class="warn">当前视频 AI 助手已开启但尚未在设置中配置 API Key，当前显示本地证据结果。</p>
           <button id="current-settings" class="link-button" type="button">前往设置</button>
           <p id="dynamic-prompt" class="warn">动态账单 AI 解释已启用但尚未在设置中配置 API Key，生成解释时会回退到本地证据说明。</p>
           <button id="dynamic-settings" class="link-button" type="button">前往设置</button>
@@ -224,6 +224,10 @@
       document.getElementById('status').textContent = 'API Key 已保存在本地，不会在输入框中回显完整值。';
       document.getElementById('status').className = 'ok';
       document.getElementById('key').value = '';
+      localStorage.setItem('currentVideoAiAssistantEnabled', document.getElementById('current').checked ? 'true' : 'false');
+    });
+    window.addEventListener('pageshow', () => {
+      document.getElementById('current').checked = localStorage.getItem('currentVideoAiAssistantEnabled') === 'true';
     });
   </script>
 </body>

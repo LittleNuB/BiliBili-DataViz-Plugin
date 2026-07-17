@@ -276,12 +276,12 @@ test('AI disabled and not configured keep transcript local evidence summary', as
   const context = withTranscriptEvidence(videoContext({}));
   const segments = transcriptSegments();
   const disabled = await generateCurrentVideoSummary(context, {
-    config: userConfig({ aiSummariesEnabled: false, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: false, apiKey: 'test-key' }),
     transcriptSegments: segments,
     now: 4000,
   });
   const notConfigured = await generateCurrentVideoSummary(context, {
-    config: userConfig({ aiSummariesEnabled: true, apiKey: '' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: '' }),
     transcriptSegments: segments,
     now: 4000,
   });
@@ -296,7 +296,7 @@ test('AI disabled and not configured keep transcript local evidence summary', as
 test('AI failed and low confidence keep transcript local evidence summary', async () => {
   const context = withTranscriptEvidence(videoContext({}));
   const failed = await generateCurrentVideoSummary(context, {
-    config: userConfig({ aiSummariesEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     transcriptSegments: transcriptSegments(),
     chat: async () => {
       throw new Error('AI_TEST_FAILURE');
@@ -304,7 +304,7 @@ test('AI failed and low confidence keep transcript local evidence summary', asyn
     now: 5000,
   });
   const lowConfidence = await generateCurrentVideoSummary(context, {
-    config: userConfig({ aiSummariesEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     transcriptSegments: transcriptSegments(),
     chat: async () => ({
       summary: 'AI low confidence answer',
@@ -325,7 +325,7 @@ test('AI failed and low confidence keep transcript local evidence summary', asyn
 test('rejects AI segment or timestamp references outside payload and keeps local transcript result', async () => {
   const context = withTranscriptEvidence(videoContext({}));
   const summary = await generateCurrentVideoSummary(context, {
-    config: userConfig({ aiSummariesEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     transcriptSegments: transcriptSegments(),
     chat: async () => ({
       summary: 'AI tries to cite transcript:outside:segment at 9:59.',
@@ -345,7 +345,7 @@ test('rejects AI segment or timestamp references outside payload and keeps local
 test('accepts valid AI transcript summary without replacing local evidence ranges', async () => {
   const context = withTranscriptEvidence(videoContext({}));
   const summary = await generateCurrentVideoSummary(context, {
-    config: userConfig({ aiSummariesEnabled: true, apiKey: 'test-key' }),
+    config: userConfig({ currentVideoAiAssistantEnabled: true, apiKey: 'test-key' }),
     transcriptSegments: transcriptSegments(),
     chat: async () => ({
       summary: 'AI based on the supplied subtitle evidence around 0:00.',
@@ -482,7 +482,7 @@ function transcriptSegments(options: {
 }
 
 function userConfig(overrides: {
-  aiSummariesEnabled: boolean;
+  currentVideoAiAssistantEnabled: boolean;
   apiKey: string;
 }): UserConfig {
   return {
@@ -499,10 +499,8 @@ function userConfig(overrides: {
       chatModel: 'test-model',
     },
     assistant: {
-      aiSummariesEnabled: overrides.aiSummariesEnabled,
+      currentVideoAiAssistantEnabled: overrides.currentVideoAiAssistantEnabled,
       smartFavoritesQaAiEnabled: false,
-      currentVideoSegmentRerankAiEnabled: false,
-      currentVideoQaAiEnabled: false,
     },
     dynamicBill: {
       aiExplanationsEnabled: false,

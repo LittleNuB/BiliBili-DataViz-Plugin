@@ -1,4 +1,5 @@
 import type { DynamicSyncStatus } from './dynamic-bill';
+import type { LocalDataCategoryId } from '../local-data-category-contract';
 
 export interface LocalDataPrivacySummary {
   checkedAt: number;
@@ -67,6 +68,21 @@ export interface LocalDataOperationResult {
     currentVideoSubtitleSources?: number;
     currentVideoSubtitleSegments?: number;
     localSettings?: boolean;
+  };
+  categories?: LocalDataCategoryOperationResult[];
+}
+
+export interface LocalDataCategoryOperationResult {
+  id: LocalDataCategoryId;
+  label: string;
+  before: {
+    count: number;
+    usageBytes: number;
+  };
+  after: {
+    count: number;
+    usageBytes: number;
+    empty: boolean;
   };
 }
 

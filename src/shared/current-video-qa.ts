@@ -185,13 +185,13 @@ export async function answerCurrentVideoQuestion(
     });
   }
 
-  if (!options.config.assistant.currentVideoQaAiEnabled) {
+  if (!options.config.assistant.currentVideoAiAssistantEnabled) {
     return withQa(local, {
       ...localQa,
       aiState: aiState({
         status: 'disabled',
         model,
-        note: '当前视频问答 AI 未在设置中启用，因此显示本地证据回答。',
+        note: '当前视频 AI 助手未在设置中开启，因此显示本地证据回答。',
         now,
       }),
     });
@@ -203,7 +203,7 @@ export async function answerCurrentVideoQuestion(
       aiState: aiState({
         status: 'not_configured',
         model,
-        note: '当前视频问答 AI 已启用但尚未配置 API Key，因此显示本地证据回答。',
+        note: '当前视频 AI 助手已开启但尚未配置 API Key，因此显示本地证据回答。',
         now,
       }),
     });

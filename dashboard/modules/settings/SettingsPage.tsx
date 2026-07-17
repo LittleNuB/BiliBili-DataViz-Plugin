@@ -92,10 +92,8 @@ export function SettingsPage() {
     return form.baseURL.trim() !== loadedConfig.ai.baseURL
       || form.chatModel.trim() !== loadedConfig.ai.chatModel
       || form.apiKeyInput.trim().length > 0
-      || assistant.aiSummariesEnabled !== loadedConfig.assistant.aiSummariesEnabled
+      || assistant.currentVideoAiAssistantEnabled !== loadedConfig.assistant.currentVideoAiAssistantEnabled
       || assistant.smartFavoritesQaAiEnabled !== loadedConfig.assistant.smartFavoritesQaAiEnabled
-      || assistant.currentVideoSegmentRerankAiEnabled !== loadedConfig.assistant.currentVideoSegmentRerankAiEnabled
-      || assistant.currentVideoQaAiEnabled !== loadedConfig.assistant.currentVideoQaAiEnabled
       || dynamicBill.aiExplanationsEnabled !== loadedConfig.dynamicBill.aiExplanationsEnabled;
   }, [assistant, dynamicBill, form, loadedConfig]);
   const localDataCards = localData ? buildLocalDataSummaryCards(localData) : [];
@@ -147,6 +145,7 @@ export function SettingsPage() {
       applyConfig(nextConfig);
       setNotice('设置已保存。后续 AI 功能会从这里读取同一套服务配置和开关。');
     } catch (err) {
+      await refreshConfig();
       setError(formatSettingsError(err));
     } finally {
       setBusy('');
@@ -345,22 +344,10 @@ export function SettingsPage() {
 
         <div className="settings-toggle-grid">
           <FeatureToggle
-            title="当前视频摘要"
-            detail="允许当前视频助手在有边界的元数据、简介或字幕证据上整理摘要。"
-            checked={assistant.aiSummariesEnabled}
-            onChange={(checked) => setAssistant(current => ({ ...current, aiSummariesEnabled: checked }))}
-          />
-          <FeatureToggle
-            title="当前视频片段排序辅助"
-            detail="允许 AI 只在已检索出的本地候选片段中调整展示顺序和解释。"
-            checked={assistant.currentVideoSegmentRerankAiEnabled}
-            onChange={(checked) => setAssistant(current => ({ ...current, currentVideoSegmentRerankAiEnabled: checked }))}
-          />
-          <FeatureToggle
-            title="当前视频问答整理"
-            detail="允许 AI 只基于当前视频 top-N 本地引用片段整理简短回答；时间点和引用仍来自本地候选。"
-            checked={assistant.currentVideoQaAiEnabled}
-            onChange={(checked) => setAssistant(current => ({ ...current, currentVideoQaAiEnabled: checked }))}
+            title="当前视频 AI 助手"
+            detail="允许用户主动触发摘要、亮点和问答时，把当前分 P 的主要文本发送给已配置的聊天服务；开启开关本身不会发送请求。"
+            checked={assistant.currentVideoAiAssistantEnabled}
+            onChange={(checked) => setAssistant(current => ({ ...current, currentVideoAiAssistantEnabled: checked }))}
           />
           <FeatureToggle
             title="智能收藏问答"
@@ -564,10 +551,8 @@ function normalizeSettingsUserConfig(config: Partial<UserConfig>): UserConfig {
 
 function normalizeAssistantConfig(config: Partial<AssistantConfig> | undefined): AssistantConfig {
   return {
-    aiSummariesEnabled: config?.aiSummariesEnabled === true,
+    currentVideoAiAssistantEnabled: config?.currentVideoAiAssistantEnabled === true,
     smartFavoritesQaAiEnabled: config?.smartFavoritesQaAiEnabled === true,
-    currentVideoSegmentRerankAiEnabled: config?.currentVideoSegmentRerankAiEnabled === true,
-    currentVideoQaAiEnabled: config?.currentVideoQaAiEnabled === true,
   };
 }
 

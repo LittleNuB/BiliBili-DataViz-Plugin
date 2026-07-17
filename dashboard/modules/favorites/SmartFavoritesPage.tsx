@@ -27,10 +27,8 @@ const CARD = {
 export function SmartFavoritesPage() {
   const [overview, setOverview] = useState<SmartFavoriteOverview | null>(null);
   const [assistantConfig, setAssistantConfig] = useState<AssistantConfig>({
-    aiSummariesEnabled: false,
+    currentVideoAiAssistantEnabled: false,
     smartFavoritesQaAiEnabled: false,
-    currentVideoSegmentRerankAiEnabled: false,
-    currentVideoQaAiEnabled: false,
   });
   const [aiStatus, setAiStatus] = useState({ hasApiKey: false, model: '' });
   const [query, setQuery] = useState('');
@@ -316,7 +314,7 @@ export function SmartFavoritesPage() {
           <Badge text={aiStatus.hasApiKey ? 'AI 服务：已配置' : 'AI 服务：未配置'} color={aiStatus.hasApiKey ? '#00D4AA' : '#FFB347'} />
           <Badge text={`模型：${aiStatus.model || '未设置'}`} color="#9090A0" />
           <Badge text={assistantConfig.smartFavoritesQaAiEnabled ? '收藏问答：已启用' : '收藏问答：未启用'} color={assistantConfig.smartFavoritesQaAiEnabled ? '#00D4AA' : '#9090A0'} />
-          <Badge text={assistantConfig.currentVideoSegmentRerankAiEnabled ? '当前视频片段排序：已启用' : '当前视频片段排序：未启用'} color={assistantConfig.currentVideoSegmentRerankAiEnabled ? '#00D4AA' : '#9090A0'} />
+          <Badge text={assistantConfig.currentVideoAiAssistantEnabled ? '当前视频助手：已启用' : '当前视频助手：未启用'} color={assistantConfig.currentVideoAiAssistantEnabled ? '#00D4AA' : '#9090A0'} />
         </div>
       </section>
 
