@@ -15,6 +15,7 @@ import type {
   FollowedVideoUpdate,
 } from '../../shared/types/dynamic-bill';
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
+import { buildDynamicBillExplanationContent } from '../dynamic-bill/explanation-content';
 import { ensureDynamicBill013Migration } from '../dynamic-bill/migration';
 import { DYNAMIC_BILL_COLUMNS, DYNAMIC_BILL_STRATEGY } from '../dynamic-bill/strategy';
 import { compareFollowedVideoUpdatesNewestFirst } from '../dynamic-bill/update-order';
@@ -138,28 +139,59 @@ export async function replaceAllDynamicBillItems(
   await ensureDynamicBill013Migration();
   const storedItems: DynamicBillItem[] = [];
 
-  await db.transaction('rw', db.dynamicBillItems, db.dynamicBillRotationRecords, async () => {
-    const existing = await db.dynamicBillItems.toArray();
-    const existingByKey = new Map(existing.map(item => [item.billKey, item]));
-    const existingRotations = await db.dynamicBillRotationRecords.toArray();
-    const rotationIdsByCreator = new Map(existingRotations.map(record => [record.creatorMid, record.id]));
+  await db.transaction(
+    'rw',
+    db.dynamicBillItems,
+    db.dynamicBillRotationRecords,
+    db.dynamicBillExplanations,
+    db.followedVideoUpdates,
+    async () => {
+      const existing = await db.dynamicBillItems.toArray();
+      const existingByKey = new Map(existing.map(item => [item.billKey, item]));
+      const existingRotations = await db.dynamicBillRotationRecords.toArray();
+      const rotationIdsByCreator = new Map(existingRotations.map(record => [record.creatorMid, record.id]));
 
-    await db.dynamicBillItems.clear();
-    const nextItems = items.map(item => mergeExistingDynamicBillState(item, existingByKey.get(item.billKey)));
-    if (nextItems.length > 0) {
-      await db.dynamicBillItems.bulkPut(nextItems);
-      storedItems.push(...nextItems);
-      await db.dynamicBillRotationRecords.bulkPut(nextItems.map(item => ({
-        id: rotationIdsByCreator.get(item.creatorMid),
-        creatorMid: item.creatorMid,
-        creatorName: item.creatorName,
-        lastShownAt: generatedAt,
-        lastBillKey: item.billKey,
-        lastColumn: item.column,
-        updatedAt: generatedAt,
-      })));
-    }
-  });
+      await db.dynamicBillItems.clear();
+      const nextItems = items.map(item => mergeExistingDynamicBillState(item, existingByKey.get(item.billKey)));
+      const updateKeys = Array.from(new Set(nextItems.map(item => item.updateKey)));
+      const updates = updateKeys.length > 0
+        ? await db.followedVideoUpdates.where('updateKey').anyOf(updateKeys).toArray()
+        : [];
+      const updatesByKey = new Map(updates.map(update => [update.updateKey, update]));
+      const billKeys = nextItems.map(item => item.billKey);
+      const explanations = billKeys.length > 0
+        ? await db.dynamicBillExplanations.where('billKey').anyOf(billKeys).toArray()
+        : [];
+      const nextItemsByKey = new Map(nextItems.map(item => [item.billKey, item]));
+      for (const explanation of explanations) {
+        const item = nextItemsByKey.get(explanation.billKey);
+        if (!item) continue;
+        const { contentHash } = buildDynamicBillExplanationContent(
+          item,
+          updatesByKey.get(item.updateKey),
+        );
+        if (explanation.contentHash !== contentHash) {
+          await db.dynamicBillExplanations
+            .where('billKey')
+            .equals(explanation.billKey)
+            .delete();
+        }
+      }
+      if (nextItems.length > 0) {
+        await db.dynamicBillItems.bulkPut(nextItems);
+        storedItems.push(...nextItems);
+        await db.dynamicBillRotationRecords.bulkPut(nextItems.map(item => ({
+          id: rotationIdsByCreator.get(item.creatorMid),
+          creatorMid: item.creatorMid,
+          creatorName: item.creatorName,
+          lastShownAt: generatedAt,
+          lastBillKey: item.billKey,
+          lastColumn: item.column,
+          updatedAt: generatedAt,
+        })));
+      }
+    },
+  );
 
   return sortDynamicBillItems(storedItems);
 }
@@ -188,12 +220,35 @@ export async function getDynamicBillItems(options: {
     items = items.filter(item => item.status === options.status);
   }
 
-  const explanations = await getDynamicBillExplanationMap(items.map(item => item.billKey));
+  const [explanations, updates] = await Promise.all([
+    getDynamicBillExplanationMap(items.map(item => item.billKey)),
+    items.length > 0
+      ? db.followedVideoUpdates
+        .where('updateKey')
+        .anyOf(Array.from(new Set(items.map(item => item.updateKey))))
+        .toArray()
+      : Promise.resolve([]),
+  ]);
+  const updatesByKey = new Map(updates.map(update => [update.updateKey, update]));
 
   return sortDynamicBillItems(items.map(item => ({
     ...item,
-    explanation: explanations.get(item.billKey),
+    explanation: validExplanationForItem(
+      item,
+      explanations.get(item.billKey),
+      updatesByKey.get(item.updateKey),
+    ),
   })));
+}
+
+function validExplanationForItem(
+  item: DynamicBillItem,
+  explanation: DynamicBillExplanation | undefined,
+  update: FollowedVideoUpdate | undefined,
+): DynamicBillExplanation | undefined {
+  if (!explanation) return undefined;
+  const { contentHash } = buildDynamicBillExplanationContent(item, update);
+  return explanation.contentHash === contentHash ? explanation : undefined;
 }
 
 export async function getDynamicBillExplanationMap(

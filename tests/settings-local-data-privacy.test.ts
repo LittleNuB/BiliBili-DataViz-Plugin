@@ -36,7 +36,19 @@ test('settings local data cards expose natural Chinese summaries only', () => {
     '动态账单',
   ]);
   assert.match(cards.map(card => card.value).join('\n'), /128 条/);
-  assertCleanUserCopy(JSON.stringify(cards));
+  const copy = JSON.stringify(cards);
+  assert.doesNotMatch(copy, /暂停|轮换|动态反馈/);
+  assertCleanUserCopy(copy);
+});
+
+test('settings page does not present Dynamic Bill pause or rotation detail', async () => {
+  const source = await readFile(
+    new URL('../dashboard/modules/settings/SettingsPage.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.doesNotMatch(source, /账单暂停记录|账单轮换记录/);
+  assert.doesNotMatch(source, /dynamicBill\.(creatorPauseCount|rotationRecordCount|feedbackCount)/);
 });
 
 test('settings local data operation messages stay bounded to counts', () => {
@@ -62,6 +74,7 @@ test('settings local data operation messages stay bounded to counts', () => {
     },
   } satisfies LocalDataOperationResult);
   assert.match(clearAllMessage, /本地 AI 设置和功能开关也已恢复为默认状态/);
+  assert.doesNotMatch(clearAllMessage, /暂停|轮换|动态反馈/);
   assertCleanUserCopy([subtitleMessage, clearAllMessage].join('\n'));
 });
 

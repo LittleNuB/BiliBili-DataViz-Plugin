@@ -49,8 +49,8 @@ export function buildLocalDataSummaryCards(summary: LocalDataPrivacySummary): Lo
       id: 'dynamicBill',
       title: '动态账单',
       value: `${summary.dynamicBill.billItemCount} 项`,
-      detail: `关注快照 ${summary.dynamicBill.activeFollowedCreatorCount} 位，最近视频投稿 ${summary.dynamicBill.followedVideoUpdateCount} 条，轮换记录 ${summary.dynamicBill.rotationRecordCount} 位。`,
-      meta: `本地暂停记录 ${summary.dynamicBill.creatorPauseCount} 位；最近生成：${formatLocalDate(summary.dynamicBill.lastGeneratedAt, 'milliseconds')}`,
+      detail: `关注快照 ${summary.dynamicBill.activeFollowedCreatorCount} 位，最近视频投稿 ${summary.dynamicBill.followedVideoUpdateCount} 条。`,
+      meta: `最近生成：${formatLocalDate(summary.dynamicBill.lastGeneratedAt, 'milliseconds')}`,
     },
   ];
 }
@@ -62,11 +62,11 @@ export function buildLocalDataOperationMessage(result: LocalDataOperationResult)
     return `已清理当前视频字幕缓存：移除 ${sourceCount} 条来源记录和 ${segmentCount} 段字幕正文。`;
   }
   if (result.operation === 'clear_dynamic_bill_data') {
-    return `已清理动态账单本地数据：账单 ${result.cleared.dynamicBillItems ?? 0} 项、解释 ${result.cleared.dynamicBillExplanations ?? 0} 条、暂停提醒 ${result.cleared.dynamicBillCreatorPauses ?? 0} 位、轮换记录 ${result.cleared.dynamicBillRotationRecords ?? 0} 位。`;
+    return `已清理动态账单本地数据：账单 ${result.cleared.dynamicBillItems ?? 0} 项、解释 ${result.cleared.dynamicBillExplanations ?? 0} 条。`;
   }
 
   return [
-    `已清理本地数据：观看历史 ${result.cleared.historyRecords ?? 0} 条、收藏 ${result.cleared.favoriteItems ?? 0} 条、字幕正文 ${result.cleared.currentVideoSubtitleSegments ?? 0} 段、动态账单 ${result.cleared.dynamicBillItems ?? 0} 项、轮换记录 ${result.cleared.dynamicBillRotationRecords ?? 0} 位。`,
+    `已清理本地数据：观看历史 ${result.cleared.historyRecords ?? 0} 条、收藏 ${result.cleared.favoriteItems ?? 0} 条、字幕正文 ${result.cleared.currentVideoSubtitleSegments ?? 0} 段、动态账单 ${result.cleared.dynamicBillItems ?? 0} 项。`,
     result.cleared.localSettings ? '本地 AI 设置和功能开关也已恢复为默认状态。' : '',
   ].filter(Boolean).join(' ');
 }

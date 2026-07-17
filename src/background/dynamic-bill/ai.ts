@@ -14,6 +14,11 @@ import {
   getDynamicBillItems,
   putDynamicBillExplanation,
 } from '../storage/dynamic-bill-repo';
+import {
+  buildDynamicBillExplanationContent,
+  type DynamicBillExplanationContent,
+  type DynamicBillExplanationPayload,
+} from './explanation-content';
 import { ensureDynamicBill013Migration } from './migration';
 
 interface BuildDynamicBillExplanationOptions {
@@ -27,46 +32,6 @@ interface AiExplanationResponse {
   viewingAngle?: unknown;
   keywords?: unknown;
   confidence?: unknown;
-}
-
-interface DynamicBillExplanationPayload {
-  column: string;
-  video: {
-    title: string;
-    intro: string;
-    authorName: string;
-    tagName: string;
-    tags: string[];
-    durationSeconds: number;
-    publishedAt: string;
-  };
-  localEvidence: {
-    facts: string[];
-    longWindow: {
-      days: number;
-      watchedCount: number;
-      positiveWatchCount: number;
-      avgCompletion: number;
-    };
-    recentWindow: {
-      days: number;
-      watchedCount: number;
-      positiveWatchCount: number;
-      avgCompletion: number;
-    };
-    follow: {
-      known: boolean;
-      ageDays?: number;
-      special?: boolean;
-    };
-    interest?: {
-      kind: string;
-      label: string;
-      longPositiveShare: number;
-      recentPositiveShare: number;
-      positiveDropRatio: number;
-    };
-  };
 }
 
 const DEFAULT_EXPLANATION_BATCH_SIZE = 6;
@@ -148,8 +113,7 @@ export async function buildDynamicBillExplanations(
   let processable = 0;
 
   for (const item of items) {
-    const payload = await buildDynamicBillExplanationPayload(item);
-    const contentHash = hashText(JSON.stringify(payload));
+    const { payload, contentHash } = await getDynamicBillExplanationContent(item);
     if (!shouldProcessItem(item, contentHash, config.ai.chatModel, includeFailed)) {
       skipped++;
       continue;
@@ -196,55 +160,17 @@ export async function buildDynamicBillExplanationPayload(
   item: DynamicBillItem,
 ): Promise<DynamicBillExplanationPayload> {
   await ensureDynamicBill013Migration();
+  return (await getDynamicBillExplanationContent(item)).payload;
+}
+
+async function getDynamicBillExplanationContent(
+  item: DynamicBillItem,
+): Promise<DynamicBillExplanationContent> {
   const update = await db.followedVideoUpdates
     .where('updateKey')
     .equals(item.updateKey)
     .first();
-  const evidence = item.evidence;
-
-  return {
-    column: columnTitle(item.column),
-    video: {
-      title: limitText(evidence.newVideo.title || update?.title || '未命名视频', 120),
-      intro: limitText(update?.intro || '', 360),
-      authorName: limitText(item.creatorName || update?.authorName || '未知 UP', 80),
-      tagName: limitText(evidence.newVideo.tagName || update?.tagName || '未知分区', 40),
-      tags: normalizeTextArray(evidence.newVideo.tags.length ? evidence.newVideo.tags : update?.tags).slice(0, 8),
-      durationSeconds: Math.max(0, Math.floor(evidence.newVideo.duration || update?.duration || 0)),
-      publishedAt: evidence.newVideo.pubtime > 0
-        ? new Date(evidence.newVideo.pubtime * 1000).toISOString()
-        : '',
-    },
-    localEvidence: {
-      facts: compactFacts(evidence.facts),
-      longWindow: {
-        days: evidence.longWindow.windowDays,
-        watchedCount: evidence.longWindow.watchedCount,
-        positiveWatchCount: evidence.longWindow.positiveWatchCount,
-        avgCompletion: roundRatio(evidence.longWindow.avgCompletion),
-      },
-      recentWindow: {
-        days: evidence.recentWindow.windowDays,
-        watchedCount: evidence.recentWindow.watchedCount,
-        positiveWatchCount: evidence.recentWindow.positiveWatchCount,
-        avgCompletion: roundRatio(evidence.recentWindow.avgCompletion),
-      },
-      follow: {
-        known: evidence.follow.followAgeKnown,
-        ageDays: evidence.follow.followAgeDays,
-        special: evidence.follow.special,
-      },
-      ...(evidence.interest ? {
-        interest: {
-          kind: evidence.interest.kind === 'category' ? '分区' : '标签',
-          label: evidence.interest.label,
-          longPositiveShare: evidence.interest.longPositiveShare,
-          recentPositiveShare: evidence.interest.recentPositiveShare,
-          positiveDropRatio: evidence.interest.positiveDropRatio,
-        },
-      } : {}),
-    },
-  };
+  return buildDynamicBillExplanationContent(item, update);
 }
 
 async function createAiExplanation(
@@ -294,8 +220,7 @@ async function writeFallbackExplanations(
 ): Promise<number> {
   let written = 0;
   for (const item of items) {
-    const payload = await buildDynamicBillExplanationPayload(item);
-    const contentHash = hashText(JSON.stringify(payload));
+    const { contentHash } = await getDynamicBillExplanationContent(item);
     const explanation = item.explanation;
     if (
       explanation?.status === status
@@ -471,13 +396,4 @@ function roundRatio(value: number): number {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function hashText(text: string): string {
-  let hash = 2166136261;
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16);
 }

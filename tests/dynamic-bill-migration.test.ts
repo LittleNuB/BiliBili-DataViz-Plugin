@@ -48,6 +48,7 @@ const sideEffects = {
   storageRemove: 0,
   storageClear: 0,
 };
+let afterStorageRemove: (() => Promise<void>) | null = null;
 
 Object.defineProperty(globalThis, 'chrome', {
   configurable: true,
@@ -81,6 +82,7 @@ Object.defineProperty(globalThis, 'chrome', {
         async remove(keys: string | string[]) {
           sideEffects.storageRemove++;
           for (const key of Array.isArray(keys) ? keys : [keys]) storageData.delete(key);
+          await afterStorageRemove?.();
         },
         async clear() {
           sideEffects.storageClear++;
@@ -103,6 +105,7 @@ test.beforeEach(async () => {
   db.close();
   await Dexie.delete(DB_NAME);
   storageData.clear();
+  afterStorageRemove = null;
   resetSideEffects();
 });
 
@@ -249,12 +252,20 @@ test('regeneration preserves state when the same update changes columns', async 
     }
     const before = (await dynamicBillRepo.getDynamicBillItems())[0];
     assert.equal(before.status, status);
+    await dynamicBillAi.buildDynamicBillExplanations({ maxItems: 1 });
+    assert.ok((await dynamicBillRepo.getDynamicBillItems())[0].explanation);
 
     await db.favoriteItems.put(fixtureFavoriteForCreator(now, creatorMid, status));
     const reclassified = (await generator.generateDynamicBillItems()).items[0];
+    const reloaded = (await dynamicBillRepo.getDynamicBillItems())[0];
 
     assert.equal(reclassified.column, 'favorite_related');
     assert.equal(reclassified.billKey, initial.billKey);
+    assert.equal(reloaded.explanation, undefined);
+    assert.equal(
+      await db.dynamicBillExplanations.where('billKey').equals(initial.billKey).count(),
+      0,
+    );
     assert.deepEqual(
       {
         status: reclassified.status,
@@ -271,6 +282,51 @@ test('regeneration preserves state when the same update changes columns', async 
       `${status} state changed after reclassification`,
     );
   }
+});
+
+test('regeneration preserves an explanation when its canonical input is unchanged', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  await seedCurrentCandidate(now, 607);
+  const initial = (await generator.generateDynamicBillItems()).items[0];
+  assert.ok(initial);
+  await dynamicBillAi.buildDynamicBillExplanations({ maxItems: 1 });
+  const before = (await dynamicBillRepo.getDynamicBillItems())[0];
+  assert.ok(before.explanation);
+
+  await dynamicBillRepo.replaceAllDynamicBillItems([
+    { ...initial, generatedAt: initial.generatedAt + 1 },
+  ], now + 1);
+
+  const reloaded = (await dynamicBillRepo.getDynamicBillItems())[0];
+  assert.deepEqual(reloaded.explanation, before.explanation);
+  assert.equal(
+    await db.dynamicBillExplanations.where('billKey').equals(initial.billKey).count(),
+    1,
+  );
+});
+
+test('item reads hide a hash-mismatched explanation before regeneration cleanup', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  await seedCurrentCandidate(now, 608);
+  const initial = (await generator.generateDynamicBillItems()).items[0];
+  assert.ok(initial);
+  await dynamicBillAi.buildDynamicBillExplanations({ maxItems: 1 });
+  assert.ok((await dynamicBillRepo.getDynamicBillItems())[0].explanation);
+
+  await db.dynamicBillItems
+    .where('billKey')
+    .equals(initial.billKey)
+    .modify({ column: 'favorite_related' });
+
+  assert.equal((await dynamicBillRepo.getDynamicBillItems())[0].explanation, undefined);
+  assert.equal(
+    await db.dynamicBillExplanations.where('billKey').equals(initial.billKey).count(),
+    1,
+  );
 });
 
 test('legacy feedback injected after the marker cannot change candidates, pauses, or settings counts', async () => {
@@ -370,6 +426,41 @@ test('dynamic bill clear counts only 0.13 data and removes hidden legacy feedbac
   assert.deepEqual(filter, { status: 'active', updatedAt: 0 });
   assert.equal(await db.dynamicBillMigrations.count(), 1);
   assert.equal(await db.dynamicBillFeedback.count(), 0);
+});
+
+test('standalone dynamic bill clear fails closed when lifecycle readback finds surviving data', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  await seedCurrentCandidate(now, 404);
+  const item = (await generator.generateDynamicBillItems()).items[0];
+  assert.ok(item);
+  let inserted = false;
+  afterStorageRemove = async () => {
+    if (inserted) return;
+    inserted = true;
+    await db.dynamicBillItems.put({
+      ...item,
+      id: undefined,
+      billKey: 'surviving-standalone-item',
+      updateKey: 'surviving-standalone-update',
+      evidence: {
+        ...item.evidence,
+        newVideo: {
+          ...item.evidence.newVideo,
+          updateKey: 'surviving-standalone-update',
+          bvid: 'BV1standaloneSurvivor',
+        },
+      },
+    });
+  };
+
+  await assert.rejects(
+    localDataRepo.clearDynamicBillLocalData(),
+    hasMessage('动态账单本地数据清理失败，请稍后重试。'),
+  );
+  assert.equal(await db.dynamicBillItems.count(), 1);
+  assert.equal(await db.dynamicBillMigrations.count(), 1);
 });
 
 test('registered dynamic bill lifecycle uses real Dexie tables and fails closed on surviving data', async () => {

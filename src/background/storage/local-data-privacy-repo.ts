@@ -1,4 +1,6 @@
 import { LOCAL_DATA_CLEAR_CONFIRMATION } from '../../shared/local-data-privacy.ts';
+import { runLocalDataCategoryLifecycle } from '../../shared/local-data-category-contract.ts';
+import { DYNAMIC_BILL_LOCAL_DATA_CLEAR_FAILED_MESSAGE } from '../../shared/dynamic-bill-errors.ts';
 import type {
   LocalDataOperationResult,
   LocalDataPrivacySummary,
@@ -66,13 +68,16 @@ export async function clearDynamicBillLocalData(): Promise<LocalDataOperationRes
   await ensureDynamicBill013Migration();
   const category = getRegisteredLocalDataCategories()
     .find(registration => registration.id === 'dynamicBill');
-  if (!category) throw new Error('DYNAMIC_BILL_LOCAL_DATA_CATEGORY_MISSING');
-  const result = await category.clear();
+  if (!category) throw new Error(DYNAMIC_BILL_LOCAL_DATA_CLEAR_FAILED_MESSAGE);
+  const lifecycle = await runLocalDataCategoryLifecycle(category);
+  if (lifecycle.status === 'failure') {
+    throw new Error(DYNAMIC_BILL_LOCAL_DATA_CLEAR_FAILED_MESSAGE);
+  }
 
   return {
     operation: 'clear_dynamic_bill_data',
     completedAt: Date.now(),
-    cleared: result.cleared,
+    cleared: lifecycle.clearResult.cleared,
   };
 }
 
