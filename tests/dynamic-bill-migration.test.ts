@@ -29,7 +29,10 @@ const generator = await import('../src/background/dynamic-bill/generator.ts');
 const dynamicBillAi = await import('../src/background/dynamic-bill/ai.ts');
 const dynamicBillSync = await import('../src/background/dynamic-bill/sync.ts');
 const dynamicBillRepo = await import('../src/background/storage/dynamic-bill-repo.ts');
+const { getRegisteredLocalDataCategories } = await import('../src/background/storage/local-data-category-registry.ts');
 const localDataRepo = await import('../src/background/storage/local-data-privacy-repo.ts');
+const { runLocalDataCategoryLifecycle } = await import('../src/shared/local-data-category-contract.ts');
+const { LOCAL_DATA_CLEAR_CONFIRMATION } = await import('../src/shared/local-data-privacy.ts');
 const {
   DYNAMIC_BILL_MIGRATION_VERSION,
   DYNAMIC_BILL_UPGRADE_FAILED_MESSAGE,
@@ -195,6 +198,28 @@ test('concurrent and repeated gates create one pause and one marker', async () =
   assert.equal((await db.dynamicBillCreatorPauses.toArray())[0].startedAt, now - DAY_MS);
 });
 
+test('repository update ordering is stable across equal-time database insertion permutations', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  const nowSeconds = Math.floor(now / 1000);
+  const updates = [
+    fixtureFollowedVideoUpdate(now, 1, 'z', nowSeconds, nowSeconds - 1),
+    fixtureFollowedVideoUpdate(now, 1, 'b', nowSeconds, nowSeconds),
+    fixtureFollowedVideoUpdate(now, 1, 'a', nowSeconds, nowSeconds),
+  ];
+
+  for (const insertionOrder of permutations(updates)) {
+    await db.followedVideoUpdates.clear();
+    await db.followedVideoUpdates.bulkAdd(insertionOrder);
+    const ordered = await dynamicBillRepo.getRecentFollowedVideoUpdates();
+    assert.deepEqual(
+      ordered.map(update => update.updateKey),
+      ['update-1-a', 'update-1-b', 'update-1-z'],
+    );
+  }
+});
+
 test('legacy feedback injected after the marker cannot change candidates, pauses, or settings counts', async () => {
   await seedLegacyDatabase();
   await migration.ensureDynamicBill013Migration();
@@ -294,6 +319,137 @@ test('dynamic bill clear counts only 0.13 data and removes hidden legacy feedbac
   assert.equal(await db.dynamicBillFeedback.count(), 0);
 });
 
+test('registered dynamic bill lifecycle uses real Dexie tables and fails closed on surviving data', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const now = Date.now();
+  await seedCurrentCandidate(now, 606);
+  const generated = await generator.generateDynamicBillItems();
+  const item = generated.items[0];
+  assert.ok(item);
+  await db.dynamicBillExplanations.put(fixtureExplanation(now, item.billKey));
+  await db.dynamicBillCreatorPauses.put({
+    creatorMid: 707,
+    creatorName: '迁移暂停 UP',
+    startedAt: now - DAY_MS,
+    expiresAt: now + DAY_MS,
+    source: 'migration',
+    createdAt: now,
+    updatedAt: now,
+  });
+  await db.dynamicBillFeedback.add(legacyCreatorFeedback(606, now, 'hidden-after-marker'));
+  await dynamicBillRepo.setDynamicSyncState({
+    status: 'success',
+    stage: 'complete',
+    lastStartedAt: now - 1_000,
+    lastFinishedAt: now,
+    lastSuccessAt: now,
+  });
+  await dynamicBillRepo.setDynamicBillFilterPreference('processed');
+
+  const category = getRegisteredLocalDataCategories().find(entry => entry.id === 'dynamicBill');
+  assert.ok(category);
+  const usage = await category.collectUsage();
+  assert.equal(usage.count, 6);
+  assert.ok(usage.usageBytes > 0);
+
+  const successfulLifecycle = await runLocalDataCategoryLifecycle(category);
+  assert.equal(successfulLifecycle.status, 'success');
+  if (successfulLifecycle.status === 'success') {
+    assert.deepEqual(successfulLifecycle.clearResult.cleared, {
+      followedCreators: 1,
+      followedVideoUpdates: 1,
+      dynamicBillItems: 1,
+      dynamicBillExplanations: 1,
+      dynamicBillCreatorPauses: 1,
+      dynamicBillRotationRecords: 1,
+    });
+    assert.deepEqual(successfulLifecycle.after, {
+      count: 0,
+      usageBytes: 0,
+      empty: true,
+    });
+  }
+  assert.deepEqual(await Promise.all([
+    db.followedCreators.count(),
+    db.followedVideoUpdates.count(),
+    db.dynamicBillItems.count(),
+    db.dynamicBillExplanations.count(),
+    db.dynamicBillCreatorPauses.count(),
+    db.dynamicBillRotationRecords.count(),
+    db.dynamicBillFeedback.count(),
+  ]), [0, 0, 0, 0, 0, 0, 0]);
+  assert.equal(await db.dynamicBillMigrations.count(), 1);
+  assert.equal(storageData.has('dynamicBillSyncState'), false);
+  assert.equal(storageData.has('dynamicBillFilterPreference'), false);
+
+  const survivor = {
+    ...item,
+    id: undefined,
+    billKey: 'surviving-item',
+    updateKey: 'surviving-update',
+    evidence: {
+      ...item.evidence,
+      newVideo: {
+        ...item.evidence.newVideo,
+        updateKey: 'surviving-update',
+        bvid: 'BV1surviving',
+      },
+    },
+  };
+  await db.dynamicBillItems.put(survivor);
+  const failedLifecycle = await runLocalDataCategoryLifecycle({
+    ...category,
+    clear: async () => {
+      const result = await category.clear();
+      await db.dynamicBillItems.put(survivor);
+      return result;
+    },
+  });
+
+  assert.equal(failedLifecycle.status, 'failure');
+  if (failedLifecycle.status === 'failure') {
+    assert.equal(failedLifecycle.failedStage, 'readback');
+    assert.equal(failedLifecycle.failureReason, 'data_remaining');
+    assert.equal(failedLifecycle.before?.count, 1);
+    assert.equal(failedLifecycle.after?.count, 1);
+    assert.match(failedLifecycle.message, /回读后仍有本地数据/);
+  }
+  assert.equal(await db.dynamicBillItems.count(), 1);
+  assert.equal(await db.dynamicBillMigrations.count(), 1);
+});
+
+test('clear all leaves every table and local setting untouched when migration fails', async () => {
+  const now = Date.now();
+  await seedLegacyDatabase({
+    feedback: [legacyCreatorFeedback(7, now - DAY_MS, 'clear-all-failure')],
+    seedUnrelatedRows: true,
+  });
+  storageData.set('preservedSetting', { enabled: true });
+  const tablesBefore = await snapshotDatabaseTables();
+  const storageBefore = [...storageData.entries()];
+  const failMarkerWrite = () => {
+    throw new Error('TEST_ABORT_MIGRATION');
+  };
+  db.dynamicBillMigrations.hook('creating', failMarkerWrite);
+
+  try {
+    await assert.rejects(
+      localDataRepo.clearAllLocalData(LOCAL_DATA_CLEAR_CONFIRMATION),
+      hasMessage(DYNAMIC_BILL_UPGRADE_FAILED_MESSAGE),
+    );
+  } finally {
+    db.dynamicBillMigrations.hook('creating').unsubscribe(failMarkerWrite);
+  }
+
+  assert.deepEqual(await snapshotDatabaseTables(), tablesBefore);
+  assert.deepEqual([...storageData.entries()], storageBefore);
+  assert.equal(sideEffects.storageGet, 0);
+  assert.equal(sideEffects.storageSet, 0);
+  assert.equal(sideEffects.storageRemove, 0);
+  assert.equal(sideEffects.storageClear, 0);
+});
+
 test('every protected entry fails with one Chinese error before reads, writes, or network work', async () => {
   const now = Date.now();
   await seedLegacyDatabase({
@@ -338,6 +494,7 @@ test('every protected entry fails with one Chinese error before reads, writes, o
     ['stored state clear', () => dynamicBillRepo.clearDynamicBillStoredState()],
     ['settings stats', () => localDataRepo.getLocalDataPrivacySummary()],
     ['dynamic clear', () => localDataRepo.clearDynamicBillLocalData()],
+    ['clear all', () => localDataRepo.clearAllLocalData(LOCAL_DATA_CLEAR_CONFIRMATION)],
   ];
   const outcomes: string[] = [];
 
@@ -385,6 +542,12 @@ function resetSideEffects(): void {
 
 function hasMessage(message: string): (error: unknown) => boolean {
   return error => error instanceof Error && error.message === message;
+}
+
+async function snapshotDatabaseTables(): Promise<Record<string, unknown[]>> {
+  return Object.fromEntries(await Promise.all(
+    db.tables.map(async table => [table.name, await table.toArray()] as const),
+  ));
 }
 
 async function seedLegacyDatabase(options: {
@@ -504,9 +667,9 @@ function legacyTopicFeedback(createdAt: number): Record<string, unknown> {
   };
 }
 
-function fixtureExplanation(now: number) {
+function fixtureExplanation(now: number, billKey = 'legacy-card') {
   return {
-    billKey: 'legacy-card',
+    billKey,
     status: 'disabled' as const,
     summary: 'fixture',
     reason: 'fixture',
@@ -517,6 +680,41 @@ function fixtureExplanation(now: number) {
     generatedAt: now,
     contentHash: 'fixture',
   };
+}
+
+function fixtureFollowedVideoUpdate(
+  now: number,
+  creatorMid: number,
+  key: string,
+  dynamicTime: number,
+  pubtime: number,
+) {
+  return {
+    updateKey: `update-${creatorMid}-${key}`,
+    dynamicId: `dynamic-${creatorMid}-${key}`,
+    bvid: `BV1fixture${creatorMid}${key}`,
+    avid: creatorMid,
+    title: `fixture video ${creatorMid} ${key}`,
+    intro: '',
+    cover: '',
+    duration: 120,
+    pubtime,
+    dynamicTime,
+    authorMid: creatorMid,
+    authorName: `UP ${creatorMid}`,
+    authorFace: '',
+    tagName: '知识',
+    tags: [],
+    syncedAt: now,
+  };
+}
+
+function permutations<T>(values: readonly T[]): T[][] {
+  if (values.length <= 1) return [[...values]];
+  return values.flatMap((value, index) => {
+    const rest = [...values.slice(0, index), ...values.slice(index + 1)];
+    return permutations(rest).map(permutation => [value, ...permutation]);
+  });
 }
 
 function fixtureSyncState() {

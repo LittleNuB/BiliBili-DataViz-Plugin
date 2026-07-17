@@ -123,6 +123,7 @@ export async function clearAllLocalData(confirmation: unknown): Promise<LocalDat
   if (confirmation !== LOCAL_DATA_CLEAR_CONFIRMATION) {
     throw new Error('LOCAL_DATA_CLEAR_CONFIRMATION_REQUIRED');
   }
+  await ensureDynamicBill013Migration();
   if (await getHistorySyncing()) {
     throw new Error('HISTORY_SYNC_IN_PROGRESS');
   }

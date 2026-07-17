@@ -17,6 +17,7 @@ import type {
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
 import { ensureDynamicBill013Migration } from '../dynamic-bill/migration';
 import { DYNAMIC_BILL_COLUMNS, DYNAMIC_BILL_STRATEGY } from '../dynamic-bill/strategy';
+import { compareFollowedVideoUpdatesNewestFirst } from '../dynamic-bill/update-order';
 import { db } from './db';
 
 const DYNAMIC_SYNC_STATE_KEY = 'dynamicBillSyncState';
@@ -105,7 +106,7 @@ export async function getRecentFollowedVideoUpdates(windowDays = DYNAMIC_UPDATE_
     .where('dynamicTime')
     .aboveOrEqual(cutoff)
     .toArray();
-  return updates.sort((a, b) => b.dynamicTime - a.dynamicTime);
+  return updates.sort(compareFollowedVideoUpdatesNewestFirst);
 }
 
 export async function getActiveFollowedCreators(): Promise<FollowedCreator[]> {

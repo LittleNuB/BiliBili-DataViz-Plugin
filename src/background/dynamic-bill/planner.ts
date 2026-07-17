@@ -14,6 +14,7 @@ import {
   DYNAMIC_BILL_STRATEGY,
   getDynamicBillThresholdEvidence,
 } from './strategy.ts';
+import { compareFollowedVideoUpdatesNewestFirst } from './update-order.ts';
 
 const SECONDS_PER_DAY = 86_400;
 const MILLISECONDS_PER_DAY = 86_400_000;
@@ -81,7 +82,7 @@ export function planFixedDynamicBillItems(input: FixedDynamicBillPlanInput): Fix
   let excludedByFeedbackCount = 0;
   const newestUnwatchedUpdateByCreator = new Map<number, FollowedVideoUpdate>();
 
-  for (const update of [...input.updates].sort((a, b) => b.dynamicTime - a.dynamicTime)) {
+  for (const update of input.updates) {
     if (!activeCreatorsByMid.has(update.authorMid)) continue;
     if (input.pausedCreatorMids.has(update.authorMid)) {
       excludedByFeedbackCount++;
@@ -91,7 +92,8 @@ export function planFixedDynamicBillItems(input: FixedDynamicBillPlanInput): Fix
       excludedRecentSameVideoCount++;
       continue;
     }
-    if (!newestUnwatchedUpdateByCreator.has(update.authorMid)) {
+    const currentNewest = newestUnwatchedUpdateByCreator.get(update.authorMid);
+    if (!currentNewest || compareFollowedVideoUpdatesNewestFirst(update, currentNewest) < 0) {
       newestUnwatchedUpdateByCreator.set(update.authorMid, update);
     }
   }
@@ -274,7 +276,7 @@ function buildWindowStats(
 function compareCandidatesByRotation(a: FixedBillCandidate, b: FixedBillCandidate): number {
   const rotationDelta = a.rotationLastShownAt - b.rotationLastShownAt;
   if (rotationDelta !== 0) return rotationDelta;
-  const updateDelta = b.update.dynamicTime - a.update.dynamicTime;
+  const updateDelta = compareFollowedVideoUpdatesNewestFirst(a.update, b.update);
   if (updateDelta !== 0) return updateDelta;
   return a.creator.mid - b.creator.mid;
 }

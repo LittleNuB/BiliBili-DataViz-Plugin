@@ -49,6 +49,29 @@ test('plans fixed 0.13 columns with unique ownership and one latest item per UP'
   assert.equal(plan.columnEligibleCounts.follow_rotation, 1);
 });
 
+test('selects the same latest unwatched update for every equal-time input permutation', () => {
+  const tiedUpdates = [
+    { ...update(1, 'z', 0), dynamicTime: NOW_SECONDS, pubtime: NOW_SECONDS - 1 },
+    { ...update(1, 'b', 0), dynamicTime: NOW_SECONDS, pubtime: NOW_SECONDS },
+    { ...update(1, 'a', 0), dynamicTime: NOW_SECONDS, pubtime: NOW_SECONDS },
+  ];
+
+  const selectedUpdateKeys = permutations(tiedUpdates).map((updates) => {
+    const plan = planFixedDynamicBillItems({
+      now: NOW,
+      creators: [creator(1)],
+      updates,
+      historyRecords: [],
+      favoriteItems: [],
+      rotationRecords: [],
+      pausedCreatorMids: new Set(),
+    });
+    return plan.items[0]?.evidence.newVideo.updateKey;
+  });
+
+  assert.deepEqual(selectedUpdateKeys, Array(6).fill('u1-a'));
+});
+
 test('uses one global rotation record and caps a column at five items', () => {
   const creatorIds = [10, 11, 12, 13, 14, 15];
   const plan = planFixedDynamicBillItems({
@@ -214,6 +237,14 @@ function rotation(creatorMid: number, lastShownAt: number): DynamicBillRotationR
     lastColumn: 'follow_rotation',
     updatedAt: lastShownAt,
   };
+}
+
+function permutations<T>(values: readonly T[]): T[][] {
+  if (values.length <= 1) return [[...values]];
+  return values.flatMap((value, index) => {
+    const rest = [...values.slice(0, index), ...values.slice(index + 1)];
+    return permutations(rest).map(permutation => [value, ...permutation]);
+  });
 }
 
 function legacyFeedback(
