@@ -10,7 +10,7 @@ import type {
   DynamicBillStatus,
 } from '../src/shared/types/dynamic-bill.ts';
 
-test('layout state uses one global empty branch when no item is visible', () => {
+test('layout state uses one global empty branch only when the bill has no candidates', () => {
   const empty = resolveDynamicBillLayoutState([], 'active', '');
   assert.equal(empty.allColumnsEmpty, true);
   assert.equal(empty.selectedItem, null);
@@ -21,7 +21,7 @@ test('layout state uses one global empty branch when no item is visible', () => 
     item('processed-card', 'favorite_related', 'processed'),
   ], 'active', 'consumed-card');
 
-  assert.equal(activeEmpty.allColumnsEmpty, true);
+  assert.equal(activeEmpty.allColumnsEmpty, false);
   assert.equal(activeEmpty.selectedItem, null);
   assert.deepEqual(activeEmpty.visibleItems, []);
 });

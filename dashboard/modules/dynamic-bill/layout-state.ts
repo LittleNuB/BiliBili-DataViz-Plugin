@@ -25,7 +25,7 @@ export function resolveDynamicBillLayoutState(
   return {
     visibleItems,
     selectedItem,
-    allColumnsEmpty: visibleItems.length === 0,
+    allColumnsEmpty: items.length === 0,
   };
 }
 
