@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>动态账单全局空态 QA</title>
+    <link rel="stylesheet" href="../dashboard/styles/dashboard.css" />
+    <style>
+      .qa-main {
+        min-width: 0;
+      }
+
+      .qa-status {
+        color: var(--bb-muted);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bb-shell">
+      <aside class="bb-sidebar">
+        <div class="bb-brand">
+          <span class="bb-brand-mark">BB</span>
+          <span class="bb-brand-text"><strong>Bili-Bill</strong><span>动态账单</span></span>
+        </div>
+      </aside>
+      <main class="qa-main">
+        <div class="dynamic-bill-page">
+          <section class="dynamic-bill-status-copy">
+            <strong>本轮暂无可展示的关注新投稿</strong>
+            <span>每轮每位 UP 最多一项，每栏最多 5 项，总计最多 15 项。</span>
+          </section>
+          <section class="dynamic-bill-empty" aria-label="动态账单空状态">
+            <strong>本轮暂无可展示的关注新投稿</strong>
+            <p>完成同步后，Bili-Bill 会从最近 7 天已关注 UP 的视频投稿中重新生成三栏账单；不会用旧账单或 AI 结果补位。</p>
+            <div class="dynamic-bill-scope-actions">
+              <button type="button" class="dynamic-bill-sync-button">同步并刷新</button>
+              <button type="button" class="dynamic-bill-sync-button is-secondary">重新生成本地账单</button>
+            </div>
+          </section>
+          <p class="qa-status" id="qa-status" role="status">正在检查空态</p>
+        </div>
+      </main>
+    </div>
+    <script>
+      function runFullEmptyQa() {
+        const emptyStates = [...document.querySelectorAll(".dynamic-bill-empty")];
+        const board = document.querySelector(".dynamic-bill-board");
+        const layout = document.querySelector(".dynamic-bill-layout");
+        const detail = document.querySelector(".dynamic-bill-detail");
+        const buttons = [...document.querySelectorAll(".dynamic-bill-empty button")]
+          .map((button) => button.textContent.trim());
+        const hasHorizontalOverflow = document.documentElement.scrollWidth > window.innerWidth + 1;
+        const passed = emptyStates.length === 1
+          && !board
+          && !layout
+          && !detail
+          && buttons.includes("同步并刷新")
+          && buttons.includes("重新生成本地账单")
+          && !hasHorizontalOverflow;
+
+        window.__dynamicBillFullEmptyQa = {
+          passed,
+          emptyStateCount: emptyStates.length,
+          hasBoard: Boolean(board),
+          hasLayout: Boolean(layout),
+          hasDetail: Boolean(detail),
+          buttons,
+          hasHorizontalOverflow,
+        };
+        document.body.dataset.qa = passed ? "passed" : "failed";
+        document.querySelector("#qa-status").textContent = passed
+          ? "全局空态检查通过"
+          : "全局空态检查未通过";
+      }
+
+      runFullEmptyQa();
+      requestAnimationFrame(runFullEmptyQa);
+    </script>
+  </body>
+</html>

@@ -48,6 +48,13 @@ export async function getRecordsSince(timestamp: number): Promise<WatchHistoryRe
   return db.watchHistory.where('viewAt').above(timestamp).toArray();
 }
 
+export async function getKnownWatchHistoryBvids(): Promise<string[]> {
+  const keys = await db.watchHistory.orderBy('bvid').uniqueKeys();
+  return keys
+    .map(key => typeof key === 'string' ? key.trim() : '')
+    .filter(Boolean);
+}
+
 export async function getTotalCount(): Promise<number> {
   return db.watchHistory.count();
 }

@@ -1,10 +1,14 @@
 import { LOCAL_DATA_CLEAR_CONFIRMATION } from '../../shared/local-data-privacy.ts';
+import { runLocalDataCategoryLifecycle } from '../../shared/local-data-category-contract.ts';
+import { DYNAMIC_BILL_LOCAL_DATA_CLEAR_FAILED_MESSAGE } from '../../shared/dynamic-bill-errors.ts';
 import type {
   LocalDataOperationResult,
   LocalDataPrivacySummary,
 } from '../../shared/types/local-data-privacy.ts';
+import { ensureDynamicBill013Migration } from '../dynamic-bill/migration.ts';
 import { getDynamicSyncState } from './dynamic-bill-repo.ts';
 import { db } from './db.ts';
+import { getRegisteredLocalDataCategories } from './local-data-category-registry.ts';
 import {
   getBackfillComplete,
   getHistorySyncing,
@@ -12,6 +16,7 @@ import {
 } from './config-store.ts';
 
 export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySummary> {
+  await ensureDynamicBill013Migration();
   const [
     history,
     favorites,
@@ -59,10 +64,28 @@ export async function clearCurrentVideoSubtitleCache(): Promise<LocalDataOperati
   };
 }
 
+export async function clearDynamicBillLocalData(): Promise<LocalDataOperationResult> {
+  await ensureDynamicBill013Migration();
+  const category = getRegisteredLocalDataCategories()
+    .find(registration => registration.id === 'dynamicBill');
+  if (!category) throw new Error(DYNAMIC_BILL_LOCAL_DATA_CLEAR_FAILED_MESSAGE);
+  const lifecycle = await runLocalDataCategoryLifecycle(category);
+  if (lifecycle.status === 'failure') {
+    throw new Error(DYNAMIC_BILL_LOCAL_DATA_CLEAR_FAILED_MESSAGE);
+  }
+
+  return {
+    operation: 'clear_dynamic_bill_data',
+    completedAt: Date.now(),
+    cleared: lifecycle.clearResult.cleared,
+  };
+}
+
 export async function clearAllLocalData(confirmation: unknown): Promise<LocalDataOperationResult> {
   if (confirmation !== LOCAL_DATA_CLEAR_CONFIRMATION) {
     throw new Error('LOCAL_DATA_CLEAR_CONFIRMATION_REQUIRED');
   }
+  await ensureDynamicBill013Migration();
   if (await getHistorySyncing()) {
     throw new Error('HISTORY_SYNC_IN_PROGRESS');
   }
@@ -147,7 +170,7 @@ async function summarizeCurrentVideoSubtitles(): Promise<LocalDataPrivacySummary
   const [sources, segmentCount, staleSegmentCount, lastUpdated] = await Promise.all([
     db.currentVideoTranscriptSources.toArray(),
     db.currentVideoTranscriptSegments.count(),
-    db.currentVideoTranscriptSegments.where({ stale: true }).count(),
+    db.currentVideoTranscriptSegments.filter(segment => segment.stale === true).count(),
     db.currentVideoTranscriptSources.orderBy('updatedAt').last(),
   ]);
   const cachedVideoCount = new Set(sources.map(source => source.bvid).filter(Boolean)).size;
@@ -162,12 +185,22 @@ async function summarizeCurrentVideoSubtitles(): Promise<LocalDataPrivacySummary
 }
 
 async function summarizeDynamicBill(): Promise<LocalDataPrivacySummary['dynamicBill']> {
-  const [creators, updatesCount, items, feedbackCount, explanationCount, syncState] = await Promise.all([
+  await ensureDynamicBill013Migration();
+  const [
+    creators,
+    updatesCount,
+    items,
+    explanationCount,
+    pauseCount,
+    rotationRecordCount,
+    syncState,
+  ] = await Promise.all([
     db.followedCreators.toArray(),
     db.followedVideoUpdates.count(),
     db.dynamicBillItems.toArray(),
-    db.dynamicBillFeedback.count(),
     db.dynamicBillExplanations.count(),
+    db.dynamicBillCreatorPauses.count(),
+    db.dynamicBillRotationRecords.count(),
     getDynamicSyncState(),
   ]);
   const statusCounts = items.reduce<Record<string, number>>((counts, item) => {
@@ -180,11 +213,12 @@ async function summarizeDynamicBill(): Promise<LocalDataPrivacySummary['dynamicB
     activeFollowedCreatorCount: creators.filter(creator => creator.isActive !== false).length,
     followedVideoUpdateCount: updatesCount,
     billItemCount: items.length,
+    rotationRecordCount,
+    creatorPauseCount: pauseCount,
     unopenedItems: statusCounts.unopened ?? 0,
     openedItems: statusCounts.opened ?? 0,
     consumedItems: statusCounts.consumed ?? 0,
     processedItems: statusCounts.processed ?? 0,
-    feedbackCount,
     explanationCount,
     lastGeneratedAt: normalizeNullableTimestamp(lastGeneratedAt),
     lastSyncedAt: normalizeNullableTimestamp(syncState.lastSuccessAt),
@@ -204,7 +238,8 @@ async function collectClearCounts(): Promise<Required<Omit<LocalDataOperationRes
     followedVideoUpdates,
     dynamicBillItems,
     dynamicBillExplanations,
-    dynamicBillFeedback,
+    dynamicBillCreatorPauses,
+    dynamicBillRotationRecords,
     currentVideoSubtitleSources,
     currentVideoSubtitleSegments,
   ] = await Promise.all([
@@ -218,7 +253,8 @@ async function collectClearCounts(): Promise<Required<Omit<LocalDataOperationRes
     db.followedVideoUpdates.count(),
     db.dynamicBillItems.count(),
     db.dynamicBillExplanations.count(),
-    db.dynamicBillFeedback.count(),
+    db.dynamicBillCreatorPauses.count(),
+    db.dynamicBillRotationRecords.count(),
     db.currentVideoTranscriptSources.count(),
     db.currentVideoTranscriptSegments.count(),
   ]);
@@ -234,7 +270,8 @@ async function collectClearCounts(): Promise<Required<Omit<LocalDataOperationRes
     followedVideoUpdates,
     dynamicBillItems,
     dynamicBillExplanations,
-    dynamicBillFeedback,
+    dynamicBillCreatorPauses,
+    dynamicBillRotationRecords,
     currentVideoSubtitleSources,
     currentVideoSubtitleSegments,
   };

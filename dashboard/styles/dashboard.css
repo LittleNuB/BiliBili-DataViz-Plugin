@@ -867,14 +867,20 @@ button {
 }
 
 .dynamic-bill-board {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
+  align-items: flex-start;
   gap: 10px;
 }
 
 .dynamic-bill-column {
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
+}
+
+.dynamic-bill-column.is-empty {
+  flex: 0.58 1 0;
+  min-width: 150px;
 }
 
 .dynamic-bill-column-head {
@@ -961,6 +967,25 @@ button {
   margin: 8px 0 0;
   font-size: 12px;
   line-height: 1.6;
+}
+
+.dynamic-bill-column-empty {
+  display: grid;
+  gap: 5px;
+  padding: 12px 13px 14px;
+  color: #8792A5;
+}
+
+.dynamic-bill-column-empty strong {
+  color: #D8DCE6;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.dynamic-bill-column-empty p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
 }
 
 .dynamic-bill-item-list {
@@ -1653,6 +1678,16 @@ button {
   .settings-data-subgrid,
   .settings-toggle-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dynamic-bill-board {
+    display: grid;
+  }
+
+  .dynamic-bill-column,
+  .dynamic-bill-column.is-empty {
+    flex: none;
+    min-width: 0;
   }
 
   .creator-hero,

@@ -36,7 +36,19 @@ test('settings local data cards expose natural Chinese summaries only', () => {
     '动态账单',
   ]);
   assert.match(cards.map(card => card.value).join('\n'), /128 条/);
-  assertCleanUserCopy(JSON.stringify(cards));
+  const copy = JSON.stringify(cards);
+  assert.doesNotMatch(copy, /暂停|轮换|动态反馈/);
+  assertCleanUserCopy(copy);
+});
+
+test('settings page does not present Dynamic Bill pause or rotation detail', async () => {
+  const source = await readFile(
+    new URL('../dashboard/modules/settings/SettingsPage.tsx', import.meta.url),
+    'utf8',
+  );
+
+  assert.doesNotMatch(source, /账单暂停记录|账单轮换记录/);
+  assert.doesNotMatch(source, /dynamicBill\.(creatorPauseCount|rotationRecordCount|feedbackCount)/);
 });
 
 test('settings local data operation messages stay bounded to counts', () => {
@@ -62,6 +74,7 @@ test('settings local data operation messages stay bounded to counts', () => {
     },
   } satisfies LocalDataOperationResult);
   assert.match(clearAllMessage, /本地 AI 设置和功能开关也已恢复为默认状态/);
+  assert.doesNotMatch(clearAllMessage, /暂停|轮换|动态反馈/);
   assertCleanUserCopy([subtitleMessage, clearAllMessage].join('\n'));
 });
 
@@ -109,7 +122,7 @@ test('registered categories collect usage, clear independently, and read back th
   const categories = createRegisteredLocalDataCategories(dependencies);
   const usageBefore = await Promise.all(categories.map(category => category.collectUsage()));
 
-  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 2, 5, 2]);
+  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 2, 6, 2]);
   assert.ok(usageBefore.every(usage => usage.usageBytes > 0));
 
   const history = categories[0];
@@ -126,10 +139,16 @@ test('registered categories collect usage, clear independently, and read back th
   for (const category of categories.slice(1)) {
     const clearResult = await category.clear();
     assert.ok(Object.keys(clearResult.cleared).length > 0);
+    if (category.id === 'dynamicBill') {
+      assert.equal(clearResult.cleared.dynamicBillCreatorPauses, 1);
+      assert.equal(clearResult.cleared.dynamicBillRotationRecords, 1);
+      assert.equal('dynamicBillFeedback' in clearResult.cleared, false);
+    }
     const readback = await category.readAfterClear();
     assert.equal(readback.count, 0, category.label);
     assert.equal(readback.empty, true, category.label);
   }
+  assert.equal(await dependencies.tables.dynamicBillFeedback.count(), 0);
 });
 
 test('lifecycle results retain completed categories and name a failed category in natural Chinese', async () => {
@@ -242,11 +261,12 @@ function makeSummary(): LocalDataPrivacySummary {
       activeFollowedCreatorCount: 12,
       followedVideoUpdateCount: 8,
       billItemCount: 6,
+      rotationRecordCount: 4,
+      creatorPauseCount: 1,
       unopenedItems: 2,
       openedItems: 1,
       consumedItems: 2,
       processedItems: 1,
-      feedbackCount: 3,
       explanationCount: 5,
       lastGeneratedAt: 1_718_000_000_000,
       lastSyncedAt: 1_718_000_000_000,
@@ -270,6 +290,8 @@ function createRegistryDependencies(): LocalDataCategoryRegistryDependencies {
     'dynamicBillItems',
     'dynamicBillExplanations',
     'dynamicBillFeedback',
+    'dynamicBillCreatorPauses',
+    'dynamicBillRotationRecords',
   ];
   const tables = Object.fromEntries(
     tableNames.map(name => [name, memoryTable([{ id: name, value: `row-${name}` }])]),

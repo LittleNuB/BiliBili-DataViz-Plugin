@@ -18,6 +18,7 @@ import {
   setDynamicSyncState,
   upsertFollowedVideoUpdates,
 } from '../storage/dynamic-bill-repo';
+import { ensureDynamicBill013Migration } from './migration';
 
 const VIDEO_UPDATE_RETENTION_DAYS = 30;
 const VIDEO_DETAIL_ENRICHMENT_LIMIT = 40;
@@ -32,10 +33,12 @@ interface SyncPartial {
 }
 
 export async function getDynamicOverview(): Promise<DynamicBillOverview> {
+  await ensureDynamicBill013Migration();
   return getDynamicBillOverview(DYNAMIC_UPDATE_WINDOW_DAYS);
 }
 
 export async function syncDynamicBillUpdates(signal?: AbortSignal): Promise<DynamicSyncResult> {
+  await ensureDynamicBill013Migration();
   const startedAt = Date.now();
   const previousState = await getDynamicSyncState();
   const partial: SyncPartial = {};

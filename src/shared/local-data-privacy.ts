@@ -49,7 +49,7 @@ export function buildLocalDataSummaryCards(summary: LocalDataPrivacySummary): Lo
       id: 'dynamicBill',
       title: '动态账单',
       value: `${summary.dynamicBill.billItemCount} 项`,
-      detail: `关注快照 ${summary.dynamicBill.activeFollowedCreatorCount} 位，近期待处理视频 ${summary.dynamicBill.followedVideoUpdateCount} 条。`,
+      detail: `关注快照 ${summary.dynamicBill.activeFollowedCreatorCount} 位，最近视频投稿 ${summary.dynamicBill.followedVideoUpdateCount} 条。`,
       meta: `最近生成：${formatLocalDate(summary.dynamicBill.lastGeneratedAt, 'milliseconds')}`,
     },
   ];
@@ -60,6 +60,9 @@ export function buildLocalDataOperationMessage(result: LocalDataOperationResult)
     const sourceCount = result.cleared.currentVideoSubtitleSources ?? 0;
     const segmentCount = result.cleared.currentVideoSubtitleSegments ?? 0;
     return `已清理当前视频字幕缓存：移除 ${sourceCount} 条来源记录和 ${segmentCount} 段字幕正文。`;
+  }
+  if (result.operation === 'clear_dynamic_bill_data') {
+    return `已清理动态账单本地数据：账单 ${result.cleared.dynamicBillItems ?? 0} 项、解释 ${result.cleared.dynamicBillExplanations ?? 0} 条。`;
   }
 
   return [

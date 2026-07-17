@@ -16,7 +16,8 @@ export interface LocalDataClearedCounts {
   followedVideoUpdates?: number;
   dynamicBillItems?: number;
   dynamicBillExplanations?: number;
-  dynamicBillFeedback?: number;
+  dynamicBillCreatorPauses?: number;
+  dynamicBillRotationRecords?: number;
   currentVideoSubtitleSources?: number;
   currentVideoSubtitleSegments?: number;
   localSettings?: boolean;
