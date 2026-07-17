@@ -1,6 +1,6 @@
 # 视频盲盒真实候选源 API Spike
 
-日期：2026-06-19
+日期：2026-06-19；分区端点复核：2026-07-17
 
 范围：验证视频盲盒 v2 是否可以安全接入真实 B 站公开视频候选源，支撑「随机探索」和「换口味」候选池。本文只记录只读 API/source spike，不实现盲盒候选池业务逻辑，不改 Dashboard 或实验页 UI，不新增 DB schema、message action 或 AI 调用。
 
@@ -9,7 +9,7 @@
 真实候选池可行，但第一批 MVP 应保守选择来源：
 
 - 「随机探索」建议优先使用相关视频候选：`/x/web-interface/archive/related`。无登录 smoke 成功返回真实公开视频候选，字段包含 `bvid/aid/cid/owner/pic/pubdate/duration/stat` 等可映射字段，可构造 B 站视频页链接。它适合从当前视频或近期看过的视频扩展一个真实候选池，但不应用于证明“换口味”，避免强化近期口味。
-- 「换口味」建议优先使用分区新视频：`/x/web-interface/dynamic/region`。无登录 smoke 成功返回分区公开视频列表，分页和字段清楚，适合把本地长期兴趣里的分区映射到 B 站真实新视频候选，再从近期低频方向随机抽取。
+- 「跨区漫游」使用分区新视频：`/x/web-interface/newlist`。2026-07-17 无 Cookie smoke 对固定目录 RID 4 和 36 均返回 `code=0`、`data.archives=10`，首项具有 `bvid/title/owner/duration/pubdate/tname`。同日复核确认旧 `/x/web-interface/dynamic/region` 已返回 HTTP 200、`code=-404`、`data=null`，只保留为失效历史记录，不再作为现行来源。
 - 搜索结果暂缓进入 MVP。`/x/web-interface/search/type` 在命令行无 Cookie smoke 中返回 HTTP 412，且结果受平台搜索排序影响。它可以作为后续补充来源，但第一版不要把搜索结果包装成 Bili-Bill 自己的排序能力。
 - UP 空间投稿暂缓进入 MVP 主路径。旧空间投稿端点在无登录 smoke 中返回 `code=-799`，需要 WBI 或扩展 runtime 登录态进一步验证；同时从已关注 UP 新投稿抽取容易和动态账单边界重叠。后续可作为「来源清楚的随机探索」补充池。
 
@@ -33,7 +33,8 @@
 | 来源 | 样本参数 | 结果 | 说明 |
 | --- | --- | --- | --- |
 | 相关视频 | `/x/web-interface/archive/related?bvid=<公开 BV>` | `code=0`, `items=40`, 首项含 `bvid` | 可作为「随机探索」真实候选源。 |
-| 分区新视频 | `/x/web-interface/dynamic/region?rid=4&pn=1&ps=10` | `code=0`, `items=10`, 首项含 `bvid` | 可作为「换口味」真实候选源。 |
+| 分区新视频（旧端点复核） | `/x/web-interface/dynamic/region?rid=4&pn=1&ps=10` | HTTP 200、`code=-404`、`data=null` | 2026-07-17 已复核失效，不再使用。 |
+| 分区新视频（现行端点） | `/x/web-interface/newlist?rid=4&pn=1&ps=10` 与 `/x/web-interface/newlist?rid=36&pn=1&ps=10` | 两个 RID 均为 `code=0`、`data.archives=10`；首项六个必要字段均存在 | 可作为「跨区漫游」真实候选源；smoke 未记录候选身份。 |
 | 搜索结果 | `/x/web-interface/search/type?search_type=video&keyword=<词>&page=1&page_size=10&order=pubdate` | HTTP `412` | 命令行无 Cookie 形态不稳定，先暂缓。 |
 | UP 空间投稿 | `/x/space/arc/search?mid=2&pn=1&ps=10&order=pubdate` | `code=-799`, `message=请求过于频繁，请稍后再试` | 需要 WBI 或 runtime smoke，先暂缓。 |
 
@@ -256,8 +257,10 @@ order=pubdate
 候选端点：
 
 ```text
-GET https://api.bilibili.com/x/web-interface/dynamic/region
+GET https://api.bilibili.com/x/web-interface/newlist
 ```
+
+旧 `/x/web-interface/dynamic/region` 仅作为历史失效记录：2026-07-17 对 `rid=4&pn=1&ps=10` 复核时为 HTTP 200、`code=-404`、`data=null`，不得再接入运行时。
 
 建议参数：
 
@@ -269,9 +272,9 @@ ps=20
 
 适用判断：
 
-- 进入 MVP：是，优先用于「换口味」。
-- 使用方式：从本地长期观看窗口里找出长期高、近期少看的分区或标签，映射到一个明确 `rid`，再从该分区新视频中抽取真实候选。
-- 不建议作为纯「随机探索」唯一来源，因为它需要本地长期兴趣来解释来源；若用于随机探索，也必须显示“来自某分区新视频候选池”。
+- 进入 0.13：是，用于「跨区漫游」。
+- 使用方式：按最近最多 7 天有效观看排除 top-3 高频分区；没有近期分区证据时从固定目录等概率选一个 `rid`，再从该分区新视频中抽取真实候选。
+- 来源边界：只服务「跨区漫游」，不作为「随机探索」或其它盲盒的补位来源。
 
 字段记录：
 
@@ -280,44 +283,43 @@ ps=20
 | `bvid` | `item.bvid` | 必填。 |
 | `avid` | `item.aid` | 可选。 |
 | `cid` | `item.cid` | 可选。 |
-| `title` | `item.title` | 展示用。 |
+| `title` | `item.title` | 必填；清洗后为空便丢弃，不用视频身份补标题。 |
 | `authorMid` | `item.owner.mid` | 来源说明和去重用。 |
 | `authorName` | `item.owner.name` | 展示用。 |
 | `cover` | `item.pic` 或 `item.first_frame` | 展示用。 |
 | `duration` | `item.duration` | 秒级时长候选。 |
 | `pubtime` | `item.pubdate` 或 `item.ctime` | 秒级时间戳。 |
-| `tagName` | 本地 `rid` 映射名或详情补全 | 用于解释长期兴趣方向。 |
+| `tagName` | `item.tname` 或固定 `rid` 映射名 | 用于说明本轮公开分区。 |
 | `sourceLabel` | `分区新视频 / <分区名>` | 用户可见来源。 |
 
 分页：
 
-- `pn/ps` 分页，本轮 `pn=1&ps=10` 成功。
-- MVP 建议每个分区最多 1 到 3 页，优先用户触发时刷新。
-- 不需要扫描大量分区；每次「换口味」只从 1 到 3 个长期冷却分区取候选。
+- `pn/ps` 分页；2026-07-17 对 RID 4 和 36 的 `pn=1&ps=10` 无 Cookie smoke 均成功。
+- 0.13 每次只请求已选分区的有限分页，优先用户触发时刷新。
+- 不扫描全部分区，也不因当前分区空池而请求其它盲盒来源。
 
 登录态：
 
-- 无 Cookie smoke 成功，适合 clean-profile 和未登录降级。
-- 扩展 runtime 仍复用 `biliGet` 即可。
+- 2026-07-17 无 Cookie smoke 成功，不依赖登录态；扩展 runtime 仍复用 `biliGet`。
 
 失败状态：
 
 | 场景 | 处理 |
 | --- | --- |
-| `rid` 无法映射 | 不生成该来源候选，解释为本地长期兴趣还不能映射到真实分区。 |
-| `code` 非 0 或 HTTP 失败 | 回退其他已验证来源或本地盲盒。 |
-| 返回空 `archives` | 当前分区无可用新视频，换下一个长期冷却分区。 |
-| 字段缺失 | 缺 `bvid` 丢弃；缺分区名用本地映射名解释。 |
+| `rid` 不在固定目录 | 不发出分区候选请求，显示本轮没有可用公开分区。 |
+| `code` 非 0 或 HTTP 失败 | 显示本轮分区候选空态，不改用历史、收藏、相关视频或其它盲盒来源。 |
+| 返回空 `data.archives` | 显示本轮分区候选空态，保留已选分区说明，不自动换来源。 |
+| 字段缺失 | 缺 `bvid` 或清洗后的非空 `title` 便丢弃；禁止把视频身份当作标题。分区名可使用固定 RID 映射说明。 |
 
 限流风险：
 
-- 风险低到中。本轮无登录 smoke 成功。
+- 风险低到中；2026-07-17 两个固定 RID 的无 Cookie smoke 成功，但端点仍按可漂移的公开依赖处理。
 - 仍应复用全局限流，限制分区数量和页数，避免每次开盒扫描全部分区。
 
 打开链接可用性：
 
 - 成功返回 `bvid`，可构造 `https://www.bilibili.com/video/{bvid}`。
-- 候选入池前做 BV 格式校验即可。
+- 候选入池前同时校验 BV 格式和非空标题。
 
 ## MVP 候选策略建议
 

@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { buildExperimentData } from '../src/background/analytics/suggestions.ts';
+import { formatExperimentLoadError } from '../dashboard/modules/experiments/experiment-copy.ts';
+import {
+  buildExperimentData,
+  fetchRandomExploreCandidatePool,
+  selectRelatedVideoSeeds,
+} from '../src/background/analytics/suggestions.ts';
 import {
   buildCrossRegionSourceFailure,
   buildRecentHighFrequencyRegions,
   buildRelatedVideoSourceFailure,
+  fetchCrossRegionCandidatePool,
+  pickRandomCandidate,
   selectCrossRegion,
   type CreatorArchiveCandidatePool,
   type CrossRegionCandidatePool,
@@ -127,6 +134,31 @@ test('uses the injected random source to draw from every fixed candidate pool', 
   );
 });
 
+test('keeps out-of-range and non-finite random values inside every candidate pool', () => {
+  const sharedPool = ['first', 'last'] as const;
+  const cases = [
+    { label: '-1', value: -1, expected: 'first' },
+    { label: '1', value: 1, expected: 'last' },
+    { label: 'NaN', value: Number.NaN, expected: 'first' },
+    { label: 'Infinity', value: Number.POSITIVE_INFINITY, expected: 'first' },
+  ] as const;
+  const allowedByBox = [
+    new Set(['BV1RANDOM001', 'BV1RANDOM002']),
+    new Set(['BV1REGION001', 'BV1REGION002']),
+    new Set(['BV1FAVORIT01', 'BV1FAVORIT02']),
+    new Set(['BV1ARCHIVE01', 'BV1ARCHIVE02']),
+  ];
+
+  for (const item of cases) {
+    assert.equal(pickRandomCandidate(sharedPool, () => item.value), item.expected, item.label);
+    const data = buildRandomContractData(() => item.value);
+    data.blindBoxes.forEach((box, index) => {
+      assert.ok(box.video, `${item.label}: ${box.id} returned undefined`);
+      assert.equal(allowedByBox[index].has(box.video.bvid), true, `${item.label}: ${box.id}`);
+    });
+  }
+});
+
 test('cross-region selection uses recent valid watches and ignores invalid records', () => {
   const records = [
     ...createRecentRegionRecords(),
@@ -159,6 +191,58 @@ test('cross-region picks from the full public directory when recent evidence is 
   assert.equal(firstSelection.selectedRegion?.regionName, '动画');
   assert.equal(lastSelection.selectedRegion?.regionName, '资讯');
   assert.notEqual(firstSelection.selectedRegion?.rid, lastSelection.selectedRegion?.rid);
+});
+
+test('fetches cross-region candidates from newlist data.archives and drops videos without titles', async () => {
+  const requests: Array<{ endpoint: string; params: Record<string, string> }> = [];
+  const missingTitleBvid = 'BV1xx411c7mD';
+  const visibleCandidateBvid = 'BV1mK4y1C7Bz';
+
+  const pool = await fetchCrossRegionCandidatePool([], {
+    nowMs: NOW_MS,
+    pageSize: 10,
+    random: () => 0,
+    request: async (endpoint, params) => {
+      requests.push({ endpoint, params });
+      return {
+        archives: [
+          {
+            bvid: missingTitleBvid,
+            owner: { mid: 1001, name: '缺标题候选 UP' },
+            duration: 180,
+            pubdate: 1_752_000_000,
+            tname: '动画',
+          },
+          {
+            bvid: visibleCandidateBvid,
+            title: '可展示的新分区视频',
+            owner: { mid: 1002, name: '公开分区 UP' },
+            duration: 240,
+            pubdate: 1_752_000_100,
+            tname: '动画',
+          },
+        ],
+      };
+    },
+  });
+
+  assert.deepEqual(requests, [{
+    endpoint: '/x/web-interface/newlist',
+    params: { rid: '1', pn: '1', ps: '10' },
+  }]);
+  assert.equal(pool.status, 'ready');
+  assert.equal(pool.excludedInvalidCandidateCount, 1);
+  assert.deepEqual(pool.candidates.map(candidate => candidate.bvid), [visibleCandidateBvid]);
+
+  const data = buildExperimentData([], [], new Map(), NOW_MS, {
+    random: () => 0,
+    randomExplorePool: emptyRelatedPool(),
+    crossRegionPool: pool,
+    creatorArchivePool: emptyCreatorArchivePool(),
+  });
+  const visibleText = data.blindBoxes.map(visibleBlindBoxText).join('\n');
+  assert.equal(visibleText.includes(missingTitleBvid), false);
+  assert.match(visibleText, /可展示的新分区视频/);
 });
 
 test('sanitizes raw runtime errors from cross-region candidate source failures', () => {
@@ -210,6 +294,62 @@ test('does not fall back to a local random video when related candidates fail', 
   assert.equal(JSON.stringify(randomExplore).includes('document is not defined'), false);
 });
 
+test('uses only valid recent related seeds and skips the related request when none qualify', async () => {
+  const validAtCutoff = createRecord({
+    bvid: 'BV1Q541167Qg',
+    tagName: '知识',
+    daysAgo: 90,
+    actualCompletion: 0.8,
+    title: '截止日内视频',
+  });
+  const validNow = createRecord({
+    bvid: 'BV1mK4y1C7Bz',
+    tagName: '动画',
+    daysAgo: 0,
+    actualCompletion: 0.8,
+    title: '当前时刻视频',
+  });
+  const validSeeds = selectRelatedVideoSeeds([validAtCutoff, validNow], NOW_MS);
+  assert.deepEqual(validSeeds.map(seed => seed.bvid), ['BV1mK4y1C7Bz', 'BV1Q541167Qg']);
+
+  const invalidTime = createRecord({
+    bvid: 'BV1ab411c7EF',
+    tagName: '游戏',
+    daysAgo: 1,
+    actualCompletion: 0.9,
+    title: '无效时间视频',
+  });
+  invalidTime.viewAt = Number.NaN;
+  const ineligibleRecords = [
+    createRecord({ bvid: 'BV1cd411c7GH', tagName: '游戏', daysAgo: 91, actualCompletion: 0.9, title: '过期视频' }),
+    createRecord({ bvid: 'BV1ef411c7JK', tagName: '游戏', daysAgo: -1, actualCompletion: 0.9, title: '未来视频' }),
+    createRecord({ bvid: 'not-a-bvid', tagName: '游戏', daysAgo: 1, actualCompletion: 0.9, title: '无效身份视频' }),
+    invalidTime,
+  ];
+
+  assert.deepEqual(selectRelatedVideoSeeds(ineligibleRecords, NOW_MS), []);
+  let requestCount = 0;
+  const pool = await fetchRandomExploreCandidatePool(
+    ineligibleRecords,
+    NOW_MS,
+    async () => {
+      requestCount += 1;
+      return createRelatedPool();
+    },
+  );
+
+  assert.equal(requestCount, 0);
+  assert.equal(pool.seedCount, 0);
+  const data = buildExperimentData(ineligibleRecords, [], new Map(), NOW_MS, {
+    randomExplorePool: pool,
+    crossRegionPool: emptyCrossRegionPool(),
+    creatorArchivePool: emptyCreatorArchivePool(),
+  });
+  const randomExplore = data.blindBoxes.find(box => box.id === 'random_explore');
+  assert.equal(randomExplore?.state, 'empty');
+  assert.equal(randomExplore?.emptyTitle, '当前没有可用于探索的近期视频');
+});
+
 test('returns natural Chinese empty states for all four fixed cards', () => {
   const data = buildExperimentData([], [], new Map(), NOW_MS, {
     randomExplorePool: emptyRelatedPool(),
@@ -232,6 +372,22 @@ test('returns natural Chinese empty states for all four fixed cards', () => {
     assert.ok(box.realCandidateLabel);
     assert.ok(box.evidence.length > 0);
     assertNoForbiddenVisibleText(visibleBlindBoxText(box));
+  }
+});
+
+test('formats experiment load errors without exposing runtime messages or raw fields', () => {
+  const failures: unknown[] = [
+    new Error('sourceHash=internal-hash'),
+    new Error('API Error: -404 data null'),
+    new ReferenceError('document is not defined'),
+    'fallback transcript confidence segmentId subtitle_url',
+    { message: 'window is not defined; bvid=BV1xx411c7mD' },
+  ];
+
+  for (const failure of failures) {
+    const visibleMessage = formatExperimentLoadError(failure);
+    assert.equal(visibleMessage, '盲盒暂时无法生成，请刷新后重试。');
+    assertNoForbiddenVisibleText(visibleMessage);
   }
 });
 
@@ -325,7 +481,9 @@ function assertNoForbiddenVisibleText(value: string): void {
     'segmentId',
     'subtitle_url',
     'source_failed',
+    'API Error',
     'document is not defined',
+    'window is not defined',
     'ReferenceError',
   ]) {
     assert.equal(value.toLocaleLowerCase().includes(rawTerm.toLocaleLowerCase()), false, rawTerm);

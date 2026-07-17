@@ -20,6 +20,7 @@ import type {
   BlindBoxRandomSource,
   CreatorArchiveCandidatePool,
   CrossRegionCandidatePool,
+  RelatedVideoCandidateOptions,
   RelatedVideoSeed,
 } from '../api/video-blind-box-candidates.ts';
 import { db } from '../storage/db.ts';
@@ -64,6 +65,11 @@ interface ExperimentRuntimeOptions {
   random?: BlindBoxRandomSource;
 }
 
+export type RelatedVideoCandidateRequest = (
+  seeds: RelatedVideoSeed[],
+  options?: RelatedVideoCandidateOptions,
+) => Promise<ExperimentRealCandidatePool>;
+
 type BlindBoxBoundaryMeta = Pick<
   ExperimentBlindBox,
   'candidateSource' | 'realCandidateLabel' | 'usesRealBilibiliCandidates'
@@ -78,13 +84,8 @@ export async function getExperimentData(options: ExperimentRuntimeOptions = {}):
     getSmartFavoriteIndexMap(),
     db.followedCreators.toArray().then(creators => creators.filter(creator => creator.isActive !== false)),
   ]);
-  const relatedSeeds = selectRelatedVideoSeeds(records, nowMs);
-
   const [randomExplorePool, crossRegionPool, creatorArchivePool] = await Promise.all([
-    fetchRelatedVideoCandidates(
-      relatedSeeds,
-      { seedLimit: RANDOM_RELATED_SEED_LIMIT },
-    ).catch(error => buildRelatedVideoSourceFailure(relatedSeeds, error, { seedLimit: RANDOM_RELATED_SEED_LIMIT })),
+    fetchRandomExploreCandidatePool(records, nowMs),
     fetchCrossRegionCandidatePool(records, { nowMs, random })
       .catch(error => buildCrossRegionSourceFailure(records, nowMs, error, { random })),
     fetchCreatorArchiveCandidatePool(followedCreators, { nowMs, random })
@@ -97,6 +98,24 @@ export async function getExperimentData(options: ExperimentRuntimeOptions = {}):
     crossRegionPool,
     creatorArchivePool,
   });
+}
+
+export async function fetchRandomExploreCandidatePool(
+  records: WatchHistoryRecord[],
+  nowMs: number,
+  request: RelatedVideoCandidateRequest = fetchRelatedVideoCandidates,
+): Promise<ExperimentRealCandidatePool> {
+  const seeds = selectRelatedVideoSeeds(records, nowMs);
+  const requestOptions = { seedLimit: RANDOM_RELATED_SEED_LIMIT };
+  if (seeds.length === 0) {
+    return buildRelatedVideoSourceFailure(seeds, null, requestOptions);
+  }
+
+  try {
+    return await request(seeds, requestOptions);
+  } catch (error) {
+    return buildRelatedVideoSourceFailure(seeds, error, requestOptions);
+  }
 }
 
 export function buildExperimentData(
@@ -481,8 +500,8 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
       '随机探索',
       teaser,
       ['本地还没有可作为公开相关视频候选种子的近期视频。'],
-      '真实候选源还没有可用种子',
-      '随机探索现在需要先用最近少量本地历史作为种子，请求 B 站公开视频的相关视频候选池。等本地有可用于请求的近期视频后，它才会开出真实候选。',
+      '当前没有可用于探索的近期视频',
+      '随机探索需要先用最近少量本地历史作为种子，请求 B 站公开视频的相关视频候选池。当前没有合格种子，因此没有发出相关候选请求。',
       '候选源未准备好',
       sourceLabel,
       '没有可请求的种子，未生成空白视频卡。',
@@ -533,19 +552,21 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
   };
 }
 
-function selectRelatedVideoSeeds(records: WatchHistoryRecord[], nowMs: number): RelatedVideoSeed[] {
+export function selectRelatedVideoSeeds(records: WatchHistoryRecord[], nowMs: number): RelatedVideoSeed[] {
   const recentCutoffMs = nowMs - RECENT_VIDEO_BLOCK_DAYS * DAY_MS;
   const seeds: RelatedVideoSeed[] = [];
   const seen = new Set<string>();
   const sortedRecords = [...records]
-    .filter(record => record.business === 'archive' && cleanText(record.bvid))
+    .filter(record => {
+      if (record.business !== 'archive' || !isLikelyBvid(cleanText(record.bvid))) return false;
+      const watchedAt = toEpochMs(record.viewAt);
+      return watchedAt >= recentCutoffMs && watchedAt <= nowMs;
+    })
     .sort((a, b) => toEpochMs(b.viewAt) - toEpochMs(a.viewAt));
 
   for (const record of sortedRecords) {
     const bvid = cleanText(record.bvid);
-    if (!isLikelyBvid(bvid) || seen.has(bvid)) continue;
-    const watchedAt = toEpochMs(record.viewAt);
-    if (watchedAt < recentCutoffMs && seeds.length > 0) break;
+    if (seen.has(bvid)) continue;
     seen.add(bvid);
     seeds.push({
       bvid,

@@ -245,7 +245,9 @@ all must-ship slices + ASR go/no-go
 - 固定“随机探索、跨区漫游、冷门收藏、UP 主考古”。
 - 每卡展示来源、入选原因和是否使用真实 B 站候选。
 - 随机探索本地近期种子与真实相关候选。
-- 跨区漫游复用固定公开分区目录和 `/x/web-interface/dynamic/region` 候选源；按最近最多 7 天有效观看确定 top-3 高频 RID，无近期证据时等概率选择分区，并公开本轮分区。
+- 跨区漫游复用固定公开分区目录和 `/x/web-interface/newlist` 候选源；按最近最多 7 天有效观看确定 top-3 高频 RID，无近期证据时等概率选择分区，并公开本轮分区。
+- 2026-07-17 无 Cookie 复核确认旧 `/x/web-interface/dynamic/region` 返回 HTTP 200、`code=-404`、`data=null`，不得继续作为现行候选源；同日分别以 `rid=4` 和 `rid=36`、`pn=1&ps=10` 请求新接口，均返回 `code=0`、`data.archives=10`，首项均具有 `bvid/title/owner/duration/pubdate/tname`。
+- 分区候选只读取 `data.archives`；缺少可打开视频身份或非空标题的条目不得入池。接口失败、空池或必要字段缺失时显示分区候选空态，不改用历史、收藏或其它盲盒来源。
 - 无效 BVID、观看时间、时长、进度或完成度记录不参与跨区频率统计。
 - 冷门收藏使用本地收藏，UP 主考古使用公开较早投稿。
 - 候选模块保持浏览器运行时可加载，不能再次出现 `document is not defined`。

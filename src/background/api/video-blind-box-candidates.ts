@@ -9,7 +9,7 @@ import type { WatchHistoryRecord } from '../../shared/types/watch-event';
 
 const DAY_MS = 86_400_000;
 const RELATED_VIDEO_ENDPOINT = '/x/web-interface/archive/related';
-const REGION_DYNAMIC_ENDPOINT = '/x/web-interface/dynamic/region';
+const REGION_NEWLIST_ENDPOINT = '/x/web-interface/newlist';
 const CREATOR_ARCHIVE_ENDPOINT = '/x/space/wbi/arc/search';
 const DEFAULT_SEED_LIMIT = 3;
 const DEFAULT_PER_SEED_LIMIT = 20;
@@ -75,11 +75,18 @@ export interface CrossRegionCandidatePool {
   excludedInvalidCandidateCount: number;
 }
 
-interface CrossRegionCandidateOptions {
+export type CrossRegionCandidateRequest = (
+  endpoint: string,
+  params: Record<string, string>,
+  signal?: AbortSignal,
+) => Promise<BiliRegionResponse>;
+
+export interface CrossRegionCandidateOptions {
   nowMs?: number;
   pageSize?: number;
   random?: BlindBoxRandomSource;
   signal?: AbortSignal;
+  request?: CrossRegionCandidateRequest;
 }
 
 export type CreatorArchiveCandidatePoolStatus =
@@ -154,9 +161,6 @@ interface BiliRegionArchive {
 
 interface BiliRegionResponse {
   archives?: BiliRegionArchive[];
-  items?: BiliRegionArchive[];
-  list?: BiliRegionArchive[];
-  result?: BiliRegionArchive[];
 }
 
 interface SpaceArchiveItem {
@@ -309,18 +313,16 @@ export async function fetchCrossRegionCandidatePool(
   const candidatesByBvid = new Map<string, ExperimentVideoCandidate>();
   let excludedInvalidCandidateCount = 0;
   const checkedRegionCount = 1;
-  const { biliGet } = await import('./client.ts');
+  const request = options.request ?? requestCrossRegionCandidates;
 
   try {
-    const data = await biliGet<BiliRegionResponse>(
-      REGION_DYNAMIC_ENDPOINT,
+    const data = await request(
+      REGION_NEWLIST_ENDPOINT,
       {
         rid: String(selection.selectedRegion.rid),
         pn: '1',
         ps: String(options.pageSize ?? REGION_PAGE_SIZE),
       },
-      2,
-      false,
       options.signal,
     );
     for (const archive of getRegionArchives(data)) {
@@ -708,10 +710,16 @@ function resolveRegion(label: string): PublicRegion | null {
 
 function getRegionArchives(data: BiliRegionResponse): BiliRegionArchive[] {
   if (Array.isArray(data.archives)) return data.archives;
-  if (Array.isArray(data.items)) return data.items;
-  if (Array.isArray(data.list)) return data.list;
-  if (Array.isArray(data.result)) return data.result;
   return [];
+}
+
+async function requestCrossRegionCandidates(
+  endpoint: string,
+  params: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<BiliRegionResponse> {
+  const { biliGet } = await import('./client.ts');
+  return biliGet<BiliRegionResponse>(endpoint, params, 2, false, signal);
 }
 
 function toRegionVideoCandidate(
@@ -719,13 +727,13 @@ function toRegionVideoCandidate(
   region: PublicRegion,
 ): ExperimentVideoCandidate | null {
   const bvid = cleanText(archive.bvid);
-  if (!isLikelyBvid(bvid)) return null;
   const title = stripHtml(cleanText(archive.title));
+  if (!isLikelyBvid(bvid) || !title) return null;
   return {
     bvid,
     avid: positiveNumber(archive.aid),
     cid: positiveNumber(archive.cid),
-    title: title || bvid,
+    title,
     authorName: cleanText(archive.owner?.name) || cleanText(archive.author) || '未知 UP',
     authorMid: positiveNumber(archive.owner?.mid),
     cover: normalizeImageUrl(archive.pic || archive.cover || archive.first_frame),

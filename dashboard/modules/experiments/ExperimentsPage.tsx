@@ -6,6 +6,7 @@ import { LoadingSkeleton } from '../../components/LoadingSkeleton';
 import { EmptyState } from '../../components/EmptyState';
 import { ErrorBoundary } from '../../components/ErrorBoundary';
 import { BILI_BLUE, BILI_PINK } from '../../../src/shared/constants';
+import { formatExperimentLoadError } from './experiment-copy';
 
 const CARD_ACCENT: Record<ExperimentBlindBox['id'], string> = {
   random_explore: '#A78BFA',
@@ -225,14 +226,6 @@ export function ExperimentsPage() {
       </div>
     </ErrorBoundary>
   );
-}
-
-function formatExperimentLoadError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (/document is not defined|window is not defined|ReferenceError/i.test(message)) {
-    return '盲盒暂时无法生成，请刷新后重试。';
-  }
-  return message || '盲盒数据读取失败，请稍后重试。';
 }
 
 function sourceMetaStyle(): Record<string, string> {
