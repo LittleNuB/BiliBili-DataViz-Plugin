@@ -322,13 +322,17 @@ export async function undoDynamicBillCreatorLessReminder(
         db.dynamicBillItems.where('billKey').equals(action.billKey).first(),
         db.dynamicBillCreatorPauses.where('creatorMid').equals(action.creatorMid).first(),
       ]);
-      if (!item || !pauseMatchesAction(pause, action) || !itemMatchesPendingAction(item, action)) {
+      if (!item || !itemMatchesPendingAction(item, action)) {
         return { status: 'conflict' };
       }
+      const ownsCurrentPause = pauseMatchesAction(pause, action);
 
       const restoredItem = restoreItemBeforeFeedback(item, action);
       await db.dynamicBillItems.put(restoredItem);
-      if (action.previousPause) {
+      if (!ownsCurrentPause) {
+        // A later settings restore or pause write already changed this creator's pause.
+        // Keep that later user-visible pause state and only undo this bill item's status.
+      } else if (action.previousPause) {
         await db.dynamicBillCreatorPauses.put({ ...action.previousPause });
       } else if (pause?.id !== undefined) {
         await db.dynamicBillCreatorPauses.delete(pause.id);
@@ -354,20 +358,19 @@ export async function restoreDynamicBillCreatorReminder(
 ): Promise<DynamicBillCreatorPauseView | null> {
   await ensureDynamicBill013Migration();
   await finalizeExpiredDynamicBillFeedbackActions(now);
-  const pause = await db.dynamicBillCreatorPauses
-    .where('creatorMid')
-    .equals(creatorMid)
-    .first();
-  if (!pause || pause.expiresAt <= now) {
-    if (pause?.id !== undefined) {
-      await db.dynamicBillCreatorPauses.delete(pause.id);
+  return db.transaction('rw', db.dynamicBillCreatorPauses, async () => {
+    const pause = await db.dynamicBillCreatorPauses
+      .where('creatorMid')
+      .equals(creatorMid)
+      .first();
+    if (!pause) return null;
+
+    const view = pause.expiresAt > now ? toCreatorPauseView(pause, now) : null;
+    if (pause.id !== undefined) {
+      await deleteCreatorPauseIfUnchanged(pause);
     }
-    return null;
-  }
-  if (pause.id !== undefined) {
-    await db.dynamicBillCreatorPauses.delete(pause.id);
-  }
-  return toCreatorPauseView(pause, now);
+    return view;
+  });
 }
 
 export async function getDynamicBillCreatorReviewPrompts(now = Date.now()): Promise<DynamicBillCreatorReviewPromptView[]> {
@@ -383,27 +386,29 @@ export async function resolveDynamicBillCreatorReviewPrompt(
   await ensureDynamicBill013Migration();
   await finalizeExpiredDynamicBillFeedbackActions(now);
 
-  const prompt = await db.dynamicBillCreatorReviewPrompts
-    .where('creatorMid')
-    .equals(creatorMid)
-    .first();
-  if (!prompt || prompt.state !== 'pending') {
-    return { status: 'not_found' };
-  }
-  const nextPrompt: DynamicBillCreatorReviewPromptRecord = {
-    ...prompt,
-    state: action === 'open_space' ? 'opened' : 'dismissed',
-    decision: action,
-    resolvedAt: now,
-    updatedAt: now,
-  };
-  await db.dynamicBillCreatorReviewPrompts.put(nextPrompt);
-  const view = toCreatorReviewPromptView(prompt);
-  return {
-    status: 'resolved',
-    prompt: view,
-    url: action === 'open_space' ? creatorSpaceUrl(creatorMid) : undefined,
-  };
+  return db.transaction('rw', db.dynamicBillCreatorReviewPrompts, async () => {
+    const prompt = await db.dynamicBillCreatorReviewPrompts
+      .where('creatorMid')
+      .equals(creatorMid)
+      .first();
+    if (!prompt || prompt.state !== 'pending') {
+      return { status: 'not_found' };
+    }
+    const nextPrompt: DynamicBillCreatorReviewPromptRecord = {
+      ...prompt,
+      state: action === 'open_space' ? 'opened' : 'dismissed',
+      decision: action,
+      resolvedAt: now,
+      updatedAt: now,
+    };
+    await db.dynamicBillCreatorReviewPrompts.put(nextPrompt);
+    const view = toCreatorReviewPromptView(prompt);
+    return {
+      status: 'resolved',
+      prompt: view,
+      url: action === 'open_space' ? creatorSpaceUrl(creatorMid) : undefined,
+    };
+  });
 }
 
 export async function finalizeExpiredDynamicBillFeedbackActions(
@@ -976,6 +981,29 @@ function pauseMatchesAction(
     && pause.expiresAt === action.pauseExpiresAt
     && pause.startedAt === action.pauseStartedAt
     && pause.source === 'user';
+}
+
+async function deleteCreatorPauseIfUnchanged(
+  pause: DynamicBillCreatorPauseRecord,
+): Promise<boolean> {
+  if (pause.id === undefined) return false;
+  const current = await db.dynamicBillCreatorPauses.get(pause.id);
+  if (!current || !sameCreatorPauseIdentity(current, pause)) return false;
+  await db.dynamicBillCreatorPauses.delete(pause.id);
+  return true;
+}
+
+function sameCreatorPauseIdentity(
+  current: DynamicBillCreatorPauseRecord,
+  expected: DynamicBillCreatorPauseRecord,
+): boolean {
+  return current.id === expected.id
+    && current.creatorMid === expected.creatorMid
+    && current.startedAt === expected.startedAt
+    && current.expiresAt === expected.expiresAt
+    && current.source === expected.source
+    && current.billKey === expected.billKey
+    && current.actionKey === expected.actionKey;
 }
 
 function itemMatchesPendingAction(

@@ -78,6 +78,7 @@ export function DynamicBillPage() {
   const [generating, setGenerating] = useState(false);
   const [explaining, setExplaining] = useState(false);
   const [processingBillKey, setProcessingBillKey] = useState("");
+  const [reviewPromptResolvingMid, setReviewPromptResolvingMid] = useState<number | null>(null);
   const [notice, setNotice] = useState("");
   const [feedbackState, setFeedbackState] =
     useState<DynamicBillFeedbackStateView>(EMPTY_FEEDBACK_STATE);
@@ -276,6 +277,7 @@ export function DynamicBillPage() {
   }
 
   async function handleReviewPromptOpen(prompt: DynamicBillCreatorReviewPromptView) {
+    setReviewPromptResolvingMid(prompt.creatorMid);
     setNotice("");
     try {
       await requestSW("OPEN_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT", {
@@ -285,10 +287,13 @@ export function DynamicBillPage() {
       setNotice(`已打开「${prompt.creatorName}」的 B 站主页；Bili-Bill 不会修改关注关系。`);
     } catch (error) {
       setNotice(dynamicBillFailureCopy("openVideo", error));
+    } finally {
+      setReviewPromptResolvingMid(null);
     }
   }
 
   async function handleReviewPromptDismiss(prompt: DynamicBillCreatorReviewPromptView) {
+    setReviewPromptResolvingMid(prompt.creatorMid);
     setNotice("");
     try {
       await requestSW("DISMISS_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT", {
@@ -298,6 +303,8 @@ export function DynamicBillPage() {
       setNotice(`已暂不处理「${prompt.creatorName}」；当前 30 天暂停不变。`);
     } catch (error) {
       setNotice(dynamicBillFailureCopy("markProcessed", error));
+    } finally {
+      setReviewPromptResolvingMid(null);
     }
   }
 
@@ -486,6 +493,7 @@ export function DynamicBillPage() {
       </section>
 
       <FeedbackStateDock
+        resolvingCreatorMid={reviewPromptResolvingMid}
         state={feedbackState}
         onUndo={handleUndoLessReminder}
         onOpenPrompt={handleReviewPromptOpen}
@@ -731,11 +739,13 @@ function FeedbackStateDock({
   onDismissPrompt,
   onOpenPrompt,
   onUndo,
+  resolvingCreatorMid,
   state,
 }: {
   onDismissPrompt: (prompt: DynamicBillCreatorReviewPromptView) => void;
   onOpenPrompt: (prompt: DynamicBillCreatorReviewPromptView) => void;
   onUndo: (action: DynamicBillPendingFeedbackActionView) => void;
+  resolvingCreatorMid: number | null;
   state: DynamicBillFeedbackStateView;
 }) {
   if (state.pendingActions.length === 0 && state.reviewPrompts.length === 0) {
@@ -756,22 +766,37 @@ function FeedbackStateDock({
           </div>
         </section>
       ))}
-      {state.reviewPrompts.map((prompt) => (
-        <section className="dynamic-bill-creator-review" key={prompt.creatorMid}>
-          <strong>要检查「{prompt.creatorName}」的关注关系吗？</strong>
-          <span>
-            你已经 3 次选择少提醒这个 UP。Bili-Bill 只会打开主页或暂不处理，不会自动取关。
-          </span>
-          <div className="dynamic-bill-feedback-actions">
-            <button type="button" onClick={() => onOpenPrompt(prompt)}>
-              打开 UP 主页
-            </button>
-            <button type="button" onClick={() => onDismissPrompt(prompt)}>
-              暂不处理
-            </button>
-          </div>
-        </section>
-      ))}
+      {state.reviewPrompts.map((prompt) => {
+        const isResolving = resolvingCreatorMid === prompt.creatorMid;
+        return (
+          <section className="dynamic-bill-creator-review" key={prompt.creatorMid}>
+            <strong>要检查「{prompt.creatorName}」的关注关系吗？</strong>
+            <span>
+              你已经 3 次选择少提醒这个 UP。Bili-Bill 只会打开主页或暂不处理，不会自动取关。
+            </span>
+            <div className="dynamic-bill-feedback-actions">
+              <button
+                type="button"
+                disabled={isResolving}
+                aria-busy={isResolving}
+                data-testid="dynamic-bill-review-open"
+                onClick={() => onOpenPrompt(prompt)}
+              >
+                {isResolving ? "处理中..." : "打开 UP 主页"}
+              </button>
+              <button
+                type="button"
+                disabled={isResolving}
+                aria-busy={isResolving}
+                data-testid="dynamic-bill-review-dismiss"
+                onClick={() => onDismissPrompt(prompt)}
+              >
+                {isResolving ? "处理中..." : "暂不处理"}
+              </button>
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }

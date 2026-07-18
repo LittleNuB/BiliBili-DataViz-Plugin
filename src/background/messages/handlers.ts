@@ -363,9 +363,9 @@ function contextMatchesVideoUrlIdentity(
     && context.currentPart.page === identity.page;
 }
 
-async function handleRequest<T>(
+export async function handleRequest<T>(
   request: BiliVizRequest,
-  requestTabId: number | null,
+  requestTabId: number | null = null,
 ): Promise<BiliVizResponse<T>> {
   if (DYNAMIC_BILL_MIGRATION_GATED_ACTIONS.has(request.action)) {
     await ensureDynamicBill013Migration();

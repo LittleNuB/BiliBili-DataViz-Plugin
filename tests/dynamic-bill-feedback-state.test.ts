@@ -26,6 +26,7 @@ const { default: Dexie } = await import('dexie');
 const { db } = await import('../src/background/storage/db.ts');
 const migration = await import('../src/background/dynamic-bill/migration.ts');
 const dynamicBillRepo = await import('../src/background/storage/dynamic-bill-repo.ts');
+const messageHandlers = await import('../src/background/messages/handlers.ts');
 const {
   DYNAMIC_BILL_CREATOR_LESS_REMINDER_UNDO_WINDOW_MS,
 } = await import('../src/background/storage/dynamic-bill-repo.ts');
@@ -33,6 +34,22 @@ const {
 const DB_NAME = 'BiliAnalyticsDB';
 const DAY_MS = 86_400_000;
 const NOW = Date.UTC(2026, 6, 18, 12, 0, 0);
+const openedTabs: string[] = [];
+
+(globalThis as unknown as {
+  chrome: {
+    tabs: {
+      create: (options: { url?: string }) => Promise<{ id: number }>;
+    };
+  };
+}).chrome = {
+  tabs: {
+    async create(options: { url?: string }) {
+      if (options.url) openedTabs.push(options.url);
+      return { id: openedTabs.length };
+    },
+  },
+};
 
 test.beforeEach(async () => {
   db.close();
@@ -187,6 +204,107 @@ test('prompt buttons resolve once and do not change the current pause', { concur
   assert.equal(pauseAfter?.source, 'user');
 });
 
+test('concurrent prompt opens resolve once and create at most one tab through the handler', { concurrency: false }, async () => {
+  await createPendingReviewPrompt(109, NOW);
+  openedTabs.length = 0;
+
+  const [first, second] = await Promise.all([
+    messageHandlers.handleRequest({
+      action: 'OPEN_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT',
+      params: { creatorMid: 109 },
+    }),
+    messageHandlers.handleRequest({
+      action: 'OPEN_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT',
+      params: { creatorMid: 109 },
+    }),
+  ]);
+  const results = [first.data, second.data] as Array<{ status: string; url?: string }>;
+
+  assert.equal(results.filter(result => result.status === 'resolved').length, 1);
+  assert.equal(results.filter(result => result.status === 'not_found').length, 1);
+  assert.deepEqual(openedTabs, ['https://space.bilibili.com/109']);
+  assert.equal((await db.dynamicBillCreatorReviewPrompts.where('creatorMid').equals(109).first())?.state, 'opened');
+});
+
+test('concurrent prompt open and dismiss are mutually exclusive', { concurrency: false }, async () => {
+  await createPendingReviewPrompt(110, NOW);
+
+  const results = await Promise.all([
+    dynamicBillRepo.resolveDynamicBillCreatorReviewPrompt(110, 'open_space', NOW + 100_000),
+    dynamicBillRepo.resolveDynamicBillCreatorReviewPrompt(110, 'dismiss', NOW + 100_001),
+  ]);
+  const resolved = results.filter(result => result.status === 'resolved');
+  const stored = await db.dynamicBillCreatorReviewPrompts.where('creatorMid').equals(110).first();
+
+  assert.equal(resolved.length, 1);
+  assert.equal(results.filter(result => result.status === 'not_found').length, 1);
+  assert.ok(stored?.state === 'opened' || stored?.state === 'dismissed');
+  assert.equal(stored?.decision, stored?.state === 'opened' ? 'open_space' : 'dismiss');
+});
+
+test('settings restore and a new less reminder serialize without deleting a later pause', { concurrency: false }, async () => {
+  await seedItem({ creatorMid: 111 });
+  await db.dynamicBillCreatorPauses.put({
+    creatorMid: 111,
+    creatorName: 'UP 111',
+    startedAt: NOW - DAY_MS,
+    expiresAt: NOW + 10 * DAY_MS,
+    source: 'migration',
+    createdAt: NOW - DAY_MS,
+    updatedAt: NOW - DAY_MS,
+  });
+
+  const [restored, applied] = await Promise.all([
+    dynamicBillRepo.restoreDynamicBillCreatorReminder(111, NOW + 1),
+    dynamicBillRepo.applyDynamicBillCreatorLessReminder('bill-111', {
+      idempotencyKey: 'restore-apply-race',
+      now: NOW + 2,
+    }),
+  ]);
+  const finalPause = await db.dynamicBillCreatorPauses.where('creatorMid').equals(111).first();
+
+  assert.ok(applied?.action);
+  if (restored?.source === 'migration') {
+    assert.equal(finalPause?.source, 'user');
+    assert.equal(finalPause?.actionKey, applied.action.actionKey);
+    assert.equal(finalPause?.expiresAt, NOW + 2 + 30 * DAY_MS);
+  } else {
+    assert.equal(restored?.source, 'user');
+    assert.equal(finalPause, undefined);
+  }
+});
+
+test('undo after settings restore does not resurrect or overwrite the restored pause state', { concurrency: false }, async () => {
+  await seedItem({ creatorMid: 112, status: 'opened', openedAt: NOW - 4_000 });
+  await db.dynamicBillCreatorPauses.put({
+    creatorMid: 112,
+    creatorName: 'UP 112',
+    startedAt: NOW - DAY_MS,
+    expiresAt: NOW + 10 * DAY_MS,
+    source: 'migration',
+    createdAt: NOW - DAY_MS,
+    updatedAt: NOW - DAY_MS,
+  });
+  const applied = await dynamicBillRepo.applyDynamicBillCreatorLessReminder('bill-112', {
+    idempotencyKey: 'restore-undo-race',
+    now: NOW,
+  });
+  assert.ok(applied?.action);
+
+  const [restored, undo] = await Promise.all([
+    dynamicBillRepo.restoreDynamicBillCreatorReminder(112, NOW + 1),
+    dynamicBillRepo.undoDynamicBillCreatorLessReminder(applied.action.undoToken, NOW + 2),
+  ]);
+  const item = await db.dynamicBillItems.where('billKey').equals('bill-112').first();
+
+  assert.ok(restored?.source === 'user' || restored?.source === 'migration');
+  assert.equal(undo.status, 'undone');
+  assert.equal(await db.dynamicBillCreatorPauses.where('creatorMid').equals(112).count(), 0);
+  assert.equal(item?.status, 'opened');
+  assert.equal(item?.openedAt, NOW - 4_000);
+  assert.equal((await db.dynamicBillFeedbackActions.where('actionKey').equals(applied.action.actionKey).first())?.state, 'undone');
+});
+
 test('settings restore deletes only the pause; expiry also cleans active pause state', { concurrency: false }, async () => {
   await seedItem({ creatorMid: 106 });
   const applied = await dynamicBillRepo.applyDynamicBillCreatorLessReminder('bill-106', {
@@ -245,6 +363,14 @@ async function finalizeAction(creatorMid: number, billKey: string, now: number):
   await dynamicBillRepo.getDynamicBillFeedbackState(
     now + DYNAMIC_BILL_CREATOR_LESS_REMINDER_UNDO_WINDOW_MS + 1,
   );
+}
+
+async function createPendingReviewPrompt(creatorMid: number, now: number): Promise<void> {
+  await finalizeAction(creatorMid, `bill-${creatorMid}-a`, now);
+  await dynamicBillRepo.restoreDynamicBillCreatorReminder(creatorMid, now + 20_000);
+  await finalizeAction(creatorMid, `bill-${creatorMid}-b`, now + 40_000);
+  await dynamicBillRepo.restoreDynamicBillCreatorReminder(creatorMid, now + 60_000);
+  await finalizeAction(creatorMid, `bill-${creatorMid}-c`, now + 80_000);
 }
 
 async function seedItem(options: {
