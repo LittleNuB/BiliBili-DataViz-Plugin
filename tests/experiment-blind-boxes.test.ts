@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { formatExperimentLoadError } from '../dashboard/modules/experiments/experiment-copy.ts';
 import {
+  buildClaimedExperimentData,
   buildExperimentData,
   fetchRandomExploreCandidatePool,
   getSuccessfulBlindBoxDrawBvids,
@@ -23,6 +24,7 @@ import {
   BLIND_BOX_DRAW_HISTORY_STORAGE_KEY,
   clearBlindBoxDrawHistory,
   collectBlindBoxDrawHistoryUsage,
+  getBlindBoxDrawHistoryEpoch,
   getBlindBoxRecentDrawnBvids,
   mergeBlindBoxDrawHistory,
   normalizeBlindBoxDrawHistory,
@@ -624,6 +626,28 @@ test('overlapping blind-box history records retain both batches in newest-first 
   assert.deepEqual(await getBlindBoxRecentDrawnBvids(storage), secondResult);
 });
 
+test('concurrent blind-box generations claim from latest history and avoid duplicate BVIDs', async () => {
+  const storage = createMemoryStorage();
+  const drawHistoryEpoch = getBlindBoxDrawHistoryEpoch();
+  const generate = () => buildClaimedExperimentData([], [], new Map(), NOW_MS, {
+    random: () => 0,
+    randomExplorePool: createRelatedPool([
+      createRelatedCandidate('BV1CONCUR01', '并发候选一'),
+      createRelatedCandidate('BV1CONCUR02', '并发候选二'),
+    ]),
+    crossRegionPool: emptyCrossRegionPool(),
+    creatorArchivePool: emptyCreatorArchivePool(),
+  }, drawHistoryEpoch, storage);
+
+  const [first, second] = await Promise.all([generate(), generate()]);
+  const firstBvid = first.blindBoxes.find(box => box.id === 'random_explore')?.video?.bvid;
+  const secondBvid = second.blindBoxes.find(box => box.id === 'random_explore')?.video?.bvid;
+
+  assert.deepEqual(new Set([firstBvid, secondBvid]), new Set(['BV1CONCUR01', 'BV1CONCUR02']));
+  assert.notEqual(firstBvid, secondBvid);
+  assert.deepEqual(await getBlindBoxRecentDrawnBvids(storage), [secondBvid, firstBvid]);
+});
+
 test('blind-box history clear waits for an earlier record and removes its completed result', async () => {
   const setStarted = createDeferred<void>();
   const releaseSet = createDeferred<void>();
@@ -650,6 +674,36 @@ test('blind-box history clear waits for an earlier record and removes its comple
   assert.deepEqual(await record, ['BV1RECORD01', 'BV1BASE0001']);
   assert.equal(await clear, 2);
   assert.equal(removeCallsBeforeRelease, 0, 'clear must wait for the earlier write');
+  assert.deepEqual(await getBlindBoxRecentDrawnBvids(storage), []);
+});
+
+test('blind-box generation started before clear does not repopulate history after delayed candidates finish', async () => {
+  const storage = createMemoryStorage({
+    [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1BEFORECLR'],
+  });
+  const releaseCandidates = createDeferred<void>();
+  const drawHistoryEpoch = getBlindBoxDrawHistoryEpoch();
+  const generation = (async () => {
+    await releaseCandidates.promise;
+    return buildClaimedExperimentData([], [], new Map(), NOW_MS, {
+      random: () => 0,
+      randomExplorePool: createRelatedPool([
+        createRelatedCandidate('BV1AFTERCLR1', '清理后的迟到候选'),
+      ]),
+      crossRegionPool: emptyCrossRegionPool(),
+      creatorArchivePool: emptyCreatorArchivePool(),
+    }, drawHistoryEpoch, storage);
+  })();
+
+  assert.equal(await clearBlindBoxDrawHistory(storage), 1);
+  releaseCandidates.resolve();
+  const data = await generation;
+
+  assert.equal(data.blindBoxes.find(box => box.id === 'random_explore')?.video?.bvid, 'BV1AFTERCLR1');
+  assert.deepEqual(await collectBlindBoxDrawHistoryUsage(storage), {
+    count: 0,
+    usageBytes: 0,
+  });
   assert.deepEqual(await getBlindBoxRecentDrawnBvids(storage), []);
 });
 
@@ -760,14 +814,21 @@ test('mock QA fixture keeps the four failure states and local favorite source co
   const mockSource = readFileSync(new URL('./experiment-blind-boxes.mock.html', import.meta.url), 'utf8');
   const mockVisibleText = htmlVisibleText(mockSource);
 
-  assert.match(mockSource, /data-box-id="cold_favorite_unopenable"/);
-  assert.match(mockVisibleText, /没有可用种子/);
-  assert.match(mockVisibleText, /没有真实候选/);
-  assert.match(mockVisibleText, /接口暂时失败/);
-  assert.match(mockVisibleText, /候选不可打开/);
-  assert.match(mockVisibleText, /冷门收藏/);
-  assert.match(mockVisibleText, /本卡不使用；固定从本地收藏回访/);
-  assert.doesNotMatch(mockVisibleText, /隐藏收藏/);
+  assert.match(mockSource, /import \{ h, render \} from 'preact'/);
+  assert.match(mockSource, /import \{ ExperimentsPage \} from '\/dashboard\/modules\/experiments\/ExperimentsPage\.tsx'/);
+  assert.match(mockSource, /globalThis\.chrome\s*=\s*\{/);
+  assert.match(mockSource, /sendMessage:\s*async message/);
+  assert.match(mockSource, /message\?\.action !== 'GET_EXPERIMENT_DATA'/);
+  assert.match(mockSource, /render\(h\(ExperimentsPage, \{\}\), document\.getElementById\('app'\)\)/);
+  assert.doesNotMatch(mockSource, /<article\b/);
+  assert.match(mockSource, /createReadyExperimentData/);
+  assert.match(mockSource, /createFailureExperimentData/);
+  assert.match(mockSource, /没有可用种子/);
+  assert.match(mockSource, /没有真实候选/);
+  assert.match(mockSource, /接口暂时失败/);
+  assert.match(mockSource, /候选打不开/);
+  assert.match(mockSource, /本卡不使用；固定从本地收藏回访。/);
+  assert.doesNotMatch(mockSource, /隐藏收藏/);
   assertNoForbiddenVisibleText(mockVisibleText);
 });
 

@@ -32,6 +32,13 @@ const dynamicBillRepo = await import('../src/background/storage/dynamic-bill-rep
 const { buildDynamicBillExplanationContent } = await import('../src/background/dynamic-bill/explanation-content.ts');
 const { getRegisteredLocalDataCategories } = await import('../src/background/storage/local-data-category-registry.ts');
 const localDataRepo = await import('../src/background/storage/local-data-privacy-repo.ts');
+const { buildClaimedExperimentData } = await import('../src/background/analytics/suggestions.ts');
+const {
+  BLIND_BOX_DRAW_HISTORY_STORAGE_KEY,
+  collectBlindBoxDrawHistoryUsage,
+  getBlindBoxDrawHistoryEpoch,
+  getBlindBoxRecentDrawnBvids,
+} = await import('../src/background/storage/blind-box-draw-history-repo.ts');
 const { runLocalDataCategoryLifecycle } = await import('../src/shared/local-data-category-contract.ts');
 const { LOCAL_DATA_CLEAR_CONFIRMATION } = await import('../src/shared/local-data-privacy.ts');
 const { DEFAULT_CONFIG } = await import('../src/shared/types/config.ts');
@@ -931,6 +938,58 @@ test('clear all leaves every table and local setting untouched when migration fa
   assert.equal(sideEffects.storageSet, 0);
   assert.equal(sideEffects.storageRemove, 0);
   assert.equal(sideEffects.storageClear, 0);
+});
+
+test('clear all prevents an earlier blind-box generation from restoring draw history', async () => {
+  await seedLegacyDatabase();
+  storageData.set(BLIND_BOX_DRAW_HISTORY_STORAGE_KEY, ['BV1BEFORECLR']);
+  let releaseCandidates = () => {};
+  const candidatesReady = new Promise<void>(resolve => {
+    releaseCandidates = resolve;
+  });
+  const generationEpoch = getBlindBoxDrawHistoryEpoch();
+  const generation = (async () => {
+    await candidatesReady;
+    return buildClaimedExperimentData([], [], new Map(), Date.UTC(2026, 5, 13, 12, 0, 0), {
+      random: () => 0,
+      randomExplorePool: {
+        sourceKind: 'bilibili_related',
+        sourceLabel: '相关视频候选',
+        seedCount: 1,
+        candidates: [{
+          sourceKind: 'bilibili_related',
+          sourceLabel: '相关视频候选',
+          seedBvid: 'BV1SEED0001',
+          seedTitle: '种子视频',
+          bvid: 'BV1AFTERCLR1',
+          avid: 12345,
+          cid: 54321,
+          title: '清理后的迟到候选',
+          authorName: '公开候选 UP',
+          authorMid: 67890,
+          cover: 'https://example.com/related.jpg',
+          duration: 960,
+          pubtime: 1_717_000_000,
+          tagName: '科技',
+          url: 'https://www.bilibili.com/video/BV1AFTERCLR1',
+        }],
+        failures: [],
+      },
+    }, generationEpoch);
+  })();
+
+  const clearResult = await localDataRepo.clearAllLocalData(LOCAL_DATA_CLEAR_CONFIRMATION);
+  assert.equal(clearResult.cleared.blindBoxDrawHistory, 1);
+  releaseCandidates();
+  const generated = await generation;
+
+  assert.equal(
+    generated.blindBoxes.find(box => box.id === 'random_explore')?.video?.bvid,
+    'BV1AFTERCLR1',
+  );
+  assert.equal((await collectBlindBoxDrawHistoryUsage(chrome.storage.local)).count, 0);
+  assert.deepEqual(await getBlindBoxRecentDrawnBvids(), []);
+  assert.equal(storageData.has(BLIND_BOX_DRAW_HISTORY_STORAGE_KEY), false);
 });
 
 test('every protected entry fails with one Chinese error before reads, writes, or network work', async () => {

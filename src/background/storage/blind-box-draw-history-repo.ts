@@ -14,7 +14,17 @@ export interface BlindBoxDrawHistoryStorage {
 
 export type BlindBoxDrawHistoryReadStorage = Pick<BlindBoxDrawHistoryStorage, 'get' | 'remove'>;
 
+interface BlindBoxDrawHistoryClaim<T> {
+  value: T;
+  drawnBvids: string[];
+}
+
 let mutationTail: Promise<void> = Promise.resolve();
+let drawHistoryEpoch = 0;
+
+export function getBlindBoxDrawHistoryEpoch(): number {
+  return drawHistoryEpoch;
+}
 
 export async function getBlindBoxRecentDrawnBvids(
   storage: Pick<BlindBoxDrawHistoryStorage, 'get'> = chrome.storage.local,
@@ -35,6 +45,38 @@ export async function recordBlindBoxDrawnBvids(
   });
 }
 
+export async function claimBlindBoxDrawHistory<T>(
+  generationEpoch: number,
+  claim: (recentDrawnBvids: string[]) => BlindBoxDrawHistoryClaim<T> | Promise<BlindBoxDrawHistoryClaim<T>>,
+  storage: BlindBoxDrawHistoryStorage = chrome.storage.local,
+): Promise<T> {
+  return enqueueMutation(async () => {
+    const current = await readBlindBoxRecentDrawnBvids(storage);
+    const result = await claim(current);
+    if (generationEpoch !== drawHistoryEpoch) {
+      return result.value;
+    }
+
+    const drawnBvids = normalizeBlindBoxDrawHistory(result.drawnBvids);
+    if (drawnBvids.length > 0) {
+      const next = mergeBlindBoxDrawHistory(current, drawnBvids);
+      await storage.set({ [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: next });
+    }
+    return result.value;
+  });
+}
+
+export async function coordinateBlindBoxDrawHistoryClear<T>(
+  clear: (recentDrawnBvids: readonly string[]) => Promise<T>,
+  storage: Pick<BlindBoxDrawHistoryStorage, 'get'> = chrome.storage.local,
+): Promise<T> {
+  return enqueueMutation(async () => {
+    drawHistoryEpoch += 1;
+    const current = await readBlindBoxRecentDrawnBvids(storage);
+    return clear(current);
+  });
+}
+
 export async function collectBlindBoxDrawHistoryUsage(
   storage: Pick<BlindBoxDrawHistoryStorage, 'get'>,
 ): Promise<LocalDataCategoryUsage> {
@@ -48,11 +90,10 @@ export async function collectBlindBoxDrawHistoryUsage(
 export async function clearBlindBoxDrawHistory(
   storage: BlindBoxDrawHistoryReadStorage,
 ): Promise<number> {
-  return enqueueMutation(async () => {
-    const before = await readBlindBoxRecentDrawnBvids(storage);
+  return coordinateBlindBoxDrawHistoryClear(async before => {
     await storage.remove([BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]);
     return before.length;
-  });
+  }, storage);
 }
 
 export async function readBlindBoxDrawHistoryAfterClear(

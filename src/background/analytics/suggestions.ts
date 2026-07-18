@@ -26,8 +26,9 @@ import type {
 } from '../api/video-blind-box-candidates.ts';
 import { db } from '../storage/db.ts';
 import {
-  getBlindBoxRecentDrawnBvids,
-  recordBlindBoxDrawnBvids,
+  claimBlindBoxDrawHistory,
+  getBlindBoxDrawHistoryEpoch,
+  type BlindBoxDrawHistoryStorage,
 } from '../storage/blind-box-draw-history-repo.ts';
 import { getFavoriteItems, getSmartFavoriteIndexMap } from '../storage/favorite-repo.ts';
 
@@ -84,12 +85,12 @@ type BlindBoxBoundaryMeta = Pick<
 export async function getExperimentData(options: ExperimentRuntimeOptions = {}): Promise<ExperimentData> {
   const nowMs = Date.now();
   const random = options.random ?? Math.random;
-  const [records, favorites, smartIndexByItemKey, followedCreators, recentDrawnBvids] = await Promise.all([
+  const drawHistoryEpoch = getBlindBoxDrawHistoryEpoch();
+  const [records, favorites, smartIndexByItemKey, followedCreators] = await Promise.all([
     db.watchHistory.toArray(),
     getFavoriteItems(),
     getSmartFavoriteIndexMap(),
     db.followedCreators.toArray().then(creators => creators.filter(creator => creator.isActive !== false)),
-    getBlindBoxRecentDrawnBvids(),
   ]);
   const [randomExplorePool, crossRegionPool, creatorArchivePool] = await Promise.all([
     fetchRandomExploreCandidatePool(records, nowMs),
@@ -99,18 +100,36 @@ export async function getExperimentData(options: ExperimentRuntimeOptions = {}):
       .catch(error => buildCreatorArchiveSourceFailure(followedCreators, nowMs, error, { random })),
   ]);
 
-  const data = buildExperimentData(records, favorites, smartIndexByItemKey, nowMs, {
+  return buildClaimedExperimentData(records, favorites, smartIndexByItemKey, nowMs, {
     random,
     randomExplorePool,
     crossRegionPool,
     creatorArchivePool,
-    recentDrawnBvids,
-  });
-  const drawnBvids = getSuccessfulBlindBoxDrawBvids(data.blindBoxes);
-  if (drawnBvids.length > 0) {
-    await recordBlindBoxDrawnBvids(drawnBvids);
-  }
-  return data;
+  }, drawHistoryEpoch);
+}
+
+export async function buildClaimedExperimentData(
+  records: WatchHistoryRecord[],
+  favorites: FavoriteItem[],
+  smartIndexByItemKey: Map<string, SmartFavoriteIndex>,
+  nowMs: number,
+  options: ExperimentBuildOptions = {},
+  drawHistoryEpoch: number = getBlindBoxDrawHistoryEpoch(),
+  storage?: BlindBoxDrawHistoryStorage,
+): Promise<ExperimentData> {
+  return claimBlindBoxDrawHistory(drawHistoryEpoch, recentDrawnBvids => {
+    const data = buildExperimentData(records, favorites, smartIndexByItemKey, nowMs, {
+      ...options,
+      recentDrawnBvids: [
+        ...(options.recentDrawnBvids ?? []),
+        ...recentDrawnBvids,
+      ],
+    });
+    return {
+      value: data,
+      drawnBvids: getSuccessfulBlindBoxDrawBvids(data.blindBoxes),
+    };
+  }, storage);
 }
 
 export async function fetchRandomExploreCandidatePool(
