@@ -21,6 +21,7 @@ import {
   type LocalDataCategoryRegistryDependencies,
   type LocalDataCategoryTable,
 } from '../src/background/storage/local-data-category-registry.ts';
+import { BLIND_BOX_DRAW_HISTORY_STORAGE_KEY } from '../src/background/storage/blind-box-draw-history-repo.ts';
 import type {
   LocalDataOperationResult,
   LocalDataPrivacySummary,
@@ -108,6 +109,7 @@ test('local data categories expose the shared lifecycle contract', () => {
     'favorites',
     'currentVideoSubtitles',
     'dynamicBill',
+    'blindBoxDrawHistory',
     'localSettings',
   ]);
 
@@ -122,7 +124,7 @@ test('registered categories collect usage, clear independently, and read back th
   const categories = createRegisteredLocalDataCategories(dependencies);
   const usageBefore = await Promise.all(categories.map(category => category.collectUsage()));
 
-  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 2, 6, 2]);
+  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 2, 6, 2, 2]);
   assert.ok(usageBefore.every(usage => usage.usageBytes > 0));
 
   const history = categories[0];
@@ -299,6 +301,7 @@ function createRegistryDependencies(): LocalDataCategoryRegistryDependencies {
   const storage = new Map<string, unknown>([
     ['lastSyncTime', 100],
     ['dynamicBillSyncState', { status: 'success' }],
+    [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY, ['BV1LATEST01', 'BV1LATEST02']],
     ['userConfig', { assistant: {} }],
     ['floatingPopupWindowId', 7],
   ]);

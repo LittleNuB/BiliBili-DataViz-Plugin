@@ -1,4 +1,5 @@
 import type {
+  ExperimentCandidateFailureKind,
   ExperimentBlindBox,
   ExperimentBlindBoxId,
   ExperimentData,
@@ -24,6 +25,11 @@ import type {
   RelatedVideoSeed,
 } from '../api/video-blind-box-candidates.ts';
 import { db } from '../storage/db.ts';
+import {
+  claimBlindBoxDrawHistory,
+  getBlindBoxDrawHistoryEpoch,
+  type BlindBoxDrawHistoryStorage,
+} from '../storage/blind-box-draw-history-repo.ts';
 import { getFavoriteItems, getSmartFavoriteIndexMap } from '../storage/favorite-repo.ts';
 
 const DAY_MS = 86_400_000;
@@ -47,7 +53,7 @@ interface BlindBoxContext {
   recentBvids: Set<string>;
   watchCountByBvid: Map<string, number>;
   lastWatchByBvid: Map<string, number>;
-  usedBvids: Set<string>;
+  recentDrawnBvids: Set<string>;
   random: BlindBoxRandomSource;
   randomExplorePool?: ExperimentRealCandidatePool;
   crossRegionPool?: CrossRegionCandidatePool;
@@ -59,6 +65,7 @@ interface ExperimentBuildOptions {
   randomExplorePool?: ExperimentRealCandidatePool;
   crossRegionPool?: CrossRegionCandidatePool;
   creatorArchivePool?: CreatorArchiveCandidatePool;
+  recentDrawnBvids?: string[];
 }
 
 interface ExperimentRuntimeOptions {
@@ -78,6 +85,7 @@ type BlindBoxBoundaryMeta = Pick<
 export async function getExperimentData(options: ExperimentRuntimeOptions = {}): Promise<ExperimentData> {
   const nowMs = Date.now();
   const random = options.random ?? Math.random;
+  const drawHistoryEpoch = getBlindBoxDrawHistoryEpoch();
   const [records, favorites, smartIndexByItemKey, followedCreators] = await Promise.all([
     db.watchHistory.toArray(),
     getFavoriteItems(),
@@ -92,12 +100,36 @@ export async function getExperimentData(options: ExperimentRuntimeOptions = {}):
       .catch(error => buildCreatorArchiveSourceFailure(followedCreators, nowMs, error, { random })),
   ]);
 
-  return buildExperimentData(records, favorites, smartIndexByItemKey, nowMs, {
+  return buildClaimedExperimentData(records, favorites, smartIndexByItemKey, nowMs, {
     random,
     randomExplorePool,
     crossRegionPool,
     creatorArchivePool,
-  });
+  }, drawHistoryEpoch);
+}
+
+export async function buildClaimedExperimentData(
+  records: WatchHistoryRecord[],
+  favorites: FavoriteItem[],
+  smartIndexByItemKey: Map<string, SmartFavoriteIndex>,
+  nowMs: number,
+  options: ExperimentBuildOptions = {},
+  drawHistoryEpoch: number = getBlindBoxDrawHistoryEpoch(),
+  storage?: BlindBoxDrawHistoryStorage,
+): Promise<ExperimentData> {
+  return claimBlindBoxDrawHistory(drawHistoryEpoch, recentDrawnBvids => {
+    const data = buildExperimentData(records, favorites, smartIndexByItemKey, nowMs, {
+      ...options,
+      recentDrawnBvids: [
+        ...(options.recentDrawnBvids ?? []),
+        ...recentDrawnBvids,
+      ],
+    });
+    return {
+      value: data,
+      drawnBvids: getSuccessfulBlindBoxDrawBvids(data.blindBoxes),
+    };
+  }, storage);
 }
 
 export async function fetchRandomExploreCandidatePool(
@@ -145,7 +177,7 @@ export function buildExperimentData(
     ),
     watchCountByBvid: countByBvid(records),
     lastWatchByBvid: buildLastWatchByBvid(records),
-    usedBvids: new Set<string>(),
+    recentDrawnBvids: new Set((options.recentDrawnBvids ?? []).filter(isLikelyBvid)),
     random: options.random ?? Math.random,
     randomExplorePool: options.randomExplorePool,
     crossRegionPool: options.crossRegionPool,
@@ -191,7 +223,7 @@ function realCandidateUnavailableMeta(candidateSource: string, reason: string): 
 function localFavoriteMeta(): BlindBoxBoundaryMeta {
   return {
     candidateSource: LOCAL_FAVORITE_SOURCE,
-    realCandidateLabel: '未使用真实 B 站候选：这是本地收藏回访。',
+    realCandidateLabel: '本卡不使用；固定从本地收藏回访。',
     usesRealBilibiliCandidates: false,
   };
 }
@@ -224,34 +256,31 @@ function buildCrossRegionBox(ctx: BlindBoxContext): ExperimentBlindBox {
       pool.evidence.length > 0 ? pool.evidence : ['没有留下可解释的真实候选池证据。'],
       crossRegionEmptyTitle(pool.status),
       crossRegionEmptyDescription(pool),
-      crossRegionEmptyStatusLabel(pool.status),
+      crossRegionEmptyStatusLabel(pool),
       pool.sourceLabel,
       crossRegionEmptyReason(pool),
       realCandidateUnavailableMeta(CROSS_REGION_CANDIDATE_SOURCE, crossRegionRealCandidateUnavailableReason(pool)),
     );
   }
 
-  const candidates = pool.candidates.filter(video => !ctx.usedBvids.has(video.bvid));
-  if (candidates.length === 0) {
+  const pick = pickBlindBoxCandidate(pool.candidates, ctx);
+  if (!pick) {
     return emptyBox(
       'cross_region',
       title,
       teaser,
       [
         ...pool.evidence,
-        `真实候选池有 ${pool.candidates.length} 条，但都已被本页其他盲盒占用。`,
+        `真实候选池返回 ${pool.candidates.length} 条，但没有留下可打开的视频。`,
       ],
-      '本页候选已经用完',
-      '跨区漫游不会改用本地历史、收藏或其他盲盒来源。刷新后可重新抽取公开分区候选。',
-      '本页候选已占用',
+      '这次没有可打开的分区新视频',
+      '跨区漫游已经取得本轮分区候选，但这些候选暂时不能打开。当前不会改用本地历史、收藏或其他盲盒来源。',
+      '候选不可打开',
       pool.sourceLabel,
-      '真实候选池有结果，但经过本页占用过滤后没有剩余视频。',
-      realCandidateUnavailableMeta(CROSS_REGION_CANDIDATE_SOURCE, '候选经过本页占用过滤后没有剩余视频。'),
+      '真实候选池返回了结果，但没有可打开的视频。',
+      realCandidateUnavailableMeta(CROSS_REGION_CANDIDATE_SOURCE, '本轮候选暂时不能打开。'),
     );
   }
-
-  const pick = pickRandomCandidate(candidates, ctx.random)!;
-  ctx.usedBvids.add(pick.bvid);
 
   return {
     id: 'cross_region',
@@ -283,32 +312,48 @@ function buildCrossRegionReason(
 }
 
 function crossRegionEmptyTitle(status: CrossRegionCandidatePool['status']): string {
-  return status === 'no_available_region'
-    ? '本轮没有可漫游的公开分区'
-    : '这次没有取得可打开的分区新视频';
+  if (status === 'no_available_region') return '本轮没有可漫游的公开分区';
+  return '这次没有取得可打开的分区新视频';
 }
 
 function crossRegionEmptyDescription(pool: CrossRegionCandidatePool): string {
   if (pool.status === 'no_available_region') {
     return '固定公开分区目录在排除近期高频分区后没有剩余方向，跨区漫游不会退回近期高频分区或其他盲盒来源。';
   }
+  if (pool.failureKind === 'upstream_failed') {
+    return '这次没有从 B 站接口取得可打开的分区新视频。请刷新后重试；当前不会改用本地历史、收藏或其他盲盒来源。';
+  }
+  if (pool.failureKind === 'no_real_candidates') {
+    return '本轮公开分区没有返回真实视频候选。跨区漫游会停在这个状态，不会切换到本地历史、收藏或其他盲盒来源。';
+  }
+  if (pool.failureKind === 'no_openable_candidates') {
+    return '本轮公开分区返回了候选，但没有留下可打开的视频。当前不会改用本地历史、收藏或其他盲盒来源。';
+  }
   return '这次没有取得可打开的分区新视频。刷新后可重试，当前不会改用本地历史、收藏或其他盲盒来源。';
 }
 
 function crossRegionEmptyReason(pool: CrossRegionCandidatePool): string {
-  return pool.status === 'no_available_region'
-    ? '排除近期高频分区后没有剩余公开分区。'
-    : '本轮公开分区新视频候选池没有留下可打开视频。';
+  if (pool.status === 'no_available_region') return '排除近期高频分区后没有剩余公开分区。';
+  if (pool.failureKind === 'upstream_failed') return '本轮分区候选源接口暂时失败。';
+  if (pool.failureKind === 'no_real_candidates') return '本轮公开分区没有返回真实视频候选。';
+  if (pool.failureKind === 'no_openable_candidates') return '本轮公开分区返回了候选，但没有可打开的视频。';
+  return '本轮公开分区新视频候选池没有留下可打开视频。';
 }
 
 function crossRegionRealCandidateUnavailableReason(pool: CrossRegionCandidatePool): string {
-  return pool.status === 'no_available_region'
-    ? '排除近期高频分区后没有剩余公开分区。'
-    : '本轮没有可打开的分区新视频。';
+  if (pool.status === 'no_available_region') return '排除近期高频分区后没有剩余公开分区。';
+  if (pool.failureKind === 'upstream_failed') return '分区候选源接口暂时失败。';
+  if (pool.failureKind === 'no_real_candidates') return '本轮公开分区没有返回真实候选。';
+  if (pool.failureKind === 'no_openable_candidates') return '本轮候选暂时不能打开。';
+  return '本轮没有可打开的分区新视频。';
 }
 
-function crossRegionEmptyStatusLabel(status: CrossRegionCandidatePool['status']): string {
-  return status === 'no_available_region' ? '无可用分区' : '真实候选为空';
+function crossRegionEmptyStatusLabel(pool: CrossRegionCandidatePool): string {
+  if (pool.status === 'no_available_region') return '无可用分区';
+  if (pool.failureKind === 'upstream_failed') return '接口暂时失败';
+  if (pool.failureKind === 'no_real_candidates') return '没有真实候选';
+  if (pool.failureKind === 'no_openable_candidates') return '候选不可打开';
+  return '真实候选为空';
 }
 
 function buildHiddenFavoriteBox(ctx: BlindBoxContext): ExperimentBlindBox {
@@ -327,10 +372,15 @@ function buildHiddenFavoriteBox(ctx: BlindBoxContext): ExperimentBlindBox {
     );
   }
 
+  let invalidFavoriteCount = 0;
   const candidates = ctx.favorites
     .map(item => {
       const video = toFavoriteVideo(item);
-      if (!video || ctx.usedBvids.has(video.bvid) || ctx.recentBvids.has(video.bvid)) return null;
+      if (!video) {
+        invalidFavoriteCount += 1;
+        return null;
+      }
+      if (ctx.recentBvids.has(video.bvid)) return null;
 
       const watchCount = ctx.watchCountByBvid.get(video.bvid) ?? 0;
       const lastWatchMs = ctx.lastWatchByBvid.get(video.bvid) ?? 0;
@@ -350,22 +400,28 @@ function buildHiddenFavoriteBox(ctx: BlindBoxContext): ExperimentBlindBox {
     .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate));
 
   if (candidates.length === 0) {
+    const hasOnlyUnopenableFavorites = invalidFavoriteCount > 0 && invalidFavoriteCount === ctx.favorites.length;
     return emptyBox(
       'hidden_favorite',
       '冷门收藏',
       '从本地收藏里翻出被你压箱底的一条。',
-      [`本地收藏 ${ctx.favorites.length} 条，但最近 ${RECENT_VIDEO_BLOCK_DAYS} 天都还比较活跃。`],
-      '压箱底的视频还没攒出来',
-      '当前收藏里最近都还在看，或者收藏时间太新，暂时没有那种“你留过但快忘了”的冷门收藏。',
-      '本地收藏暂不符合',
+      hasOnlyUnopenableFavorites
+        ? [`本地收藏 ${ctx.favorites.length} 条，但缺少可打开的视频身份。`]
+        : [`本地收藏 ${ctx.favorites.length} 条，但最近 ${RECENT_VIDEO_BLOCK_DAYS} 天都还比较活跃。`],
+      hasOnlyUnopenableFavorites ? '本地收藏暂时打不开' : '压箱底的视频还没攒出来',
+      hasOnlyUnopenableFavorites
+        ? '这批本地收藏缺少可打开的视频身份，冷门收藏不会改用外部候选或其他盲盒来源。'
+        : '当前收藏里最近都还在看，或者收藏时间太新，暂时没有那种“你留过但快忘了”的冷门收藏。',
+      hasOnlyUnopenableFavorites ? '候选不可打开' : '本地收藏暂不符合',
       LOCAL_FAVORITE_SOURCE,
-      '本地收藏里暂时没有足够冷门的回访候选。',
+      hasOnlyUnopenableFavorites
+        ? '本地收藏返回了记录，但没有可打开的视频。'
+        : '本地收藏里暂时没有足够冷门的回访候选。',
       localFavoriteMeta(),
     );
   }
 
-  const pick = pickRandomCandidate(candidates, ctx.random)!;
-  ctx.usedBvids.add(pick.video.bvid);
+  const pick = pickBlindBoxCandidate(candidates, ctx, candidate => candidate.video)!;
 
   return {
     id: 'hidden_favorite',
@@ -416,34 +472,31 @@ function buildCreatorArchiveBox(ctx: BlindBoxContext): ExperimentBlindBox {
       pool.evidence.length > 0 ? pool.evidence : ['没有留下可解释的公开投稿候选池证据。'],
       creatorArchiveEmptyTitle(pool.status),
       creatorArchiveEmptyDescription(pool),
-      creatorArchiveEmptyStatusLabel(pool.status),
+      creatorArchiveEmptyStatusLabel(pool),
       pool.sourceLabel,
       creatorArchiveEmptyReason(pool),
       realCandidateUnavailableMeta(CREATOR_ARCHIVE_CANDIDATE_SOURCE, creatorArchiveRealCandidateUnavailableReason(pool)),
     );
   }
 
-  const candidates = pool.candidates.filter(video => !ctx.usedBvids.has(video.bvid));
-  if (candidates.length === 0) {
+  const pick = pickBlindBoxCandidate(pool.candidates, ctx);
+  if (!pick) {
     return emptyBox(
       'creator_archive',
       title,
       teaser,
       [
         ...pool.evidence,
-        `公开较早投稿候选池有 ${pool.candidates.length} 条，但都已被本页其他盲盒占用。`,
+        `公开较早投稿候选池返回 ${pool.candidates.length} 条，但没有留下可打开的视频。`,
       ],
-      '本页候选已经用完',
-      'UP 主考古不会改用本地历史、收藏或最近 7 天新投稿。刷新后可重新抽取公开投稿候选。',
-      '本页候选已占用',
+      '这次没有可打开的较早投稿',
+      'UP 主考古已经取得本轮公开投稿候选，但这些候选暂时不能打开。当前不会改用本地历史、收藏或最近 7 天新投稿。',
+      '候选不可打开',
       pool.sourceLabel,
-      '公开较早投稿候选池有结果，但经过本页占用过滤后没有剩余视频。',
-      realCandidateUnavailableMeta(CREATOR_ARCHIVE_CANDIDATE_SOURCE, '候选经过本页占用过滤后没有剩余视频。'),
+      '公开较早投稿候选池返回了结果，但没有可打开的视频。',
+      realCandidateUnavailableMeta(CREATOR_ARCHIVE_CANDIDATE_SOURCE, '本轮候选暂时不能打开。'),
     );
   }
-
-  const pick = pickRandomCandidate(candidates, ctx.random)!;
-  ctx.usedBvids.add(pick.bvid);
 
   return {
     id: 'creator_archive',
@@ -472,23 +525,40 @@ function creatorArchiveEmptyDescription(pool: CreatorArchiveCandidatePool): stri
   if (pool.status === 'no_followed_creator') {
     return '需要先同步关注快照，UP 主考古才知道该从哪些已关注 UP 的公开投稿里抽取。';
   }
+  if (pool.failureKind === 'upstream_failed') {
+    return '这次没有从公开 UP 空间取得可打开的较早投稿。请刷新后重试；当前不会改用本地历史、收藏或最近 7 天新投稿。';
+  }
+  if (pool.failureKind === 'no_real_candidates') {
+    return '本轮已关注 UP 没有返回可用于考古的较早投稿。UP 主考古会停在这个状态，不会改用其他盲盒来源。';
+  }
+  if (pool.failureKind === 'no_openable_candidates') {
+    return '本轮公开投稿返回了候选，但没有留下可打开的视频。当前不会改用本地历史、收藏或最近 7 天新投稿。';
+  }
   return '这次没有取得可打开的较早投稿。刷新后可重试，当前不会改用本地历史、收藏或最近 7 天新投稿。';
 }
 
 function creatorArchiveEmptyReason(pool: CreatorArchiveCandidatePool): string {
-  return pool.status === 'no_followed_creator'
-    ? '本地没有已同步关注 UP 快照，暂不请求公开投稿。'
-    : '本轮公开投稿候选池没有留下可打开的较早投稿。';
+  if (pool.status === 'no_followed_creator') return '本地没有已同步关注 UP 快照，暂不请求公开投稿。';
+  if (pool.failureKind === 'upstream_failed') return '本轮公开投稿候选源接口暂时失败。';
+  if (pool.failureKind === 'no_real_candidates') return '本轮已关注 UP 没有返回可用于考古的较早投稿。';
+  if (pool.failureKind === 'no_openable_candidates') return '本轮公开投稿返回了候选，但没有可打开的视频。';
+  return '本轮公开投稿候选池没有留下可打开的较早投稿。';
 }
 
 function creatorArchiveRealCandidateUnavailableReason(pool: CreatorArchiveCandidatePool): string {
-  return pool.status === 'no_followed_creator'
-    ? '缺少已同步关注 UP 快照。'
-    : '本轮没有可打开的较早投稿。';
+  if (pool.status === 'no_followed_creator') return '缺少已同步关注 UP 快照。';
+  if (pool.failureKind === 'upstream_failed') return '公开投稿候选源接口暂时失败。';
+  if (pool.failureKind === 'no_real_candidates') return '本轮没有真实较早投稿候选。';
+  if (pool.failureKind === 'no_openable_candidates') return '本轮候选暂时不能打开。';
+  return '本轮没有可打开的较早投稿。';
 }
 
-function creatorArchiveEmptyStatusLabel(status: CreatorArchiveCandidatePool['status']): string {
-  return status === 'no_followed_creator' ? '关注快照未同步' : '真实候选为空';
+function creatorArchiveEmptyStatusLabel(pool: CreatorArchiveCandidatePool): string {
+  if (pool.status === 'no_followed_creator') return '关注快照未同步';
+  if (pool.failureKind === 'upstream_failed') return '接口暂时失败';
+  if (pool.failureKind === 'no_real_candidates') return '没有真实候选';
+  if (pool.failureKind === 'no_openable_candidates') return '候选不可打开';
+  return '真实候选为空';
 }
 
 function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
@@ -502,7 +572,7 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
       ['本地还没有可作为公开相关视频候选种子的近期视频。'],
       '当前没有可用于探索的近期视频',
       '随机探索需要先用最近少量本地历史作为种子，请求 B 站公开视频的相关视频候选池。当前没有合格种子，因此没有发出相关候选请求。',
-      '候选源未准备好',
+      '没有可用种子',
       sourceLabel,
       '没有可请求的种子，未生成空白视频卡。',
       realCandidateUnavailableMeta(RELATED_CANDIDATE_SOURCE, '缺少可请求的本地近期视频。'),
@@ -510,9 +580,10 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
   }
 
   const pool = ctx.randomExplorePool.candidates
-    .filter(candidate => !ctx.usedBvids.has(candidate.bvid) && !ctx.recentBvids.has(candidate.bvid));
+    .filter(candidate => !ctx.recentBvids.has(candidate.bvid));
+  const pick = pickBlindBoxCandidate(pool, ctx);
 
-  if (pool.length === 0) {
+  if (!pick) {
     const failureSummary = formatRelatedCandidateFailures(ctx.randomExplorePool);
     return emptyBox(
       'random_explore',
@@ -521,19 +592,16 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
       [
         `已尝试 ${ctx.randomExplorePool.seedCount} 个种子视频的相关视频候选。`,
         failureSummary,
-        `同时会排除最近 ${RECENT_VIDEO_BLOCK_DAYS} 天看过的视频和本页其它盲盒已占用的视频。`,
+        `同时会排除最近 ${RECENT_VIDEO_BLOCK_DAYS} 天看过的视频；最近抽中过的视频只会在有其它候选时避开。`,
       ],
-      '相关视频候选暂时不可用',
-      '这次没有拿到可安全展示的真实候选，Bili-Bill 不会用本地库存视频冒充随机探索候选。',
-      '候选源暂不可用',
+      relatedEmptyTitle(ctx.randomExplorePool),
+      relatedEmptyDescription(ctx.randomExplorePool, pool.length),
+      relatedEmptyStatusLabel(ctx.randomExplorePool),
       sourceLabel,
-      '真实候选源失败或为空，未生成空白视频卡。',
-      realCandidateUnavailableMeta(RELATED_CANDIDATE_SOURCE, '候选源失败、为空或过滤后无可打开视频。'),
+      relatedEmptyReason(ctx.randomExplorePool, pool.length),
+      realCandidateUnavailableMeta(RELATED_CANDIDATE_SOURCE, relatedRealCandidateUnavailableReason(ctx.randomExplorePool, pool.length)),
     );
   }
-
-  const pick = pickRandomCandidate(pool, ctx.random)!;
-  ctx.usedBvids.add(pick.bvid);
 
   return {
     id: 'random_explore',
@@ -541,10 +609,10 @@ function buildRandomExploreBox(ctx: BlindBoxContext): ExperimentBlindBox {
     teaser,
     ...realCandidateUsedMeta(RELATED_CANDIDATE_SOURCE),
     source: `${sourceLabel} / 种子视频「${pick.seedTitle || pick.seedBvid}」`,
-    reason: `Bili-Bill 只保留可打开的公开相关视频候选，并在 ${pool.length} 条候选里随机抽取一条；不会从本地历史或收藏库存补位。`,
+    reason: `Bili-Bill 只保留可打开的公开相关视频候选，并在本轮候选池里随机抽取一条；不会从本地历史或收藏库存补位。`,
     evidence: [
       `候选来自 B 站公开视频的相关视频候选池，使用 ${ctx.randomExplorePool.seedCount} 个本地种子视频逐个请求。`,
-      `抽取前已排除最近 ${RECENT_VIDEO_BLOCK_DAYS} 天看过的视频，以及其它盲盒已经占用的候选。`,
+      `抽取前已排除最近 ${RECENT_VIDEO_BLOCK_DAYS} 天看过的视频；最近抽中过的视频只作为短期避让记录。`,
       `本次种子视频：${pick.seedTitle || pick.seedBvid}。`,
     ],
     state: 'ready',
@@ -580,7 +648,7 @@ export function selectRelatedVideoSeeds(records: WatchHistoryRecord[], nowMs: nu
 
 function formatRelatedCandidateFailures(pool: ExperimentRealCandidatePool): string {
   if (pool.candidates.length > 0) {
-    return `相关视频候选返回 ${pool.candidates.length} 条，但都已被近期观看、重复候选或其它盲盒占用。`;
+    return `相关视频候选返回 ${pool.candidates.length} 条，但都已被近期观看过滤，或暂时不能打开。`;
   }
   if (pool.failures.length === 0) {
     return '相关视频候选没有返回可展示的视频。';
@@ -597,6 +665,67 @@ function formatRelatedCandidateFailures(pool: ExperimentRealCandidatePool): stri
   ].filter(Boolean);
 
   return `相关视频候选暂不可用：${parts.join('，') || '未返回有效候选'}。`;
+}
+
+function relatedEmptyTitle(pool: ExperimentRealCandidatePool): string {
+  if (pool.failureKind === 'upstream_failed') return '相关视频候选源暂时失败';
+  if (pool.failureKind === 'no_real_candidates') return '这次没有取得真实相关视频候选';
+  if (pool.failureKind === 'no_openable_candidates') return '这次没有可打开的相关视频';
+  return '相关视频候选暂时不可用';
+}
+
+function relatedEmptyDescription(pool: ExperimentRealCandidatePool, filteredCandidateCount: number): string {
+  const kind = relatedFailureKind(pool, filteredCandidateCount);
+  if (kind === 'upstream_failed') {
+    return '这次没有从 B 站接口取得可打开的相关视频。请刷新后重试；随机探索不会用本地库存视频冒充真实候选。';
+  }
+  if (kind === 'no_real_candidates') {
+    return '本轮种子没有返回真实相关视频候选。随机探索会停在这个状态，不会改用收藏、分区或其他盲盒来源。';
+  }
+  if (kind === 'no_openable_candidates') {
+    return '本轮相关视频返回了候选，但没有留下可打开的视频。随机探索不会用本地库存视频冒充真实候选。';
+  }
+  if (pool.candidates.length > 0 && filteredCandidateCount === 0) {
+    return '本轮相关视频候选都已在近期看过。随机探索不会用本地库存视频补位，请刷新后重试。';
+  }
+  return '这次没有拿到可安全展示的真实候选，Bili-Bill 不会用本地库存视频冒充随机探索候选。';
+}
+
+function relatedEmptyStatusLabel(pool: ExperimentRealCandidatePool): string {
+  if (pool.failureKind === 'upstream_failed') return '接口暂时失败';
+  if (pool.failureKind === 'no_real_candidates') return '没有真实候选';
+  if (pool.failureKind === 'no_openable_candidates') return '候选不可打开';
+  return '候选源暂不可用';
+}
+
+function relatedEmptyReason(pool: ExperimentRealCandidatePool, filteredCandidateCount: number): string {
+  const kind = relatedFailureKind(pool, filteredCandidateCount);
+  if (kind === 'upstream_failed') return '相关视频候选源接口暂时失败。';
+  if (kind === 'no_real_candidates') return '本轮种子没有返回真实相关视频候选。';
+  if (kind === 'no_openable_candidates') return '本轮相关视频返回了候选，但没有可打开的视频。';
+  if (pool.candidates.length > 0 && filteredCandidateCount === 0) return '本轮真实相关视频候选都已在近期看过。';
+  return '真实候选源失败或为空，未生成空白视频卡。';
+}
+
+function relatedRealCandidateUnavailableReason(
+  pool: ExperimentRealCandidatePool,
+  filteredCandidateCount: number,
+): string {
+  const kind = relatedFailureKind(pool, filteredCandidateCount);
+  if (kind === 'upstream_failed') return '相关视频候选源接口暂时失败。';
+  if (kind === 'no_real_candidates') return '本轮种子没有返回真实候选。';
+  if (kind === 'no_openable_candidates') return '本轮候选暂时不能打开。';
+  if (pool.candidates.length > 0 && filteredCandidateCount === 0) return '本轮候选都已在近期看过。';
+  return '候选源失败、为空或过滤后无可打开视频。';
+}
+
+function relatedFailureKind(
+  pool: ExperimentRealCandidatePool,
+  filteredCandidateCount: number,
+): ExperimentCandidateFailureKind | undefined {
+  if (pool.failureKind) return pool.failureKind;
+  if (pool.candidates.length > 0 && filteredCandidateCount > 0) return 'no_openable_candidates';
+  return undefined;
 }
 
 function emptyBox(
@@ -626,15 +755,59 @@ function emptyBox(
   };
 }
 
+export function getSuccessfulBlindBoxDrawBvids(boxes: ExperimentBlindBox[]): string[] {
+  const bvids: string[] = [];
+  const seen = new Set<string>();
+
+  for (const box of boxes) {
+    if (box.state !== 'ready' || !isOpenableVideoCandidate(box.video)) continue;
+    if (seen.has(box.video.bvid)) continue;
+    seen.add(box.video.bvid);
+    bvids.push(box.video.bvid);
+  }
+
+  return bvids;
+}
+
+function pickBlindBoxCandidate<T>(
+  items: readonly T[],
+  ctx: BlindBoxContext,
+  getVideo: (item: T) => ExperimentVideoCandidate | undefined = item => item as ExperimentVideoCandidate,
+): T | undefined {
+  const validItems = items.filter(item => isOpenableVideoCandidate(getVideo(item)));
+  if (validItems.length === 0) return undefined;
+
+  const unseenItems = validItems.filter(item => {
+    const video = getVideo(item);
+    return video ? !ctx.recentDrawnBvids.has(video.bvid) : false;
+  });
+  const pick = pickRandomCandidate(unseenItems.length > 0 ? unseenItems : validItems, ctx.random);
+  const video = pick ? getVideo(pick) : undefined;
+  if (video) {
+    ctx.recentDrawnBvids.add(video.bvid);
+  }
+  return pick;
+}
+
+function isOpenableVideoCandidate(video: ExperimentVideoCandidate | undefined): video is ExperimentVideoCandidate {
+  return Boolean(
+    video
+      && isLikelyBvid(cleanText(video.bvid))
+      && cleanText(video.title)
+      && cleanText(video.url).startsWith(`https://www.bilibili.com/video/${encodeURIComponent(video.bvid)}`),
+  );
+}
+
 function toFavoriteVideo(item: FavoriteItem): ExperimentVideoCandidate | null {
-  if (!cleanText(item.bvid)) return null;
+  const bvid = cleanText(item.bvid);
+  if (!isLikelyBvid(bvid)) return null;
   return {
-    bvid: item.bvid,
+    bvid,
     avid: item.avid > 0 ? item.avid : undefined,
     title: cleanText(item.title) || '未命名收藏视频',
     authorName: cleanText(item.authorName) || '未知 UP',
     cover: cleanText(item.cover),
-    url: buildVideoUrl(item.bvid, item.avid),
+    url: buildVideoUrl(bvid, item.avid),
     sourceKind: 'local_favorite',
   };
 }

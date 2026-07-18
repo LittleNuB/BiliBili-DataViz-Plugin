@@ -1,4 +1,5 @@
 import type {
+  ExperimentCandidateFailureKind,
   ExperimentRealCandidateFailure,
   ExperimentRealCandidatePool,
   ExperimentRealVideoCandidate,
@@ -73,6 +74,7 @@ export interface CrossRegionCandidatePool {
   evidence: string[];
   checkedRegionCount: number;
   excludedInvalidCandidateCount: number;
+  failureKind?: ExperimentCandidateFailureKind;
 }
 
 export type CrossRegionCandidateRequest = (
@@ -109,6 +111,7 @@ export interface CreatorArchiveCandidatePool {
   checkedCreatorCount: number;
   excludedRecentSubmissionCount: number;
   excludedInvalidCandidateCount: number;
+  failureKind?: ExperimentCandidateFailureKind;
 }
 
 interface CreatorArchiveCandidateOptions {
@@ -270,6 +273,7 @@ export async function fetchRelatedVideoCandidates(
     seedCount: selectedSeeds.length,
     candidates,
     failures,
+    failureKind: classifyRelatedCandidateFailure(selectedSeeds.length, candidates, failures),
   };
 }
 
@@ -285,6 +289,7 @@ export function buildRelatedVideoSourceFailure(
     seedCount: selectedSeeds.length,
     candidates: [],
     failures: selectedSeeds.map(seed => toRelatedFailure(seed, 'request_failed')),
+    failureKind: selectedSeeds.length === 0 ? 'no_seed' : 'upstream_failed',
   };
 }
 
@@ -312,6 +317,7 @@ export async function fetchCrossRegionCandidatePool(
 
   const candidatesByBvid = new Map<string, ExperimentVideoCandidate>();
   let excludedInvalidCandidateCount = 0;
+  let fetchedArchiveCount = 0;
   const checkedRegionCount = 1;
   const request = options.request ?? requestCrossRegionCandidates;
 
@@ -325,7 +331,9 @@ export async function fetchCrossRegionCandidatePool(
       },
       options.signal,
     );
-    for (const archive of getRegionArchives(data)) {
+    const archives = getRegionArchives(data);
+    fetchedArchiveCount = archives.length;
+    for (const archive of archives) {
       const video = toRegionVideoCandidate(archive, selection.selectedRegion);
       if (!video) {
         excludedInvalidCandidateCount += 1;
@@ -348,6 +356,7 @@ export async function fetchCrossRegionCandidatePool(
       ],
       checkedRegionCount,
       excludedInvalidCandidateCount,
+      failureKind: 'upstream_failed',
     };
   }
 
@@ -377,6 +386,7 @@ export async function fetchCrossRegionCandidatePool(
     ],
     checkedRegionCount,
     excludedInvalidCandidateCount,
+    failureKind: fetchedArchiveCount > 0 ? 'no_openable_candidates' : 'no_real_candidates',
   };
 }
 
@@ -402,6 +412,7 @@ export function buildCrossRegionSourceFailure(
     ],
     checkedRegionCount: 0,
     excludedInvalidCandidateCount: 0,
+    failureKind: 'upstream_failed',
   };
 }
 
@@ -479,12 +490,15 @@ export async function fetchCreatorArchiveCandidatePool(
       checkedCreatorCount: 0,
       excludedRecentSubmissionCount: 0,
       excludedInvalidCandidateCount: 0,
+      failureKind: 'no_seed',
     };
   }
 
   const cutoffSeconds = Math.floor((nowMs - CREATOR_ARCHIVE_RECENT_BLOCK_DAYS * DAY_MS) / 1000);
   const candidatesByBvid = new Map<string, ExperimentVideoCandidate>();
   const failures: string[] = [];
+  let fetchedArchiveCount = 0;
+  let requestFailureCount = 0;
   let excludedRecentSubmissionCount = 0;
   let excludedInvalidCandidateCount = 0;
   const { biliGet } = await import('./client.ts');
@@ -504,7 +518,9 @@ export async function fetchCreatorArchiveCandidatePool(
         true,
         options.signal,
       );
-      for (const item of getSpaceArchives(data)) {
+      const archives = getSpaceArchives(data);
+      fetchedArchiveCount += archives.length;
+      for (const item of archives) {
         const candidate = toCreatorArchiveCandidate(item, seed);
         if (!candidate) {
           excludedInvalidCandidateCount += 1;
@@ -519,6 +535,7 @@ export async function fetchCreatorArchiveCandidatePool(
         }
       }
     } catch (error) {
+      requestFailureCount += 1;
       failures.push(`${seed.name}: ${readableCandidateError(error)}`);
     }
   }
@@ -556,6 +573,12 @@ export async function fetchCreatorArchiveCandidatePool(
     checkedCreatorCount: selectedSeeds.length,
     excludedRecentSubmissionCount,
     excludedInvalidCandidateCount,
+    failureKind: classifyCreatorArchiveFailure(
+      selectedSeeds.length,
+      requestFailureCount,
+      fetchedArchiveCount,
+      excludedInvalidCandidateCount,
+    ),
   };
 }
 
@@ -584,7 +607,33 @@ export function buildCreatorArchiveSourceFailure(
     checkedCreatorCount: 0,
     excludedRecentSubmissionCount: 0,
     excludedInvalidCandidateCount: 0,
+    failureKind: selectedSeeds.length > 0 ? 'upstream_failed' : 'no_seed',
   };
+}
+
+function classifyRelatedCandidateFailure(
+  seedCount: number,
+  candidates: ExperimentRealVideoCandidate[],
+  failures: ExperimentRealCandidateFailure[],
+): ExperimentCandidateFailureKind | undefined {
+  if (candidates.length > 0) return undefined;
+  if (seedCount === 0) return 'no_seed';
+  if (failures.some(failure => failure.reason === 'request_failed')) return 'upstream_failed';
+  if (failures.some(failure => failure.reason === 'no_valid_candidates')) return 'no_openable_candidates';
+  return 'no_real_candidates';
+}
+
+function classifyCreatorArchiveFailure(
+  seedCount: number,
+  requestFailureCount: number,
+  fetchedArchiveCount: number,
+  excludedInvalidCandidateCount: number,
+): ExperimentCandidateFailureKind {
+  if (seedCount === 0) return 'no_seed';
+  if (requestFailureCount >= seedCount && fetchedArchiveCount === 0) return 'upstream_failed';
+  if (fetchedArchiveCount === 0) return 'no_real_candidates';
+  if (excludedInvalidCandidateCount >= fetchedArchiveCount) return 'no_openable_candidates';
+  return 'no_real_candidates';
 }
 
 export function selectCreatorArchiveSeeds(
@@ -665,7 +714,7 @@ function buildCrossRegionSelectionEvidence(
   return [
     basis,
     `跨区漫游只使用仓库维护的固定公开分区目录和 B 站分区新视频接口，本轮候选分区为「${selectedRegionName}」。`,
-    `真实候选池返回 ${candidateCount} 条可打开视频；本切片不使用最近抽取记录去重，也不改用本地历史或收藏补位。`,
+    `真实候选池返回 ${candidateCount} 条可打开视频；抽取时会优先避开最近抽中过的视频，但不会改用本地历史或收藏补位。`,
   ];
 }
 

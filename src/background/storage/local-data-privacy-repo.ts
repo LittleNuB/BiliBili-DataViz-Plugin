@@ -14,6 +14,10 @@ import {
   getHistorySyncing,
   getLastSyncTime,
 } from './config-store.ts';
+import {
+  coordinateBlindBoxDrawHistoryClear,
+  getBlindBoxRecentDrawnBvids,
+} from './blind-box-draw-history-repo.ts';
 
 export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySummary> {
   await ensureDynamicBill013Migration();
@@ -90,22 +94,24 @@ export async function clearAllLocalData(confirmation: unknown): Promise<LocalDat
     throw new Error('HISTORY_SYNC_IN_PROGRESS');
   }
 
-  const counts = await collectClearCounts();
-  await db.transaction('rw', db.tables, async () => {
-    for (const table of db.tables) {
-      await table.clear();
-    }
-  });
-  await chrome.storage.local.clear();
+  return coordinateBlindBoxDrawHistoryClear(async recentDrawnBvids => {
+    const counts = await collectClearCounts(recentDrawnBvids.length);
+    await db.transaction('rw', db.tables, async () => {
+      for (const table of db.tables) {
+        await table.clear();
+      }
+    });
+    await chrome.storage.local.clear();
 
-  return {
-    operation: 'clear_all_local_data',
-    completedAt: Date.now(),
-    cleared: {
-      ...counts,
-      localSettings: true,
-    },
-  };
+    return {
+      operation: 'clear_all_local_data',
+      completedAt: Date.now(),
+      cleared: {
+        ...counts,
+        localSettings: true,
+      },
+    };
+  });
 }
 
 async function summarizeHistory(): Promise<LocalDataPrivacySummary['history']> {
@@ -226,7 +232,9 @@ async function summarizeDynamicBill(): Promise<LocalDataPrivacySummary['dynamicB
   };
 }
 
-async function collectClearCounts(): Promise<Required<Omit<LocalDataOperationResult['cleared'], 'localSettings'>>> {
+async function collectClearCounts(
+  coordinatedBlindBoxDrawHistoryCount?: number,
+): Promise<Required<Omit<LocalDataOperationResult['cleared'], 'localSettings'>>> {
   const [
     historyRecords,
     playerEvents,
@@ -242,6 +250,7 @@ async function collectClearCounts(): Promise<Required<Omit<LocalDataOperationRes
     dynamicBillRotationRecords,
     currentVideoSubtitleSources,
     currentVideoSubtitleSegments,
+    blindBoxDrawHistory,
   ] = await Promise.all([
     db.watchHistory.count(),
     db.playerEvents.count(),
@@ -257,6 +266,7 @@ async function collectClearCounts(): Promise<Required<Omit<LocalDataOperationRes
     db.dynamicBillRotationRecords.count(),
     db.currentVideoTranscriptSources.count(),
     db.currentVideoTranscriptSegments.count(),
+    coordinatedBlindBoxDrawHistoryCount ?? getBlindBoxRecentDrawnBvids().then(bvids => bvids.length),
   ]);
 
   return {
@@ -274,6 +284,7 @@ async function collectClearCounts(): Promise<Required<Omit<LocalDataOperationRes
     dynamicBillRotationRecords,
     currentVideoSubtitleSources,
     currentVideoSubtitleSegments,
+    blindBoxDrawHistory,
   };
 }
 

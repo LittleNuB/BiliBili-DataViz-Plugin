@@ -7,6 +7,11 @@ import type {
   LocalDataClearedCounts,
 } from '../../shared/local-data-category-contract.ts';
 import { db } from './db.ts';
+import {
+  clearBlindBoxDrawHistory,
+  collectBlindBoxDrawHistoryUsage,
+  readBlindBoxDrawHistoryAfterClear,
+} from './blind-box-draw-history-repo.ts';
 
 type AnyTable = Table<any, any, any>;
 
@@ -147,8 +152,25 @@ export function createRegisteredLocalDataCategories(
       dynamicBillCreatorPauses: counts[4] ?? 0,
       dynamicBillRotationRecords: counts[5] ?? 0,
     })),
+    blindBoxDrawHistoryCategory(dependencies),
     storageCategory(dependencies, 'localSettings', '本地 AI 设置', LOCAL_SETTING_STORAGE_KEYS),
   ];
+}
+
+function blindBoxDrawHistoryCategory(
+  dependencies: LocalDataCategoryRegistryDependencies,
+): LocalDataCategoryRegistration {
+  return {
+    id: 'blindBoxDrawHistory',
+    label: '盲盒抽取记录',
+    includeInClearAll: true,
+    collectUsage: () => collectBlindBoxDrawHistoryUsage(dependencies.storage),
+    clear: async (): Promise<LocalDataCategoryClearResult> => {
+      const clearedCount = await clearBlindBoxDrawHistory(dependencies.storage);
+      return { cleared: { blindBoxDrawHistory: clearedCount } };
+    },
+    readAfterClear: () => readBlindBoxDrawHistoryAfterClear(dependencies.storage),
+  };
 }
 
 function tableCategory(
