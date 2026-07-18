@@ -101,6 +101,11 @@ import {
   getCurrentVideoTranscriptEvidenceState,
   getCurrentVideoTranscriptSegments,
 } from '../storage/current-video-transcript-repo';
+import {
+  clearTemporaryCurrentVideoTranscriptCacheForTab,
+  retainTemporaryCurrentVideoTranscriptOwner,
+  type CurrentVideoTemporaryTranscriptOwner,
+} from '../current-video-temporary-transcript-cache.ts';
 import { testAiConnection } from '../ai/openai-compatible';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
@@ -143,7 +148,7 @@ export function setupMessageHandlers(): void {
     // Handle UI request messages
     const request = message as BiliVizRequest;
     if (request.action) {
-      handleRequest(request).then(sendResponse).catch((err) => {
+      handleRequest(request, sender.tab?.id ?? null).then(sendResponse).catch((err) => {
         sendResponse({ success: false, error: errorMessage(err) });
       });
       return true;
@@ -154,11 +159,13 @@ export function setupMessageHandlers(): void {
 
   chrome.tabs.onRemoved.addListener((tabId) => {
     currentVideoContexts.delete(tabId);
+    clearTemporaryCurrentVideoTranscriptCacheForTab(tabId);
   });
 
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     const nextUrl = changeInfo.url;
     if (!nextUrl) return;
+    clearTemporaryCurrentVideoTranscriptCacheForTab(tabId);
     if (!isBilibiliVideoUrl(nextUrl)) {
       currentVideoContexts.delete(tabId);
       return;
@@ -175,7 +182,18 @@ async function handleContentMessage(msg: BiliVizContentMessage, tabId: number): 
   switch (msg.action) {
     case 'CURRENT_VIDEO_CONTEXT_UPDATE': {
       if (tabId > 0) {
-        currentVideoContexts.set(tabId, msg.payload as CurrentVideoContextResult);
+        const context = msg.payload as CurrentVideoContextResult;
+        currentVideoContexts.set(tabId, context);
+        if (context.kind === 'video' && context.cid) {
+          retainTemporaryCurrentVideoTranscriptOwner({
+            ownerTabId: tabId,
+            bvid: context.bvid,
+            cid: context.cid,
+            page: context.currentPart.page,
+          });
+        } else {
+          clearTemporaryCurrentVideoTranscriptCacheForTab(tabId);
+        }
       }
       break;
     }
@@ -212,11 +230,15 @@ async function handleContentMessage(msg: BiliVizContentMessage, tabId: number): 
       break;
     }
     case 'PAGE_NAVIGATION':
+      clearTemporaryCurrentVideoTranscriptCacheForTab(tabId);
       break;
   }
 }
 
-async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizResponse<T>> {
+async function handleRequest<T>(
+  request: BiliVizRequest,
+  requestTabId: number | null,
+): Promise<BiliVizResponse<T>> {
   if (DYNAMIC_BILL_MIGRATION_GATED_ACTIONS.has(request.action)) {
     await ensureDynamicBill013Migration();
   }
@@ -357,25 +379,25 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     case 'CLEAR_ALL_LOCAL_DATA':
       return { success: true, data: await clearAllLocalData(request.params?.confirmation) as T };
     case 'GET_CURRENT_VIDEO_CONTEXT':
-      return { success: true, data: await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(request.params)) as T };
+      return { success: true, data: await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(request.params), requestTabId) as T };
     case 'PROBE_CURRENT_VIDEO_SUBTITLE_SOURCE':
-      return { success: true, data: await probeSubtitleSourceForActiveTab(request.params) as T };
+      return { success: true, data: await probeSubtitleSourceForActiveTab(request.params, requestTabId) as T };
     case 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE':
-      return { success: true, data: await getTranscriptEvidenceForActiveTab(request.params) as T };
+      return { success: true, data: await getTranscriptEvidenceForActiveTab(request.params, requestTabId) as T };
     case 'GET_CURRENT_VIDEO_SUMMARY': {
-      const context = await getCurrentVideoContextForActiveTabWithSelection(request.params);
-      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
+      const context = await getCurrentVideoContextForActiveTabWithSelection(request.params, requestTabId);
+      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context, requestTabId);
       return { success: true, data: await generateCurrentVideoSummary(context, { transcriptSegments }) as T };
     }
     case 'GET_VIDEO_KNOWLEDGE': {
-      const context = await getCurrentVideoContextForActiveTabWithSelection(request.params);
-      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
+      const context = await getCurrentVideoContextForActiveTabWithSelection(request.params, requestTabId);
+      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context, requestTabId);
       return { success: true, data: buildVideoKnowledgeResult(context, { transcriptSegments }) as T };
     }
     case 'SEARCH_CURRENT_VIDEO_SEGMENTS': {
       const query = String(request.params?.query ?? '');
-      const context = await getCurrentVideoContextForActiveTabWithSelection(request.params);
-      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
+      const context = await getCurrentVideoContextForActiveTabWithSelection(request.params, requestTabId);
+      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context, requestTabId);
       const videoKnowledge = buildVideoKnowledgeResult(context, { transcriptSegments });
       return {
         success: true,
@@ -394,9 +416,9 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       };
     }
     case 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP':
-      return { success: true, data: await requestCurrentVideoSegmentJump(request.params) as T };
+      return { success: true, data: await requestCurrentVideoSegmentJump(request.params, requestTabId) as T };
     case 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP':
-      return { success: true, data: await returnCurrentVideoSegmentJump() as T };
+      return { success: true, data: await returnCurrentVideoSegmentJump(requestTabId) as T };
     case 'REQUEST_VIDEO_KNOWLEDGE_JUMP':
       return { success: true, data: await requestVideoKnowledgeJump(request.params) as T };
     case 'GET_SMART_FAVORITES':
@@ -574,6 +596,7 @@ async function requestVideoKnowledgeJump(params: Record<string, unknown> | undef
 
 async function requestCurrentVideoSegmentJump(
   params: Record<string, unknown> | undefined,
+  requestTabId: number | null,
 ): Promise<CurrentVideoTimestampJumpResponse> {
   const candidateId = requireStringParam(params?.candidateId, 'candidateId');
   const query = requireStringParam(params?.query, 'query');
@@ -586,7 +609,7 @@ async function requestCurrentVideoSegmentJump(
     );
   }
 
-  const target = await resolveCurrentVideoLookupState();
+  const target = await resolveCurrentVideoLookupState(requestTabId);
   const tabId = target.tab?.id ?? 0;
   if (!target.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(target.tab.url)) {
     return blockedTimestampJumpResponse(
@@ -596,7 +619,7 @@ async function requestCurrentVideoSegmentJump(
     );
   }
 
-  const context = await getCurrentVideoContextForActiveTabWithSelection(params);
+  const context = await getCurrentVideoContextForActiveTabWithSelection(params, requestTabId);
   if (context.kind !== 'video') {
     return blockedTimestampJumpResponse(
       candidateId,
@@ -605,7 +628,7 @@ async function requestCurrentVideoSegmentJump(
     );
   }
 
-  const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
+  const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context, requestTabId);
   const videoKnowledge = buildVideoKnowledgeResult(context, { transcriptSegments });
   const result = searchCurrentVideoSegments(context, {
     query,
@@ -661,8 +684,10 @@ async function requestCurrentVideoSegmentJump(
   }
 }
 
-async function returnCurrentVideoSegmentJump(): Promise<CurrentVideoTimestampReturnResponse> {
-  const target = await resolveCurrentVideoLookupState();
+async function returnCurrentVideoSegmentJump(
+  requestTabId: number | null,
+): Promise<CurrentVideoTimestampReturnResponse> {
+  const target = await resolveCurrentVideoLookupState(requestTabId);
   const tabId = target.tab?.id ?? 0;
   if (!target.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(target.tab.url)) {
     return blockedTimestampReturnResponse(formatTimestampJumpFailureReason('no_context'));
@@ -688,24 +713,31 @@ async function markConsumedFromPlayerEvent(
 
 async function getCurrentVideoContextForActiveTab(
   options: CurrentVideoLookupOptions = {},
+  requestTabId: number | null = null,
 ): Promise<CurrentVideoContextResult> {
-  const context = await getRawCurrentVideoContextForActiveTab(options);
+  const context = await getRawCurrentVideoContextForActiveTab(options, requestTabId);
   if (context.kind !== 'video') return context;
   const withSubtitle = await enrichCurrentVideoContextWithSubtitleProbe(context, options);
-  return await enrichCurrentVideoContextWithTranscriptEvidence(withSubtitle);
+  return await enrichCurrentVideoContextWithTranscriptEvidence(withSubtitle, requestTabId);
 }
 
 async function getCurrentVideoContextForActiveTabWithSelection(
   params: Record<string, unknown> | undefined,
+  requestTabId: number | null = null,
 ): Promise<CurrentVideoContextResult> {
-  const context = await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(params));
-  return await bindSelectedCurrentVideoTranscriptEvidence(context, selectedSourceIdentityKey(params));
+  const context = await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(params), requestTabId);
+  return await bindSelectedCurrentVideoTranscriptEvidence(
+    context,
+    selectedSourceIdentityKey(params),
+    requestTabId,
+  );
 }
 
 async function getRawCurrentVideoContextForActiveTab(
   options: CurrentVideoLookupOptions = {},
+  requestTabId: number | null = null,
 ): Promise<CurrentVideoContextResult> {
-  const { tab, context } = await resolveCurrentVideoLookupState();
+  const { tab, context } = await resolveCurrentVideoLookupState(requestTabId);
   const url = tab?.url ?? null;
 
   if (!url || !isBilibiliVideoUrl(url)) {
@@ -726,13 +758,14 @@ async function getRawCurrentVideoContextForActiveTab(
 
 async function probeSubtitleSourceForActiveTab(
   params: Record<string, unknown> | undefined,
+  requestTabId: number | null = null,
 ): Promise<CurrentVideoSubtitleSourceState> {
   const options = currentVideoLookupOptions({
     ...params,
     forceSubtitleProbe: params?.force === true || params?.forceSubtitleProbe === true,
     forceContextRefresh: params?.force === true || params?.forceContextRefresh === true,
   });
-  const context = await getCurrentVideoContextForActiveTab(options);
+  const context = await getCurrentVideoContextForActiveTab(options, requestTabId);
   if (context.kind === 'video' && context.subtitleProbe) {
     return context.subtitleProbe;
   }
@@ -741,20 +774,23 @@ async function probeSubtitleSourceForActiveTab(
 
 async function getTranscriptEvidenceForActiveTab(
   params: Record<string, unknown> | undefined,
+  requestTabId: number | null = null,
 ): Promise<CurrentVideoTranscriptEvidenceState> {
-  const context = await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(params));
+  const context = await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(params), requestTabId);
   const requestedLanguage = typeof params?.language === 'string'
     ? params.language
     : null;
   return await cacheCurrentVideoTranscriptEvidence(context, {
     requestedLanguage,
     protectedSourceIdentityKeys: currentVideoProtectedSourceIdentityKeys(context, params),
+    temporaryOwner: await temporaryTranscriptOwnerForContext(context, requestTabId),
   });
 }
 
 async function bindSelectedCurrentVideoTranscriptEvidence(
   context: CurrentVideoContextResult,
   sourceIdentityKey: string | null,
+  requestTabId: number | null = null,
 ): Promise<CurrentVideoContextResult> {
   if (context.kind !== 'video' || !sourceIdentityKey || !context.cid) return context;
   const transcriptEvidence = await getCurrentVideoTranscriptEvidenceState({
@@ -762,7 +798,7 @@ async function bindSelectedCurrentVideoTranscriptEvidence(
     cid: context.cid,
     page: context.currentPart.page,
     sourceIdentityKey,
-  });
+  }, Date.now(), await temporaryTranscriptOwnerForContext(context, requestTabId));
   return withTranscriptEvidenceState(context, transcriptEvidence);
 }
 
@@ -802,6 +838,7 @@ async function enrichCurrentVideoContextWithSubtitleProbe(
 
 async function enrichCurrentVideoContextWithTranscriptEvidence(
   context: CurrentVideoContext,
+  requestTabId: number | null = null,
 ): Promise<CurrentVideoContext> {
   if (!context.cid) {
     return withTranscriptEvidenceState(context, buildCurrentVideoTranscriptEvidenceState({
@@ -822,12 +859,13 @@ async function enrichCurrentVideoContextWithTranscriptEvidence(
     bvid: context.bvid,
     cid: context.cid,
     page: context.currentPart.page,
-  });
+  }, Date.now(), await temporaryTranscriptOwnerForContext(context, requestTabId));
   return withTranscriptEvidenceState(context, state);
 }
 
 async function getActiveCurrentVideoTranscriptSegments(
   context: CurrentVideoContextResult,
+  requestTabId: number | null = null,
 ) {
   if (
     context.kind !== 'video'
@@ -844,7 +882,7 @@ async function getActiveCurrentVideoTranscriptSegments(
     language: context.transcriptEvidence.language,
     sourceIdentityKey: context.transcriptEvidence.sourceIdentityKey,
     sourceHash: context.transcriptEvidence.sourceHash,
-  });
+  }, await temporaryTranscriptOwnerForContext(context, requestTabId));
 }
 
 function subtitleProbeCacheKey(context: CurrentVideoContext): string {
@@ -915,7 +953,25 @@ function selectedSourceIdentityKey(params: Record<string, unknown> | undefined):
     : null;
 }
 
-async function resolveCurrentVideoLookupState(): Promise<{
+async function temporaryTranscriptOwnerForContext(
+  context: CurrentVideoContextResult,
+  requestTabId: number | null,
+): Promise<CurrentVideoTemporaryTranscriptOwner | undefined> {
+  if (context.kind !== 'video' || !context.cid) return undefined;
+  const target = await resolveCurrentVideoLookupState(requestTabId);
+  const ownerTabId = target.tab?.id ?? 0;
+  if (ownerTabId <= 0) return undefined;
+  return {
+    ownerTabId,
+    bvid: context.bvid,
+    cid: context.cid,
+    page: context.currentPart.page,
+  };
+}
+
+async function resolveCurrentVideoLookupState(
+  requestTabId: number | null = null,
+): Promise<{
   tab: CurrentVideoTabSnapshot | null;
   context: CurrentVideoContextResult | null;
 }> {
@@ -929,6 +985,14 @@ async function resolveCurrentVideoLookupState(): Promise<{
     active: tab.active ?? false,
     lastAccessed: typeof tab.lastAccessed === 'number' ? tab.lastAccessed : null,
   } satisfies CurrentVideoTabSnapshot)));
+
+  if (requestTabId && requestTabId > 0) {
+    const tab = tabs.find(candidate => candidate.id === requestTabId) ?? null;
+    return {
+      tab,
+      context: tab ? currentVideoContexts.get(requestTabId) ?? null : null,
+    };
+  }
 
   return resolveCurrentVideoTabState(tabs, currentVideoContexts);
 }

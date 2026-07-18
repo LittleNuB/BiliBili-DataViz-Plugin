@@ -111,6 +111,16 @@ def run_flow(page):
     storage_after_select = page.evaluate("window.__assistantMockStorage.currentVideoPrimaryTextSelections || {}")
     assert storage_after_select, "explicit assistant source selection was not saved"
 
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    page.wait_for_function(
+        """() => [...(window.__assistantMockMessages || [])].reverse().some(
+            (message) => message.action === "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE"
+                && message.params?.selectedSourceIdentityKey
+        )"""
+    )
+    refresh_message = last_message_for(page, "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE")
+    assert refresh_message["params"].get("selectedSourceIdentityKey"), "selected source key was not sent with subtitle refresh"
+
     page.locator("textarea").fill("subagent 在哪里")
     page.get_by_role("button", name="提问").click()
     expect(page.get_by_text("回答：有证据")).to_be_visible()

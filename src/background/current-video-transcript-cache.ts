@@ -15,6 +15,7 @@ import type {
   CurrentVideoSubtitlePlayerInfoFetcher,
   PlayerInfoFetchOptions,
 } from '../shared/current-video-subtitle-state';
+import type { CurrentVideoTemporaryTranscriptOwner } from './current-video-temporary-transcript-cache.ts';
 
 const SUBTITLE_FETCH_TIMEOUT_MS = 30_000;
 const PLAYER_INFO_ATTEMPTS: Array<PlayerInfoFetchOptions> = [
@@ -36,9 +37,13 @@ export interface CacheCurrentVideoTranscriptOptions {
   fetchPlayerInfo?: CurrentVideoSubtitlePlayerInfoFetcher;
   fetchSubtitleJson?: (url: string) => Promise<unknown>;
   protectedSourceIdentityKeys?: Iterable<string>;
+  temporaryOwner?: CurrentVideoTemporaryTranscriptOwner;
   upsertEvidence?: (
     evidence: CurrentVideoTranscriptEvidenceWrite,
-    options?: { protectedSourceIdentityKeys?: Iterable<string> },
+    options?: {
+      protectedSourceIdentityKeys?: Iterable<string>;
+      temporaryOwner?: CurrentVideoTemporaryTranscriptOwner;
+    },
   ) => Promise<CurrentVideoTranscriptEvidenceState>;
 }
 
@@ -178,6 +183,7 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
           context,
           options.protectedSourceIdentityKeys,
         ),
+        temporaryOwner: options.temporaryOwner,
       });
     } catch (error) {
       const message = errorMessage(error);
@@ -217,7 +223,10 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
 
 async function defaultUpsertEvidence(
   evidence: CurrentVideoTranscriptEvidenceWrite,
-  options: { protectedSourceIdentityKeys?: Iterable<string> } = {},
+  options: {
+    protectedSourceIdentityKeys?: Iterable<string>;
+    temporaryOwner?: CurrentVideoTemporaryTranscriptOwner;
+  } = {},
 ): Promise<CurrentVideoTranscriptEvidenceState> {
   const repo = await import('./storage/current-video-transcript-repo.ts');
   return await repo.upsertCurrentVideoTranscriptEvidence(evidence, options);

@@ -1,4 +1,5 @@
 import {
+  buildCurrentVideoTranscriptEvidenceState,
   buildTranscriptEvidenceStateFromCache,
   planTranscriptEvidenceUpsert,
 } from '../../shared/current-video-transcript-cache';
@@ -10,14 +11,17 @@ import type {
   CurrentVideoTranscriptSourceRecord,
 } from '../../shared/types/current-video-transcript';
 import {
+  clearTemporaryCurrentVideoTranscriptCacheForOwner,
   getTemporaryCurrentVideoTranscriptEvidenceState,
   getTemporaryCurrentVideoTranscriptSegments,
   putTemporaryCurrentVideoTranscriptEvidence,
+  type CurrentVideoTemporaryTranscriptOwner,
 } from '../current-video-temporary-transcript-cache.ts';
 import { db } from './db';
 
 export interface UpsertCurrentVideoTranscriptEvidenceOptions {
   protectedSourceIdentityKeys?: Iterable<string>;
+  temporaryOwner?: CurrentVideoTemporaryTranscriptOwner;
 }
 
 export async function upsertCurrentVideoTranscriptEvidence(
@@ -25,6 +29,7 @@ export async function upsertCurrentVideoTranscriptEvidence(
   options: UpsertCurrentVideoTranscriptEvidenceOptions = {},
 ): Promise<CurrentVideoTranscriptEvidenceState> {
   let state: CurrentVideoTranscriptEvidenceState | null = null;
+  let ownerToClearAfterCommit: CurrentVideoTemporaryTranscriptOwner | null = null;
 
   await db.transaction(
     'rw',
@@ -39,7 +44,27 @@ export async function upsertCurrentVideoTranscriptEvidence(
         protectedSourceIdentityKeys: options.protectedSourceIdentityKeys,
       });
       if (plan.skippedPersistentWrite) {
-        putTemporaryCurrentVideoTranscriptEvidence(evidence);
+        const temporarilyStored = options.temporaryOwner
+          ? putTemporaryCurrentVideoTranscriptEvidence(options.temporaryOwner, evidence)
+          : false;
+        if (!temporarilyStored) {
+          state = buildCurrentVideoTranscriptEvidenceState({
+            status: 'missing',
+            target: {
+              bvid: evidence.sourceRecord.bvid,
+              cid: evidence.sourceRecord.cid,
+              page: evidence.sourceRecord.page,
+              language: evidence.sourceRecord.language,
+            },
+            now: Date.now(),
+            sourceType: evidence.sourceRecord.sourceType,
+            reason: 'temporary_transcript_owner_missing',
+            message: '本次临时内容已失效，请重新检测字幕。',
+            warnings: ['transcript_temporary_owner_missing'],
+          });
+        }
+      } else if (!plan.skippedPersistentWrite && options.temporaryOwner) {
+        ownerToClearAfterCommit = options.temporaryOwner;
       }
 
       if (plan.sourceIdsToDelete.length > 0) {
@@ -54,9 +79,13 @@ export async function upsertCurrentVideoTranscriptEvidence(
       if (!plan.skippedPersistentWrite && plan.segmentsToPut.length > 0) {
         await db.currentVideoTranscriptSegments.bulkPut(plan.segmentsToPut);
       }
-      state = plan.state;
+      state ??= plan.state;
     },
   );
+
+  if (ownerToClearAfterCommit) {
+    clearTemporaryCurrentVideoTranscriptCacheForOwner(ownerToClearAfterCommit);
+  }
 
   if (!state) {
     throw new Error('TRANSCRIPT_CACHE_WRITE_FAILED');
@@ -67,6 +96,7 @@ export async function upsertCurrentVideoTranscriptEvidence(
 export async function getCurrentVideoTranscriptEvidenceState(
   identity: CurrentVideoTranscriptIdentity,
   now = Date.now(),
+  temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
 ): Promise<CurrentVideoTranscriptEvidenceState> {
   const [sources, segments] = await Promise.all([
     db.currentVideoTranscriptSources.where('bvid').equals(identity.bvid).toArray(),
@@ -78,12 +108,14 @@ export async function getCurrentVideoTranscriptEvidenceState(
     await touchTranscriptSource(state.sourceIdentityKey, now);
     return state;
   }
-  const temporaryState = getTemporaryCurrentVideoTranscriptEvidenceState(identity, now);
+  if (!temporaryOwner) return state;
+  const temporaryState = getTemporaryCurrentVideoTranscriptEvidenceState(temporaryOwner, identity, now);
   return temporaryState.active ? temporaryState : state;
 }
 
 export async function getCurrentVideoTranscriptSegments(
   identity: CurrentVideoTranscriptIdentity & { sourceHash?: string | null },
+  temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
 ): Promise<CurrentVideoTranscriptSegment[]> {
   const rows = await db.currentVideoTranscriptSegments
     .where('[bvid+cid+page]')
@@ -106,7 +138,9 @@ export async function getCurrentVideoTranscriptSegments(
     )
     .sort((a, b) => a.startSeconds - b.startSeconds || a.endSeconds - b.endSeconds);
   if (persistentSegments.length > 0) return persistentSegments;
-  return getTemporaryCurrentVideoTranscriptSegments(identity);
+  return temporaryOwner
+    ? getTemporaryCurrentVideoTranscriptSegments(temporaryOwner, identity)
+    : [];
 }
 
 async function touchTranscriptSource(sourceIdentityKey: string, now: number): Promise<void> {

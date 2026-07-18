@@ -1939,6 +1939,7 @@ async function refreshSubtitleEvidenceFromPage(): Promise<void> {
     const transcriptEvidence = await sendRuntimeRequest<CurrentVideoTranscriptEvidenceState>(
       'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE',
       {
+        ...currentPrimaryTextRequestParams(),
         forceContextRefresh: true,
         forceSubtitleProbe: true,
       },

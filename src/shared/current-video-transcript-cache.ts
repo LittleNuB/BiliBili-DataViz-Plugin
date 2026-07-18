@@ -17,6 +17,7 @@ import type { CurrentVideoSubtitleSourceType } from './types/current-video-conte
 
 export const CURRENT_VIDEO_TRANSCRIPT_CACHE_MAX_SOURCE_IDENTITIES = 50;
 export const CURRENT_VIDEO_TRANSCRIPT_CACHE_MAX_BYTES = 50 * 1024 * 1024;
+const AUTO_INCREMENT_ID_CONSERVATIVE_VALUE = Number.MAX_SAFE_INTEGER;
 
 export interface NormalizeBilibiliTranscriptEvidenceOptions {
   bvid: string;
@@ -36,6 +37,8 @@ export interface TranscriptEvidenceUpsertPlan {
   segmentIdsToDelete: number[];
   sourceIdentityKeysToDelete: string[];
   skippedPersistentWrite: boolean;
+  finalRetainedBytes: number;
+  finalRetainedSourceIdentityCount: number;
   state: CurrentVideoTranscriptEvidenceState;
 }
 
@@ -225,10 +228,15 @@ export function planTranscriptEvidenceUpsert(
 ): TranscriptEvidenceUpsertPlan {
   const maxSourceIdentities = options.maxSourceIdentities ?? CURRENT_VIDEO_TRANSCRIPT_CACHE_MAX_SOURCE_IDENTITIES;
   const maxBytes = options.maxBytes ?? CURRENT_VIDEO_TRANSCRIPT_CACHE_MAX_BYTES;
-  const source = normalizeSourceRecordIdentity(evidence.sourceRecord);
+  const normalizedSource = normalizeSourceRecordIdentity(evidence.sourceRecord);
+  const source = {
+    ...normalizedSource,
+    serializedBytes: measureTranscriptPersistentBytes(normalizedSource, evidence.segments),
+  };
   const sourceIdentityKey = sourceIdentity(source);
   const protectedKeys = new Set(options.protectedSourceIdentityKeys ?? []);
   protectedKeys.add(sourceIdentityKey);
+  const existingRetention = measureRetainedTranscriptCache(existingSources, existingSegments);
 
   if (source.status === 'cached' && (source.serializedBytes ?? 0) > maxBytes) {
     return {
@@ -238,6 +246,8 @@ export function planTranscriptEvidenceUpsert(
       segmentIdsToDelete: [],
       sourceIdentityKeysToDelete: [],
       skippedPersistentWrite: true,
+      finalRetainedBytes: existingRetention.bytes,
+      finalRetainedSourceIdentityCount: existingRetention.sourceIdentityCount,
       state: {
         ...buildTranscriptEvidenceStateFromCache(
           {
@@ -306,19 +316,58 @@ export function planTranscriptEvidenceUpsert(
       protectedSourceIdentityKeys: protectedKeys,
     },
   );
+  if (
+    eviction.finalRetainedSourceIdentityCount > maxSourceIdentities
+    || eviction.finalRetainedBytes > maxBytes
+  ) {
+    return {
+      sourcesToPut: [],
+      segmentsToPut: [],
+      sourceIdsToDelete: [],
+      segmentIdsToDelete: [],
+      sourceIdentityKeysToDelete: [],
+      skippedPersistentWrite: true,
+      finalRetainedBytes: existingRetention.bytes,
+      finalRetainedSourceIdentityCount: existingRetention.sourceIdentityCount,
+      state: {
+        ...buildTranscriptEvidenceStateFromCache(
+          {
+            bvid: source.bvid,
+            cid: source.cid,
+            page: source.page,
+            language: source.language,
+            sourceIdentityKey,
+            sourceHash: source.sourceHash,
+          },
+          [source],
+          nextSegments,
+          source.updatedAt,
+        ),
+        persistent: false,
+        temporary: true,
+        warnings: Array.from(new Set([
+          ...source.warnings,
+          'transcript_source_temporary_budget_protected',
+        ])),
+        message: '字幕内容较大，本次仅临时使用，离开页面后需要重新检测。',
+      },
+    };
+  }
   const deletedSourceKeys = new Set(eviction.sourceIdentityKeysToDelete);
   const keptSources = mergedSources.filter(item => !deletedSourceKeys.has(sourceIdentity(item)));
   const keptSegments = mergedSegments.filter(segment =>
     !deletedSourceKeys.has(segment.sourceIdentityKey ?? sourceIdentityFromSegment(segment)),
   );
 
-  return {
+  const plan: TranscriptEvidenceUpsertPlan = {
     sourcesToPut: [sourceToPut],
     segmentsToPut: nextSegments,
     sourceIdsToDelete: eviction.sourceIdsToDelete,
     segmentIdsToDelete: eviction.segmentIdsToDelete,
     sourceIdentityKeysToDelete: eviction.sourceIdentityKeysToDelete,
     skippedPersistentWrite: false,
+    finalRetainedBytes: eviction.finalRetainedBytes,
+    finalRetainedSourceIdentityCount: eviction.finalRetainedSourceIdentityCount,
     state: buildTranscriptEvidenceStateFromCache(
       {
         bvid: source.bvid,
@@ -333,6 +382,8 @@ export function planTranscriptEvidenceUpsert(
       source.updatedAt,
     ),
   };
+  assertTranscriptWritePlanWithinBudget(plan, maxBytes, maxSourceIdentities);
+  return plan;
 }
 
 export function buildTranscriptEvidenceStateFromCache(
@@ -734,6 +785,8 @@ function planTranscriptCacheEviction(
   sourceIdsToDelete: number[];
   segmentIdsToDelete: number[];
   sourceIdentityKeysToDelete: string[];
+  finalRetainedBytes: number;
+  finalRetainedSourceIdentityCount: number;
 } {
   const sourceByIdentity = new Map<string, CurrentVideoTranscriptSourceRecord>();
   for (const source of sources.map(normalizeSourceRecordIdentity)) {
@@ -781,7 +834,47 @@ function planTranscriptCacheEviction(
     sourceIdsToDelete,
     segmentIdsToDelete,
     sourceIdentityKeysToDelete: toDelete,
+    finalRetainedBytes: Math.max(0, totalBytes),
+    finalRetainedSourceIdentityCount: retained.size,
   };
+}
+
+function measureRetainedTranscriptCache(
+  sources: CurrentVideoTranscriptSourceRecord[],
+  segments: CurrentVideoTranscriptSegment[],
+): { bytes: number; sourceIdentityCount: number } {
+  const sourceByIdentity = new Map<string, CurrentVideoTranscriptSourceRecord>();
+  for (const source of sources.map(normalizeSourceRecordIdentity)) {
+    sourceByIdentity.set(sourceIdentity(source), source);
+  }
+  const segmentsByIdentity = new Map<string, CurrentVideoTranscriptSegment[]>();
+  for (const segment of segments) {
+    const key = segment.sourceIdentityKey ?? sourceIdentityFromSegment(segment);
+    const bucket = segmentsByIdentity.get(key) ?? [];
+    bucket.push(segment);
+    segmentsByIdentity.set(key, bucket);
+  }
+  return {
+    bytes: Array.from(sourceByIdentity.entries()).reduce(
+      (sum, [key, source]) => sum + sourceBytes(source, segmentsByIdentity.get(key) ?? []),
+      0,
+    ),
+    sourceIdentityCount: sourceByIdentity.size,
+  };
+}
+
+function assertTranscriptWritePlanWithinBudget(
+  plan: TranscriptEvidenceUpsertPlan,
+  maxBytes: number,
+  maxSourceIdentities: number,
+): void {
+  if (plan.skippedPersistentWrite) return;
+  if (
+    plan.finalRetainedBytes > maxBytes
+    || plan.finalRetainedSourceIdentityCount > maxSourceIdentities
+  ) {
+    throw new Error('TRANSCRIPT_CACHE_WRITE_PLAN_EXCEEDS_BUDGET');
+  }
 }
 
 function sourceBytes(
@@ -789,7 +882,13 @@ function sourceBytes(
   segments: CurrentVideoTranscriptSegment[],
 ): number {
   if (!source) return 0;
-  return source.serializedBytes ?? measureTranscriptPersistentBytes(source, segments);
+  if (
+    typeof source.id === 'number'
+    && segments.every(segment => typeof segment.id === 'number')
+  ) {
+    return measureTranscriptRecordBytes(source, segments);
+  }
+  return measureTranscriptPersistentBytes(source, segments);
 }
 
 export function measureTranscriptPersistentBytes(
@@ -801,71 +900,48 @@ export function measureTranscriptPersistentBytes(
     : 0;
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const measured = serializedSize({
-      source: persistedSourceRecord({ ...source, serializedBytes }),
-      segments: segments.map(persistedSegmentRecord),
-    });
+    const measured = measureTranscriptRecordBytes(
+      { ...source, serializedBytes },
+      segments,
+    );
     if (measured === serializedBytes) return measured;
     serializedBytes = measured;
   }
 
-  return serializedSize({
-    source: persistedSourceRecord({ ...source, serializedBytes }),
-    segments: segments.map(persistedSegmentRecord),
-  });
+  return measureTranscriptRecordBytes(
+    { ...source, serializedBytes },
+    segments,
+  );
 }
 
 function persistedSourceRecord(source: CurrentVideoTranscriptSourceRecord): CurrentVideoTranscriptSourceRecord {
   const normalized = normalizeSourceRecordIdentity(source);
   return {
-    identityKey: normalized.identityKey,
-    sourceIdentityKey: normalized.sourceIdentityKey,
-    partIdentityKey: normalized.partIdentityKey,
-    bvid: normalized.bvid,
-    cid: normalized.cid,
-    page: normalized.page,
-    language: normalized.language,
-    source: normalized.source,
-    sourceType: normalized.sourceType,
-    sourceHash: normalized.sourceHash,
-    bodyHash: normalized.bodyHash ?? null,
-    timelineHash: normalized.timelineHash ?? null,
-    trackId: normalized.trackId,
-    trackUrlHost: normalized.trackUrlHost,
-    segmentCount: normalized.segmentCount,
-    serializedBytes: normalized.serializedBytes ?? 0,
-    coverageStartSeconds: normalized.coverageStartSeconds,
-    coverageEndSeconds: normalized.coverageEndSeconds,
-    status: normalized.status,
-    stale: normalized.stale,
-    persistent: normalized.persistent ?? true,
-    fetchedAt: normalized.fetchedAt,
-    updatedAt: normalized.updatedAt,
-    lastAccessedAt: normalized.lastAccessedAt ?? normalized.updatedAt,
-    reason: normalized.reason,
-    message: normalized.message,
-    warnings: normalized.warnings,
+    ...normalized,
+    id: typeof normalized.id === 'number'
+      ? normalized.id
+      : AUTO_INCREMENT_ID_CONSERVATIVE_VALUE,
   };
 }
 
 function persistedSegmentRecord(segment: CurrentVideoTranscriptSegment): CurrentVideoTranscriptSegment {
   return {
-    segmentId: segment.segmentId,
-    sourceIdentityKey: segment.sourceIdentityKey,
-    bvid: segment.bvid,
-    cid: segment.cid,
-    page: segment.page,
-    startSeconds: segment.startSeconds,
-    endSeconds: segment.endSeconds,
-    text: segment.text,
-    language: segment.language,
-    source: segment.source,
-    sourceType: segment.sourceType,
-    sourceHash: segment.sourceHash,
-    stale: segment.stale,
-    fetchedAt: segment.fetchedAt,
-    updatedAt: segment.updatedAt,
+    ...segment,
+    id: typeof segment.id === 'number'
+      ? segment.id
+      : AUTO_INCREMENT_ID_CONSERVATIVE_VALUE,
   };
+}
+
+function measureTranscriptRecordBytes(
+  source: CurrentVideoTranscriptSourceRecord,
+  segments: CurrentVideoTranscriptSegment[],
+): number {
+  return serializedSize(persistedSourceRecord(source))
+    + segments.reduce(
+      (sum, segment) => sum + serializedSize(persistedSegmentRecord(segment)),
+      0,
+    );
 }
 
 function serializedSize(value: unknown): number {

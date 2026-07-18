@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { cacheCurrentVideoTranscriptEvidence } from '../src/background/current-video-transcript-cache.ts';
@@ -12,9 +13,11 @@ import {
 } from '../src/shared/current-video-transcript-cache.ts';
 import {
   clearTemporaryCurrentVideoTranscriptCache,
+  clearTemporaryCurrentVideoTranscriptCacheForTab,
   getTemporaryCurrentVideoTranscriptEvidenceState,
   getTemporaryCurrentVideoTranscriptSegments,
   putTemporaryCurrentVideoTranscriptEvidence,
+  retainTemporaryCurrentVideoTranscriptOwner,
 } from '../src/background/current-video-temporary-transcript-cache.ts';
 import { clearLegacyCurrentVideoTranscriptCache } from '../src/background/storage/current-video-transcript-migration.ts';
 import {
@@ -226,16 +229,13 @@ test('evicts by serialized byte limit without evicting protected identities', ()
     baseNormalizeOptions({ bvid: 'BV1Protected', cid: 4001, fetchedAt: 1000 }),
   );
   const oldEvidence = normalizeBilibiliTranscriptEvidence(
-    { body: [{ from: 0, to: 1, content: 'old large cache' }] },
+    { body: [{ from: 0, to: 1, content: 'old large cache '.repeat(200) }] },
     baseNormalizeOptions({ bvid: 'BV1OldLarge', cid: 4002, fetchedAt: 1100 }),
   );
-  oldEvidence.sourceRecord.serializedBytes = 900;
-  protectedEvidence.sourceRecord.serializedBytes = 900;
   const nextEvidence = normalizeBilibiliTranscriptEvidence(
     { body: [{ from: 0, to: 1, content: 'new write' }] },
     baseNormalizeOptions({ bvid: 'BV1NewLarge', cid: 4003, fetchedAt: 1200 }),
   );
-  nextEvidence.sourceRecord.serializedBytes = 900;
   const sources = [
     { ...oldEvidence.sourceRecord, id: 1, lastAccessedAt: 1 },
     { ...protectedEvidence.sourceRecord, id: 2, lastAccessedAt: 2 },
@@ -244,10 +244,12 @@ test('evicts by serialized byte limit without evicting protected identities', ()
     { ...oldEvidence.segments[0], id: 11 },
     { ...protectedEvidence.segments[0], id: 12 },
   ];
+  const maxBytes = measureTranscriptPersistentBytes(sources[1], [segments[1]])
+    + measureTranscriptPersistentBytes(nextEvidence.sourceRecord, nextEvidence.segments);
 
   const plan = planTranscriptEvidenceUpsert(sources, segments, nextEvidence, {
     maxSourceIdentities: 50,
-    maxBytes: 1800,
+    maxBytes,
     protectedSourceIdentityKeys: [protectedEvidence.sourceRecord.sourceIdentityKey as string],
   });
 
@@ -255,6 +257,56 @@ test('evicts by serialized byte limit without evicting protected identities', ()
   assert.deepEqual(plan.segmentIdsToDelete, [11]);
   assert.equal(plan.sourceIdentityKeysToDelete.includes(protectedEvidence.sourceRecord.sourceIdentityKey as string), false);
   assert.equal(plan.skippedPersistentWrite, false);
+  assert.ok(plan.finalRetainedBytes <= maxBytes);
+  assert.ok(plan.finalRetainedSourceIdentityCount <= 50);
+});
+
+test('keeps existing cache intact when protected identities still exceed the budget with incoming', () => {
+  const active = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 1, content: 'active source' }] },
+    baseNormalizeOptions({ bvid: 'BV1Active', cid: 4101, fetchedAt: 1000 }),
+  );
+  const selected = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 1, content: 'selected source' }] },
+    baseNormalizeOptions({ bvid: 'BV1Selected', cid: 4102, fetchedAt: 1100 }),
+  );
+  const evictable = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 1, content: 'old unprotected source' }] },
+    baseNormalizeOptions({ bvid: 'BV1Evictable', cid: 4103, fetchedAt: 900 }),
+  );
+  const incoming = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 1, content: 'incoming source' }] },
+    baseNormalizeOptions({ bvid: 'BV1Incoming', cid: 4104, fetchedAt: 1200 }),
+  );
+  const existingSources = [
+    { ...active.sourceRecord, id: 1 },
+    { ...selected.sourceRecord, id: 2 },
+    { ...evictable.sourceRecord, id: 3 },
+  ];
+  const existingSegments = [
+    { ...active.segments[0], id: 11 },
+    { ...selected.segments[0], id: 12 },
+    { ...evictable.segments[0], id: 13 },
+  ];
+
+  const plan = planTranscriptEvidenceUpsert(existingSources, existingSegments, incoming, {
+    maxSourceIdentities: 2,
+    maxBytes: Number.MAX_SAFE_INTEGER,
+    protectedSourceIdentityKeys: [
+      active.sourceRecord.sourceIdentityKey as string,
+      selected.sourceRecord.sourceIdentityKey as string,
+    ],
+  });
+
+  assert.equal(plan.skippedPersistentWrite, true);
+  assert.equal(plan.state.temporary, true);
+  assert.deepEqual(plan.sourcesToPut, []);
+  assert.deepEqual(plan.segmentsToPut, []);
+  assert.deepEqual(plan.sourceIdsToDelete, []);
+  assert.deepEqual(plan.segmentIdsToDelete, []);
+  assert.deepEqual(plan.sourceIdentityKeysToDelete, []);
+  assert.equal(plan.finalRetainedSourceIdentityCount, existingSources.length);
+  assert.ok(plan.finalRetainedBytes > 0);
 });
 
 test('keeps oversize subtitle source temporary without evicting existing cache', () => {
@@ -266,9 +318,13 @@ test('keeps oversize subtitle source temporary without evicting existing cache',
     { body: [{ from: 0, to: 1, content: 'oversize cache' }] },
     baseNormalizeOptions({ bvid: 'BV1Oversize', cid: 5002, fetchedAt: 2000 }),
   );
-  oversize.sourceRecord.serializedBytes = 51 * 1024 * 1024;
-
-  const plan = planTranscriptEvidenceUpsert([existing.sourceRecord], existing.segments, oversize);
+  const oversizeBytes = measureTranscriptPersistentBytes(oversize.sourceRecord, oversize.segments);
+  const plan = planTranscriptEvidenceUpsert(
+    [existing.sourceRecord],
+    existing.segments,
+    oversize,
+    { maxBytes: oversizeBytes - 1 },
+  );
 
   assert.equal(plan.skippedPersistentWrite, true);
   assert.equal(plan.sourcesToPut.length, 0);
@@ -318,6 +374,60 @@ test('uses persisted source and segment records for byte limit boundary planning
   assert.ok(CURRENT_VIDEO_TRANSCRIPT_CACHE_MAX_BYTES > measured);
 });
 
+test('keeps fake IndexedDB auto-id readback within MAX-1, MAX, and MAX+1 plans', async () => {
+  const { db } = await import('../src/background/storage/db.ts');
+  db.close();
+  await db.delete();
+  await db.open();
+
+  try {
+    const evidence = normalizeBilibiliTranscriptEvidence(
+      {
+        body: [
+          { from: 0, to: 1, content: '自动主键边界🙂'.repeat(20) },
+          { from: 1, to: 2, content: 'fake IndexedDB readback'.repeat(15) },
+        ],
+      },
+      baseNormalizeOptions({ bvid: 'BV1FakeIdbLimit', cid: 6151, fetchedAt: 9050 }),
+    );
+    const max = measureTranscriptPersistentBytes(evidence.sourceRecord, evidence.segments);
+    const maxMinusOne = planTranscriptEvidenceUpsert([], [], evidence, { maxBytes: max - 1 });
+    const exactMax = planTranscriptEvidenceUpsert([], [], evidence, { maxBytes: max });
+    const maxPlusOne = planTranscriptEvidenceUpsert([], [], evidence, { maxBytes: max + 1 });
+
+    assert.equal(maxMinusOne.skippedPersistentWrite, true);
+    assert.equal(exactMax.skippedPersistentWrite, false);
+    assert.equal(maxPlusOne.skippedPersistentWrite, false);
+
+    await db.transaction(
+      'rw',
+      db.currentVideoTranscriptSources,
+      db.currentVideoTranscriptSegments,
+      async () => {
+        await db.currentVideoTranscriptSources.bulkPut(exactMax.sourcesToPut);
+        await db.currentVideoTranscriptSegments.bulkPut(exactMax.segmentsToPut);
+      },
+    );
+    const [storedSources, storedSegments] = await Promise.all([
+      db.currentVideoTranscriptSources.toArray(),
+      db.currentVideoTranscriptSegments.toArray(),
+    ]);
+    const actualBytes = storedSources.reduce((sum, row) => sum + utf8JsonBytes(row), 0)
+      + storedSegments.reduce((sum, row) => sum + utf8JsonBytes(row), 0);
+
+    assert.equal(storedSources.length, 1);
+    assert.equal(storedSegments.length, 2);
+    assert.equal(typeof storedSources[0].id, 'number');
+    assert.ok(storedSegments.every(segment => typeof segment.id === 'number'));
+    assert.ok(actualBytes <= max);
+    assert.ok(actualBytes <= exactMax.finalRetainedBytes);
+    assert.equal(exactMax.finalRetainedSourceIdentityCount, 1);
+  } finally {
+    db.close();
+    await db.delete();
+  }
+});
+
 test('keeps oversize subtitle body readable only in temporary source memory', () => {
   clearTemporaryCurrentVideoTranscriptCache();
   const oversize = normalizeBilibiliTranscriptEvidence(
@@ -335,7 +445,8 @@ test('keeps oversize subtitle body readable only in temporary source memory', ()
   });
   assert.equal(plan.skippedPersistentWrite, true);
 
-  putTemporaryCurrentVideoTranscriptEvidence(oversize, 9200);
+  const owner = temporaryOwner(71, oversize);
+  putTemporaryCurrentVideoTranscriptEvidence(owner, oversize, 9200);
   const identity = {
     bvid: 'BV1Temporary',
     cid: 6201,
@@ -344,8 +455,8 @@ test('keeps oversize subtitle body readable only in temporary source memory', ()
     sourceIdentityKey: oversize.sourceRecord.sourceIdentityKey,
     sourceHash: oversize.sourceRecord.sourceHash,
   };
-  const state = getTemporaryCurrentVideoTranscriptEvidenceState(identity, 9300);
-  const segments = getTemporaryCurrentVideoTranscriptSegments(identity, 9300);
+  const state = getTemporaryCurrentVideoTranscriptEvidenceState(owner, identity, 9300);
+  const segments = getTemporaryCurrentVideoTranscriptSegments(owner, identity, 9300);
 
   assert.equal(state.active, true);
   assert.equal(state.temporary, true);
@@ -353,15 +464,73 @@ test('keeps oversize subtitle body readable only in temporary source memory', ()
   assert.equal(segments.length, 2);
   assert.match(segments.map(segment => segment.text).join('\n'), /本次临时使用/);
 
-  const switched = getTemporaryCurrentVideoTranscriptEvidenceState({
+  const switched = getTemporaryCurrentVideoTranscriptEvidenceState(owner, {
     ...identity,
     sourceIdentityKey: 'primary-text:bilibili_subtitle:BV1Temporary:6201:1:zh-cn:other',
   }, 9400);
   assert.equal(switched.active, false);
 
   clearTemporaryCurrentVideoTranscriptCache();
-  const cleared = getTemporaryCurrentVideoTranscriptSegments(identity, 9500);
+  const cleared = getTemporaryCurrentVideoTranscriptSegments(owner, identity, 9500);
   assert.equal(cleared.length, 0);
+});
+
+test('isolates temporary transcript bodies by tab and releases only the navigating tab', () => {
+  clearTemporaryCurrentVideoTranscriptCache();
+  const evidence = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '两个标签页不能互相读取这段正文。' }] },
+    baseNormalizeOptions({ bvid: 'BV1TwoTabs', cid: 6251, fetchedAt: 9600 }),
+  );
+  const identity = {
+    bvid: evidence.sourceRecord.bvid,
+    cid: evidence.sourceRecord.cid,
+    page: evidence.sourceRecord.page,
+    language: evidence.sourceRecord.language,
+    sourceIdentityKey: evidence.sourceRecord.sourceIdentityKey,
+    sourceHash: evidence.sourceRecord.sourceHash,
+  };
+  const tabOne = temporaryOwner(81, evidence);
+  const tabTwo = temporaryOwner(82, evidence);
+
+  putTemporaryCurrentVideoTranscriptEvidence(tabOne, evidence, 9700);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabOne, identity, 9710).length, 1);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabTwo, identity, 9710).length, 0);
+
+  putTemporaryCurrentVideoTranscriptEvidence(tabTwo, evidence, 9720);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabOne, identity, 9730).length, 1);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabTwo, identity, 9730).length, 1);
+
+  const replacement = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '同页新正文替换旧的临时来源。' }] },
+    baseNormalizeOptions({ bvid: 'BV1TwoTabs', cid: 6251, fetchedAt: 9735 }),
+  );
+  const replacementIdentity = {
+    ...identity,
+    sourceIdentityKey: replacement.sourceRecord.sourceIdentityKey,
+    sourceHash: replacement.sourceRecord.sourceHash,
+  };
+  putTemporaryCurrentVideoTranscriptEvidence(tabOne, replacement, 9735);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabOne, identity, 9736).length, 0);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabOne, replacementIdentity, 9736).length, 1);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabTwo, identity, 9736).length, 1);
+
+  retainTemporaryCurrentVideoTranscriptOwner({
+    ownerTabId: tabOne.ownerTabId,
+    bvid: 'BV1NextPage',
+    cid: 6252,
+    page: 2,
+  });
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabOne, identity, 9740).length, 0);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabTwo, identity, 9740).length, 1);
+
+  clearTemporaryCurrentVideoTranscriptCacheForTab(tabTwo.ownerTabId);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabTwo, identity, 9750).length, 0);
+
+  putTemporaryCurrentVideoTranscriptEvidence(tabOne, evidence, 9760);
+  clearTemporaryCurrentVideoTranscriptCache();
+  const workerMemoryMissing = getTemporaryCurrentVideoTranscriptEvidenceState(tabOne, identity, 9770);
+  assert.equal(workerMemoryMissing.active, false);
+  assert.equal(workerMemoryMissing.status, 'missing');
 });
 
 test('Dexie 0.12 subtitle cache upgrade clears only transcript tables transactionally', async () => {
@@ -415,7 +584,14 @@ test('background cache fetch keeps raw subtitle URL internal and reports languag
   const store = memoryStore();
   let fetchedUrl = '';
   let protectedKeys: string[] = [];
+  let temporaryOwnerSeen: unknown = null;
   const protectedIdentityKey = 'primary-text:bilibili_subtitle:BV1Protected:202:1:zh-cn:protected';
+  const temporaryOwnerScope = {
+    ownerTabId: 91,
+    bvid: 'BV1Transcript00',
+    cid: 101,
+    page: 1,
+  };
   const fetchTargets: Array<{ bvid: string; aid?: number | null; cid: number; page: number | null }> = [];
   const context = {
     ...videoContext(),
@@ -423,6 +599,7 @@ test('background cache fetch keeps raw subtitle URL internal and reports languag
   };
   const state = await cacheCurrentVideoTranscriptEvidence(context, {
     now: 5000,
+    temporaryOwner: temporaryOwnerScope,
     fetchPlayerInfo: async (target) => {
       fetchTargets.push(target);
       return {
@@ -444,6 +621,7 @@ test('background cache fetch keeps raw subtitle URL internal and reports languag
     },
     upsertEvidence: async (evidence, options) => {
       protectedKeys = Array.from(options?.protectedSourceIdentityKeys ?? []);
+      temporaryOwnerSeen = options?.temporaryOwner ?? null;
       return store.upsert(evidence);
     },
   });
@@ -453,6 +631,7 @@ test('background cache fetch keeps raw subtitle URL internal and reports languag
   assert.equal(state.segmentCount, 1);
   assert.deepEqual(fetchTargets[0], { bvid: 'BV1Transcript00', aid: 8800, cid: 101, page: 1 });
   assert.deepEqual(protectedKeys, [protectedIdentityKey]);
+  assert.deepEqual(temporaryOwnerSeen, temporaryOwnerScope);
   assert.match(fetchedUrl, /^https:\/\/aisubtitle\.hdslb\.com\//);
   assert.doesNotMatch(JSON.stringify(state), /private-track|subtitle_url|token=secret|SESSDATA|Key\.txt/i);
 });
@@ -632,6 +811,15 @@ function baseNormalizeOptions(overrides: Partial<Parameters<typeof normalizeBili
   };
 }
 
+function temporaryOwner(ownerTabId: number, evidence: CurrentVideoTranscriptEvidenceWrite) {
+  return {
+    ownerTabId,
+    bvid: evidence.sourceRecord.bvid,
+    cid: evidence.sourceRecord.cid,
+    page: evidence.sourceRecord.page,
+  };
+}
+
 function memoryStore() {
   const sources: CurrentVideoTranscriptSourceRecord[] = [];
   const segments: CurrentVideoTranscriptSegment[] = [];
@@ -724,6 +912,10 @@ function putSegments(
       target.push(value);
     }
   }
+}
+
+function utf8JsonBytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
 function videoContext(): CurrentVideoContext {
