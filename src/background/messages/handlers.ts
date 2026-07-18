@@ -808,12 +808,20 @@ async function getCurrentVideoContextLookupWithSelection(
   params: Record<string, unknown> | undefined,
   requestTabId: number | null = null,
 ): Promise<CurrentVideoContextLookupResult> {
-  const lookup = await getCurrentVideoContextLookup(currentVideoLookupOptions(params), requestTabId);
+  const options = currentVideoLookupOptions(params);
+  const requestedSourceIdentityKey = selectedSourceIdentityKey(params);
+  if (!requestedSourceIdentityKey) {
+    return await getCurrentVideoContextLookup(options, requestTabId);
+  }
+
+  const lookup = await getRawCurrentVideoContextLookup(options, requestTabId);
+  if (lookup.context.kind !== 'video') return lookup;
+  const withSubtitle = await enrichCurrentVideoContextWithSubtitleProbe(lookup.context, options);
   return {
     ...lookup,
     context: await bindSelectedCurrentVideoTranscriptEvidence(
-      lookup.context,
-      selectedSourceIdentityKey(params),
+      withSubtitle,
+      requestedSourceIdentityKey,
       lookup.temporaryOwner,
     ),
   };
@@ -1031,8 +1039,7 @@ function currentVideoLookupOptions(
 }
 
 function primaryTextSelectionsReady(params: Record<string, unknown> | undefined): boolean {
-  return params?.primaryTextSelectionsReady !== false
-    && params?.primaryTextSelectionReady !== false;
+  return params?.primaryTextSelectionsReady === true;
 }
 
 function primaryTextSelectionNotReadySummary(now = Date.now()): CurrentVideoSummaryResult {

@@ -80,6 +80,7 @@
       const runtimeMessages = [];
       const extensionStorage = {};
       let deferPrimaryTextStorage = mockParams.get("deferPrimaryTextStorage") === "1";
+      const rejectPrimaryTextStorage = mockParams.get("rejectPrimaryTextStorage") === "1";
       const pendingPrimaryTextStorageReads = [];
       if (mockParams.get("savedSource") === "v1") {
         extensionStorage[primaryTextSelectionStorageKey] = {
@@ -563,7 +564,11 @@
       window.__assistantMockResolvePrimaryTextStorage = () => {
         deferPrimaryTextStorage = false;
         const pending = pendingPrimaryTextStorageReads.splice(0);
-        for (const resolveRead of pending) resolveRead();
+        for (const read of pending) read.resolve();
+      };
+      window.__assistantMockRejectPrimaryTextStorage = () => {
+        const pending = pendingPrimaryTextStorageReads.splice(0);
+        for (const read of pending) read.reject();
       };
       window.__assistantMockSwitchDuringTranscript = () => {
         switchDuringNextTranscriptFetch = true;
@@ -920,9 +925,12 @@
         storage: {
           local: {
             get(keys) {
-              if (deferPrimaryTextStorage && readsPrimaryTextSelection(keys)) {
-                return new Promise((resolve) => {
-                  pendingPrimaryTextStorageReads.push(() => resolve(storageGetResult(keys)));
+              if ((deferPrimaryTextStorage || rejectPrimaryTextStorage) && readsPrimaryTextSelection(keys)) {
+                return new Promise((resolve, reject) => {
+                  pendingPrimaryTextStorageReads.push({
+                    resolve: () => resolve(storageGetResult(keys)),
+                    reject: () => reject(new Error("MOCK_PRIMARY_TEXT_STORAGE_READ_FAILED")),
+                  });
                 });
               }
               return Promise.resolve(storageGetResult(keys));

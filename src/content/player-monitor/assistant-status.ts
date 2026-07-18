@@ -754,6 +754,8 @@ function renderExpandedPanel(root: HTMLElement): void {
     appendSubtitleDiagnostics(body, context);
     appendVideoIdentity(body, context);
     appendPrimaryTextSourceSwitcher(body, context);
+    appendSummary(body);
+    appendVideoKnowledge(body, context);
     appendSegmentSearch(body, context);
   } else {
     const empty = section('当前视频');
@@ -2312,8 +2314,13 @@ function ensurePrimaryTextSelectionsLoaded(): void {
       }
     })
     .catch(() => {
+      primaryTextSelections.clear();
       primaryTextSelectionsLoaded = true;
       primaryTextSelectionsLoading = false;
+      if (assistantState.context) {
+        updateAssistantContext(assistantState.context);
+        renderAssistantShell();
+      }
     });
 }
 

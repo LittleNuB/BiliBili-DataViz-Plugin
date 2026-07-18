@@ -14,7 +14,10 @@ import {
 import { retainTemporaryTranscriptOwnerForContextSnapshot } from '../src/background/current-video-transcript-owner.ts';
 import type { CurrentVideoContext } from '../src/shared/types/current-video-context.ts';
 import type { BiliVizRequest, BiliVizResponse } from '../src/shared/types/messages.ts';
-import type { CurrentVideoSegmentRetrievalResult } from '../src/shared/types/current-video-segment-retrieval.ts';
+import type {
+  CurrentVideoSegmentRetrievalResult,
+  CurrentVideoTimestampJumpResponse,
+} from '../src/shared/types/current-video-segment-retrieval.ts';
 import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary.ts';
 import type { VideoKnowledgeResult } from '../src/shared/types/video-knowledge.ts';
 import { db } from '../src/background/storage/db.ts';
@@ -255,6 +258,15 @@ test('background full-text handlers fail closed while primary text selection rea
       query: 'active V2 transcript',
     },
   }, tabId, context.url);
+  const jump = await sendRequest<CurrentVideoTimestampJumpResponse>({
+    action: 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP',
+    params: {
+      ...readinessParams,
+      candidateId: 'readiness-blocked-candidate',
+      query: 'active V2 transcript',
+      confirmed: true,
+    },
+  }, tabId, context.url);
 
   assert.equal(summary.success, true);
   assert.equal(summary.data?.status, 'cancelled');
@@ -274,9 +286,165 @@ test('background full-text handlers fail closed while primary text selection rea
   assert.equal(search.data?.aiRerank.status, 'not_requested');
   assert.equal(search.data?.qa.aiState.status, 'not_requested');
 
+  assert.equal(jump.success, true);
+  assert.equal(jump.data?.ok, false);
+  assert.equal(jump.data?.targetSeconds, null);
+  assert.match(jump.data?.message ?? '', /主要文本来源/);
+
   const sourceAfter = await transcriptSource(evidence.sourceRecord.identityKey);
   assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
   assert.equal(storageReadCount('userConfig'), 0);
+});
+
+test('background full-text handlers fail closed when the readiness marker is missing or malformed', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+
+  const tabId = 18_605;
+  const context = handlerVideoContext('BV1MissingReady9', 4501, 1);
+  const evidence = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 9, to: 13, content: 'marker absent V2 body must remain unread' }] },
+    {
+      bvid: context.bvid,
+      cid: context.cid as number,
+      page: context.currentPart.page,
+      language: 'zh-CN',
+      sourceType: 'bilibili_player_wbi_v2',
+      trackId: 'missing-marker-v2',
+      trackUrlHost: 'aisubtitle.hdslb.com',
+      fetchedAt: 11_300,
+    },
+  );
+  await upsertCurrentVideoTranscriptEvidence(evidence);
+  const sourceBefore = await transcriptSource(evidence.sourceRecord.identityKey);
+
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 4_000 }]);
+  await sendContentMessage({
+    action: 'CURRENT_VIDEO_CONTEXT_UPDATE',
+    payload: context,
+  }, tabId, context.url);
+
+  const summary = await sendRequest<CurrentVideoSummaryResult>({
+    action: 'GET_CURRENT_VIDEO_SUMMARY',
+    params: {},
+  }, tabId, context.url);
+  const knowledge = await sendRequest<VideoKnowledgeResult>({
+    action: 'GET_VIDEO_KNOWLEDGE',
+    params: {},
+  }, tabId, context.url);
+  const search = await sendRequest<CurrentVideoSegmentRetrievalResult>({
+    action: 'SEARCH_CURRENT_VIDEO_SEGMENTS',
+    params: { query: 'marker absent V2 body' },
+  }, tabId, context.url);
+  const jump = await sendRequest<CurrentVideoTimestampJumpResponse>({
+    action: 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP',
+    params: {
+      candidateId: 'missing-marker-candidate',
+      query: 'marker absent V2 body',
+      confirmed: true,
+    },
+  }, tabId, context.url);
+  const malformed = await sendRequest<CurrentVideoSummaryResult>({
+    action: 'GET_CURRENT_VIDEO_SUMMARY',
+    params: { primaryTextSelectionsReady: 'true' },
+  }, tabId, context.url);
+
+  assert.equal(summary.data?.status, 'cancelled');
+  assert.equal(summary.data?.sourceTier, null);
+  assert.equal(knowledge.data?.nodes.length, 0);
+  assert.equal(knowledge.data?.sourceState.transcriptEvidence, false);
+  assert.equal(search.data?.status, 'no_evidence');
+  assert.equal(search.data?.candidates.length, 0);
+  assert.equal(search.data?.evidenceState.transcriptSegmentCount, 0);
+  assert.equal(search.data?.aiRerank.status, 'not_requested');
+  assert.equal(search.data?.qa.aiState.status, 'not_requested');
+  assert.equal(jump.data?.ok, false);
+  assert.equal(jump.data?.targetSeconds, null);
+  assert.match(jump.data?.message ?? '', /主要文本来源/);
+  assert.equal(malformed.data?.status, 'cancelled');
+
+  const sourceAfter = await transcriptSource(evidence.sourceRecord.identityKey);
+  assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
+  assert.equal(storageReadCount('userConfig'), 0);
+});
+
+test('background keeps an exact missing saved V1 selection inactive without touching active V2', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+
+  const tabId = 18_606;
+  const context = handlerVideoContext('BV1MissingV19', 4601, 1);
+  const evidenceV2 = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 14, to: 19, content: 'persistent active V2 must not replace the missing saved V1 source' }] },
+    {
+      bvid: context.bvid,
+      cid: context.cid as number,
+      page: context.currentPart.page,
+      language: 'zh-CN',
+      sourceType: 'bilibili_player_wbi_v2',
+      trackId: 'missing-v1-active-v2',
+      trackUrlHost: 'aisubtitle.hdslb.com',
+      fetchedAt: 11_400,
+    },
+  );
+  await upsertCurrentVideoTranscriptEvidence(evidenceV2);
+  await db.currentVideoTranscriptSources
+    .where('identityKey')
+    .equals(evidenceV2.sourceRecord.identityKey)
+    .modify({ lastAccessedAt: 1_000 });
+  const sourceBefore = await transcriptSource(evidenceV2.sourceRecord.identityKey);
+  const missingV1Key = `primary-text:bilibili_subtitle:${context.bvid}:${context.cid}:1:zh-cn:saved-v1-missing`;
+
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 5_000 }]);
+  await sendContentMessage({
+    action: 'CURRENT_VIDEO_CONTEXT_UPDATE',
+    payload: context,
+  }, tabId, context.url);
+
+  const selectedParams = {
+    primaryTextSelectionsReady: true,
+    selectedSourceIdentityKey: missingV1Key,
+  };
+  const summary = await sendRequest<CurrentVideoSummaryResult>({
+    action: 'GET_CURRENT_VIDEO_SUMMARY',
+    params: selectedParams,
+  }, tabId, context.url);
+  const knowledge = await sendRequest<VideoKnowledgeResult>({
+    action: 'GET_VIDEO_KNOWLEDGE',
+    params: selectedParams,
+  }, tabId, context.url);
+  const search = await sendRequest<CurrentVideoSegmentRetrievalResult>({
+    action: 'SEARCH_CURRENT_VIDEO_SEGMENTS',
+    params: {
+      ...selectedParams,
+      query: 'persistent active V2 must not replace',
+    },
+  }, tabId, context.url);
+  const jump = await sendRequest<CurrentVideoTimestampJumpResponse>({
+    action: 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP',
+    params: {
+      ...selectedParams,
+      candidateId: 'missing-v1-candidate',
+      query: 'persistent active V2 must not replace',
+      confirmed: true,
+    },
+  }, tabId, context.url);
+
+  assert.notEqual(summary.data?.sourceTier, 'transcript_summary');
+  assert.equal(summary.data?.evidence.some(item => item.source === 'transcript'), false);
+  assert.equal(summary.data?.timestampRanges.length, 0);
+  assert.equal(knowledge.data?.sourceState.transcriptEvidence, false);
+  assert.equal(knowledge.data?.nodes.some(node => node.source === 'transcript'), false);
+  assert.equal(search.data?.status, 'no_evidence');
+  assert.equal(search.data?.candidates.length, 0);
+  assert.equal(search.data?.evidenceState.transcriptSegmentCount, 0);
+  assert.notEqual(search.data?.aiRerank.status, 'generated');
+  assert.notEqual(search.data?.qa.aiState.status, 'generated');
+  assert.equal(jump.data?.ok, false);
+  assert.equal(jump.data?.targetSeconds, null);
+
+  const sourceAfter = await transcriptSource(evidenceV2.sourceRecord.identityKey);
+  assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
 });
 
 function handlerVideoContext(bvid: string, cid: number, page = 1): CurrentVideoContext {

@@ -17,6 +17,7 @@ FORBIDDEN_VISIBLE_TERMS = [
     "segmentId",
     "subtitle_url",
     "document is not defined",
+    "MOCK_PRIMARY_TEXT_STORAGE_READ_FAILED",
 ]
 FULL_TEXT_OR_SEARCH_ACTIONS = {
     "GET_CURRENT_VIDEO_SUMMARY",
@@ -282,6 +283,39 @@ def run_single_v2_without_saved_selection_flow(page):
     assert_no_horizontal_overflow(page)
 
 
+def run_rejected_storage_single_v2_flow(page):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&rejectPrimaryTextStorage=1")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+
+    page.get_by_text("展开助手").click()
+    expect(page.get_by_text("正在读取本页保存的主要文本来源选择").first).to_be_visible()
+    expect(page.locator("textarea")).to_be_disabled()
+    expect(page.get_by_role("button", name="读取摘要")).to_be_disabled()
+    expect(page.get_by_role("button", name="刷新节点")).to_be_disabled()
+
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    expect(page.get_by_text("B站字幕").first).to_be_visible()
+    current_v2_key = page.evaluate("window.__assistantMockCurrentSourceIdentityKey()")
+    expect(page.locator("textarea")).to_be_disabled()
+
+    page.evaluate("window.__assistantMockRejectPrimaryTextStorage()")
+    expect(page.get_by_text("正在读取本页保存的主要文本来源选择")).to_have_count(0)
+    expect(page.locator("textarea")).to_be_enabled()
+    expect(page.get_by_role("button", name="读取摘要")).to_be_enabled()
+    expect(page.get_by_role("button", name="刷新节点")).to_be_enabled()
+
+    page.locator("textarea").fill("subagent 在哪里")
+    page.get_by_role("button", name="提问").click()
+    expect(page.get_by_text("回答：有证据")).to_be_visible()
+    search_message = last_message_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS")
+    assert search_message["params"].get("primaryTextSelectionsReady") is True
+    assert search_message["params"].get("selectedSourceIdentityKey") == current_v2_key
+
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
 def main():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -295,6 +329,11 @@ def main():
             run_single_v2_without_saved_selection_flow(single_v2)
             assert not single_v2_errors, "\n".join(single_v2_errors)
             single_v2.close()
+
+            rejected_storage, rejected_storage_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_rejected_storage_single_v2_flow(rejected_storage)
+            assert not rejected_storage_errors, "\n".join(rejected_storage_errors)
+            rejected_storage.close()
 
             late_switch, late_switch_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
             run_late_switch_flow(late_switch)
@@ -316,7 +355,7 @@ def main():
             assert not mobile_errors, "\n".join(mobile_errors)
             mobile.close()
 
-            print("current-video primary-text real UI QA passed: deferred storage readiness, missing saved source, single-source fallback, desktop/mobile source selection, no automatic full-text request, search/jump/return, no raw visible leak, no overflow, no console errors")
+            print("current-video primary-text real UI QA passed: deferred and rejected storage readiness, missing saved source, single-source fallback, desktop/mobile source selection, no automatic full-text request, search/jump/return, no raw visible leak, no overflow, no console errors")
         finally:
             browser.close()
 
