@@ -204,10 +204,98 @@ def run_late_switch_flow(page):
     assert_no_horizontal_overflow(page)
 
 
+def run_deferred_storage_flow(page):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&deferPrimaryTextStorage=1&savedSource=v1")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+
+    page.get_by_text("展开助手").click()
+    expect(page.get_by_text("正在读取本页保存的主要文本来源选择").first).to_be_visible()
+    expect(page.locator("textarea")).to_be_disabled()
+    expect(page.get_by_role("button", name="提问")).to_be_disabled()
+
+    counts_before = {
+        action: message_count_for(page, action)
+        for action in [
+            "GET_CURRENT_VIDEO_SUMMARY",
+            "GET_VIDEO_KNOWLEDGE",
+            "SEARCH_CURRENT_VIDEO_SEGMENTS",
+            "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
+        ]
+    }
+    page.get_by_role("button", name="提问").evaluate("(button) => button.click()")
+    for action, count in counts_before.items():
+        assert message_count_for(page, action) == count, f"{action} should stay blocked before storage resolves"
+
+    saved_v1_key = page.evaluate(
+        """() => Object.values(window.__assistantMockStorage.currentVideoPrimaryTextSelections || {})[0] || null"""
+    )
+    assert saved_v1_key and saved_v1_key.endswith("mock-source-hash-hidden-v1")
+    page.evaluate("window.__assistantMockResolvePrimaryTextStorage()")
+    expect(page.get_by_text("此前选择的主要文本来源已经不可用").first).to_be_visible()
+    expect(page.locator("textarea")).to_be_disabled()
+    expect(page.get_by_role("button", name="提问")).to_be_disabled()
+
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    page.wait_for_function(
+        """(expected) => [...(window.__assistantMockMessages || [])].reverse().some(
+            (message) => message.action === "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE"
+                && message.params?.selectedSourceIdentityKey === expected
+        )""",
+        arg=saved_v1_key,
+    )
+    refresh_message = last_message_for(page, "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE")
+    assert refresh_message["params"].get("selectedSourceIdentityKey") == saved_v1_key
+    assert refresh_message["params"].get("selectedSourceIdentityKey") != page.evaluate("window.__assistantMockCurrentSourceIdentityKey()")
+
+    page.get_by_role("button", name="提问").evaluate("(button) => button.click()")
+    assert message_count_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS") == counts_before["SEARCH_CURRENT_VIDEO_SEGMENTS"]
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_single_v2_without_saved_selection_flow(page):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+
+    page.get_by_text("展开助手").click()
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    expect(page.get_by_text("B站字幕").first).to_be_visible()
+    expect(page.locator("textarea")).to_be_enabled()
+    current_v2_key = page.evaluate("window.__assistantMockCurrentSourceIdentityKey()")
+
+    page.locator("textarea").fill("subagent 在哪里")
+    page.get_by_role("button", name="提问").click()
+    expect(page.get_by_text("回答：有证据")).to_be_visible()
+    search_message = last_message_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS")
+    assert search_message["params"].get("primaryTextSelectionsReady") is True
+    assert search_message["params"].get("selectedSourceIdentityKey") == current_v2_key
+
+    page.get_by_role("button", name="预览跳转").first.click()
+    page.get_by_role("button", name="确认跳转").click()
+    jump_message = last_message_for(page, "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP")
+    assert jump_message["params"].get("primaryTextSelectionsReady") is True
+    assert jump_message["params"].get("selectedSourceIdentityKey") == current_v2_key
+
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
 def main():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
+            deferred_storage, deferred_storage_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_deferred_storage_flow(deferred_storage)
+            assert not deferred_storage_errors, "\n".join(deferred_storage_errors)
+            deferred_storage.close()
+
+            single_v2, single_v2_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_single_v2_without_saved_selection_flow(single_v2)
+            assert not single_v2_errors, "\n".join(single_v2_errors)
+            single_v2.close()
+
             late_switch, late_switch_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
             run_late_switch_flow(late_switch)
             assert not late_switch_errors, "\n".join(late_switch_errors)
@@ -228,7 +316,7 @@ def main():
             assert not mobile_errors, "\n".join(mobile_errors)
             mobile.close()
 
-            print("current-video primary-text real UI QA passed: desktop/mobile source selection, no automatic full-text request, search/jump/return, no raw visible leak, no overflow, no console errors")
+            print("current-video primary-text real UI QA passed: deferred storage readiness, missing saved source, single-source fallback, desktop/mobile source selection, no automatic full-text request, search/jump/return, no raw visible leak, no overflow, no console errors")
         finally:
             browser.close()
 

@@ -60,10 +60,12 @@
     </style>
     <script>
       const mockBvid = "BV1ShellMock9";
+      const mockParams = new URLSearchParams(location.search);
+      const primaryTextSelectionStorageKey = "currentVideoPrimaryTextSelections";
       const baseMockCid = 2202;
       let mockCid = baseMockCid;
       let mockPage = 1;
-      let subtitleCached = false;
+      let subtitleCached = mockParams.get("subtitleCached") === "1";
       let switchDuringNextTranscriptFetch = false;
       let summaryReadCount = 0;
       let searchReadCount = 0;
@@ -71,12 +73,19 @@
       let playbackPosition = 12;
       let returnPointSeconds = null;
       let lastSearchResult = null;
-      let subtitleSourceHash = "mock-source-hash-hidden";
-      let subtitleBodyHash = "mock-body-hash-hidden";
-      let subtitleTimelineHash = "mock-timeline-hash-hidden";
+      let subtitleSourceHash = mockParams.get("sourceVersion") === "v2" ? "mock-source-hash-hidden-v2" : "mock-source-hash-hidden";
+      let subtitleBodyHash = mockParams.get("sourceVersion") === "v2" ? "mock-body-hash-hidden-v2" : "mock-body-hash-hidden";
+      let subtitleTimelineHash = mockParams.get("sourceVersion") === "v2" ? "mock-timeline-hash-hidden-v2" : "mock-timeline-hash-hidden";
       const subtitleSourceIdentityKey = () => `primary-text:bilibili_subtitle:${mockBvid}:${mockCid}:${mockPage}:zh-cn:${subtitleSourceHash}`;
       const runtimeMessages = [];
       const extensionStorage = {};
+      let deferPrimaryTextStorage = mockParams.get("deferPrimaryTextStorage") === "1";
+      const pendingPrimaryTextStorageReads = [];
+      if (mockParams.get("savedSource") === "v1") {
+        extensionStorage[primaryTextSelectionStorageKey] = {
+          [`${mockBvid}:${baseMockCid}:1`]: `primary-text:bilibili_subtitle:${mockBvid}:${baseMockCid}:1:zh-cn:mock-source-hash-hidden-v1`,
+        };
+      }
 
       window.__INITIAL_STATE__ = {
         videoData: {
@@ -550,6 +559,12 @@
       window.__assistantMockPlaybackPosition = () => playbackPosition;
       window.__assistantMockMessages = runtimeMessages;
       window.__assistantMockStorage = extensionStorage;
+      window.__assistantMockCurrentSourceIdentityKey = () => subtitleSourceIdentityKey();
+      window.__assistantMockResolvePrimaryTextStorage = () => {
+        deferPrimaryTextStorage = false;
+        const pending = pendingPrimaryTextStorageReads.splice(0);
+        for (const resolveRead of pending) resolveRead();
+      };
       window.__assistantMockSwitchDuringTranscript = () => {
         switchDuringNextTranscriptFetch = true;
       };
@@ -832,6 +847,26 @@
         };
       }
 
+      function storageGetResult(keys) {
+        if (typeof keys === "string") {
+          return { [keys]: extensionStorage[keys] };
+        }
+        if (Array.isArray(keys)) {
+          return Object.fromEntries(keys.map((key) => [key, extensionStorage[key]]));
+        }
+        if (keys && typeof keys === "object") {
+          return Object.fromEntries(Object.keys(keys).map((key) => [key, extensionStorage[key] ?? keys[key]]));
+        }
+        return { ...extensionStorage };
+      }
+
+      function readsPrimaryTextSelection(keys) {
+        if (typeof keys === "string") return keys === primaryTextSelectionStorageKey;
+        if (Array.isArray(keys)) return keys.includes(primaryTextSelectionStorageKey);
+        if (keys && typeof keys === "object") return Object.prototype.hasOwnProperty.call(keys, primaryTextSelectionStorageKey);
+        return true;
+      }
+
       window.chrome = {
         runtime: {
           getURL(path) {
@@ -885,16 +920,12 @@
         storage: {
           local: {
             get(keys) {
-              if (typeof keys === "string") {
-                return Promise.resolve({ [keys]: extensionStorage[keys] });
+              if (deferPrimaryTextStorage && readsPrimaryTextSelection(keys)) {
+                return new Promise((resolve) => {
+                  pendingPrimaryTextStorageReads.push(() => resolve(storageGetResult(keys)));
+                });
               }
-              if (Array.isArray(keys)) {
-                return Promise.resolve(Object.fromEntries(keys.map((key) => [key, extensionStorage[key]])));
-              }
-              if (keys && typeof keys === "object") {
-                return Promise.resolve(Object.fromEntries(Object.keys(keys).map((key) => [key, extensionStorage[key] ?? keys[key]])));
-              }
-              return Promise.resolve({ ...extensionStorage });
+              return Promise.resolve(storageGetResult(keys));
             },
             set(values) {
               Object.assign(extensionStorage, values || {});

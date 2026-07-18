@@ -880,6 +880,7 @@ function primaryTextSourceCard(
 ): HTMLElement {
   const isActive = activeSourceIdentityKey === source.identity.sourceIdentityKey;
   const isSelectedByUser = selectedPrimaryTextSourceIdentityKey(context) === source.identity.sourceIdentityKey;
+  const selectionReady = primaryTextSelectionsLoaded;
   const card = document.createElement('article');
   card.className = [
     'bdc-assistant-source-card',
@@ -897,14 +898,20 @@ function primaryTextSourceCard(
   const actions = document.createElement('div');
   actions.className = 'bdc-assistant-source-actions';
   actions.appendChild(button(
-    assistantState.primaryTextSaving && isActive ? '保存中...' : isSelectedByUser ? '已用于助手' : '用于视频助手',
+    assistantState.primaryTextSaving && isActive
+      ? '保存中...'
+      : !selectionReady
+        ? '读取中...'
+        : isSelectedByUser
+          ? '已用于助手'
+          : '用于视频助手',
     isSelectedByUser
       ? 'bdc-assistant-button bdc-assistant-button-quiet'
       : 'bdc-assistant-button bdc-assistant-button-primary',
     () => {
       void selectPrimaryTextSourceForAssistant(context, source.identity.sourceIdentityKey, source.label);
     },
-    assistantState.primaryTextSaving || isSelectedByUser,
+    !selectionReady || assistantState.primaryTextSaving || isSelectedByUser,
   ));
   card.appendChild(actions);
   return card;
@@ -923,6 +930,11 @@ async function selectPrimaryTextSourceForAssistant(
   sourceIdentityKey: string,
   label: string,
 ): Promise<void> {
+  if (!primaryTextSelectionsLoaded) {
+    assistantState.primaryTextStatus = '正在读取本页保存的主要文本来源选择，请稍等后再试。';
+    renderAssistantShell();
+    return;
+  }
   const partKey = primaryTextPartKey(context);
   if (!partKey) return;
   primaryTextSelections.set(partKey, sourceIdentityKey);
@@ -1478,6 +1490,9 @@ function segmentJumpPreviewPanel(
   result: CurrentVideoSegmentRetrievalResult,
 ): HTMLElement {
   const preview = candidate.jumpPreview;
+  const primaryTextBlockReason = assistantState.context?.kind === 'video'
+    ? primaryTextSubmissionBlockMessage(buildPrimaryTextStateForContext(assistantState.context))
+    : null;
   const panel = document.createElement('div');
   panel.className = 'bdc-assistant-jump-preview';
   appendText(panel, 'div', 'bdc-assistant-jump-preview-title', '确认跳转前预览');
@@ -1500,6 +1515,9 @@ function segmentJumpPreviewPanel(
     `证据预览：${safeVisibleText(preview.evidencePreview || candidate.evidenceText)}`,
   );
   appendText(panel, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(preview.message));
+  if (primaryTextBlockReason) {
+    appendText(panel, 'div', 'bdc-assistant-subtitle-detail', primaryTextBlockReason);
+  }
 
   const actions = document.createElement('div');
   actions.className = 'bdc-assistant-jump-actions';
@@ -1509,7 +1527,7 @@ function segmentJumpPreviewPanel(
     () => {
       void confirmCurrentVideoSegmentJumpFromPage(candidate, result);
     },
-    assistantState.segmentJumpLoading || !preview.canJump,
+    assistantState.segmentJumpLoading || !preview.canJump || Boolean(primaryTextBlockReason),
   ));
   actions.appendChild(button(
     '取消',
@@ -1534,6 +1552,10 @@ function appendSegmentLimitations(
 
 function appendSummary(parent: HTMLElement): void {
   const block = section('辅助摘要', 'bdc-assistant-section-auxiliary');
+  const context = assistantState.context?.kind === 'video' ? assistantState.context : null;
+  const primaryTextBlockReason = context
+    ? primaryTextSubmissionBlockMessage(buildPrimaryTextStateForContext(context))
+    : null;
 
   if (assistantState.summaryLoading) {
     appendText(block, 'div', 'bdc-assistant-muted', '正在刷新当前视频摘要...');
@@ -1545,9 +1567,13 @@ function appendSummary(parent: HTMLElement): void {
     appendText(block, 'div', 'bdc-assistant-subtitle-text', assistantState.summaryError);
     block.appendChild(button('重试摘要', 'bdc-assistant-button bdc-assistant-button-primary', () => {
       void loadCurrentVideoSummary(true);
-    }));
+    }, Boolean(primaryTextBlockReason)));
     parent.appendChild(block);
     return;
+  }
+
+  if (primaryTextBlockReason) {
+    appendText(block, 'div', 'bdc-assistant-subtitle-text', primaryTextBlockReason);
   }
 
   const summary = assistantState.summary;
@@ -1555,7 +1581,7 @@ function appendSummary(parent: HTMLElement): void {
     appendText(block, 'div', 'bdc-assistant-muted', '展开后会读取当前视频摘要。');
     block.appendChild(button('读取摘要', 'bdc-assistant-button bdc-assistant-button-primary', () => {
       void loadCurrentVideoSummary(true);
-    }));
+    }, Boolean(primaryTextBlockReason)));
     parent.appendChild(block);
     return;
   }
@@ -1610,6 +1636,7 @@ function appendSummary(parent: HTMLElement): void {
 
 function appendVideoKnowledge(parent: HTMLElement, context: CurrentVideoContext): void {
   const block = section('辅助知识节点', 'bdc-assistant-section-auxiliary');
+  const primaryTextBlockReason = primaryTextSubmissionBlockMessage(buildPrimaryTextStateForContext(context));
   const head = block.querySelector('.bdc-assistant-section-head');
   head?.appendChild(button(
     assistantState.knowledgeLoading ? '刷新中...' : '刷新节点',
@@ -1617,7 +1644,7 @@ function appendVideoKnowledge(parent: HTMLElement, context: CurrentVideoContext)
     () => {
       void loadCurrentVideoKnowledge(true);
     },
-    assistantState.knowledgeLoading || !context.bvid,
+    assistantState.knowledgeLoading || !context.bvid || Boolean(primaryTextBlockReason),
   ));
 
   if (assistantState.knowledgeLoading) {
@@ -1628,6 +1655,12 @@ function appendVideoKnowledge(parent: HTMLElement, context: CurrentVideoContext)
 
   if (assistantState.knowledgeError) {
     appendText(block, 'div', 'bdc-assistant-subtitle-text', assistantState.knowledgeError);
+    parent.appendChild(block);
+    return;
+  }
+
+  if (primaryTextBlockReason) {
+    appendText(block, 'div', 'bdc-assistant-subtitle-text', primaryTextBlockReason);
     parent.appendChild(block);
     return;
   }
@@ -1978,6 +2011,15 @@ function finishStaleSubtitleRefresh(requestId: number): void {
 async function loadCurrentVideoSummary(force: boolean): Promise<void> {
   if (assistantState.context?.kind !== 'video') return;
   if (assistantState.summaryLoading) return;
+  const primaryTextBlockReason = primaryTextSubmissionBlockMessage(
+    buildPrimaryTextStateForContext(assistantState.context),
+  );
+  if (primaryTextBlockReason) {
+    assistantState.summary = null;
+    assistantState.summaryError = primaryTextBlockReason;
+    renderAssistantShell();
+    return;
+  }
   if (
     !force
     && assistantState.summary
@@ -2015,6 +2057,15 @@ async function loadCurrentVideoSummary(force: boolean): Promise<void> {
 async function loadCurrentVideoKnowledge(force: boolean): Promise<void> {
   if (assistantState.context?.kind !== 'video') return;
   if (assistantState.knowledgeLoading) return;
+  const primaryTextBlockReason = primaryTextSubmissionBlockMessage(
+    buildPrimaryTextStateForContext(assistantState.context),
+  );
+  if (primaryTextBlockReason) {
+    assistantState.knowledge = null;
+    assistantState.knowledgeError = primaryTextBlockReason;
+    renderAssistantShell();
+    return;
+  }
   if (
     !force
     && assistantState.knowledge
@@ -2290,6 +2341,9 @@ function activePrimaryTextSourceIdentityKey(context: CurrentVideoContext): strin
 function primaryTextSubmissionBlockMessage(
   primaryTextState: ReturnType<typeof buildPrimaryTextStateForContext>,
 ): string | null {
+  if (!primaryTextSelectionsLoaded) {
+    return '正在读取本页保存的主要文本来源选择，请稍等后再试。';
+  }
   if (primaryTextState.state.status === 'selected_source_missing') {
     return '此前选择的主要文本来源已不可用。请重新检测字幕正文，或重新选择新的主要文本来源后再提问。';
   }
@@ -2303,11 +2357,16 @@ function primaryTextSubmissionBlockMessage(
 }
 
 function currentPrimaryTextRequestParams(): Record<string, unknown> {
+  if (!primaryTextSelectionsLoaded) {
+    return { primaryTextSelectionsReady: false };
+  }
   const context = assistantState.context;
-  if (context?.kind !== 'video') return {};
+  if (context?.kind !== 'video') return { primaryTextSelectionsReady: true };
   const selectedSourceIdentityKey = selectedPrimaryTextSourceIdentityKey(context)
     ?? activePrimaryTextSourceIdentityKey(context);
-  return selectedSourceIdentityKey ? { selectedSourceIdentityKey } : {};
+  return selectedSourceIdentityKey
+    ? { primaryTextSelectionsReady: true, selectedSourceIdentityKey }
+    : { primaryTextSelectionsReady: true };
 }
 
 function compactStatusText(context: CurrentVideoContextResult | null): string {

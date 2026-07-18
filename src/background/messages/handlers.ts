@@ -8,11 +8,13 @@ import type {
 } from '../../shared/types/current-video-context';
 import type { CurrentVideoTranscriptEvidenceState } from '../../shared/types/current-video-transcript';
 import type {
+  CurrentVideoSegmentRetrievalResult,
   CurrentVideoTimestampJumpResponse,
   CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
 import type { CurrentVideoRelatedFavoritesResponse } from '../../shared/types/current-video-related-favorites';
-import type { VideoKnowledgeJumpResponse } from '../../shared/types/video-knowledge';
+import type { CurrentVideoSummaryResult } from '../../shared/types/current-video-summary';
+import type { VideoKnowledgeJumpResponse, VideoKnowledgeResult } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import type { SmartIndexResult } from '../../shared/types/favorite';
 import type { SmartFavoriteIndexRebuildResult } from '../../shared/types/local-data-privacy';
@@ -41,7 +43,11 @@ import {
   buildCurrentVideoTranscriptEvidenceState,
   withTranscriptEvidenceState,
 } from '../../shared/current-video-transcript-cache';
-import { searchCurrentVideoSegments } from '../../shared/current-video-segment-retrieval';
+import {
+  rewriteCurrentVideoSegmentQuery,
+  searchCurrentVideoSegments,
+} from '../../shared/current-video-segment-retrieval';
+import { cancelledCurrentVideoSummary } from '../../shared/current-video-summary';
 import { searchCurrentVideoSegmentsWithAiRerank } from '../current-video-segment-rerank';
 import {
   buildCurrentVideoRelatedFavoritesHint,
@@ -75,6 +81,7 @@ import { DYNAMIC_BILL_STRATEGY } from '../dynamic-bill/strategy';
 import { getDynamicOverview, syncDynamicBillUpdates } from '../dynamic-bill/sync';
 import {
   extractBvidFromUrl,
+  extractPageFromUrl,
   isBilibiliVideoUrl,
   resolveCurrentVideoTabState,
   type CurrentVideoTabSnapshot,
@@ -127,6 +134,7 @@ const DYNAMIC_BILL_MIGRATION_GATED_ACTIONS = new Set<RequestAction>([
 const currentVideoContexts = new Map<number, CurrentVideoContextResult>();
 const currentVideoSubtitleProbes = new Map<string, CurrentVideoSubtitleSourceState>();
 const currentVideoSubtitleProbeRequests = new Map<string, Promise<CurrentVideoSubtitleSourceState>>();
+const PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE = '主要文本来源选择还在读取中，请稍等本页保存的选择读取完成后再试。';
 
 interface CurrentVideoLookupOptions {
   forceContextRefresh?: boolean;
@@ -139,12 +147,17 @@ interface CurrentVideoContextLookupResult {
   temporaryOwner?: CurrentVideoTemporaryTranscriptOwner;
 }
 
+interface BilibiliVideoUrlIdentity {
+  bvid: string;
+  page: number;
+}
+
 export function setupMessageHandlers(): void {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Handle content script messages
     const contentMsg = message as BiliVizContentMessage;
     if (contentMsg.action && ['PLAYER_HEARTBEAT', 'PLAYER_ACTION', 'PAGE_NAVIGATION', 'CURRENT_VIDEO_CONTEXT_UPDATE'].includes(contentMsg.action)) {
-      handleContentMessage(contentMsg, sender.tab?.id ?? 0).then(() => {
+      handleContentMessage(contentMsg, sender.tab?.id ?? 0, sender.tab?.url ?? null).then(() => {
         sendResponse({ success: true });
       }).catch((err) => {
         sendResponse({ success: false, error: errorMessage(err) });
@@ -172,26 +185,32 @@ export function setupMessageHandlers(): void {
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     const nextUrl = changeInfo.url;
     if (!nextUrl) return;
+    currentVideoContexts.delete(tabId);
     clearTemporaryCurrentVideoTranscriptCacheForTab(tabId);
-    if (!isBilibiliVideoUrl(nextUrl)) {
-      currentVideoContexts.delete(tabId);
-      return;
-    }
-
-    const cached = currentVideoContexts.get(tabId);
-    if (cached?.kind === 'video' && cached.bvid !== extractBvidFromUrl(nextUrl)) {
-      currentVideoContexts.delete(tabId);
-    }
   });
 }
 
-async function handleContentMessage(msg: BiliVizContentMessage, tabId: number): Promise<void> {
+async function handleContentMessage(
+  msg: BiliVizContentMessage,
+  tabId: number,
+  senderTabUrl: string | null = null,
+): Promise<void> {
   switch (msg.action) {
     case 'CURRENT_VIDEO_CONTEXT_UPDATE': {
       if (tabId > 0) {
         const context = msg.payload as CurrentVideoContextResult;
+        if (context.kind !== 'video') {
+          if (!senderTabUrl || !isBilibiliVideoUrl(senderTabUrl)) {
+            currentVideoContexts.delete(tabId);
+            clearTemporaryCurrentVideoTranscriptCacheForTab(tabId);
+          }
+          break;
+        }
+        if (!canAcceptCurrentVideoContextUpdate(context, senderTabUrl)) {
+          break;
+        }
         currentVideoContexts.set(tabId, context);
-        if (context.kind === 'video' && context.cid) {
+        if (context.cid) {
           retainTemporaryCurrentVideoTranscriptOwner({
             ownerTabId: tabId,
             bvid: context.bvid,
@@ -237,9 +256,46 @@ async function handleContentMessage(msg: BiliVizContentMessage, tabId: number): 
       break;
     }
     case 'PAGE_NAVIGATION':
+      currentVideoContexts.delete(tabId);
       clearTemporaryCurrentVideoTranscriptCacheForTab(tabId);
       break;
   }
+}
+
+function canAcceptCurrentVideoContextUpdate(
+  context: CurrentVideoContext,
+  senderTabUrl: string | null,
+): boolean {
+  const contextUrlIdentity = bilibiliVideoUrlIdentity(context.url);
+  if (!contextUrlIdentity || !contextMatchesVideoUrlIdentity(context, contextUrlIdentity)) {
+    return false;
+  }
+
+  if (!senderTabUrl) return true;
+  const senderUrlIdentity = bilibiliVideoUrlIdentity(senderTabUrl);
+  return Boolean(
+    senderUrlIdentity
+    && senderUrlIdentity.bvid === contextUrlIdentity.bvid
+    && senderUrlIdentity.page === contextUrlIdentity.page,
+  );
+}
+
+function bilibiliVideoUrlIdentity(url: string | null | undefined): BilibiliVideoUrlIdentity | null {
+  if (!url || !isBilibiliVideoUrl(url)) return null;
+  const bvid = extractBvidFromUrl(url);
+  if (!bvid) return null;
+  return {
+    bvid,
+    page: extractPageFromUrl(url),
+  };
+}
+
+function contextMatchesVideoUrlIdentity(
+  context: CurrentVideoContext,
+  identity: BilibiliVideoUrlIdentity,
+): boolean {
+  return context.bvid === identity.bvid
+    && context.currentPart.page === identity.page;
 }
 
 async function handleRequest<T>(
@@ -392,17 +448,26 @@ async function handleRequest<T>(
     case 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE':
       return { success: true, data: await getTranscriptEvidenceForActiveTab(request.params, requestTabId) as T };
     case 'GET_CURRENT_VIDEO_SUMMARY': {
+      if (!primaryTextSelectionsReady(request.params)) {
+        return { success: true, data: primaryTextSelectionNotReadySummary() as T };
+      }
       const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
       const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(lookup.context, lookup.temporaryOwner);
       return { success: true, data: await generateCurrentVideoSummary(lookup.context, { transcriptSegments }) as T };
     }
     case 'GET_VIDEO_KNOWLEDGE': {
+      if (!primaryTextSelectionsReady(request.params)) {
+        return { success: true, data: primaryTextSelectionNotReadyKnowledge() as T };
+      }
       const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
       const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(lookup.context, lookup.temporaryOwner);
       return { success: true, data: buildVideoKnowledgeResult(lookup.context, { transcriptSegments }) as T };
     }
     case 'SEARCH_CURRENT_VIDEO_SEGMENTS': {
       const query = String(request.params?.query ?? '');
+      if (!primaryTextSelectionsReady(request.params)) {
+        return { success: true, data: primaryTextSelectionNotReadySegmentResult(query) as T };
+      }
       const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
       const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(lookup.context, lookup.temporaryOwner);
       const videoKnowledge = buildVideoKnowledgeResult(lookup.context, { transcriptSegments });
@@ -613,6 +678,13 @@ async function requestCurrentVideoSegmentJump(
       candidateId,
       'confirmation_required',
       formatTimestampJumpFailureReason('confirmation_required'),
+    );
+  }
+  if (!primaryTextSelectionsReady(params)) {
+    return blockedTimestampJumpResponse(
+      candidateId,
+      'no_context',
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
     );
   }
 
@@ -933,7 +1005,7 @@ async function requestFreshCurrentVideoContext(
       payload: {},
     }) as CurrentVideoContextResult;
     if (response?.kind !== 'video') return response ?? null;
-    if (extractBvidFromUrl(tabUrl) !== response.bvid) return null;
+    if (!canAcceptCurrentVideoContextUpdate(response, tabUrl)) return null;
     currentVideoContexts.set(tabId, response);
     if (response.cid) {
       retainTemporaryCurrentVideoTranscriptOwner({
@@ -955,6 +1027,115 @@ function currentVideoLookupOptions(
   return {
     forceContextRefresh: params?.forceContextRefresh === true,
     forceSubtitleProbe: params?.forceSubtitleProbe === true,
+  };
+}
+
+function primaryTextSelectionsReady(params: Record<string, unknown> | undefined): boolean {
+  return params?.primaryTextSelectionsReady !== false
+    && params?.primaryTextSelectionReady !== false;
+}
+
+function primaryTextSelectionNotReadySummary(now = Date.now()): CurrentVideoSummaryResult {
+  return {
+    ...cancelledCurrentVideoSummary(null, now),
+    title: '主要文本来源尚未就绪',
+    summary: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    missingSources: ['主要文本来源选择'],
+    limitations: ['读取完成前不会使用当前可见字幕正文，也不会请求 AI。'],
+    nextQuestions: [],
+    ai: {
+      status: 'not_requested',
+      model: null,
+      error: null,
+      note: '主要文本来源选择尚未读取完成，因此没有请求 AI。',
+    },
+  };
+}
+
+function primaryTextSelectionNotReadyKnowledge(now = Date.now()): VideoKnowledgeResult {
+  return {
+    status: 'ready',
+    title: '当前视频',
+    generatedAt: now,
+    sourceState: {
+      metadata: false,
+      description: false,
+      pages: false,
+      chapters: false,
+      transcript: false,
+      transcriptEvidence: false,
+      contentText: false,
+    },
+    transcriptEvidence: null,
+    nodes: [],
+    warnings: ['primary_text_selection_not_ready'],
+    limitations: [
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+      '读取完成前不会把当前可见字幕正文当作主要文本来源。',
+    ],
+  };
+}
+
+function primaryTextSelectionNotReadySegmentResult(
+  query: string,
+  now = Date.now(),
+): CurrentVideoSegmentRetrievalResult {
+  const normalizedQuery = String(query ?? '').trim();
+  const queryRewrite = rewriteCurrentVideoSegmentQuery(normalizedQuery);
+  return {
+    status: 'no_evidence',
+    query: normalizedQuery,
+    normalizedQuery: queryRewrite.normalizedQuery,
+    title: '当前视频',
+    generatedAt: now,
+    candidates: [],
+    summary: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    limitations: [
+      '主要文本来源选择读取完成前不会检索当前可见字幕正文。',
+      '本次没有请求 AI，也没有读取历史、收藏、关注或本地敏感文件。',
+    ],
+    queryRewrite,
+    evidenceState: {
+      transcriptSegmentCount: 0,
+      timedKnowledgeNodeCount: 0,
+      metadataHintAvailable: false,
+      contextFresh: false,
+    },
+    aiRerank: {
+      status: 'not_requested',
+      model: null,
+      note: '主要文本来源选择尚未读取完成，因此没有请求 AI 重排。',
+      error: null,
+      generatedAt: now,
+      payloadCandidateCount: 0,
+      appliedCandidateIds: [],
+      explanations: [],
+    },
+    qa: {
+      status: 'insufficient_evidence',
+      answer: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+      confidence: 0,
+      confidenceLabel: '低',
+      citedSegments: [],
+      sourceState: {
+        transcriptSegmentCount: 0,
+        timedKnowledgeNodeCount: 0,
+        metadataHintAvailable: false,
+        contextFresh: false,
+        hasCitableEvidence: false,
+        hasOnlyMetadataHints: false,
+      },
+      aiState: {
+        status: 'not_requested',
+        model: null,
+        note: '主要文本来源选择尚未读取完成，因此没有请求 AI 整理回答。',
+        error: null,
+        generatedAt: now,
+        payloadCandidateCount: 0,
+        citedCandidateIds: [],
+      },
+      limitations: ['请等本页保存的主要文本来源选择读取完成后再提问。'],
+    },
   };
 }
 
