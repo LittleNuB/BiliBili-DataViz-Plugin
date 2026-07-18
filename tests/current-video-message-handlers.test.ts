@@ -144,6 +144,84 @@ test('handler clears same-BV page-1 context on page navigation and refreshes pag
   assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
 });
 
+test('request-tab lookup revalidates stale same-BV page context before exact-source search', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+
+  const tabId = 18_608;
+  const bvid = 'BV1RequestTabRace';
+  const contextP1 = handlerVideoContext(bvid, 4801, 1);
+  const contextP2 = handlerVideoContext(bvid, 4802, 2);
+  const evidenceP1 = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 3, content: 'page one exact transcript must not leak into page two' }] },
+    {
+      bvid,
+      cid: 4801,
+      page: 1,
+      language: 'zh-CN',
+      sourceType: 'bilibili_player_wbi_v2',
+      trackId: 'request-tab-race-p1',
+      trackUrlHost: 'aisubtitle.hdslb.com',
+      fetchedAt: 11_600,
+    },
+  );
+  await upsertCurrentVideoTranscriptEvidence(evidenceP1);
+  await db.currentVideoTranscriptSources
+    .where('identityKey')
+    .equals(evidenceP1.sourceRecord.identityKey)
+    .modify({ lastAccessedAt: 1_000 });
+  const sourceBefore = await transcriptSource(evidenceP1.sourceRecord.identityKey);
+
+  setTabs([{ id: tabId, url: contextP1.url, active: true, lastAccessed: 7_000 }]);
+  await sendContentMessage({
+    action: 'CURRENT_VIDEO_CONTEXT_UPDATE',
+    payload: contextP1,
+  }, tabId, contextP1.url);
+
+  let freshContextRequests = 0;
+  setTabMessageHandler(tabId, (message) => {
+    assert.deepEqual(message, {
+      action: 'COLLECT_CURRENT_VIDEO_CONTEXT',
+      payload: {},
+    });
+    freshContextRequests += 1;
+    return contextP2;
+  });
+
+  setTabs([{ id: tabId, url: contextP2.url, active: true, lastAccessed: 8_000 }]);
+  const search = await sendRequest<CurrentVideoSegmentRetrievalResult>({
+    action: 'SEARCH_CURRENT_VIDEO_SEGMENTS',
+    params: {
+      query: 'page one exact transcript',
+      primaryTextSelectionsReady: true,
+      selectedSourceIdentityKey: evidenceP1.sourceRecord.sourceIdentityKey,
+    },
+  }, tabId, contextP2.url);
+
+  assert.equal(search.success, true);
+  assert.equal(freshContextRequests, 1);
+  assert.equal(search.data?.status, 'no_evidence');
+  assert.equal(search.data?.candidates.length, 0);
+  assert.equal(search.data?.evidenceState.transcriptSegmentCount, 0);
+
+  const sourceAfter = await transcriptSource(evidenceP1.sourceRecord.identityKey);
+  assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
+
+  await sendContentMessage({
+    action: 'CURRENT_VIDEO_CONTEXT_UPDATE',
+    payload: contextP1,
+  }, tabId, contextP2.url);
+  const contextAfterLateP1 = await sendRequest<CurrentVideoContext>({
+    action: 'GET_CURRENT_VIDEO_CONTEXT',
+    params: {},
+  }, tabId, contextP2.url);
+
+  assert.equal(contextAfterLateP1.success, true);
+  assert.equal(contextAfterLateP1.data?.kind, 'video');
+  assert.equal(contextAfterLateP1.data?.kind === 'video' ? contextAfterLateP1.data.cid : null, 4802);
+  assert.equal(contextAfterLateP1.data?.kind === 'video' ? contextAfterLateP1.data.currentPart.page : null, 2);
+});
+
 test('handler rejects late page-1 context updates after the sender tab is on page 2', async () => {
   resetChromeHarness();
   await resetTranscriptDb();

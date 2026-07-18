@@ -1,4 +1,6 @@
 from pathlib import Path
+import os
+import subprocess
 from urllib.parse import urlparse
 
 from playwright.sync_api import expect, sync_playwright
@@ -7,6 +9,7 @@ from playwright.sync_api import expect, sync_playwright
 ROOT = Path(__file__).resolve().parents[1]
 MOCK_HTML = ROOT / "tests" / "current-video-assistant-shell.mock.html"
 MOCK_URL = "https://www.bilibili.com/video/BV1ShellMock9"
+PLAYER_MONITOR_BUNDLE = ROOT / "dist" / "content" / "player-monitor.js"
 FORBIDDEN_VISIBLE_TERMS = [
     "未消费",
     "猜你喜欢",
@@ -18,6 +21,7 @@ FORBIDDEN_VISIBLE_TERMS = [
     "subtitle_url",
     "document is not defined",
     "MOCK_PRIMARY_TEXT_STORAGE_READ_FAILED",
+    "MOCK_PRIMARY_TEXT_STORAGE_WRITE_FAILED",
 ]
 FULL_TEXT_OR_SEARCH_ACTIONS = {
     "GET_CURRENT_VIDEO_SUMMARY",
@@ -49,6 +53,25 @@ def route_mock(route):
         return
 
     route.fulfill(status=404, body="not found")
+
+
+def build_player_monitor_bundle():
+    npm = "npm.cmd" if os.name == "nt" else "npm"
+    command = [npm, "exec", "--", "vite", "build", "--config", "vite.player-monitor.config.ts"]
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise AssertionError(f"player-monitor content bundle build failed:\n{result.stdout}")
+    if not PLAYER_MONITOR_BUNDLE.exists():
+        raise AssertionError(f"player-monitor content bundle was not generated: {PLAYER_MONITOR_BUNDLE}")
 
 
 def message_actions(page):
@@ -285,7 +308,7 @@ def run_single_v2_without_saved_selection_flow(page):
 
 def run_rejected_storage_single_v2_flow(page):
     page.route("**/*", route_mock)
-    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&rejectPrimaryTextStorage=1")
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&rejectPrimaryTextStorage=1&savedSource=v1")
     expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
 
     page.get_by_text("展开助手").click()
@@ -294,16 +317,66 @@ def run_rejected_storage_single_v2_flow(page):
     expect(page.get_by_role("button", name="读取摘要")).to_be_disabled()
     expect(page.get_by_role("button", name="刷新节点")).to_be_disabled()
 
-    page.get_by_role("button", name="重新检测字幕").first.click()
-    expect(page.get_by_text("B站字幕").first).to_be_visible()
+    blocked_actions = [
+        "GET_CURRENT_VIDEO_SUMMARY",
+        "GET_VIDEO_KNOWLEDGE",
+        "SEARCH_CURRENT_VIDEO_SEGMENTS",
+        "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
+    ]
+    counts_before_reject = {action: message_count_for(page, action) for action in blocked_actions}
+    page.get_by_role("button", name="读取摘要").evaluate("(button) => button.click()")
+    page.get_by_role("button", name="刷新节点").evaluate("(button) => button.click()")
+    page.get_by_role("button", name="重新检测字幕").first.evaluate("(button) => button.click()")
+    page.locator("textarea").evaluate(
+        """(textarea) => {
+            textarea.value = "subagent 在哪里";
+            textarea.dispatchEvent(new Event("input", { bubbles: true }));
+        }"""
+    )
+    page.get_by_role("button", name="提问").evaluate("(button) => button.click()")
+    for action, count in counts_before_reject.items():
+        assert message_count_for(page, action) == count, f"{action} should stay blocked while storage read is pending"
+
+    page.evaluate("window.__assistantMockRejectPrimaryTextStorage()")
+    expect(page.get_by_text("保存的主要文本来源选择读取失败").first).to_be_visible()
     current_v2_key = page.evaluate("window.__assistantMockCurrentSourceIdentityKey()")
     expect(page.locator("textarea")).to_be_disabled()
 
-    page.evaluate("window.__assistantMockRejectPrimaryTextStorage()")
-    expect(page.get_by_text("正在读取本页保存的主要文本来源选择")).to_have_count(0)
+    counts_after_reject = {action: message_count_for(page, action) for action in blocked_actions}
+    page.get_by_role("button", name="读取摘要").evaluate("(button) => button.click()")
+    page.get_by_role("button", name="刷新节点").evaluate("(button) => button.click()")
+    page.get_by_role("button", name="提问").evaluate("(button) => button.click()")
+    for action, count in counts_after_reject.items():
+        assert message_count_for(page, action) == count, f"{action} should stay blocked after storage read rejection"
+
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    expect(page.get_by_text("B站字幕").first).to_be_visible()
+    refresh_after_reject = last_message_for(page, "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE")
+    assert refresh_after_reject["params"].get("primaryTextSelectionsReady") is False
+    assert not refresh_after_reject["params"].get("selectedSourceIdentityKey")
+
+    page.evaluate("window.__assistantMockRejectNextPrimaryTextStorageSet()")
+    page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕").get_by_role("button", name="用于视频助手").click()
+    expect(page.get_by_text("保存主要文本来源失败").first).to_be_visible()
+    expect(page.locator("textarea")).to_be_disabled()
+    expect(page.get_by_role("button", name="读取摘要")).to_be_disabled()
+    expect(page.get_by_role("button", name="刷新节点")).to_be_disabled()
+    storage_after_failed_set = page.evaluate("window.__assistantMockStorage.currentVideoPrimaryTextSelections || {}")
+    assert current_v2_key not in list(storage_after_failed_set.values()), "failed save must roll back in-memory selection"
+    counts_after_failed_set = {action: message_count_for(page, action) for action in blocked_actions}
+    page.get_by_role("button", name="读取摘要").evaluate("(button) => button.click()")
+    page.get_by_role("button", name="刷新节点").evaluate("(button) => button.click()")
+    page.get_by_role("button", name="提问").evaluate("(button) => button.click()")
+    for action, count in counts_after_failed_set.items():
+        assert message_count_for(page, action) == count, f"{action} should stay blocked after source save rejection"
+
+    page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕").get_by_role("button", name="用于视频助手").click()
+    expect(page.get_by_text("已用于当前视频助手").first).to_be_visible()
     expect(page.locator("textarea")).to_be_enabled()
     expect(page.get_by_role("button", name="读取摘要")).to_be_enabled()
     expect(page.get_by_role("button", name="刷新节点")).to_be_enabled()
+    storage_after_success = page.evaluate("window.__assistantMockStorage.currentVideoPrimaryTextSelections || {}")
+    assert current_v2_key in list(storage_after_success.values()), "successful explicit selection must persist exact V2"
 
     page.locator("textarea").fill("subagent 在哪里")
     page.get_by_role("button", name="提问").click()
@@ -317,6 +390,7 @@ def run_rejected_storage_single_v2_flow(page):
 
 
 def main():
+    build_player_monitor_bundle()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:

@@ -1,5 +1,7 @@
 import 'fake-indexeddb/auto';
 import assert from 'node:assert/strict';
+import Dexie from 'dexie';
+import { registerHooks } from 'node:module';
 import test from 'node:test';
 import { cacheCurrentVideoTranscriptEvidence } from '../src/background/current-video-transcript-cache.ts';
 import {
@@ -48,6 +50,24 @@ import type {
   CurrentVideoTranscriptSegment,
   CurrentVideoTranscriptSourceRecord,
 } from '../src/shared/types/current-video-transcript.ts';
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    try {
+      return nextResolve(specifier, context);
+    } catch (error) {
+      if (!specifier.startsWith('.') || /\.[cm]?[jt]sx?$/.test(specifier)) throw error;
+      for (const candidate of [`${specifier}.ts`, `${specifier}.tsx`, `${specifier}/index.ts`]) {
+        try {
+          return nextResolve(candidate, context);
+        } catch {
+          // Try the next TypeScript source shape.
+        }
+      }
+      throw error;
+    }
+  },
+});
 
 type CurrentVideoTranscriptTestDb = typeof import('../src/background/storage/db.ts').db;
 
@@ -1450,6 +1470,109 @@ test('Dexie 0.12 subtitle cache upgrade clears only transcript tables transactio
   assert.deepEqual(tables.favoriteItems, [{ id: 2 }]);
 });
 
+test('real Dexie v9 to v10 upgrade clears only transcript tables and preserves unrelated data', async () => {
+  const { BiliAnalyticsDB } = await import('../src/background/storage/db.ts');
+  const dbName = uniqueTestDbName('v9-v10');
+  const legacy = new Dexie(dbName);
+  legacy.version(9).stores(dexieV9Stores());
+  await legacy.open();
+
+  try {
+    const legacyEvidence = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'legacy transcript body must be cleared' }] },
+      baseNormalizeOptions({ bvid: 'BV1RealV9Clear', cid: 6611, fetchedAt: 10_300 }),
+    );
+    await legacy.table('currentVideoTranscriptSources').bulkPut([legacyEvidence.sourceRecord]);
+    await legacy.table('currentVideoTranscriptSegments').bulkPut(legacyEvidence.segments);
+    await legacy.table('watchHistory').add(watchHistoryRecord('BV1MigrationKeep'));
+    await legacy.table('favoriteItems').add(favoriteItemRecord('migration-favorite', 'BV1FavoriteKeep'));
+    await legacy.table('dynamicBillItems').add(dynamicBillItemRecord('migration-dynamic-bill'));
+  } finally {
+    legacy.close();
+  }
+
+  const upgraded = new BiliAnalyticsDB(dbName);
+  try {
+    await upgraded.open();
+
+    assert.equal(upgraded.verno, 10);
+    assert.equal(await upgraded.currentVideoTranscriptSources.count(), 0);
+    assert.equal(await upgraded.currentVideoTranscriptSegments.count(), 0);
+    assert.equal((await upgraded.watchHistory.where('bvid').equals('BV1MigrationKeep').first())?.title, 'Kept history BV1MigrationKeep');
+    assert.equal((await upgraded.favoriteItems.where('itemKey').equals('migration-favorite').first())?.bvid, 'BV1FavoriteKeep');
+    assert.equal((await upgraded.dynamicBillItems.where('billKey').equals('migration-dynamic-bill').first())?.status, 'unopened');
+    assert.equal(await upgraded.currentVideoTranscriptSources.where('sourceIdentityKey').equals('missing').count(), 0);
+    assert.equal(await upgraded.currentVideoTranscriptSegments.where('sourceIdentityKey').equals('missing').count(), 0);
+  } finally {
+    upgraded.close();
+    await Dexie.delete(dbName);
+  }
+});
+
+test('production current-video subtitle clear removes persistent and temporary transcript bodies only', async () => {
+  const { db } = await import('../src/background/storage/db.ts');
+  const { upsertCurrentVideoTranscriptEvidence } = await import('../src/background/storage/current-video-transcript-repo.ts');
+  const { clearCurrentVideoSubtitleCache } = await import('../src/background/storage/local-data-privacy-repo.ts');
+  const { getRegisteredLocalDataCategories } = await import('../src/background/storage/local-data-category-registry.ts');
+  db.close();
+  await db.delete();
+  await db.open();
+  clearTemporaryCurrentVideoTranscriptCache();
+
+  try {
+    const persistent = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'persistent subtitle body must be cleared' }] },
+      baseNormalizeOptions({ bvid: 'BV1ProductionClear', cid: 6621, fetchedAt: 10_400 }),
+    );
+    const temporary = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 2, to: 4, content: 'temporary subtitle body must be cleared' }] },
+      baseNormalizeOptions({ bvid: 'BV1ProductionTemp', cid: 6622, fetchedAt: 10_401 }),
+    );
+    await upsertCurrentVideoTranscriptEvidence(persistent);
+    const owner = temporaryOwner(171, temporary);
+    assert.equal(putTemporaryCurrentVideoTranscriptEvidence(owner, temporary, 10_410).status, 'stored');
+    assert.equal(getTemporaryCurrentVideoTranscriptSegments(owner, transcriptIdentityFromEvidence(temporary), 10_411).length, 1);
+
+    await db.watchHistory.add(watchHistoryRecord('BV1ClearKeepHistory'));
+    await db.favoriteItems.add(favoriteItemRecord('clear-favorite', 'BV1ClearKeepFavorite'));
+    await db.dynamicBillItems.add(dynamicBillItemRecord('clear-dynamic-bill'));
+
+    const subtitleCategory = getRegisteredLocalDataCategories()
+      .find(category => category.id === 'currentVideoSubtitles');
+    assert.ok(subtitleCategory);
+    const usageBefore = await subtitleCategory.collectUsage();
+    assert.equal(usageBefore.count, 1);
+    assert.equal(usageBefore.details?.currentVideoSubtitleSources, 1);
+    assert.equal(usageBefore.details?.currentVideoSubtitleSegments, 1);
+    assert.ok(usageBefore.usageBytes > 0);
+
+    const result = await clearCurrentVideoSubtitleCache();
+    assert.equal(result.cleared.currentVideoSubtitleSources, 1);
+    assert.equal(result.cleared.currentVideoSubtitleSegments, 1);
+    assert.equal(await db.currentVideoTranscriptSources.count(), 0);
+    assert.equal(await db.currentVideoTranscriptSegments.count(), 0);
+    assert.equal(getTemporaryCurrentVideoTranscriptSegments(owner, transcriptIdentityFromEvidence(temporary), 10_412).length, 0);
+
+    const readback = await subtitleCategory.readAfterClear();
+    assert.deepEqual(readback, {
+      count: 0,
+      usageBytes: 0,
+      empty: true,
+      details: {
+        currentVideoSubtitleSources: 0,
+        currentVideoSubtitleSegments: 0,
+      },
+    });
+    assert.equal((await db.watchHistory.where('bvid').equals('BV1ClearKeepHistory').first())?.title, 'Kept history BV1ClearKeepHistory');
+    assert.equal((await db.favoriteItems.where('itemKey').equals('clear-favorite').first())?.bvid, 'BV1ClearKeepFavorite');
+    assert.equal((await db.dynamicBillItems.where('billKey').equals('clear-dynamic-bill').first())?.status, 'unopened');
+  } finally {
+    db.close();
+    await db.delete();
+    clearTemporaryCurrentVideoTranscriptCache();
+  }
+});
+
 test('records empty and malformed transcript states without active segments', () => {
   const empty = normalizeBilibiliTranscriptEvidence(
     { body: [] },
@@ -2024,6 +2147,110 @@ function baseNormalizeOptions(overrides: Partial<Parameters<typeof normalizeBili
     trackUrlHost: 'aisubtitle.hdslb.com',
     fetchedAt: 1000,
     ...overrides,
+  };
+}
+
+function uniqueTestDbName(suffix: string): string {
+  return `BiliAnalyticsDB-test-${suffix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function dexieV9Stores(): Record<string, string> {
+  return {
+    watchHistory:
+      '++id, kid, &sessionKey, avid, bvid, [avid+cid+viewAt], authorMid, tagName, viewAt, dt',
+    playerEvents:
+      '++id, [bvid+cid], eventType, timestamp, tabId',
+    dailyAggregates:
+      '++id, &date',
+    favoriteFolders:
+      '++id, &mediaId, title, syncedAt',
+    favoriteItems:
+      '++id, &itemKey, mediaId, avid, bvid, authorMid, tagName, favTime, syncedAt',
+    smartFavoriteIndex:
+      '++id, &itemKey, status, indexedAt, contentHash',
+    followedCreators:
+      '++id, &mid, followedAt, followAgeKnown, isActive, firstSeenAt, syncedAt, lastSeenAt',
+    followedVideoUpdates:
+      '++id, &updateKey, dynamicId, bvid, authorMid, dynamicTime, pubtime, syncedAt',
+    dynamicBillItems:
+      '++id, &billKey, column, status, creatorMid, updateKey, generatedAt, localRank',
+    dynamicBillFeedback:
+      '++id, [scope+key], scope, key, creatorMid, billKey, column, createdAt',
+    dynamicBillExplanations:
+      '++id, &billKey, status, generatedAt, model, contentHash',
+    dynamicBillCreatorPauses:
+      '++id, &creatorMid, expiresAt, startedAt, source, updatedAt',
+    dynamicBillRotationRecords:
+      '++id, &creatorMid, lastShownAt, lastColumn, updatedAt',
+    dynamicBillMigrations:
+      '++id, &version, completedAt',
+    currentVideoTranscriptSources:
+      '++id, &identityKey, bvid, [bvid+cid+page], [bvid+cid+page+language], sourceHash, stale, updatedAt',
+    currentVideoTranscriptSegments:
+      '++id, &segmentId, bvid, [bvid+cid+page], [bvid+cid+page+language], sourceHash, stale, updatedAt',
+  };
+}
+
+function watchHistoryRecord(bvid: string) {
+  return {
+    sessionKey: `${bvid}:1`,
+    kid: 1,
+    avid: 1,
+    bvid,
+    cid: 1,
+    title: `Kept history ${bvid}`,
+    authorName: 'Migration UP',
+    authorMid: 101,
+    tagName: '科技',
+    tags: ['测试'],
+    cover: '',
+    viewAt: 1_700_000_000,
+    progress: 60,
+    duration: 120,
+    actualCompletion: 0.5,
+    deviceType: 2,
+    isFavorite: false,
+    business: 'archive',
+    dt: 2,
+    syncedAt: 1_700_000_100,
+  };
+}
+
+function favoriteItemRecord(itemKey: string, bvid: string) {
+  return {
+    itemKey,
+    mediaId: 7,
+    folderTitle: 'Migration Favorites',
+    avid: 2,
+    bvid,
+    title: `Kept favorite ${bvid}`,
+    intro: 'favorite row kept across transcript migration',
+    authorName: 'Favorite UP',
+    authorMid: 202,
+    tagName: '知识',
+    tags: ['测试'],
+    cover: '',
+    duration: 180,
+    pubtime: 1_699_000_000,
+    favTime: 1_700_000_200,
+    syncedAt: 1_700_000_300,
+  };
+}
+
+function dynamicBillItemRecord(billKey: string) {
+  return {
+    billKey,
+    column: 'buried_follow',
+    status: 'unopened',
+    updateKey: `${billKey}:update`,
+    creatorMid: 303,
+    creatorName: 'Dynamic UP',
+    creatorFace: '',
+    historyBvids: ['BV1DynamicKeep'],
+    evidence: {},
+    localRank: 1,
+    score: 0.9,
+    generatedAt: 1_700_000_400,
   };
 }
 

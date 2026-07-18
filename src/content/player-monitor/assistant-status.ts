@@ -592,6 +592,7 @@ interface AssistantState {
 const primaryTextSelections = new Map<string, string>();
 let primaryTextSelectionsLoaded = false;
 let primaryTextSelectionsLoading = false;
+let primaryTextSelectionsReadFailed = false;
 
 const assistantState: AssistantState = {
   expanded: false,
@@ -797,7 +798,7 @@ function appendPrimaryTextSourceSwitcher(parent: HTMLElement, context: CurrentVi
   appendText(block, 'div', 'bdc-assistant-subtitle-text', sourceState.state.userMessage);
   appendText(block, 'div', 'bdc-assistant-subtitle-detail', sourceState.state.action);
 
-  if (!primaryTextSelectionsLoaded) {
+  if (!primaryTextSelectionsLoaded && !primaryTextSelectionsReadFailed) {
     appendText(block, 'div', 'bdc-assistant-status', '正在读取本页已保存的来源选择...');
   }
   if (assistantState.primaryTextStatus) {
@@ -831,11 +832,14 @@ function buildPrimaryTextStateForContext(context: CurrentVideoContext): {
     sources,
     selectedSourceIdentityKey,
   });
+  const blockImplicitSource = primaryTextSelectionsReadFailed && !selectedSourceIdentityKey;
   return {
     sources: state.sources,
     state,
     selectedSourceIdentityKey,
-    activeSourceIdentityKey: state.primarySource?.identity.sourceIdentityKey ?? null,
+    activeSourceIdentityKey: blockImplicitSource
+      ? null
+      : state.primarySource?.identity.sourceIdentityKey ?? null,
   };
 }
 
@@ -882,7 +886,7 @@ function primaryTextSourceCard(
 ): HTMLElement {
   const isActive = activeSourceIdentityKey === source.identity.sourceIdentityKey;
   const isSelectedByUser = selectedPrimaryTextSourceIdentityKey(context) === source.identity.sourceIdentityKey;
-  const selectionReady = primaryTextSelectionsLoaded;
+  const selectionReady = primaryTextSelectionsLoaded || primaryTextSelectionsReadFailed;
   const card = document.createElement('article');
   card.className = [
     'bdc-assistant-source-card',
@@ -932,13 +936,15 @@ async function selectPrimaryTextSourceForAssistant(
   sourceIdentityKey: string,
   label: string,
 ): Promise<void> {
-  if (!primaryTextSelectionsLoaded) {
+  if (!primaryTextSelectionsLoaded && !primaryTextSelectionsReadFailed) {
     assistantState.primaryTextStatus = '正在读取本页保存的主要文本来源选择，请稍等后再试。';
     renderAssistantShell();
     return;
   }
   const partKey = primaryTextPartKey(context);
   if (!partKey) return;
+  const hadPreviousSelection = primaryTextSelections.has(partKey);
+  const previousSelection = primaryTextSelections.get(partKey) ?? null;
   primaryTextSelections.set(partKey, sourceIdentityKey);
   updateAssistantContext(context);
   assistantState.primaryTextSaving = true;
@@ -948,9 +954,20 @@ async function selectPrimaryTextSourceForAssistant(
 
   try {
     await savePrimaryTextSelections();
+    primaryTextSelectionsLoaded = true;
+    primaryTextSelectionsReadFailed = false;
     assistantState.primaryTextStatus = `${label}已用于当前视频助手。`;
   } catch {
-    assistantState.primaryTextStatus = `${label}已在本页用于当前视频助手；保存选择失败，刷新页面后可能需要重新选择。`;
+    if (hadPreviousSelection && previousSelection) {
+      primaryTextSelections.set(partKey, previousSelection);
+    } else {
+      primaryTextSelections.delete(partKey);
+    }
+    if (!primaryTextSelectionsLoaded) {
+      primaryTextSelectionsReadFailed = true;
+    }
+    updateAssistantContext(context);
+    assistantState.primaryTextStatus = '保存主要文本来源失败，请重新选择一个来源后再继续。';
   } finally {
     assistantState.primaryTextSaving = false;
     renderAssistantShell();
@@ -1950,6 +1967,16 @@ async function refreshSubtitleEvidenceFromPage(): Promise<void> {
   if (assistantState.subtitleRefreshing) return;
   const initialIdentity = currentAssistantVideoIdentity();
   if (!initialIdentity) return;
+  if (assistantState.context?.kind === 'video' && primaryTextSelectionsLoading) {
+    const primaryTextBlockReason = primaryTextSubmissionBlockMessage(
+      buildPrimaryTextStateForContext(assistantState.context),
+    );
+    if (primaryTextBlockReason) {
+      assistantState.subtitleStatus = primaryTextBlockReason;
+      renderAssistantShell();
+      return;
+    }
+  }
 
   const requestId = assistantState.subtitleRequestId + 1;
   assistantState.subtitleRequestId = requestId;
@@ -2293,7 +2320,7 @@ function contextStateKey(context: CurrentVideoContextResult): string {
 }
 
 function ensurePrimaryTextSelectionsLoaded(): void {
-  if (primaryTextSelectionsLoaded || primaryTextSelectionsLoading) return;
+  if (primaryTextSelectionsLoaded || primaryTextSelectionsLoading || primaryTextSelectionsReadFailed) return;
   primaryTextSelectionsLoading = true;
   chrome.storage?.local?.get(PRIMARY_TEXT_SELECTION_STORAGE_KEY)
     .then((stored) => {
@@ -2308,6 +2335,7 @@ function ensurePrimaryTextSelectionsLoaded(): void {
       }
       primaryTextSelectionsLoaded = true;
       primaryTextSelectionsLoading = false;
+      primaryTextSelectionsReadFailed = false;
       if (assistantState.context) {
         updateAssistantContext(assistantState.context);
         renderAssistantShell();
@@ -2315,8 +2343,10 @@ function ensurePrimaryTextSelectionsLoaded(): void {
     })
     .catch(() => {
       primaryTextSelections.clear();
-      primaryTextSelectionsLoaded = true;
+      primaryTextSelectionsLoaded = false;
       primaryTextSelectionsLoading = false;
+      primaryTextSelectionsReadFailed = true;
+      assistantState.primaryTextStatus = '保存的主要文本来源选择读取失败，请先在来源卡片中明确选择一个来源后再继续。';
       if (assistantState.context) {
         updateAssistantContext(assistantState.context);
         renderAssistantShell();
@@ -2348,6 +2378,9 @@ function activePrimaryTextSourceIdentityKey(context: CurrentVideoContext): strin
 function primaryTextSubmissionBlockMessage(
   primaryTextState: ReturnType<typeof buildPrimaryTextStateForContext>,
 ): string | null {
+  if (primaryTextSelectionsReadFailed) {
+    return '保存的主要文本来源选择读取失败，请先在来源卡片中明确选择一个来源后再继续。';
+  }
   if (!primaryTextSelectionsLoaded) {
     return '正在读取本页保存的主要文本来源选择，请稍等后再试。';
   }
@@ -2364,7 +2397,7 @@ function primaryTextSubmissionBlockMessage(
 }
 
 function currentPrimaryTextRequestParams(): Record<string, unknown> {
-  if (!primaryTextSelectionsLoaded) {
+  if (!primaryTextSelectionsLoaded || primaryTextSelectionsReadFailed) {
     return { primaryTextSelectionsReady: false };
   }
   const context = assistantState.context;

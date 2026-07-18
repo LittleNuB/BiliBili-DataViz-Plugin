@@ -81,6 +81,7 @@
       const extensionStorage = {};
       let deferPrimaryTextStorage = mockParams.get("deferPrimaryTextStorage") === "1";
       const rejectPrimaryTextStorage = mockParams.get("rejectPrimaryTextStorage") === "1";
+      let rejectNextPrimaryTextStorageSet = false;
       const pendingPrimaryTextStorageReads = [];
       if (mockParams.get("savedSource") === "v1") {
         extensionStorage[primaryTextSelectionStorageKey] = {
@@ -570,6 +571,9 @@
         const pending = pendingPrimaryTextStorageReads.splice(0);
         for (const read of pending) read.reject();
       };
+      window.__assistantMockRejectNextPrimaryTextStorageSet = () => {
+        rejectNextPrimaryTextStorageSet = true;
+      };
       window.__assistantMockSwitchDuringTranscript = () => {
         switchDuringNextTranscriptFetch = true;
       };
@@ -872,6 +876,10 @@
         return true;
       }
 
+      function writesPrimaryTextSelection(values) {
+        return Boolean(values && Object.prototype.hasOwnProperty.call(values, primaryTextSelectionStorageKey));
+      }
+
       window.chrome = {
         runtime: {
           getURL(path) {
@@ -936,6 +944,10 @@
               return Promise.resolve(storageGetResult(keys));
             },
             set(values) {
+              if (rejectNextPrimaryTextStorageSet && writesPrimaryTextSelection(values)) {
+                rejectNextPrimaryTextStorageSet = false;
+                return Promise.reject(new Error("MOCK_PRIMARY_TEXT_STORAGE_WRITE_FAILED"));
+              }
               Object.assign(extensionStorage, values || {});
               return Promise.resolve();
             },

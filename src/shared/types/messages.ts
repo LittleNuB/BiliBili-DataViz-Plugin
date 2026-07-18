@@ -36,7 +36,7 @@ import type {
 } from './current-video-segment-retrieval';
 import type { CurrentVideoRelatedFavoritesResponse } from './current-video-related-favorites';
 import type { CurrentVideoSummaryResult } from './current-video-summary';
-import type { VideoKnowledgeJumpResponse, VideoKnowledgeResult } from './video-knowledge';
+import type { VideoKnowledgeResult } from './video-knowledge';
 import type { HistoryTailProbeReport } from './history-tail-probe';
 import type { HistorySyncCursorSnapshot, HistorySyncMode } from './history-sync';
 import type { AiConnectionTestResult } from './config';
@@ -77,7 +77,6 @@ export type RequestAction =
   | 'GET_CURRENT_VIDEO_RELATED_FAVORITES'
   | 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP'
   | 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP'
-  | 'REQUEST_VIDEO_KNOWLEDGE_JUMP'
   | 'GET_SMART_FAVORITES'
   | 'GET_SMART_FAVORITES_BY_PATH'
   | 'SYNC_FAVORITES'
@@ -202,7 +201,6 @@ export type CurrentVideoSegmentRetrievalResponse = BiliVizResponse<CurrentVideoS
 export type CurrentVideoRelatedFavoritesMessageResponse = BiliVizResponse<CurrentVideoRelatedFavoritesResponse>;
 export type CurrentVideoTimestampJumpMessageResponse = BiliVizResponse<CurrentVideoTimestampJumpResponse>;
 export type CurrentVideoTimestampReturnMessageResponse = BiliVizResponse<CurrentVideoTimestampReturnResponse>;
-export type VideoKnowledgeJumpMessageResponse = BiliVizResponse<VideoKnowledgeJumpResponse>;
 export type DynamicBillOverviewResponse = BiliVizResponse<DynamicBillOverview>;
 export type DynamicSyncResponse = BiliVizResponse<DynamicSyncResult>;
 export type DynamicBillGenerateResponse = BiliVizResponse<DynamicBillGenerateResult>;

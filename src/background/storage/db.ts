@@ -35,8 +35,8 @@ export class BiliAnalyticsDB extends Dexie {
   currentVideoTranscriptSources!: Table<CurrentVideoTranscriptSourceRecord, number>;
   currentVideoTranscriptSegments!: Table<CurrentVideoTranscriptSegment, number>;
 
-  constructor() {
-    super('BiliAnalyticsDB');
+  constructor(databaseName = 'BiliAnalyticsDB') {
+    super(databaseName);
     this.version(1).stores({
       watchHistory:
         '++id, &kid, avid, bvid, [avid+cid+viewAt], authorMid, tagName, viewAt, dt',

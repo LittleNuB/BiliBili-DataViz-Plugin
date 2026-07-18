@@ -17,7 +17,7 @@ import type {
   CurrentVideoTimestampReturnResponse,
 } from '../src/shared/types/current-video-segment-retrieval';
 import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary';
-import type { VideoKnowledgeJumpResponse, VideoKnowledgeNode, VideoKnowledgeResult } from '../src/shared/types/video-knowledge';
+import type { VideoKnowledgeNode, VideoKnowledgeResult } from '../src/shared/types/video-knowledge';
 import { cancelledCurrentVideoSummary, loadingCurrentVideoSummary } from '../src/shared/current-video-summary';
 import {
   buildCurrentVideoSubtitleDiagnostics,
@@ -31,8 +31,6 @@ export function App() {
   const [currentVideoContext, setCurrentVideoContext] = useState<CurrentVideoContextResult | null>(null);
   const [currentVideoSummary, setCurrentVideoSummary] = useState<CurrentVideoSummaryResult | null>(null);
   const [videoKnowledge, setVideoKnowledge] = useState<VideoKnowledgeResult | null>(null);
-  const [jumpPreviewNodeId, setJumpPreviewNodeId] = useState<string | null>(null);
-  const [jumpStatus, setJumpStatus] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [subtitleProbeLoading, setSubtitleProbeLoading] = useState(false);
   const [subtitleProbeStatus, setSubtitleProbeStatus] = useState<string | null>(null);
@@ -101,8 +99,6 @@ export function App() {
     try {
       const result = await requestSW<VideoKnowledgeResult>('GET_VIDEO_KNOWLEDGE');
       setVideoKnowledge(result);
-      setJumpPreviewNodeId(null);
-      setJumpStatus(null);
     } catch (e) {
       setVideoKnowledge({
         status: 'no_context',
@@ -154,20 +150,6 @@ export function App() {
       setSubtitleProbeStatus('重新检测失败：请确认当前 B 站视频页仍然打开，并在播放器里开启中文 AI 字幕后重试。');
     } finally {
       setSubtitleProbeLoading(false);
-    }
-  }
-
-  async function confirmVideoKnowledgeJump(node: VideoKnowledgeNode) {
-    if (!node.jumpAction) return;
-    setJumpStatus('正在确认手动跳转...');
-    try {
-      const result = await requestSW<VideoKnowledgeJumpResponse>('REQUEST_VIDEO_KNOWLEDGE_JUMP', {
-        nodeId: node.id,
-        confirmed: true,
-      });
-      setJumpStatus(result.message);
-    } catch (e) {
-      setJumpStatus((e as Error).message);
     }
   }
 
@@ -375,8 +357,6 @@ export function App() {
         context={currentVideoContext}
         summary={currentVideoSummary}
         knowledge={videoKnowledge}
-        previewNodeId={jumpPreviewNodeId}
-        jumpStatus={jumpStatus}
         loading={summaryLoading}
         subtitleProbeLoading={subtitleProbeLoading}
         subtitleProbeStatus={subtitleProbeStatus}
@@ -384,8 +364,6 @@ export function App() {
         onCancel={cancelCurrentVideoSummary}
         onReprobeSubtitle={reprobeCurrentVideoSubtitle}
         onRefreshKnowledge={fetchVideoKnowledge}
-        onPreviewNode={setJumpPreviewNodeId}
-        onConfirmJump={confirmVideoKnowledgeJump}
         onOpenSettings={openSettings}
       />
 
@@ -560,8 +538,6 @@ function CurrentVideoAssistantStatus({
   context,
   summary,
   knowledge,
-  previewNodeId,
-  jumpStatus,
   loading,
   subtitleProbeLoading,
   subtitleProbeStatus,
@@ -569,15 +545,11 @@ function CurrentVideoAssistantStatus({
   onCancel,
   onReprobeSubtitle,
   onRefreshKnowledge,
-  onPreviewNode,
-  onConfirmJump,
   onOpenSettings,
 }: {
   context: CurrentVideoContextResult | null;
   summary: CurrentVideoSummaryResult | null;
   knowledge: VideoKnowledgeResult | null;
-  previewNodeId: string | null;
-  jumpStatus: string | null;
   loading: boolean;
   subtitleProbeLoading: boolean;
   subtitleProbeStatus: string | null;
@@ -585,12 +557,9 @@ function CurrentVideoAssistantStatus({
   onCancel: () => void;
   onReprobeSubtitle: () => void;
   onRefreshKnowledge: () => void;
-  onPreviewNode: (nodeId: string | null) => void;
-  onConfirmJump: (node: VideoKnowledgeNode) => void;
   onOpenSettings: () => void;
 }) {
   const isVideo = context?.kind === 'video';
-  const previewNode = knowledge?.nodes.find(node => node.id === previewNodeId) ?? null;
   const [segmentQuery, setSegmentQuery] = useState('');
   const [segmentResult, setSegmentResult] = useState<CurrentVideoSegmentRetrievalResult | null>(null);
   const [segmentLoading, setSegmentLoading] = useState(false);
@@ -821,11 +790,7 @@ function CurrentVideoAssistantStatus({
           </div>
           <VideoKnowledgePanel
             knowledge={knowledge}
-            previewNode={previewNode}
-            jumpStatus={jumpStatus}
             onRefresh={onRefreshKnowledge}
-            onPreview={onPreviewNode}
-            onConfirm={onConfirmJump}
           />
           <CurrentVideoSegmentRetrievalPanel
             subtitleDiagnostics={subtitleDiagnostics}
@@ -884,11 +849,7 @@ function CurrentVideoAssistantStatus({
           没有当前视频上下文。请打开 B 站视频页后再查看元数据和来源可用性。
           <VideoKnowledgePanel
             knowledge={knowledge}
-            previewNode={previewNode}
-            jumpStatus={jumpStatus}
             onRefresh={onRefreshKnowledge}
-            onPreview={onPreviewNode}
-            onConfirm={onConfirmJump}
           />
         </div>
       )}
@@ -1215,18 +1176,10 @@ function SegmentJumpPreview({
 
 function VideoKnowledgePanel({
   knowledge,
-  previewNode,
-  jumpStatus,
   onRefresh,
-  onPreview,
-  onConfirm,
 }: {
   knowledge: VideoKnowledgeResult | null;
-  previewNode: VideoKnowledgeNode | null;
-  jumpStatus: string | null;
   onRefresh: () => void;
-  onPreview: (nodeId: string | null) => void;
-  onConfirm: (node: VideoKnowledgeNode) => void;
 }) {
   const nodes = knowledge?.nodes ?? [];
   const transcriptNodeCount = nodes.filter(node => node.source === 'transcript').length;
@@ -1294,81 +1247,8 @@ function VideoKnowledgePanel({
                 字幕证据：{formatNodeTimeRange(node)}；来自当前视频字幕片段，暂不提供跳转。
               </div>
             )}
-            {node.jumpAction && (
-              <button
-                onClick={() => onPreview(node.id)}
-                style={{
-                  marginTop: '5px',
-                  background: 'rgba(251, 114, 153, 0.18)',
-                  color: '#FFD6E2',
-                  border: '1px solid rgba(251, 114, 153, 0.32)',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontSize: '10px',
-                  padding: '4px 7px',
-                }}
-              >
-                预览跳转
-              </button>
-            )}
           </div>
         ))
-      )}
-      {previewNode?.jumpAction && (
-        <div style={{
-          marginTop: '8px',
-          padding: '8px',
-          border: '1px solid rgba(255,179,71,0.28)',
-          borderRadius: '6px',
-          background: 'rgba(255,179,71,0.08)',
-        }}>
-          <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45, fontWeight: 700 }}>
-            手动跳转预览
-          </div>
-          <div style={{ color: '#E8E8F2', fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
-            {previewNode.jumpAction.previewLabel}
-          </div>
-          <div style={{ color: '#A0A0B0', fontSize: '9px', lineHeight: 1.45, marginTop: '2px' }}>
-            来源：{previewNode.sourceLabel}。必须确认后才会跳转；自动跳转默认关闭。
-          </div>
-          <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-            <button
-              onClick={() => onConfirm(previewNode)}
-              style={{
-                flex: 1,
-                background: '#FFB347',
-                color: '#1A1A2E',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '10px',
-                fontWeight: 700,
-                padding: '5px 7px',
-              }}
-            >
-              确认跳转
-            </button>
-            <button
-              onClick={() => onPreview(null)}
-              style={{
-                background: 'transparent',
-                color: '#C8C8D8',
-                border: '1px solid rgba(255,255,255,0.14)',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '10px',
-                padding: '5px 7px',
-              }}
-            >
-              取消
-            </button>
-          </div>
-        </div>
-      )}
-      {jumpStatus && (
-        <div style={{ color: '#A0E7A0', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
-          {jumpStatus}
-        </div>
       )}
     </div>
   );

@@ -15,7 +15,6 @@ import type {
   CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
 import type { CurrentVideoContextResult } from '../../shared/types/current-video-context';
-import type { VideoKnowledgeJumpResponse, VideoKnowledgeNode } from '../../shared/types/video-knowledge';
 
 let cleanup: (() => void) | null = null;
 let lastContextKey = '';
@@ -23,8 +22,7 @@ let retryTimer: number | null = null;
 let latestContext: CurrentVideoContextResult | null = null;
 let currentVideoTimestampReturnPoint: CurrentVideoTimestampReturnPoint | null = null;
 
-const RETURN_TOAST_ID = 'bdc-video-knowledge-return';
-const PAGE_RETURN_KEY = 'bdc-video-knowledge-return-point';
+const RETURN_TOAST_ID = 'bdc-current-video-return';
 
 function scheduleInitialize(delay = 0): void {
   if (retryTimer !== null) {
@@ -63,7 +61,6 @@ async function initializeMonitor(): Promise<void> {
     latestContext = contextWithDuration;
     renderCurrentVideoAssistant(contextWithDuration);
     sendCurrentVideoContext(contextWithDuration);
-    showStoredPageReturnIfAvailable(contextWithDuration);
     lastContextKey = contextKey;
     console.log(
       `[BiliViz] Monitoring: ${contextWithDuration.title} (${contextWithDuration.bvid}, cid=${contextWithDuration.cid || 'unknown'}, p=${contextWithDuration.currentPart.page})`,
@@ -98,20 +95,6 @@ async function initializeMonitor(): Promise<void> {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.action === 'VIDEO_KNOWLEDGE_MANUAL_JUMP') {
-    handleVideoKnowledgeManualJump(message.payload).then(sendResponse).catch((error) => {
-      sendResponse({
-        ok: false,
-        message: error instanceof Error ? error.message : String(error),
-        nodeId: String(message.payload?.node?.id ?? ''),
-        previousPositionSeconds: null,
-        targetSeconds: null,
-        targetPage: null,
-      } satisfies VideoKnowledgeJumpResponse);
-    });
-    return true;
-  }
-
   if (message?.action === 'CURRENT_VIDEO_TIMESTAMP_JUMP') {
     handleCurrentVideoTimestampJump(message.payload).then(sendResponse).catch((error) => {
       sendResponse({
@@ -165,58 +148,6 @@ async function collectAndPublishCurrentVideoContext(): Promise<CurrentVideoConte
   return context;
 }
 
-async function handleVideoKnowledgeManualJump(payload: {
-  node?: VideoKnowledgeNode;
-  contextBvid?: string | null;
-  confirmed?: boolean;
-}): Promise<VideoKnowledgeJumpResponse> {
-  const node = payload.node;
-  if (!payload.confirmed || !node?.jumpAction?.requiresConfirmation) {
-    throw new Error('CONFIRMATION_REQUIRED');
-  }
-  if (!node.jumpAction) {
-    throw new Error('JUMP_TARGET_UNAVAILABLE');
-  }
-  if (latestContext?.kind !== 'video' || latestContext.bvid !== payload.contextBvid || node.bvid !== latestContext.bvid) {
-    throw new Error('VIDEO_CONTEXT_CHANGED');
-  }
-
-  const targetPage = node.jumpAction.targetPage;
-  const targetSeconds = node.jumpAction.targetSeconds;
-  if (node.jumpAction.type === 'page' && targetPage && targetPage !== latestContext.currentPart.page) {
-    const previousPositionSeconds = currentVideoElement()?.currentTime ?? null;
-    storePageReturn(latestContext.url, previousPositionSeconds);
-    window.setTimeout(() => {
-      location.assign(urlForPage(targetPage));
-    }, 0);
-    return {
-      ok: true,
-      message: `Opening ${node.jumpAction.previewLabel}`,
-      nodeId: node.id,
-      previousPositionSeconds,
-      targetSeconds,
-      targetPage,
-    };
-  }
-
-  if (typeof targetSeconds !== 'number' || !Number.isFinite(targetSeconds) || targetSeconds < 0) {
-    throw new Error('INVALID_SEEK_TARGET');
-  }
-
-  const video = await detectVideo();
-  const previousPositionSeconds = video.currentTime;
-  video.currentTime = Math.min(targetSeconds, Number.isFinite(video.duration) ? video.duration : targetSeconds);
-  showReturnToast(previousPositionSeconds);
-  return {
-    ok: true,
-    message: `Jumped to ${node.jumpAction.previewLabel}`,
-    nodeId: node.id,
-    previousPositionSeconds,
-    targetSeconds,
-    targetPage,
-  };
-}
-
 async function handleCurrentVideoTimestampJump(
   payload: CurrentVideoTimestampJumpContentPayload,
 ): Promise<CurrentVideoTimestampJumpResponse> {
@@ -227,7 +158,7 @@ async function handleCurrentVideoTimestampJump(
   });
   if (result.returnPoint) {
     currentVideoTimestampReturnPoint = result.returnPoint;
-    showReturnToast(result.response.returnPointSeconds, undefined, handleCurrentVideoTimestampReturn);
+    showReturnToast(result.response.returnPointSeconds, handleCurrentVideoTimestampReturn);
   }
   return result.response;
 }
@@ -254,43 +185,8 @@ function currentUsableVideoElement(): HTMLVideoElement | null {
   return video;
 }
 
-function urlForPage(page: number): string {
-  const url = new URL(location.href);
-  url.searchParams.set('p', String(page));
-  return url.toString();
-}
-
-function storePageReturn(url: string, seconds: number | null): void {
-  try {
-    sessionStorage.setItem(PAGE_RETURN_KEY, JSON.stringify({ url, seconds, savedAt: Date.now() }));
-  } catch {
-    // Session storage can be unavailable in some embedded player contexts.
-  }
-}
-
-function showStoredPageReturnIfAvailable(context: CurrentVideoContextResult): void {
-  if (context.kind !== 'video') return;
-  try {
-    const raw = sessionStorage.getItem(PAGE_RETURN_KEY);
-    if (!raw) return;
-    const parsed = JSON.parse(raw) as { url?: unknown; seconds?: unknown; savedAt?: unknown };
-    if (typeof parsed.url !== 'string' || Date.now() - Number(parsed.savedAt ?? 0) > 10 * 60 * 1000) {
-      sessionStorage.removeItem(PAGE_RETURN_KEY);
-      return;
-    }
-    showReturnToast(
-      typeof parsed.seconds === 'number' && Number.isFinite(parsed.seconds) ? parsed.seconds : null,
-      parsed.url,
-    );
-    sessionStorage.removeItem(PAGE_RETURN_KEY);
-  } catch {
-    sessionStorage.removeItem(PAGE_RETURN_KEY);
-  }
-}
-
 function showReturnToast(
   seconds: number | null,
-  url?: string,
   onReturn?: () => Promise<CurrentVideoTimestampReturnResponse>,
 ): void {
   const existing = document.getElementById(RETURN_TOAST_ID);
@@ -327,10 +223,6 @@ function showReturnToast(
   back.textContent = '返回';
   back.style.cssText = 'flex:1;border:0;border-radius:6px;background:#ffb347;color:#1a1a2e;font-weight:700;font-size:12px;padding:6px 8px;cursor:pointer';
   back.addEventListener('click', async () => {
-    if (url) {
-      location.assign(url);
-      return;
-    }
     if (onReturn) {
       await onReturn();
       toast.remove();

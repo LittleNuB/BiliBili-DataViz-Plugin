@@ -14,7 +14,7 @@ import type {
 } from '../../shared/types/current-video-segment-retrieval';
 import type { CurrentVideoRelatedFavoritesResponse } from '../../shared/types/current-video-related-favorites';
 import type { CurrentVideoSummaryResult } from '../../shared/types/current-video-summary';
-import type { VideoKnowledgeJumpResponse, VideoKnowledgeResult } from '../../shared/types/video-knowledge';
+import type { VideoKnowledgeResult } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import type { SmartIndexResult } from '../../shared/types/favorite';
 import type { SmartFavoriteIndexRebuildResult } from '../../shared/types/local-data-privacy';
@@ -58,7 +58,7 @@ import {
   blockedTimestampReturnResponse,
   formatTimestampJumpFailureReason,
 } from '../../shared/current-video-timestamp-jump';
-import { buildVideoKnowledgeResult, findVideoKnowledgeNode } from '../../shared/video-knowledge';
+import { buildVideoKnowledgeResult } from '../../shared/video-knowledge';
 import {
   getQuickStats,
   getDashboardOverview,
@@ -83,6 +83,7 @@ import {
   extractBvidFromUrl,
   extractPageFromUrl,
   isBilibiliVideoUrl,
+  resolveFreshMatchingVideoContext,
   resolveCurrentVideoTabState,
   type CurrentVideoTabSnapshot,
 } from '../current-video-context-resolver';
@@ -491,8 +492,6 @@ async function handleRequest<T>(
       return { success: true, data: await requestCurrentVideoSegmentJump(request.params, requestTabId) as T };
     case 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP':
       return { success: true, data: await returnCurrentVideoSegmentJump(requestTabId) as T };
-    case 'REQUEST_VIDEO_KNOWLEDGE_JUMP':
-      return { success: true, data: await requestVideoKnowledgeJump(request.params) as T };
     case 'GET_SMART_FAVORITES':
       return { success: true, data: await getSmartFavoriteOverview() as T };
     case 'GET_SMART_FAVORITES_BY_PATH': {
@@ -625,45 +624,6 @@ async function getCurrentVideoRelatedFavorites(
     generatedAt: now,
     limitations: hint.limitations,
   };
-}
-
-async function requestVideoKnowledgeJump(params: Record<string, unknown> | undefined): Promise<VideoKnowledgeJumpResponse> {
-  const nodeId = requireStringParam(params?.nodeId, 'nodeId');
-  const confirmed = params?.confirmed === true;
-  if (!confirmed) {
-    return {
-      ok: false,
-      message: 'CONFIRMATION_REQUIRED',
-      nodeId,
-      previousPositionSeconds: null,
-      targetSeconds: null,
-      targetPage: null,
-    };
-  }
-
-  const target = await resolveCurrentVideoLookupState();
-  const tabId = target.tab?.id ?? 0;
-  if (!target.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(target.tab.url)) {
-    throw new Error('NO_ACTIVE_BILIBILI_VIDEO_TAB');
-  }
-
-  if (target.context?.kind !== 'video') {
-    throw new Error('VIDEO_CONTEXT_UNAVAILABLE');
-  }
-  const knowledge = buildVideoKnowledgeResult(target.context);
-  const node = findVideoKnowledgeNode(knowledge, nodeId);
-  if (!node || !node.jumpAction) {
-    throw new Error('VIDEO_KNOWLEDGE_JUMP_TARGET_UNAVAILABLE');
-  }
-
-  return await chrome.tabs.sendMessage(tabId, {
-    action: 'VIDEO_KNOWLEDGE_MANUAL_JUMP',
-    payload: {
-      node,
-      contextBvid: target.context.bvid,
-      confirmed: true,
-    },
-  });
 }
 
 async function requestCurrentVideoSegmentJump(
@@ -1226,7 +1186,7 @@ async function resolveCurrentVideoLookupState(
     const tab = tabs.find(candidate => candidate.id === requestTabId) ?? null;
     return {
       tab,
-      context: tab ? currentVideoContexts.get(requestTabId) ?? null : null,
+      context: tab ? resolveFreshMatchingVideoContext(tab, currentVideoContexts) : null,
     };
   }
 
