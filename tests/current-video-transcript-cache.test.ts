@@ -919,6 +919,131 @@ test('owner broad reads prefer active temporary body over stale persistent body'
   });
 });
 
+test('repo fails closed when an explicit temporary owner was invalidated before read', async () => {
+  await withFreshTranscriptRepo(async (repo) => {
+    const persistentA = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'persistent A before tab switch' }] },
+      baseNormalizeOptions({ bvid: 'BV1InvalidOwnerA', cid: 6475, fetchedAt: 10_540 }),
+    );
+    const videoB = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'video B after tab switch' }] },
+      baseNormalizeOptions({ bvid: 'BV1InvalidOwnerB', cid: 6476, fetchedAt: 10_541 }),
+    );
+    const oldOwnerA = temporaryOwner(700, persistentA);
+
+    await repo.upsertCurrentVideoTranscriptEvidence(persistentA);
+    retainTemporaryCurrentVideoTranscriptOwner({
+      ownerTabId: oldOwnerA.ownerTabId,
+      bvid: videoB.sourceRecord.bvid,
+      cid: videoB.sourceRecord.cid,
+      page: videoB.sourceRecord.page,
+    });
+
+    const broadState = await repo.getCurrentVideoTranscriptEvidenceState({
+      bvid: persistentA.sourceRecord.bvid,
+      cid: persistentA.sourceRecord.cid,
+      page: persistentA.sourceRecord.page,
+    }, 10_550, oldOwnerA);
+    assert.equal(broadState.active, false);
+    assert.equal(broadState.reason, 'temporary_transcript_current_source_unavailable');
+    assert.equal((await repo.getCurrentVideoTranscriptSegments({
+      bvid: persistentA.sourceRecord.bvid,
+      cid: persistentA.sourceRecord.cid,
+      page: persistentA.sourceRecord.page,
+    }, oldOwnerA)).length, 0);
+
+    const explicitState = await repo.getCurrentVideoTranscriptEvidenceState(
+      transcriptIdentityFromEvidence(persistentA),
+      10_551,
+      oldOwnerA,
+    );
+    assert.equal(explicitState.active, false);
+    assert.equal(explicitState.reason, 'temporary_transcript_current_source_unavailable');
+    assert.equal((await repo.getCurrentVideoTranscriptSegments(
+      transcriptIdentityFromEvidence(persistentA),
+      oldOwnerA,
+    )).length, 0);
+
+    const { db } = await import('../src/background/storage/db.ts');
+    const sourceAfterInvalidRead = await db.currentVideoTranscriptSources
+      .where('identityKey')
+      .equals(persistentA.sourceRecord.identityKey)
+      .first();
+    assert.equal(sourceAfterInvalidRead?.lastAccessedAt, persistentA.sourceRecord.lastAccessedAt);
+
+    const noOwnerState = await repo.getCurrentVideoTranscriptEvidenceState({
+      bvid: persistentA.sourceRecord.bvid,
+      cid: persistentA.sourceRecord.cid,
+      page: persistentA.sourceRecord.page,
+    }, 10_552);
+    assert.equal(noOwnerState.active, true);
+    assert.equal(noOwnerState.sourceIdentityKey, persistentA.sourceRecord.sourceIdentityKey);
+    assert.equal(noOwnerState.persistent, true);
+
+    const validOwnerA = temporaryOwner(701, persistentA);
+    const validOwnerState = await repo.getCurrentVideoTranscriptEvidenceState({
+      bvid: persistentA.sourceRecord.bvid,
+      cid: persistentA.sourceRecord.cid,
+      page: persistentA.sourceRecord.page,
+    }, 10_553, validOwnerA);
+    assert.equal(validOwnerState.active, true);
+    assert.equal(validOwnerState.sourceIdentityKey, persistentA.sourceRecord.sourceIdentityKey);
+    assert.deepEqual((await repo.getCurrentVideoTranscriptSegments(
+      transcriptIdentityFromEvidence(persistentA),
+      validOwnerA,
+    )).map(segment => segment.text), ['persistent A before tab switch']);
+  });
+});
+
+test('repo fails closed when an explicit temporary owner belongs to another video', async () => {
+  await withFreshTranscriptRepo(async (repo) => {
+    const persistentA = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'persistent A before owner mismatch' }] },
+      baseNormalizeOptions({ bvid: 'BV1OwnerMismatchA', cid: 6477, fetchedAt: 10_560 }),
+    );
+    const videoB = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'valid owner belongs to B' }] },
+      baseNormalizeOptions({ bvid: 'BV1OwnerMismatchB', cid: 6478, fetchedAt: 10_561 }),
+    );
+    const ownerB = temporaryOwner(702, videoB);
+
+    await repo.upsertCurrentVideoTranscriptEvidence(persistentA);
+
+    const broadState = await repo.getCurrentVideoTranscriptEvidenceState({
+      bvid: persistentA.sourceRecord.bvid,
+      cid: persistentA.sourceRecord.cid,
+      page: persistentA.sourceRecord.page,
+    }, 10_570, ownerB);
+    assert.equal(broadState.active, false);
+    assert.equal(broadState.reason, 'temporary_transcript_current_source_unavailable');
+    assert.equal((await repo.getCurrentVideoTranscriptSegments({
+      bvid: persistentA.sourceRecord.bvid,
+      cid: persistentA.sourceRecord.cid,
+      page: persistentA.sourceRecord.page,
+    }, ownerB)).length, 0);
+
+    const explicitState = await repo.getCurrentVideoTranscriptEvidenceState(
+      transcriptIdentityFromEvidence(persistentA),
+      10_571,
+      ownerB,
+    );
+    assert.equal(explicitState.active, false);
+    assert.equal(explicitState.reason, 'temporary_transcript_current_source_unavailable');
+    assert.equal((await repo.getCurrentVideoTranscriptSegments(
+      transcriptIdentityFromEvidence(persistentA),
+      ownerB,
+    )).length, 0);
+
+    const noOwnerState = await repo.getCurrentVideoTranscriptEvidenceState({
+      bvid: persistentA.sourceRecord.bvid,
+      cid: persistentA.sourceRecord.cid,
+      page: persistentA.sourceRecord.page,
+    }, 10_572);
+    assert.equal(noOwnerState.active, true);
+    assert.equal(noOwnerState.sourceIdentityKey, persistentA.sourceRecord.sourceIdentityKey);
+  });
+});
+
 test('owner rejected source_too_large marker blocks stale persistent fallback', async () => {
   await assertOwnerRejectedSourceBlocksPersistentFallback('source_too_large');
 });

@@ -135,6 +135,13 @@ export async function getCurrentVideoTranscriptEvidenceState(
   now = Date.now(),
   temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
 ): Promise<CurrentVideoTranscriptEvidenceState> {
+  if (
+    temporaryOwner
+    && !isTemporaryCurrentVideoTranscriptOwnerValidForIdentity(temporaryOwner, identity)
+  ) {
+    return buildTemporaryCurrentVideoTranscriptUnavailableState(identity, now);
+  }
+
   const [sources, segments] = await Promise.all([
     db.currentVideoTranscriptSources.where('bvid').equals(identity.bvid).toArray(),
     db.currentVideoTranscriptSegments.where('bvid').equals(identity.bvid).toArray(),
@@ -192,6 +199,13 @@ export async function getCurrentVideoTranscriptSegments(
   identity: CurrentVideoTranscriptIdentity & { sourceHash?: string | null },
   temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
 ): Promise<CurrentVideoTranscriptSegment[]> {
+  if (
+    temporaryOwner
+    && !isTemporaryCurrentVideoTranscriptOwnerValidForIdentity(temporaryOwner, identity)
+  ) {
+    return [];
+  }
+
   const rows = await db.currentVideoTranscriptSegments
     .where('[bvid+cid+page]')
     .equals([identity.bvid, identity.cid, identity.page])
