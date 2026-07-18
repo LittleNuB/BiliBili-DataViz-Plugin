@@ -101,10 +101,9 @@ def run_flow(page):
     assert "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE" in actions_after_redetect
     assert not any(action in FULL_TEXT_OR_SEARCH_ACTIONS for action in actions_after_redetect)
 
-    page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕").get_by_text("查看来源").click()
-    expect(page.get_by_text("主要文本来源没有改变")).to_be_visible()
+    expect(page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕").get_by_text("查看来源")).to_have_count(0)
     storage_before_select = page.evaluate("window.__assistantMockStorage.currentVideoPrimaryTextSelections || null")
-    assert storage_before_select in (None, {}), "viewing a source must not save the assistant source"
+    assert storage_before_select in (None, {}), "source card must not save the assistant source before explicit selection"
 
     page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕").get_by_role("button", name="用于视频助手").click()
     expect(page.get_by_text("已用于当前视频助手").first).to_be_visible()
@@ -142,10 +141,32 @@ def run_flow(page):
     assert_no_horizontal_overflow(page)
 
 
+def run_late_switch_flow(page):
+    page.route("**/*", route_mock)
+    page.goto(MOCK_URL)
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+
+    page.get_by_text("展开助手").click()
+    expect(page.get_by_text("主要文本来源").first).to_be_visible()
+    page.evaluate("window.__assistantMockSwitchDuringTranscript()")
+    page.get_by_role("button", name="重新检测字幕").first.click()
+
+    expect(page.get_by_text("当前视频或分 P 已切换，请在当前分 P 重新检测字幕。")).to_be_visible()
+    expect(page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕")).to_have_count(0)
+    assert_no_full_text_or_search(page)
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
 def main():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
+            late_switch, late_switch_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_late_switch_flow(late_switch)
+            assert not late_switch_errors, "\n".join(late_switch_errors)
+            late_switch.close()
+
             desktop, desktop_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
             run_flow(desktop)
             assert not desktop_errors, "\n".join(desktop_errors)

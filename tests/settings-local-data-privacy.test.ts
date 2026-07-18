@@ -239,6 +239,7 @@ test('SET-013-A keeps the existing clear-all production transaction', async () =
 
   assert.match(source, /db\.transaction\(\s*'rw',\s*db\.tables/);
   assert.match(source, /chrome\.storage\.local\.clear\(\)/);
+  assert.match(source, /runCurrentVideoTranscriptClearCoordinator\(\s*async\s*\(\)\s*=>\s*\r?\n\s*coordinateBlindBoxDrawHistoryClear/);
   assert.doesNotMatch(source, /clearRegisteredLocalDataCategories/);
 });
 

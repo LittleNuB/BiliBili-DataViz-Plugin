@@ -7,6 +7,8 @@ import type {
   LocalDataClearedCounts,
 } from '../../shared/local-data-category-contract.ts';
 import { db } from './db.ts';
+import { clearTemporaryCurrentVideoTranscriptCache } from '../current-video-temporary-transcript-cache.ts';
+import { runCurrentVideoTranscriptClearCoordinator } from '../current-video-transcript-clear-epoch.ts';
 import {
   clearBlindBoxDrawHistory,
   collectBlindBoxDrawHistoryUsage,
@@ -183,20 +185,21 @@ function currentVideoSubtitleCategory(
     label: '当前视频字幕缓存',
     includeInClearAll: true,
     collectUsage,
-    clear: async () => {
+    clear: async () => runCurrentVideoTranscriptClearCoordinator(async () => {
       const [sources, segments] = await Promise.all(group.tables.map(table => table.toArray()));
       await dependencies.transaction(group.tables, async () => {
         for (const table of group.tables) {
           await table.clear();
         }
       });
+      clearTemporaryCurrentVideoTranscriptCache();
       return {
         cleared: {
           currentVideoSubtitleSources: sources.length,
           currentVideoSubtitleSegments: segments.length,
         },
       };
-    },
+    }),
     readAfterClear: async () => {
       const usage = await collectUsage();
       return {

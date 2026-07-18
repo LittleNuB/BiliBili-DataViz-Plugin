@@ -7,6 +7,7 @@ import type {
 } from '../../shared/types/local-data-privacy.ts';
 import { ensureDynamicBill013Migration } from '../dynamic-bill/migration.ts';
 import { clearTemporaryCurrentVideoTranscriptCache } from '../current-video-temporary-transcript-cache.ts';
+import { runCurrentVideoTranscriptClearCoordinator } from '../current-video-transcript-clear-epoch.ts';
 import { getDynamicSyncState } from './dynamic-bill-repo.ts';
 import { db } from './db.ts';
 import { getRegisteredLocalDataCategories } from './local-data-category-registry.ts';
@@ -44,30 +45,32 @@ export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySumm
 }
 
 export async function clearCurrentVideoSubtitleCache(): Promise<LocalDataOperationResult> {
-  const [sourceCount, segmentCount] = await Promise.all([
-    db.currentVideoTranscriptSources.count(),
-    db.currentVideoTranscriptSegments.count(),
-  ]);
+  return await runCurrentVideoTranscriptClearCoordinator(async () => {
+    const [sourceCount, segmentCount] = await Promise.all([
+      db.currentVideoTranscriptSources.count(),
+      db.currentVideoTranscriptSegments.count(),
+    ]);
 
-  await db.transaction(
-    'rw',
-    db.currentVideoTranscriptSources,
-    db.currentVideoTranscriptSegments,
-    async () => {
-      await db.currentVideoTranscriptSources.clear();
-      await db.currentVideoTranscriptSegments.clear();
-    },
-  );
-  clearTemporaryCurrentVideoTranscriptCache();
+    await db.transaction(
+      'rw',
+      db.currentVideoTranscriptSources,
+      db.currentVideoTranscriptSegments,
+      async () => {
+        await db.currentVideoTranscriptSources.clear();
+        await db.currentVideoTranscriptSegments.clear();
+      },
+    );
+    clearTemporaryCurrentVideoTranscriptCache();
 
-  return {
-    operation: 'clear_current_video_subtitle_cache',
-    completedAt: Date.now(),
-    cleared: {
-      currentVideoSubtitleSources: sourceCount,
-      currentVideoSubtitleSegments: segmentCount,
-    },
-  };
+    return {
+      operation: 'clear_current_video_subtitle_cache',
+      completedAt: Date.now(),
+      cleared: {
+        currentVideoSubtitleSources: sourceCount,
+        currentVideoSubtitleSegments: segmentCount,
+      },
+    };
+  });
 }
 
 export async function clearDynamicBillLocalData(): Promise<LocalDataOperationResult> {
@@ -95,26 +98,26 @@ export async function clearAllLocalData(confirmation: unknown): Promise<LocalDat
   if (await getHistorySyncing()) {
     throw new Error('HISTORY_SYNC_IN_PROGRESS');
   }
+  return await runCurrentVideoTranscriptClearCoordinator(async () =>
+    coordinateBlindBoxDrawHistoryClear(async recentDrawnBvids => {
+      const counts = await collectClearCounts(recentDrawnBvids.length);
+      await db.transaction('rw', db.tables, async () => {
+        for (const table of db.tables) {
+          await table.clear();
+        }
+      });
+      await chrome.storage.local.clear();
+      clearTemporaryCurrentVideoTranscriptCache();
 
-  return coordinateBlindBoxDrawHistoryClear(async recentDrawnBvids => {
-    const counts = await collectClearCounts(recentDrawnBvids.length);
-    await db.transaction('rw', db.tables, async () => {
-      for (const table of db.tables) {
-        await table.clear();
-      }
-    });
-    await chrome.storage.local.clear();
-    clearTemporaryCurrentVideoTranscriptCache();
-
-    return {
-      operation: 'clear_all_local_data',
-      completedAt: Date.now(),
-      cleared: {
-        ...counts,
-        localSettings: true,
-      },
-    };
-  });
+      return {
+        operation: 'clear_all_local_data',
+        completedAt: Date.now(),
+        cleared: {
+          ...counts,
+          localSettings: true,
+        },
+      };
+    }));
 }
 
 async function summarizeHistory(): Promise<LocalDataPrivacySummary['history']> {

@@ -14,11 +14,21 @@ import {
 import {
   clearTemporaryCurrentVideoTranscriptCache,
   clearTemporaryCurrentVideoTranscriptCacheForTab,
+  CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES,
   getTemporaryCurrentVideoTranscriptEvidenceState,
   getTemporaryCurrentVideoTranscriptSegments,
   putTemporaryCurrentVideoTranscriptEvidence,
   retainTemporaryCurrentVideoTranscriptOwner,
 } from '../src/background/current-video-temporary-transcript-cache.ts';
+import {
+  getCurrentVideoTranscriptClearState,
+  runCurrentVideoTranscriptClearCoordinator,
+} from '../src/background/current-video-transcript-clear-epoch.ts';
+import {
+  coordinateBlindBoxDrawHistoryClear,
+  recordBlindBoxDrawnBvids,
+  type BlindBoxDrawHistoryStorage,
+} from '../src/background/storage/blind-box-draw-history-repo.ts';
 import { clearLegacyCurrentVideoTranscriptCache } from '../src/background/storage/current-video-transcript-migration.ts';
 import {
   assertAssistantPayloadAudit,
@@ -100,6 +110,51 @@ test('upserts and reads transcript evidence without destructive unrelated change
   assert.equal(read.status, 'cached');
   assert.equal(read.active, true);
   assert.equal(read.segmentCount, 1);
+});
+
+test('source identity key does not override current-video part identity', () => {
+  const partOne = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '第一分 P 字幕不能被第二分 P 读取。' }] },
+    baseNormalizeOptions({ bvid: 'BV1SameBvid00', cid: 101, page: 1, fetchedAt: 1100 }),
+  );
+  const spoofedPartTwoSource: CurrentVideoTranscriptSourceRecord = {
+    ...partOne.sourceRecord,
+    cid: 202,
+    page: 2,
+    partIdentityKey: 'subtitle-part:BV1SameBvid00:202:2:zh-cn',
+  };
+  const state = buildTranscriptEvidenceStateFromCache(
+    {
+      bvid: 'BV1SameBvid00',
+      cid: 202,
+      page: 2,
+      language: 'zh-CN',
+      sourceIdentityKey: partOne.sourceRecord.sourceIdentityKey,
+      sourceHash: partOne.sourceRecord.sourceHash,
+    },
+    [partOne.sourceRecord],
+    partOne.segments,
+    1200,
+  );
+  const spoofedState = buildTranscriptEvidenceStateFromCache(
+    {
+      bvid: 'BV1SameBvid00',
+      cid: 202,
+      page: 2,
+      language: 'zh-CN',
+      sourceIdentityKey: partOne.sourceRecord.sourceIdentityKey,
+      sourceHash: partOne.sourceRecord.sourceHash,
+    },
+    [spoofedPartTwoSource],
+    partOne.segments.map(segment => ({ ...segment, cid: 202, page: 2 })),
+    1200,
+  );
+
+  assert.equal(state.active, false);
+  assert.notEqual(state.status, 'cached');
+  assert.equal(spoofedState.active, true);
+  assert.equal(spoofedState.cid, 202);
+  assert.equal(spoofedState.page, 2);
 });
 
 test('keeps text and timeline changes as separate source identities', () => {
@@ -446,7 +501,7 @@ test('keeps oversize subtitle body readable only in temporary source memory', ()
   assert.equal(plan.skippedPersistentWrite, true);
 
   const owner = temporaryOwner(71, oversize);
-  putTemporaryCurrentVideoTranscriptEvidence(owner, oversize, 9200);
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(owner, oversize, 9200).status, 'stored');
   const identity = {
     bvid: 'BV1Temporary',
     cid: 6201,
@@ -494,10 +549,10 @@ test('rejects late temporary subtitle writes after tab generation is cleared', (
   clearTemporaryCurrentVideoTranscriptCacheForTab(oldOwner.ownerTabId);
   const returnedSameVideoOwner = temporaryOwner(72, evidence);
 
-  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(oldOwner, evidence, 9530), false);
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(oldOwner, evidence, 9530).status, 'invalid_owner');
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(returnedSameVideoOwner, identity, 9540).length, 0);
 
-  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(returnedSameVideoOwner, evidence, 9550), true);
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(returnedSameVideoOwner, evidence, 9550).status, 'stored');
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(returnedSameVideoOwner, identity, 9560).length, 1);
 });
 
@@ -520,7 +575,7 @@ test('rejects late temporary subtitle writes after clear all invalidates owners'
   clearTemporaryCurrentVideoTranscriptCache();
   const returnedSameVideoOwner = temporaryOwner(73, evidence);
 
-  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(oldOwner, evidence, 9580), false);
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(oldOwner, evidence, 9580).status, 'invalid_owner');
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(returnedSameVideoOwner, identity, 9590).length, 0);
 });
 
@@ -541,11 +596,11 @@ test('isolates temporary transcript bodies by tab and releases only the navigati
   const tabOne = temporaryOwner(81, evidence);
   const tabTwo = temporaryOwner(82, evidence);
 
-  putTemporaryCurrentVideoTranscriptEvidence(tabOne, evidence, 9700);
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(tabOne, evidence, 9700).status, 'stored');
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabOne, identity, 9710).length, 1);
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabTwo, identity, 9710).length, 0);
 
-  putTemporaryCurrentVideoTranscriptEvidence(tabTwo, evidence, 9720);
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(tabTwo, evidence, 9720).status, 'stored');
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabOne, identity, 9730).length, 1);
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabTwo, identity, 9730).length, 1);
 
@@ -558,7 +613,7 @@ test('isolates temporary transcript bodies by tab and releases only the navigati
     sourceIdentityKey: replacement.sourceRecord.sourceIdentityKey,
     sourceHash: replacement.sourceRecord.sourceHash,
   };
-  putTemporaryCurrentVideoTranscriptEvidence(tabOne, replacement, 9735);
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(tabOne, replacement, 9735).status, 'stored');
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabOne, identity, 9736).length, 0);
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabOne, replacementIdentity, 9736).length, 1);
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabTwo, identity, 9736).length, 1);
@@ -575,11 +630,83 @@ test('isolates temporary transcript bodies by tab and releases only the navigati
   clearTemporaryCurrentVideoTranscriptCacheForTab(tabTwo.ownerTabId);
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(tabTwo, identity, 9750).length, 0);
 
-  putTemporaryCurrentVideoTranscriptEvidence(tabOne, evidence, 9760);
+  const returnedTabOne = temporaryOwner(tabOne.ownerTabId, evidence);
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(returnedTabOne, evidence, 9760).status, 'stored');
   clearTemporaryCurrentVideoTranscriptCache();
-  const workerMemoryMissing = getTemporaryCurrentVideoTranscriptEvidenceState(tabOne, identity, 9770);
+  const workerMemoryMissing = getTemporaryCurrentVideoTranscriptEvidenceState(returnedTabOne, identity, 9770);
   assert.equal(workerMemoryMissing.active, false);
   assert.equal(workerMemoryMissing.status, 'missing');
+});
+
+test('temporary transcript admission rejects a fifth live owner without evicting existing owners', () => {
+  clearTemporaryCurrentVideoTranscriptCache();
+  const stored: Array<{
+    owner: ReturnType<typeof temporaryOwner>;
+    identity: ReturnType<typeof transcriptIdentityFromEvidence>;
+  }> = [];
+
+  for (let index = 0; index < CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES; index += 1) {
+    const evidence = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: `保留第 ${index + 1} 个仍打开页面的临时字幕。` }] },
+      baseNormalizeOptions({ bvid: `BV1TempLive${index}`, cid: 6300 + index, fetchedAt: 9800 + index }),
+    );
+    const owner = temporaryOwner(100 + index, evidence);
+    assert.equal(putTemporaryCurrentVideoTranscriptEvidence(owner, evidence, 9810 + index).status, 'stored');
+    stored.push({ owner, identity: transcriptIdentityFromEvidence(evidence) });
+  }
+
+  const fifth = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '第五个页面不能挤掉仍有效的旧页面。' }] },
+    baseNormalizeOptions({ bvid: 'BV1TempLive4', cid: 6304, fetchedAt: 9820 }),
+  );
+  const fifthOwner = temporaryOwner(104, fifth);
+  const rejected = putTemporaryCurrentVideoTranscriptEvidence(fifthOwner, fifth, 9821);
+  assert.equal(rejected.status, 'capacity_exceeded');
+  assert.equal(rejected.retainedSourceCount, CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(fifthOwner, transcriptIdentityFromEvidence(fifth), 9822).length, 0);
+
+  for (const entry of stored) {
+    assert.equal(getTemporaryCurrentVideoTranscriptSegments(entry.owner, entry.identity, 9823).length, 1);
+  }
+
+  clearTemporaryCurrentVideoTranscriptCacheForTab(stored[0].owner.ownerTabId);
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(fifthOwner, fifth, 9824).status, 'stored');
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(fifthOwner, transcriptIdentityFromEvidence(fifth), 9825).length, 1);
+});
+
+test('temporary transcript admission enforces cumulative bytes and single-source byte caps', () => {
+  clearTemporaryCurrentVideoTranscriptCache();
+  const first = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '第一份临时字幕'.repeat(32) }] },
+    baseNormalizeOptions({ bvid: 'BV1TempBytesA', cid: 6401, fetchedAt: 9900 }),
+  );
+  const second = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '第二份临时字幕'.repeat(32) }] },
+    baseNormalizeOptions({ bvid: 'BV1TempBytesB', cid: 6402, fetchedAt: 9901 }),
+  );
+  const firstOwner = temporaryOwner(111, first);
+  const secondOwner = temporaryOwner(112, second);
+  const firstBytes = measureTranscriptPersistentBytes(first.sourceRecord, first.segments);
+  const secondBytes = measureTranscriptPersistentBytes(second.sourceRecord, second.segments);
+  const cumulativeLimit = firstBytes + secondBytes - 1;
+
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(firstOwner, first, 9910, {
+    maxSourceCount: 4,
+    maxBytes: cumulativeLimit,
+  }).status, 'stored');
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(secondOwner, second, 9911, {
+    maxSourceCount: 4,
+    maxBytes: cumulativeLimit,
+  }).status, 'capacity_exceeded');
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(firstOwner, transcriptIdentityFromEvidence(first), 9912).length, 1);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(secondOwner, transcriptIdentityFromEvidence(second), 9912).length, 0);
+
+  const singleTooLarge = putTemporaryCurrentVideoTranscriptEvidence(secondOwner, second, 9913, {
+    maxSourceCount: 4,
+    maxBytes: secondBytes - 1,
+  });
+  assert.equal(singleTooLarge.status, 'source_too_large');
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(firstOwner, transcriptIdentityFromEvidence(first), 9914).length, 1);
 });
 
 test('Dexie 0.12 subtitle cache upgrade clears only transcript tables transactionally', async () => {
@@ -727,7 +854,7 @@ test('background cache scopes in-flight temporary subtitle fetches by tab genera
     const owner = options?.temporaryOwner;
     assert.ok(owner);
     ownersSeen.push(owner.ownerTabId);
-    assert.equal(putTemporaryCurrentVideoTranscriptEvidence(owner, evidence), true);
+    assert.equal(putTemporaryCurrentVideoTranscriptEvidence(owner, evidence).status, 'stored');
     return getTemporaryCurrentVideoTranscriptEvidenceState(owner, {
       bvid: evidence.sourceRecord.bvid,
       cid: evidence.sourceRecord.cid,
@@ -757,6 +884,139 @@ test('background cache scopes in-flight temporary subtitle fetches by tab genera
 
   assert.deepEqual(ownersSeen.sort((a, b) => a - b), [92, 93]);
   assert.equal(fetchCount, 2);
+});
+
+test('clear coordinator rejects subtitle fetches started before and during clearing, then allows fresh fetches', async () => {
+  const context = videoContext({ bvid: 'BV1ClearGen0', cid: 6501 });
+  const store = memoryStore();
+  const writes: string[] = [];
+  const beforeFetchStarted = deferred<void>();
+  const releaseBeforeFetch = deferred<void>();
+  const fetchPlayerInfo = async () => ({
+    subtitle: {
+      subtitles: [
+        {
+          id: 7,
+          lan: 'zh-CN',
+          subtitle_url: '//aisubtitle.hdslb.com/bfs/ai_subtitle/clear-generation.json',
+        },
+      ],
+    },
+  });
+  const upsertEvidence = async (evidence: CurrentVideoTranscriptEvidenceWrite) => {
+    writes.push(evidence.segments.map(segment => segment.text).join('\n'));
+    return store.upsert(evidence);
+  };
+
+  const beforeClear = cacheCurrentVideoTranscriptEvidence(context, {
+    now: 10_000,
+    fetchPlayerInfo,
+    fetchSubtitleJson: async () => {
+      beforeFetchStarted.resolve();
+      await releaseBeforeFetch.promise;
+      return { body: [{ from: 0, to: 2, content: '清理前开始的请求不能写回。' }] };
+    },
+    upsertEvidence,
+  });
+  await beforeFetchStarted.promise;
+
+  await runCurrentVideoTranscriptClearCoordinator(async () => {
+    const duringClear = await cacheCurrentVideoTranscriptEvidence(context, {
+      now: 10_010,
+      fetchPlayerInfo,
+      fetchSubtitleJson: async () => ({ body: [{ from: 0, to: 2, content: '清理期间的新请求不能写回。' }] }),
+      upsertEvidence,
+    });
+    assert.equal(duringClear.active, false);
+    assert.equal(duringClear.reason, 'transcript_cache_cleared_during_request');
+
+    releaseBeforeFetch.resolve();
+    const beforeClearResult = await beforeClear;
+    assert.equal(beforeClearResult.active, false);
+    assert.equal(beforeClearResult.reason, 'transcript_cache_cleared_during_request');
+    assert.deepEqual(writes, []);
+  });
+
+  const afterClear = await cacheCurrentVideoTranscriptEvidence(context, {
+    now: 10_020,
+    fetchPlayerInfo,
+    fetchSubtitleJson: async () => ({ body: [{ from: 0, to: 2, content: '清理完成后的新请求可以写入。' }] }),
+    upsertEvidence,
+  });
+
+  assert.equal(afterClear.status, 'cached');
+  assert.equal(afterClear.active, true);
+  assert.deepEqual(writes, ['清理完成后的新请求可以写入。']);
+});
+
+test('repo writes require current generation and no active clearing window', async () => {
+  const { db } = await import('../src/background/storage/db.ts');
+  const { upsertCurrentVideoTranscriptEvidence } = await import('../src/background/storage/current-video-transcript-repo.ts');
+  db.close();
+  await db.delete();
+  await db.open();
+
+  try {
+    const evidence = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: '清理窗口内不能直接落库。' }] },
+      baseNormalizeOptions({ bvid: 'BV1RepoClear0', cid: 6511, fetchedAt: 10_100 }),
+    );
+    await runCurrentVideoTranscriptClearCoordinator(async () => {
+      const blocked = await upsertCurrentVideoTranscriptEvidence(evidence);
+      assert.equal(blocked.active, false);
+      assert.equal(blocked.reason, 'transcript_cache_cleared_during_request');
+    });
+
+    assert.equal(await db.currentVideoTranscriptSources.count(), 0);
+    assert.equal(await db.currentVideoTranscriptSegments.count(), 0);
+
+    const stored = await upsertCurrentVideoTranscriptEvidence(evidence);
+    assert.equal(stored.status, 'cached');
+    assert.equal(await db.currentVideoTranscriptSources.count(), 1);
+    assert.equal(await db.currentVideoTranscriptSegments.count(), 1);
+  } finally {
+    db.close();
+    await db.delete();
+  }
+});
+
+test('clear coordinator remains active while blind-box draw-history clear waits in the queue', async () => {
+  const storage = delayedBlindBoxStorage();
+  const queuedMutation = recordBlindBoxDrawnBvids(['BV1QUEUE01'], storage);
+  await storage.setStarted.promise;
+
+  const clearPromise = runCurrentVideoTranscriptClearCoordinator(async () =>
+    coordinateBlindBoxDrawHistoryClear(async () => 'cleared', storage));
+  await Promise.resolve();
+  assert.equal(getCurrentVideoTranscriptClearState().clearing, true);
+
+  let writes = 0;
+  const duringQueue = await cacheCurrentVideoTranscriptEvidence(videoContext({ bvid: 'BV1QueueClear', cid: 6521 }), {
+    now: 10_200,
+    fetchPlayerInfo: async () => ({
+      subtitle: {
+        subtitles: [
+          {
+            lan: 'zh-CN',
+            subtitle_url: '//aisubtitle.hdslb.com/bfs/ai_subtitle/queue-clear.json',
+          },
+        ],
+      },
+    }),
+    fetchSubtitleJson: async () => ({ body: [{ from: 0, to: 2, content: '排队清理期间不能写回。' }] }),
+    upsertEvidence: async (evidence) => {
+      writes += 1;
+      return memoryStore().upsert(evidence);
+    },
+  });
+  assert.equal(duringQueue.active, false);
+  assert.equal(duringQueue.reason, 'transcript_cache_cleared_during_request');
+  assert.equal(writes, 0);
+
+  storage.releaseSet.resolve();
+  await queuedMutation;
+  assert.equal(await clearPromise, 'cleared');
+  assert.equal(getCurrentVideoTranscriptClearState().clearing, false);
 });
 
 test('background cache blocks unsupported subtitle hosts before fetching body', async () => {
@@ -945,6 +1205,17 @@ function temporaryOwner(ownerTabId: number, evidence: CurrentVideoTranscriptEvid
   return owner;
 }
 
+function transcriptIdentityFromEvidence(evidence: CurrentVideoTranscriptEvidenceWrite) {
+  return {
+    bvid: evidence.sourceRecord.bvid,
+    cid: evidence.sourceRecord.cid,
+    page: evidence.sourceRecord.page,
+    language: evidence.sourceRecord.language,
+    sourceIdentityKey: evidence.sourceRecord.sourceIdentityKey,
+    sourceHash: evidence.sourceRecord.sourceHash,
+  };
+}
+
 function memoryStore() {
   const sources: CurrentVideoTranscriptSourceRecord[] = [];
   const segments: CurrentVideoTranscriptSegment[] = [];
@@ -1043,24 +1314,31 @@ function utf8JsonBytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
-function videoContext(): CurrentVideoContext {
+function videoContext(options: {
+  bvid?: string;
+  cid?: number;
+  page?: number;
+} = {}): CurrentVideoContext {
+  const bvid = options.bvid ?? 'BV1Transcript00';
+  const cid = options.cid ?? 101;
+  const page = options.page ?? 1;
   return {
     kind: 'video',
-    url: 'https://www.bilibili.com/video/BV1Transcript00?p=1',
+    url: `https://www.bilibili.com/video/${bvid}?p=${page}`,
     collectedAt: 1000,
-    bvid: 'BV1Transcript00',
+    bvid,
     aid: 8800,
-    cid: 101,
+    cid,
     title: 'Transcript cache video',
     authorName: 'Cache UP',
     authorMid: 42,
     durationSeconds: 600,
     currentPart: {
-      page: 1,
+      page,
       title: 'Main',
       total: 1,
     },
-    parts: [{ page: 1, cid: 101, title: 'Main', durationSeconds: 600 }],
+    parts: [{ page, cid, title: 'Main', durationSeconds: 600 }],
     chapters: [],
     description: {
       availability: 'available',
@@ -1078,5 +1356,45 @@ function videoContext(): CurrentVideoContext {
     subtitleProbe: null,
     transcriptEvidence: null,
     warnings: ['transcript_probe_pending'],
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  return {
+    promise,
+    resolve: (value?: T | PromiseLike<T>) => resolve(value as T),
+    reject,
+  };
+}
+
+function delayedBlindBoxStorage(): BlindBoxDrawHistoryStorage & {
+  setStarted: ReturnType<typeof deferred<void>>;
+  releaseSet: ReturnType<typeof deferred<void>>;
+} {
+  const values = new Map<string, unknown>();
+  const setStarted = deferred<void>();
+  const releaseSet = deferred<void>();
+  return {
+    setStarted,
+    releaseSet,
+    get: async keys => Object.fromEntries(keys.map(key => [key, values.get(key)])),
+    set: async items => {
+      setStarted.resolve();
+      await releaseSet.promise;
+      for (const [key, value] of Object.entries(items)) {
+        values.set(key, value);
+      }
+    },
+    remove: async keys => {
+      for (const key of keys) {
+        values.delete(key);
+      }
+    },
   };
 }

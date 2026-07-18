@@ -106,6 +106,7 @@ import {
   retainTemporaryCurrentVideoTranscriptOwner,
   type CurrentVideoTemporaryTranscriptOwner,
 } from '../current-video-temporary-transcript-cache.ts';
+import { retainTemporaryTranscriptOwnerForContextSnapshot } from '../current-video-transcript-owner.ts';
 import { testAiConnection } from '../ai/openai-compatible';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
@@ -130,6 +131,12 @@ const currentVideoSubtitleProbeRequests = new Map<string, Promise<CurrentVideoSu
 interface CurrentVideoLookupOptions {
   forceContextRefresh?: boolean;
   forceSubtitleProbe?: boolean;
+}
+
+interface CurrentVideoContextLookupResult {
+  tab: CurrentVideoTabSnapshot | null;
+  context: CurrentVideoContextResult;
+  temporaryOwner?: CurrentVideoTemporaryTranscriptOwner;
 }
 
 export function setupMessageHandlers(): void {
@@ -385,23 +392,23 @@ async function handleRequest<T>(
     case 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE':
       return { success: true, data: await getTranscriptEvidenceForActiveTab(request.params, requestTabId) as T };
     case 'GET_CURRENT_VIDEO_SUMMARY': {
-      const context = await getCurrentVideoContextForActiveTabWithSelection(request.params, requestTabId);
-      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context, requestTabId);
-      return { success: true, data: await generateCurrentVideoSummary(context, { transcriptSegments }) as T };
+      const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
+      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(lookup.context, lookup.temporaryOwner);
+      return { success: true, data: await generateCurrentVideoSummary(lookup.context, { transcriptSegments }) as T };
     }
     case 'GET_VIDEO_KNOWLEDGE': {
-      const context = await getCurrentVideoContextForActiveTabWithSelection(request.params, requestTabId);
-      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context, requestTabId);
-      return { success: true, data: buildVideoKnowledgeResult(context, { transcriptSegments }) as T };
+      const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
+      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(lookup.context, lookup.temporaryOwner);
+      return { success: true, data: buildVideoKnowledgeResult(lookup.context, { transcriptSegments }) as T };
     }
     case 'SEARCH_CURRENT_VIDEO_SEGMENTS': {
       const query = String(request.params?.query ?? '');
-      const context = await getCurrentVideoContextForActiveTabWithSelection(request.params, requestTabId);
-      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context, requestTabId);
-      const videoKnowledge = buildVideoKnowledgeResult(context, { transcriptSegments });
+      const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
+      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(lookup.context, lookup.temporaryOwner);
+      const videoKnowledge = buildVideoKnowledgeResult(lookup.context, { transcriptSegments });
       return {
         success: true,
-        data: await searchCurrentVideoSegmentsWithAiRerank(context, {
+        data: await searchCurrentVideoSegmentsWithAiRerank(lookup.context, {
           query,
           transcriptSegments,
           videoKnowledge,
@@ -609,9 +616,9 @@ async function requestCurrentVideoSegmentJump(
     );
   }
 
-  const target = await resolveCurrentVideoLookupState(requestTabId);
-  const tabId = target.tab?.id ?? 0;
-  if (!target.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(target.tab.url)) {
+  const lookup = await getCurrentVideoContextLookupWithSelection(params, requestTabId);
+  const tabId = lookup.tab?.id ?? 0;
+  if (!lookup.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(lookup.tab.url)) {
     return blockedTimestampJumpResponse(
       candidateId,
       'no_context',
@@ -619,7 +626,7 @@ async function requestCurrentVideoSegmentJump(
     );
   }
 
-  const context = await getCurrentVideoContextForActiveTabWithSelection(params, requestTabId);
+  const context = lookup.context;
   if (context.kind !== 'video') {
     return blockedTimestampJumpResponse(
       candidateId,
@@ -628,7 +635,7 @@ async function requestCurrentVideoSegmentJump(
     );
   }
 
-  const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context, requestTabId);
+  const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context, lookup.temporaryOwner);
   const videoKnowledge = buildVideoKnowledgeResult(context, { transcriptSegments });
   const result = searchCurrentVideoSegments(context, {
     query,
@@ -715,45 +722,68 @@ async function getCurrentVideoContextForActiveTab(
   options: CurrentVideoLookupOptions = {},
   requestTabId: number | null = null,
 ): Promise<CurrentVideoContextResult> {
-  const context = await getRawCurrentVideoContextForActiveTab(options, requestTabId);
-  if (context.kind !== 'video') return context;
-  const withSubtitle = await enrichCurrentVideoContextWithSubtitleProbe(context, options);
-  return await enrichCurrentVideoContextWithTranscriptEvidence(withSubtitle, requestTabId);
+  return (await getCurrentVideoContextLookup(options, requestTabId)).context;
 }
 
 async function getCurrentVideoContextForActiveTabWithSelection(
   params: Record<string, unknown> | undefined,
   requestTabId: number | null = null,
 ): Promise<CurrentVideoContextResult> {
-  const context = await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(params), requestTabId);
-  return await bindSelectedCurrentVideoTranscriptEvidence(
-    context,
-    selectedSourceIdentityKey(params),
-    requestTabId,
-  );
+  return (await getCurrentVideoContextLookupWithSelection(params, requestTabId)).context;
 }
 
-async function getRawCurrentVideoContextForActiveTab(
+async function getCurrentVideoContextLookupWithSelection(
+  params: Record<string, unknown> | undefined,
+  requestTabId: number | null = null,
+): Promise<CurrentVideoContextLookupResult> {
+  const lookup = await getCurrentVideoContextLookup(currentVideoLookupOptions(params), requestTabId);
+  return {
+    ...lookup,
+    context: await bindSelectedCurrentVideoTranscriptEvidence(
+      lookup.context,
+      selectedSourceIdentityKey(params),
+      lookup.temporaryOwner,
+    ),
+  };
+}
+
+async function getCurrentVideoContextLookup(
   options: CurrentVideoLookupOptions = {},
   requestTabId: number | null = null,
-): Promise<CurrentVideoContextResult> {
+): Promise<CurrentVideoContextLookupResult> {
+  const lookup = await getRawCurrentVideoContextLookup(options, requestTabId);
+  if (lookup.context.kind !== 'video') return lookup;
+  const withSubtitle = await enrichCurrentVideoContextWithSubtitleProbe(lookup.context, options);
+  return {
+    ...lookup,
+    context: await enrichCurrentVideoContextWithTranscriptEvidence(withSubtitle, lookup.temporaryOwner),
+  };
+}
+
+async function getRawCurrentVideoContextLookup(
+  options: CurrentVideoLookupOptions = {},
+  requestTabId: number | null = null,
+): Promise<CurrentVideoContextLookupResult> {
   const { tab, context } = await resolveCurrentVideoLookupState(requestTabId);
   const url = tab?.url ?? null;
+  let resolvedContext: CurrentVideoContextResult;
 
   if (!url || !isBilibiliVideoUrl(url)) {
-    return buildNoContext(url, 'non_video_page', 'non_video');
-  }
-
-  if (tab?.id && (options.forceContextRefresh || context?.kind !== 'video')) {
+    resolvedContext = buildNoContext(url, 'non_video_page', 'non_video');
+  } else if (tab?.id && (options.forceContextRefresh || context?.kind !== 'video')) {
     const refreshed = await requestFreshCurrentVideoContext(tab.id, url);
-    if (refreshed) return refreshed;
+    resolvedContext = refreshed ?? buildNoContext(url, 'video_context_unavailable', 'video');
+  } else if (context?.kind === 'video') {
+    resolvedContext = context;
+  } else {
+    resolvedContext = buildNoContext(url, 'video_context_unavailable', 'video');
   }
 
-  if (context?.kind === 'video') {
-    return context;
-  }
-
-  return buildNoContext(url, 'video_context_unavailable', 'video');
+  return {
+    tab,
+    context: resolvedContext,
+    temporaryOwner: retainTemporaryTranscriptOwnerForContextSnapshot(resolvedContext, tab?.id ?? null),
+  };
 }
 
 async function probeSubtitleSourceForActiveTab(
@@ -776,21 +806,21 @@ async function getTranscriptEvidenceForActiveTab(
   params: Record<string, unknown> | undefined,
   requestTabId: number | null = null,
 ): Promise<CurrentVideoTranscriptEvidenceState> {
-  const context = await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(params), requestTabId);
+  const lookup = await getRawCurrentVideoContextLookup(currentVideoLookupOptions(params), requestTabId);
   const requestedLanguage = typeof params?.language === 'string'
     ? params.language
     : null;
-  return await cacheCurrentVideoTranscriptEvidence(context, {
+  return await cacheCurrentVideoTranscriptEvidence(lookup.context, {
     requestedLanguage,
-    protectedSourceIdentityKeys: currentVideoProtectedSourceIdentityKeys(context, params),
-    temporaryOwner: await temporaryTranscriptOwnerForContext(context, requestTabId),
+    protectedSourceIdentityKeys: currentVideoProtectedSourceIdentityKeys(lookup.context, params),
+    temporaryOwner: lookup.temporaryOwner,
   });
 }
 
 async function bindSelectedCurrentVideoTranscriptEvidence(
   context: CurrentVideoContextResult,
   sourceIdentityKey: string | null,
-  requestTabId: number | null = null,
+  temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
 ): Promise<CurrentVideoContextResult> {
   if (context.kind !== 'video' || !sourceIdentityKey || !context.cid) return context;
   const transcriptEvidence = await getCurrentVideoTranscriptEvidenceState({
@@ -798,7 +828,7 @@ async function bindSelectedCurrentVideoTranscriptEvidence(
     cid: context.cid,
     page: context.currentPart.page,
     sourceIdentityKey,
-  }, Date.now(), await temporaryTranscriptOwnerForContext(context, requestTabId));
+  }, Date.now(), temporaryOwner);
   return withTranscriptEvidenceState(context, transcriptEvidence);
 }
 
@@ -838,7 +868,7 @@ async function enrichCurrentVideoContextWithSubtitleProbe(
 
 async function enrichCurrentVideoContextWithTranscriptEvidence(
   context: CurrentVideoContext,
-  requestTabId: number | null = null,
+  temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
 ): Promise<CurrentVideoContext> {
   if (!context.cid) {
     return withTranscriptEvidenceState(context, buildCurrentVideoTranscriptEvidenceState({
@@ -859,13 +889,13 @@ async function enrichCurrentVideoContextWithTranscriptEvidence(
     bvid: context.bvid,
     cid: context.cid,
     page: context.currentPart.page,
-  }, Date.now(), await temporaryTranscriptOwnerForContext(context, requestTabId));
+  }, Date.now(), temporaryOwner);
   return withTranscriptEvidenceState(context, state);
 }
 
 async function getActiveCurrentVideoTranscriptSegments(
   context: CurrentVideoContextResult,
-  requestTabId: number | null = null,
+  temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
 ) {
   if (
     context.kind !== 'video'
@@ -882,7 +912,7 @@ async function getActiveCurrentVideoTranscriptSegments(
     language: context.transcriptEvidence.language,
     sourceIdentityKey: context.transcriptEvidence.sourceIdentityKey,
     sourceHash: context.transcriptEvidence.sourceHash,
-  }, await temporaryTranscriptOwnerForContext(context, requestTabId));
+  }, temporaryOwner);
 }
 
 function subtitleProbeCacheKey(context: CurrentVideoContext): string {
@@ -959,22 +989,6 @@ function selectedSourceIdentityKey(params: Record<string, unknown> | undefined):
   return typeof value === 'string' && value.trim()
     ? value.trim()
     : null;
-}
-
-async function temporaryTranscriptOwnerForContext(
-  context: CurrentVideoContextResult,
-  requestTabId: number | null,
-): Promise<CurrentVideoTemporaryTranscriptOwner | undefined> {
-  if (context.kind !== 'video' || !context.cid) return undefined;
-  const target = await resolveCurrentVideoLookupState(requestTabId);
-  const ownerTabId = target.tab?.id ?? 0;
-  if (ownerTabId <= 0) return undefined;
-  return retainTemporaryCurrentVideoTranscriptOwner({
-    ownerTabId,
-    bvid: context.bvid,
-    cid: context.cid,
-    page: context.currentPart.page,
-  }) ?? undefined;
 }
 
 async function resolveCurrentVideoLookupState(

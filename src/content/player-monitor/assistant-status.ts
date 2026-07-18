@@ -879,15 +879,12 @@ function primaryTextSourceCard(
   source: CurrentVideoPrimaryTextSourceOption,
   activeSourceIdentityKey: string | null,
 ): HTMLElement {
-  const viewingKey = assistantState.primaryTextViewingSourceIdentityKey;
   const isActive = activeSourceIdentityKey === source.identity.sourceIdentityKey;
   const isSelectedByUser = selectedPrimaryTextSourceIdentityKey(context) === source.identity.sourceIdentityKey;
-  const isViewing = viewingKey === source.identity.sourceIdentityKey;
   const card = document.createElement('article');
   card.className = [
     'bdc-assistant-source-card',
     isActive ? 'bdc-assistant-source-card-active' : '',
-    isViewing ? 'bdc-assistant-source-card-viewing' : '',
   ].filter(Boolean).join(' ');
 
   appendText(card, 'div', 'bdc-assistant-source-title', source.label);
@@ -896,20 +893,10 @@ function primaryTextSourceCard(
     ? '已由你明确设为当前视频助手来源。'
     : isActive
       ? '当前可用于助手；点击“用于视频助手”后会记住这个选择。'
-      : '查看这个来源不会改变主要文本来源。');
+      : '选择这个来源后，后续当前视频助手会使用它。');
 
   const actions = document.createElement('div');
   actions.className = 'bdc-assistant-source-actions';
-  actions.appendChild(button(
-    isViewing ? '正在查看' : '查看来源',
-    'bdc-assistant-button bdc-assistant-button-quiet',
-    () => {
-      assistantState.primaryTextViewingSourceIdentityKey = source.identity.sourceIdentityKey;
-      assistantState.primaryTextStatus = '已切换查看的来源；主要文本来源没有改变。';
-      renderAssistantShell();
-    },
-    isViewing,
-  ));
   actions.appendChild(button(
     assistantState.primaryTextSaving && isActive ? '保存中...' : isSelectedByUser ? '已用于助手' : '用于视频助手',
     isSelectedByUser
@@ -1924,6 +1911,8 @@ async function returnCurrentVideoSegmentJumpFromPage(): Promise<void> {
 
 async function refreshSubtitleEvidenceFromPage(): Promise<void> {
   if (assistantState.subtitleRefreshing) return;
+  const initialIdentity = currentAssistantVideoIdentity();
+  if (!initialIdentity) return;
 
   const requestId = assistantState.subtitleRequestId + 1;
   assistantState.subtitleRequestId = requestId;
@@ -1932,10 +1921,14 @@ async function refreshSubtitleEvidenceFromPage(): Promise<void> {
   renderAssistantShell();
 
   try {
-    await sendRuntimeRequest<CurrentVideoContextResult>('GET_CURRENT_VIDEO_CONTEXT', {
+    const refreshedContext = await sendRuntimeRequest<CurrentVideoContextResult>('GET_CURRENT_VIDEO_CONTEXT', {
       forceContextRefresh: true,
       forceSubtitleProbe: true,
     });
+    if (!subtitleRefreshStillTargets(requestId, initialIdentity, refreshedContext)) {
+      finishStaleSubtitleRefresh(requestId);
+      return;
+    }
     const transcriptEvidence = await sendRuntimeRequest<CurrentVideoTranscriptEvidenceState>(
       'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE',
       {
@@ -1944,10 +1937,19 @@ async function refreshSubtitleEvidenceFromPage(): Promise<void> {
         forceSubtitleProbe: true,
       },
     );
+    if (!subtitleRefreshStillTargets(requestId, initialIdentity, transcriptEvidence)) {
+      finishStaleSubtitleRefresh(requestId);
+      return;
+    }
     const context = await sendRuntimeRequest<CurrentVideoContextResult>('GET_CURRENT_VIDEO_CONTEXT', {
       forceContextRefresh: true,
     });
-    if (assistantState.subtitleRequestId !== requestId) return;
+    if (!subtitleRefreshStillTargets(requestId, initialIdentity, context)
+      || !transcriptEvidenceMatchesVideoIdentity(transcriptEvidence, initialIdentity)
+    ) {
+      finishStaleSubtitleRefresh(requestId);
+      return;
+    }
 
     const nextContext = context.kind === 'video'
       ? { ...context, transcriptEvidence }
@@ -1962,6 +1964,13 @@ async function refreshSubtitleEvidenceFromPage(): Promise<void> {
     assistantState.subtitleStatus = '重新检测失败：请确认当前 B 站视频页仍然打开，并在播放器里开启中文 AI 字幕后重试。';
     renderAssistantShell();
   }
+}
+
+function finishStaleSubtitleRefresh(requestId: number): void {
+  if (assistantState.subtitleRequestId !== requestId) return;
+  assistantState.subtitleRefreshing = false;
+  assistantState.subtitleStatus = '当前视频或分 P 已切换，请在当前分 P 重新检测字幕。';
+  renderAssistantShell();
 }
 
 async function loadCurrentVideoSummary(force: boolean): Promise<void> {
@@ -2131,6 +2140,77 @@ function injectStyle(): void {
   style.id = STYLE_ID;
   style.textContent = CSS;
   document.head.appendChild(style);
+}
+
+interface CurrentAssistantVideoIdentity {
+  bvid: string;
+  cid: number | null;
+  page: number;
+}
+
+function currentAssistantVideoIdentity(): CurrentAssistantVideoIdentity | null {
+  const context = assistantState.context;
+  if (context?.kind !== 'video') return null;
+  return {
+    bvid: context.bvid,
+    cid: context.cid ?? null,
+    page: context.currentPart.page,
+  };
+}
+
+function subtitleRefreshStillTargets(
+  requestId: number,
+  identity: CurrentAssistantVideoIdentity,
+  result: CurrentVideoContextResult | CurrentVideoTranscriptEvidenceState,
+): boolean {
+  return assistantState.subtitleRequestId === requestId
+    && currentAssistantIdentityMatches(identity)
+    && (
+      isTranscriptEvidenceState(result)
+        ? transcriptEvidenceMatchesVideoIdentity(result, identity)
+        : contextMatchesVideoIdentity(result, identity)
+    );
+}
+
+function currentAssistantIdentityMatches(identity: CurrentAssistantVideoIdentity): boolean {
+  const current = currentAssistantVideoIdentity();
+  return Boolean(current && sameCurrentAssistantVideoIdentity(current, identity));
+}
+
+function contextMatchesVideoIdentity(
+  context: CurrentVideoContextResult,
+  identity: CurrentAssistantVideoIdentity,
+): boolean {
+  return context.kind === 'video'
+    && sameCurrentAssistantVideoIdentity({
+      bvid: context.bvid,
+      cid: context.cid ?? null,
+      page: context.currentPart.page,
+    }, identity);
+}
+
+function transcriptEvidenceMatchesVideoIdentity(
+  evidence: CurrentVideoTranscriptEvidenceState,
+  identity: CurrentAssistantVideoIdentity,
+): boolean {
+  return evidence.bvid === identity.bvid
+    && (evidence.cid ?? null) === identity.cid
+    && evidence.page === identity.page;
+}
+
+function sameCurrentAssistantVideoIdentity(
+  left: CurrentAssistantVideoIdentity,
+  right: CurrentAssistantVideoIdentity,
+): boolean {
+  return left.bvid === right.bvid
+    && left.cid === right.cid
+    && left.page === right.page;
+}
+
+function isTranscriptEvidenceState(
+  value: CurrentVideoContextResult | CurrentVideoTranscriptEvidenceState,
+): value is CurrentVideoTranscriptEvidenceState {
+  return 'status' in value && 'active' in value && 'segmentCount' in value;
 }
 
 function contextStateKey(context: CurrentVideoContextResult): string {

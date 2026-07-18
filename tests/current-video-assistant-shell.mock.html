@@ -60,8 +60,11 @@
     </style>
     <script>
       const mockBvid = "BV1ShellMock9";
-      const mockCid = 2202;
+      const baseMockCid = 2202;
+      let mockCid = baseMockCid;
+      let mockPage = 1;
       let subtitleCached = false;
+      let switchDuringNextTranscriptFetch = false;
       let summaryReadCount = 0;
       let searchReadCount = 0;
       let knowledgeReadCount = 0;
@@ -71,7 +74,7 @@
       const subtitleSourceHash = "mock-source-hash-hidden";
       const subtitleBodyHash = "mock-body-hash-hidden";
       const subtitleTimelineHash = "mock-timeline-hash-hidden";
-      const subtitleSourceIdentityKey = `primary-text:bilibili_subtitle:${mockBvid}:${mockCid}:1:zh-cn:${subtitleSourceHash}`;
+      const subtitleSourceIdentityKey = () => `primary-text:bilibili_subtitle:${mockBvid}:${mockCid}:${mockPage}:zh-cn:${subtitleSourceHash}`;
       const runtimeMessages = [];
       const extensionStorage = {};
 
@@ -114,11 +117,11 @@
           checkedAt: Date.now(),
           bvid: mockBvid,
           cid: mockCid,
-          page: 1,
+          page: mockPage,
           language: subtitleCached ? "zh-CN" : null,
           source: subtitleCached ? "bilibili_subtitle" : null,
           sourceType: "bilibili_player_wbi_v2",
-          sourceIdentityKey: subtitleCached ? subtitleSourceIdentityKey : null,
+          sourceIdentityKey: subtitleCached ? subtitleSourceIdentityKey() : null,
           ["source" + "Hash"]: subtitleCached ? subtitleSourceHash : null,
           bodyHash: subtitleCached ? subtitleBodyHash : null,
           timelineHash: subtitleCached ? subtitleTimelineHash : null,
@@ -149,8 +152,11 @@
           authorName: "Mock UP",
           authorMid: 42,
           durationSeconds: 600,
-          currentPart: { page: 1, title: "主视频", total: 1 },
-          parts: [{ page: 1, cid: mockCid, title: "主视频", durationSeconds: 600 }],
+          currentPart: { page: mockPage, title: mockPage === 1 ? "主视频" : "第二分 P", total: 2 },
+          parts: [
+            { page: 1, cid: baseMockCid, title: "主视频", durationSeconds: 600 },
+            { page: 2, cid: 3303, title: "第二分 P", durationSeconds: 420 },
+          ],
           chapters: [],
           description: {
             availability: "available",
@@ -172,7 +178,7 @@
                 checkedAt: Date.now(),
                 bvid: mockBvid,
                 cid: mockCid,
-                page: 1,
+                page: mockPage,
                 sourceType: "bilibili_player_wbi_v2",
                 sourceDomain: "api.bilibili.com",
                 sourcePath: "/x/player/wbi/v2",
@@ -544,6 +550,9 @@
       window.__assistantMockPlaybackPosition = () => playbackPosition;
       window.__assistantMockMessages = runtimeMessages;
       window.__assistantMockStorage = extensionStorage;
+      window.__assistantMockSwitchDuringTranscript = () => {
+        switchDuringNextTranscriptFetch = true;
+      };
 
       function searchCurrentVideoSegmentsResult(query) {
         searchReadCount += 1;
@@ -832,7 +841,13 @@
             }
             if (message.action === "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE") {
               subtitleCached = true;
-              return Promise.resolve({ success: true, data: transcriptEvidence() });
+              const evidence = transcriptEvidence();
+              if (switchDuringNextTranscriptFetch) {
+                switchDuringNextTranscriptFetch = false;
+                mockPage = 2;
+                mockCid = 3303;
+              }
+              return Promise.resolve({ success: true, data: evidence });
             }
             if (message.action === "GET_CURRENT_VIDEO_SUMMARY") {
               return Promise.resolve({ success: true, data: currentSummary() });

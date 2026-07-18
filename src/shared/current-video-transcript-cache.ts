@@ -724,20 +724,23 @@ function sourceMatchesIdentity(identity: CurrentVideoTranscriptIdentity) {
   const expectedSourceHash = identity.sourceHash ?? null;
   return (source: CurrentVideoTranscriptSourceRecord) => {
     const normalized = normalizeSourceRecordIdentity(source);
+    const sameVideoPart = normalized.bvid === identity.bvid
+      && normalized.cid === identity.cid
+      && normalized.page === identity.page;
+    const sameLanguage = !identity.language
+      || languageKey(normalized.language) === languageKey(identity.language);
     if (expectedSourceIdentityKey) {
-      return sourceIdentity(normalized) === expectedSourceIdentityKey;
+      return sameVideoPart
+        && sameLanguage
+        && sourceIdentity(normalized) === expectedSourceIdentityKey
+        && (!expectedSourceHash || normalized.sourceHash === expectedSourceHash);
     }
     if (expectedSourceHash) {
-      return normalized.bvid === identity.bvid
-        && normalized.cid === identity.cid
-        && normalized.page === identity.page
+      return sameVideoPart
         && normalized.sourceHash === expectedSourceHash
-        && (!identity.language || languageKey(normalized.language) === languageKey(identity.language));
+        && sameLanguage;
     }
-    return normalized.bvid === identity.bvid
-      && normalized.cid === identity.cid
-      && normalized.page === identity.page
-      && (!identity.language || languageKey(normalized.language) === languageKey(identity.language));
+    return sameVideoPart && sameLanguage;
   };
 }
 

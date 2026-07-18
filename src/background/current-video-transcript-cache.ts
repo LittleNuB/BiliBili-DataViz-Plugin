@@ -16,6 +16,10 @@ import type {
   PlayerInfoFetchOptions,
 } from '../shared/current-video-subtitle-state';
 import type { CurrentVideoTemporaryTranscriptOwner } from './current-video-temporary-transcript-cache.ts';
+import {
+  canUseCurrentVideoTranscriptClearGeneration,
+  getCurrentVideoTranscriptClearState,
+} from './current-video-transcript-clear-epoch.ts';
 
 const SUBTITLE_FETCH_TIMEOUT_MS = 30_000;
 const PLAYER_INFO_ATTEMPTS: Array<PlayerInfoFetchOptions> = [
@@ -43,6 +47,7 @@ export interface CacheCurrentVideoTranscriptOptions {
     options?: {
       protectedSourceIdentityKeys?: Iterable<string>;
       temporaryOwner?: CurrentVideoTemporaryTranscriptOwner;
+      expectedClearGeneration?: number;
     },
   ) => Promise<CurrentVideoTranscriptEvidenceState>;
 }
@@ -79,11 +84,22 @@ export async function cacheCurrentVideoTranscriptEvidence(
     });
   }
 
+  const clearState = getCurrentVideoTranscriptClearState();
+  if (clearState.clearing) {
+    return transcriptClearedDuringRequestState({
+      bvid: context.bvid,
+      cid: context.cid,
+      page: context.currentPart.page,
+      language: options.requestedLanguage ?? null,
+    }, now, 'bilibili_player_v2');
+  }
+  const expectedClearGeneration = clearState.generation;
   const key = [
     context.bvid,
     context.cid,
     context.currentPart.page,
     normalizeLanguage(options.requestedLanguage) ?? 'auto',
+    expectedClearGeneration,
     options.temporaryOwner
       ? `${options.temporaryOwner.ownerTabId}:${options.temporaryOwner.navigationGeneration}`
       : 'persistent',
@@ -94,6 +110,7 @@ export async function cacheCurrentVideoTranscriptEvidence(
   const request = cacheCurrentVideoTranscriptEvidenceInner(context, {
     ...options,
     now,
+    expectedClearGeneration,
   }).finally(() => {
     inFlightTranscriptCaches.delete(key);
   });
@@ -103,7 +120,7 @@ export async function cacheCurrentVideoTranscriptEvidence(
 
 async function cacheCurrentVideoTranscriptEvidenceInner(
   context: CurrentVideoContext,
-  options: CacheCurrentVideoTranscriptOptions & { now: number },
+  options: CacheCurrentVideoTranscriptOptions & { now: number; expectedClearGeneration: number },
 ): Promise<CurrentVideoTranscriptEvidenceState> {
   const target = {
     bvid: context.bvid,
@@ -128,6 +145,9 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
         },
         attempt,
       );
+      if (!canUseCurrentVideoTranscriptClearGeneration(options.expectedClearGeneration)) {
+        return transcriptClearedDuringRequestState(target, options.now, attempt.sourceType);
+      }
       const tracks = extractSubtitleTrackCandidates(data, attempt);
 
       if (tracks.status !== 'ok') {
@@ -169,6 +189,9 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
       }
 
       const subtitleJson = await fetchSubtitleJson(url.toString());
+      if (!canUseCurrentVideoTranscriptClearGeneration(options.expectedClearGeneration)) {
+        return transcriptClearedDuringRequestState(target, options.now, selected.sourceType);
+      }
       return await upsertEvidence(normalizeBilibiliTranscriptEvidence(
         subtitleJson,
         {
@@ -187,6 +210,7 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
           options.protectedSourceIdentityKeys,
         ),
         temporaryOwner: options.temporaryOwner,
+        expectedClearGeneration: options.expectedClearGeneration,
       });
     } catch (error) {
       const message = errorMessage(error);
@@ -229,10 +253,27 @@ async function defaultUpsertEvidence(
   options: {
     protectedSourceIdentityKeys?: Iterable<string>;
     temporaryOwner?: CurrentVideoTemporaryTranscriptOwner;
+    expectedClearGeneration?: number;
   } = {},
 ): Promise<CurrentVideoTranscriptEvidenceState> {
   const repo = await import('./storage/current-video-transcript-repo.ts');
   return await repo.upsertCurrentVideoTranscriptEvidence(evidence, options);
+}
+
+function transcriptClearedDuringRequestState(
+  target: { bvid: string; cid: number; page: number; language: string | null },
+  now: number,
+  sourceType: CurrentVideoSubtitleSourceType,
+): CurrentVideoTranscriptEvidenceState {
+  return buildCurrentVideoTranscriptEvidenceState({
+    status: 'missing',
+    target,
+    now,
+    sourceType,
+    reason: 'transcript_cache_cleared_during_request',
+    message: '字幕缓存已在本次检测过程中被清理；请重新检测当前视频字幕正文。',
+    warnings: ['transcript_cache_cleared_during_request'],
+  });
 }
 
 const fetchBilibiliPlayerInfo: CurrentVideoSubtitlePlayerInfoFetcher = async (
