@@ -810,7 +810,6 @@ function appendPrimaryTextSourceSwitcher(parent: HTMLElement, context: CurrentVi
   for (const source of sourceState.sources) {
     list.appendChild(primaryTextSourceCard(context, source, sourceState.activeSourceIdentityKey));
   }
-  list.appendChild(localTranscriptPreparationCard());
   block.appendChild(list);
   parent.appendChild(block);
 }
@@ -907,23 +906,6 @@ function primaryTextSourceCard(
     },
     assistantState.primaryTextSaving || isSelectedByUser,
   ));
-  card.appendChild(actions);
-  return card;
-}
-
-function localTranscriptPreparationCard(): HTMLElement {
-  const card = document.createElement('article');
-  card.className = 'bdc-assistant-source-card';
-  appendText(card, 'div', 'bdc-assistant-source-title', '本地转录');
-  appendText(
-    card,
-    'div',
-    'bdc-assistant-subtitle-detail',
-    '转录模型尚未接入，当前只保留准备态；不会把未生成的转录稿当作可用正文。',
-  );
-  const actions = document.createElement('div');
-  actions.className = 'bdc-assistant-source-actions';
-  actions.appendChild(button('暂不可用', 'bdc-assistant-button bdc-assistant-button-quiet', () => {}, true));
   card.appendChild(actions);
   return card;
 }

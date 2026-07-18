@@ -90,7 +90,8 @@ def run_flow(page):
 
     page.get_by_text("展开助手").click()
     expect(page.get_by_text("主要文本来源").first).to_be_visible()
-    expect(page.get_by_text("本地转录").first).to_be_visible()
+    expect(page.get_by_text("本地转录")).to_have_count(0)
+    expect(page.get_by_text("暂不可用", exact=True)).to_have_count(0)
     expect(page.get_by_text("问这个视频", exact=True)).to_be_visible()
     assert_no_full_text_or_search(page)
 
