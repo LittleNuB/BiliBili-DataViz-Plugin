@@ -288,6 +288,16 @@ export function getTemporaryCurrentVideoTranscriptOwnerReadResolution(
   };
 }
 
+export function getTemporaryCurrentVideoTranscriptCurrentSourceIdentity(
+  owner: CurrentVideoTemporaryTranscriptOwner,
+): CurrentVideoTranscriptIdentity | null {
+  if (!validOwner(owner)) return null;
+  const marker = temporaryTranscriptCurrentSources.get(currentSourceKey(owner));
+  if (!marker || !sameOwner(marker.owner, owner)) return null;
+  if (marker.status !== 'temporary_cached' && marker.status !== 'persistent_cached') return null;
+  return currentSourceIdentity(marker);
+}
+
 export function buildTemporaryCurrentVideoTranscriptUnavailableState(
   identity: CurrentVideoTranscriptIdentity,
   now = Date.now(),

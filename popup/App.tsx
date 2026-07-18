@@ -636,7 +636,9 @@ function CurrentVideoAssistantStatus({
         confirmed: true,
         ...authorization.params,
       });
-      setSegmentJumpStatus(result.message);
+      setSegmentJumpStatus(result.ok
+        ? result.message
+        : '未能完成跳转，请回到当前视频页确认页面和播放器状态后重试。');
       setSegmentReturnAvailable(result.ok && result.returnPointSeconds !== null);
     } catch {
       setSegmentJumpStatus('跳转确认失败，请确认当前 B 站视频页仍然打开后重试。');
@@ -648,7 +650,9 @@ function CurrentVideoAssistantStatus({
     setSegmentJumpStatus('正在返回原位置...');
     try {
       const result = await requestSW<CurrentVideoTimestampReturnResponse>('RETURN_CURRENT_VIDEO_SEGMENT_JUMP');
-      setSegmentJumpStatus(result.message);
+      setSegmentJumpStatus(result.ok
+        ? result.message
+        : '未能返回原位置，请回到当前视频页确认页面和播放器状态后重试。');
       if (result.ok) setSegmentReturnAvailable(false);
     } catch {
       setSegmentJumpStatus('返回原位置失败，请确认当前 B 站视频页仍然打开后重试。');
@@ -674,10 +678,11 @@ function CurrentVideoAssistantStatus({
       {isVideo ? (
         <>
           <div style={{ color: '#E8E8F2', fontSize: '12px', lineHeight: 1.45, fontWeight: 600 }}>
-            {context.title ?? context.bvid}
+            {context.title?.trim() || '当前视频'}
           </div>
           <div style={{ color: '#A0A0B0', fontSize: '10px', lineHeight: 1.5, marginTop: '4px' }}>
-            BVID {context.bvid} / CID {context.cid ?? '未知'}
+            当前分 P：{context.currentPart.title?.trim() || `第 ${context.currentPart.page} 段`}
+            {context.currentPart.total ? `（第 ${context.currentPart.page}/${context.currentPart.total} 段）` : ''}
             <br />
             简介 {availabilityLabel(context.sources.description)}；字幕 {availabilityLabel(context.sources.transcript)}；正文文本 {availabilityLabel(context.sources.contentText)}
             <br />

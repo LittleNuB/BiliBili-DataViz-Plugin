@@ -25,6 +25,15 @@ FORBIDDEN_VISIBLE_TERMS = [
     "MOCK_PRIMARY_TEXT_STORAGE_READBACK_FAILED",
     "MOCK_SEGMENT_BACKEND_RAW_FAILURE",
 ]
+FORBIDDEN_ASSISTANT_IDENTITY_TERMS = [
+    "BVID",
+    "CID",
+    "BV1ShellMock9",
+    "BV1OtherMock8",
+    "2202",
+    "3303",
+    "4404",
+]
 FULL_TEXT_OR_SEARCH_ACTIONS = {
     "GET_CURRENT_VIDEO_SUMMARY",
     "GET_VIDEO_KNOWLEDGE",
@@ -98,6 +107,14 @@ def message_count_for(page, action):
     )
 
 
+def current_video_context_updates(page):
+    return page.evaluate(
+        """() => (window.__assistantMockMessages || [])
+            .filter((message) => message.action === "CURRENT_VIDEO_CONTEXT_UPDATE")
+            .map((message) => message.payload)"""
+    )
+
+
 def assert_no_full_text_or_search(page):
     actions = message_actions(page)
     leaked = [action for action in actions if action in FULL_TEXT_OR_SEARCH_ACTIONS]
@@ -108,6 +125,11 @@ def assert_clean_visible_text(page):
     text = page.locator("body").inner_text()
     for term in FORBIDDEN_VISIBLE_TERMS:
         assert term not in text, f"visible raw term leaked: {term}"
+    assistant = page.locator("#bdc-current-video-assistant")
+    if assistant.count() > 0:
+        assistant_text = assistant.inner_text()
+        for term in FORBIDDEN_ASSISTANT_IDENTITY_TERMS:
+            assert term not in assistant_text, f"assistant leaked current-video identity: {term}"
 
 
 def assert_no_horizontal_overflow(page):
@@ -264,15 +286,15 @@ def run_deferred_storage_flow(page):
 
     page.get_by_role("button", name="重新检测字幕").first.click()
     page.wait_for_function(
-        """(expected) => [...(window.__assistantMockMessages || [])].reverse().some(
+        """() => [...(window.__assistantMockMessages || [])].reverse().some(
             (message) => message.action === "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE"
-                && message.params?.selectedSourceIdentityKey === expected
+                && message.params?.primaryTextSelectionsReady === false
+                && !message.params?.selectedSourceIdentityKey
         )""",
-        arg=saved_v1_key,
     )
     refresh_message = last_message_for(page, "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE")
-    assert refresh_message["params"].get("selectedSourceIdentityKey") == saved_v1_key
-    assert refresh_message["params"].get("selectedSourceIdentityKey") != page.evaluate("window.__assistantMockCurrentSourceIdentityKey()")
+    assert refresh_message["params"].get("primaryTextSelectionsReady") is False
+    assert not refresh_message["params"].get("selectedSourceIdentityKey")
 
     page.get_by_role("button", name="提问").evaluate("(button) => button.click()")
     assert message_count_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS") == counts_before["SEARCH_CURRENT_VIDEO_SEGMENTS"]
@@ -452,6 +474,180 @@ def run_loaded_selection_save_failure_flow(page):
     assert_no_horizontal_overflow(page)
 
 
+def run_loaded_storage_change_invalidation_flow(page):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&savedSource=current")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+    page.get_by_text("展开助手").click()
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    old_source_key = page.evaluate("window.__assistantMockCurrentSourceIdentityKey()")
+
+    page.get_by_role("button", name="刷新节点").click()
+    expect(page.get_by_text("字幕节点 0:00-0:04：页内助手留在播放页")).to_be_visible()
+    page.evaluate("window.__assistantMockDeferNextProtectedAction('GET_VIDEO_KNOWLEDGE')")
+    page.get_by_role("button", name="刷新节点").click()
+    expect(page.get_by_role("button", name="刷新中...")).to_be_visible()
+
+    page.evaluate("window.__assistantMockClearPrimaryTextSelectionsForLocalSettings()")
+    expect(page.get_by_role("button", name="刷新中...")).to_have_count(0)
+    expect(page.get_by_text("字幕节点 0:00-0:04：页内助手留在播放页")).to_have_count(0)
+    page.evaluate("window.__assistantMockResolveProtectedResponses()")
+    page.wait_for_timeout(50)
+    expect(page.get_by_text("字幕节点 0:00-0:04：页内助手留在播放页")).to_have_count(0)
+
+    page.evaluate("window.__assistantMockReplaceSubtitleSource('v3')")
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    current_source_key = page.evaluate("window.__assistantMockCurrentSourceIdentityKey()")
+    assert current_source_key != old_source_key
+    page.get_by_role("button", name="刷新节点").click()
+    knowledge_message = last_message_for(page, "GET_VIDEO_KNOWLEDGE")
+    assert knowledge_message["params"].get("primaryTextSelectionsReady") is True
+    assert knowledge_message["params"].get("selectedSourceIdentityKey") == current_source_key
+    assert knowledge_message["params"].get("selectedSourceIdentityKey") != old_source_key
+
+    page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕").get_by_role("button", name="用于视频助手").click()
+    expect(page.get_by_text("已用于当前视频助手").first).to_be_visible()
+    page.locator("textarea").fill("清理竞态")
+    page.evaluate("window.__assistantMockDeferNextProtectedAction('SEARCH_CURRENT_VIDEO_SEGMENTS')")
+    page.get_by_role("button", name="提问").click()
+    page.evaluate("window.__assistantMockClearPrimaryTextSelectionsForClearAll()")
+    page.evaluate("window.__assistantMockResolveProtectedResponses()")
+    page.wait_for_timeout(50)
+    expect(page.get_by_text("回答：有证据")).to_have_count(0)
+
+    page.get_by_role("button", name="提问").click()
+    expect(page.get_by_text("回答：有证据")).to_be_visible()
+    search_message = last_message_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS")
+    assert search_message["params"].get("primaryTextSelectionsReady") is True
+    assert search_message["params"].get("selectedSourceIdentityKey") == current_source_key
+    assert search_message["params"].get("selectedSourceIdentityKey") != old_source_key
+    page.evaluate("window.__assistantMockSetInvalidPrimaryTextSelections()")
+    expect(page.get_by_text("回答：有证据")).to_have_count(0)
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_navigation_epoch_flow(page, mode):
+    page.route("**/*", route_mock)
+    query = "deferInitialContext=1" if mode == "collect" else "deferVideoDetection=1"
+    page.goto(f"{MOCK_URL}?{query}")
+
+    if mode == "collect":
+        page.wait_for_function("window.__assistantMockPendingInitialViewFetchCount() === 1")
+    else:
+        expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+        page.get_by_text("展开助手").click()
+        expect(page.get_by_text("第 1 / 2 P", exact=True)).to_be_visible()
+
+    page.evaluate("window.__assistantMockClearMessages()")
+    page.evaluate("window.__assistantMockNavigateToPartWithoutCollect(2)")
+    if mode == "detect":
+        page.evaluate("window.__assistantMockReleaseVideoDetection()")
+
+    if mode == "collect":
+        expect(page.get_by_text("展开助手")).to_be_visible(timeout=5000)
+        page.get_by_text("展开助手").click()
+    expect(page.get_by_text("第 2 / 2 P", exact=True)).to_be_visible(timeout=5000)
+    if mode == "collect":
+        page.evaluate("window.__assistantMockResolveInitialViewFetch()")
+    page.wait_for_timeout(150)
+
+    assistant_text = page.locator("#bdc-current-video-assistant").inner_text()
+    assert "第 2 / 2 P" in assistant_text
+    assert "第 1 / 2 P" not in assistant_text
+    updates = current_video_context_updates(page)
+    assert updates, f"{mode} navigation did not publish the current context"
+    assert all(
+        update.get("kind") != "video"
+        or (update.get("cid") == 3303 and update.get("currentPart", {}).get("page") == 2)
+        for update in updates
+    ), f"{mode} navigation published a stale context: {updates}"
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_content_listener_controlled_error_flow(page):
+    page.route("**/*", route_mock)
+    page.goto(MOCK_URL)
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+    jump_response = page.evaluate(
+        """() => new Promise((resolve, reject) => {
+          const contentListener = (() => {
+            const listeners = window.__contentRuntimeListenersForQa || [];
+            return listeners[0] || null;
+          })();
+          if (!contentListener) {
+            reject(new Error("content listener unavailable"));
+            return;
+          }
+          const context = [...(window.__assistantMockMessages || [])]
+            .reverse()
+            .find((message) => message.action === "CURRENT_VIDEO_CONTEXT_UPDATE")?.payload;
+          if (!context || context.kind !== "video") {
+            reject(new Error("video context unavailable"));
+            return;
+          }
+          const originalCreateElement = document.createElement.bind(document);
+          document.createElement = () => { throw new Error("document is not defined"); };
+          const keepOpen = contentListener({
+            action: "CURRENT_VIDEO_TIMESTAMP_JUMP",
+            payload: {
+              candidateId: "qa-controlled-error",
+              confirmed: true,
+              contextBvid: context.bvid,
+              contextCid: context.cid,
+              contextPage: context.currentPart.page,
+              contextUrl: context.url,
+              contextCollectedAt: context.collectedAt,
+              targetSeconds: 4,
+              targetTimeLabel: "0:04",
+              sourceLabel: "字幕证据",
+              confidence: 0.8,
+              confidenceLabel: "高",
+              evidencePreview: "受控错误测试",
+            },
+          }, {}, (response) => {
+            document.createElement = originalCreateElement;
+            resolve(response);
+          });
+          if (keepOpen !== true) {
+            document.createElement = originalCreateElement;
+            reject(new Error("jump listener did not keep channel open"));
+          }
+        })"""
+    )
+    assert jump_response["ok"] is False
+    assert jump_response["message"] == "跳转失败，请确认当前视频页和播放器仍然可用后重试。"
+    assert "document is not defined" not in jump_response["message"]
+
+    return_response = page.evaluate(
+        """() => new Promise((resolve, reject) => {
+          const contentListener = (window.__contentRuntimeListenersForQa || [])[0];
+          if (!contentListener) {
+            reject(new Error("content listener unavailable"));
+            return;
+          }
+          const originalQuerySelector = document.querySelector.bind(document);
+          document.querySelector = () => { throw new Error("document is not defined"); };
+          const keepOpen = contentListener(
+            { action: "CURRENT_VIDEO_TIMESTAMP_RETURN", payload: {} },
+            {},
+            (response) => {
+              document.querySelector = originalQuerySelector;
+              resolve(response);
+            },
+          );
+          if (keepOpen !== true) {
+            document.querySelector = originalQuerySelector;
+            reject(new Error("return listener did not keep channel open"));
+          }
+        })"""
+    )
+    assert return_response["ok"] is False
+    assert return_response["message"] == "返回失败，请确认当前视频页和播放器仍然可用后重试。"
+    assert "document is not defined" not in return_response["message"]
+
+
 def run_selection_save_blocks_operations_flow(page):
     page.route("**/*", route_mock)
     page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2")
@@ -599,6 +795,26 @@ def main():
             assert not loaded_save_failure_errors, "\n".join(loaded_save_failure_errors)
             loaded_save_failure.close()
 
+            storage_change, storage_change_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_loaded_storage_change_invalidation_flow(storage_change)
+            assert not storage_change_errors, "\n".join(storage_change_errors)
+            storage_change.close()
+
+            deferred_collect, deferred_collect_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_navigation_epoch_flow(deferred_collect, "collect")
+            assert not deferred_collect_errors, "\n".join(deferred_collect_errors)
+            deferred_collect.close()
+
+            deferred_detect, deferred_detect_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_navigation_epoch_flow(deferred_detect, "detect")
+            assert not deferred_detect_errors, "\n".join(deferred_detect_errors)
+            deferred_detect.close()
+
+            listener_errors, listener_errors_console = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_content_listener_controlled_error_flow(listener_errors)
+            assert not listener_errors_console, "\n".join(listener_errors_console)
+            listener_errors.close()
+
             saving, saving_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
             run_selection_save_blocks_operations_flow(saving)
             assert not saving_errors, "\n".join(saving_errors)
@@ -654,7 +870,7 @@ def main():
             assert not mobile_errors, "\n".join(mobile_errors)
             mobile.close()
 
-            print("current-video primary-text real UI QA passed: deferred and rejected storage readiness, serialized save/readback rollback, save-pending operation gates, save-time part/video context switch isolation, missing saved source, single-source fallback, desktop/mobile source selection, no automatic full-text request, search no-candidate/backend-failure states, search/jump/return, no raw visible leak, no overflow, no console errors")
+            print("current-video primary-text real UI QA passed: deferred and rejected storage readiness, live local-settings/clear-all selection invalidation with late-response rejection, collect/detect navigation epoch isolation, controlled jump/return failures, serialized save/readback rollback, save-pending operation gates, save-time part/video context switch isolation, missing saved source, single-source fallback, desktop/mobile source selection, no automatic full-text request, search no-candidate/backend-failure states, search/jump/return, no raw visible leak, no overflow, no console errors")
         finally:
             browser.close()
 

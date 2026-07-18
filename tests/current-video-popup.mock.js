@@ -50,7 +50,7 @@
       bvid,
       aid: 119201,
       cid,
-      title: 'Popup 授权 Mock 视频',
+      title: params.get('missingTitle') === '1' ? null : 'Popup 授权 Mock 视频',
       authorName: 'Mock UP',
       authorMid: 42,
       durationSeconds: 600,
@@ -249,6 +249,18 @@
           case 'SEARCH_CURRENT_VIDEO_SEGMENTS':
             return Promise.resolve({ success: true, data: searchResult(message.params?.query, authorized) });
           case 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP':
+            if (params.get('rawJumpFailure') === '1') {
+              return Promise.resolve({ success: true, data: {
+                ok: false,
+                message: 'document is not defined; sourceHash=popup-source-v2',
+                candidateId: String(message.params?.candidateId || ''),
+                targetSeconds: null,
+                targetTimeLabel: null,
+                returnPointSeconds: null,
+                sourceLabel: null,
+                confidence: null,
+              } });
+            }
             returnAvailable = authorized;
             return Promise.resolve({ success: true, data: {
               ok: authorized,
@@ -261,6 +273,15 @@
               confidence: authorized ? 0.88 : null,
             } });
           case 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP':
+            if (params.get('rawReturnFailure') === '1') {
+              return Promise.resolve({ success: true, data: {
+                ok: false,
+                message: 'document is not defined; segmentId=hidden-popup-segment',
+                candidateId: null,
+                returnPointSeconds: null,
+                targetSeconds: null,
+              } });
+            }
             returnAvailable = false;
             return Promise.resolve({ success: true, data: {
               ok: true,

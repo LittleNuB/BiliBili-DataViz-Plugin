@@ -82,13 +82,13 @@ export function buildCurrentVideoSubtitleDiagnostics(
     return diagnostics({
       status: 'missing_cid',
       tone: 'blocked',
-      title: '缺少 CID，暂时不能检测字幕',
-      message: 'Bili-Bill 还没有拿到当前分 P 的 CID，因此不能安全请求 B 站字幕来源或读取字幕正文。',
+      title: '当前分 P 身份未就绪，暂时不能检测字幕',
+      message: 'Bili-Bill 还没有确认当前分 P 的完整身份，因此不能安全请求 B 站字幕来源或读取字幕正文。',
       action: '请确认视频页加载完成；如果播放器里已经开启中文 AI 字幕，请点击重新检测字幕。',
       evidenceAvailable: false,
       canRetry: true,
       detailLines: [
-        'CID 仍未知时，摘要只能使用标题、UP 主、简介、分 P 或章节等元数据兜底。',
+        '当前分 P 身份仍不完整时，摘要只能使用标题、UP 主、简介、分 P 或章节等元数据兜底。',
       ],
     });
   }
@@ -153,7 +153,7 @@ function transcriptEvidenceDiagnostics(
         status: 'stale',
         tone: 'warning',
         title: '本地字幕证据与当前视频不匹配',
-        message: '本地缓存的字幕正文不属于当前 BVID、CID、分 P 或语言，已经停止作为当前视频证据使用。',
+        message: '本地缓存的字幕正文不属于当前视频、分 P 或语言，已经停止作为当前视频证据使用。',
         action: '点击重新检测字幕，重新读取当前视频的字幕正文。',
         evidenceAvailable: false,
         canRetry: true,
@@ -318,9 +318,9 @@ function subtitleProbeDiagnostics(
       return diagnostics({
         status: probe.reason === 'missing_cid' ? 'missing_cid' : 'metadata_only',
         tone: 'warning',
-        title: probe.reason === 'missing_cid' ? '缺少 CID，暂时不能检测字幕' : '当前页面暂时不能检测字幕',
+        title: probe.reason === 'missing_cid' ? '当前分 P 身份未就绪，暂时不能检测字幕' : '当前页面暂时不能检测字幕',
         message: probe.reason === 'missing_cid'
-          ? 'Bili-Bill 还没有拿到当前分 P 的 CID，因此不能安全请求 B 站字幕来源。'
+          ? 'Bili-Bill 还没有确认当前分 P 的完整身份，因此不能安全请求 B 站字幕来源。'
           : '当前页面不满足字幕检测条件；仍使用元数据或简介兜底。',
         action: '请确认视频页加载完成，并在播放器里开启中文 AI 字幕后重新检测字幕。',
         evidenceAvailable: false,

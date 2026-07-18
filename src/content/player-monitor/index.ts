@@ -21,10 +21,20 @@ let lastContextKey = '';
 let retryTimer: number | null = null;
 let latestContext: CurrentVideoContextResult | null = null;
 let currentVideoTimestampReturnPoint: CurrentVideoTimestampReturnPoint | null = null;
+let lastUrl = location.href;
+let navigationEpoch = 0;
 
 const RETURN_TOAST_ID = 'bdc-current-video-return';
 
-function scheduleInitialize(delay = 0): void {
+interface NavigationSnapshot {
+  epoch: number;
+  href: string;
+}
+
+function scheduleInitialize(
+  delay = 0,
+  snapshot: NavigationSnapshot = currentNavigationSnapshot(),
+): void {
   if (retryTimer !== null) {
     window.clearTimeout(retryTimer);
     retryTimer = null;
@@ -32,12 +42,17 @@ function scheduleInitialize(delay = 0): void {
 
   retryTimer = window.setTimeout(() => {
     retryTimer = null;
-    initializeMonitor();
+    if (!navigationSnapshotIsCurrent(snapshot)) return;
+    void initializeMonitor(snapshot);
   }, delay);
 }
 
-async function initializeMonitor(): Promise<void> {
-  const context = await collectAndPublishCurrentVideoContext();
+async function initializeMonitor(
+  snapshot: NavigationSnapshot = currentNavigationSnapshot(),
+): Promise<void> {
+  if (!navigationSnapshotIsCurrent(snapshot)) return;
+  const context = await collectAndPublishCurrentVideoContext(snapshot);
+  if (!navigationSnapshotIsCurrent(snapshot)) return;
 
   if (!isVideoPage()) {
     cleanupMonitor();
@@ -47,6 +62,7 @@ async function initializeMonitor(): Promise<void> {
 
   if (context.kind !== 'video') {
     console.warn('[BiliViz] No BVID found on video page');
+    scheduleInitialize(1500, snapshot);
     return;
   }
 
@@ -57,7 +73,9 @@ async function initializeMonitor(): Promise<void> {
 
   try {
     const video = await detectVideo();
+    if (!navigationSnapshotIsCurrent(snapshot)) return;
     const contextWithDuration = withVideoElementDuration(context, video);
+    if (!navigationSnapshotIsCurrent(snapshot)) return;
     latestContext = contextWithDuration;
     renderCurrentVideoAssistant(contextWithDuration);
     sendCurrentVideoContext(contextWithDuration);
@@ -75,6 +93,7 @@ async function initializeMonitor(): Promise<void> {
       authorName: contextWithDuration.authorName ?? '',
     };
 
+    if (!navigationSnapshotIsCurrent(snapshot)) return;
     const removeEvents = attachEventListeners(video, videoCtx, (msg) => {
       chrome.runtime.sendMessage(msg).catch(() => {
         // SW may be inactive; the next heartbeat/action can wake it again.
@@ -90,16 +109,17 @@ async function initializeMonitor(): Promise<void> {
       removeHeartbeat();
     };
   } catch (e) {
+    if (!navigationSnapshotIsCurrent(snapshot)) return;
     console.error('[BiliViz] Failed to initialize player monitor:', e);
   }
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.action === 'CURRENT_VIDEO_TIMESTAMP_JUMP') {
-    handleCurrentVideoTimestampJump(message.payload).then(sendResponse).catch((error) => {
+    handleCurrentVideoTimestampJump(message.payload).then(sendResponse).catch(() => {
       sendResponse({
         ok: false,
-        message: error instanceof Error ? error.message : String(error),
+        message: '跳转失败，请确认当前视频页和播放器仍然可用后重试。',
         candidateId: String(message.payload?.candidateId ?? ''),
         targetSeconds: null,
         targetTimeLabel: null,
@@ -112,10 +132,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.action === 'CURRENT_VIDEO_TIMESTAMP_RETURN') {
-    handleCurrentVideoTimestampReturn().then(sendResponse).catch((error) => {
+    handleCurrentVideoTimestampReturn().then(sendResponse).catch(() => {
       sendResponse({
         ok: false,
-        message: error instanceof Error ? error.message : String(error),
+        message: '返回失败，请确认当前视频页和播放器仍然可用后重试。',
         candidateId: null,
         returnPointSeconds: null,
         targetSeconds: null,
@@ -125,12 +145,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.action === 'COLLECT_CURRENT_VIDEO_CONTEXT') {
-    collectAndPublishCurrentVideoContext().then(sendResponse).catch((error) => {
+    const snapshot = currentNavigationSnapshot();
+    collectAndPublishCurrentVideoContext(snapshot).then(sendResponse).catch(() => {
       sendResponse({
         kind: 'no_context',
         url: location.href,
         collectedAt: Date.now(),
-        reason: error instanceof Error ? 'video_context_unavailable' : 'unknown',
+        reason: 'video_context_unavailable',
         pageType: isVideoPage() ? 'video' : 'non_video',
       } satisfies CurrentVideoContextResult);
     });
@@ -140,8 +161,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
-async function collectAndPublishCurrentVideoContext(): Promise<CurrentVideoContextResult> {
+async function collectAndPublishCurrentVideoContext(
+  snapshot: NavigationSnapshot = currentNavigationSnapshot(),
+): Promise<CurrentVideoContextResult> {
   const context = await collectCurrentVideoContext();
+  if (!navigationSnapshotIsCurrent(snapshot)) {
+    return currentNavigationNoContext();
+  }
   latestContext = context;
   renderCurrentVideoAssistant(context);
   sendCurrentVideoContext(context);
@@ -262,6 +288,47 @@ function cleanupMonitor(): void {
   cleanup = null;
 }
 
+function currentNavigationSnapshot(): NavigationSnapshot {
+  return {
+    epoch: navigationEpoch,
+    href: location.href,
+  };
+}
+
+function navigationSnapshotIsCurrent(snapshot: NavigationSnapshot): boolean {
+  return snapshot.epoch === navigationEpoch && snapshot.href === location.href;
+}
+
+function currentNavigationNoContext(): CurrentVideoContextResult {
+  return {
+    kind: 'no_context',
+    url: location.href,
+    collectedAt: Date.now(),
+    reason: isVideoPage() ? 'video_context_unavailable' : 'non_video_page',
+    pageType: isVideoPage() ? 'video' : 'non_video',
+  };
+}
+
+function handlePossibleNavigation(): void {
+  const href = location.href;
+  if (href === lastUrl) return;
+
+  lastUrl = href;
+  navigationEpoch += 1;
+  if (retryTimer !== null) {
+    window.clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+  cleanupMonitor();
+  lastContextKey = '';
+  currentVideoTimestampReturnPoint = null;
+  document.getElementById(RETURN_TOAST_ID)?.remove();
+  const pendingContext = currentNavigationNoContext();
+  latestContext = pendingContext;
+  renderCurrentVideoAssistant(pendingContext);
+  scheduleInitialize(0, currentNavigationSnapshot());
+}
+
 function sendCurrentVideoContext(context: CurrentVideoContextResult): void {
   const message: BiliVizContentMessage = {
     action: 'CURRENT_VIDEO_CONTEXT_UPDATE',
@@ -275,24 +342,13 @@ function sendCurrentVideoContext(context: CurrentVideoContextResult): void {
 
 scheduleInitialize();
 
-let lastUrl = location.href;
 const navObserver = new MutationObserver(() => {
-  if (location.href !== lastUrl) {
-    lastUrl = location.href;
-    lastContextKey = '';
-    scheduleInitialize(800);
-    window.setTimeout(() => scheduleInitialize(2500), 2500);
-  }
+  handlePossibleNavigation();
 });
 navObserver.observe(document.body, { childList: true, subtree: true });
 
 setInterval(() => {
-  if (location.href !== lastUrl) {
-    lastUrl = location.href;
-    lastContextKey = '';
-    scheduleInitialize(800);
-    window.setTimeout(() => scheduleInitialize(2500), 2500);
-  }
+  handlePossibleNavigation();
 }, 2000);
 
 console.log('[BiliViz] Player monitor loaded');

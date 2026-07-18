@@ -14,6 +14,7 @@ import {
   buildTemporaryCurrentVideoTranscriptUnavailableState,
   buildTemporaryCurrentVideoTranscriptWriteFailureState,
   getTemporaryCurrentVideoTranscriptEvidenceState,
+  getTemporaryCurrentVideoTranscriptCurrentSourceIdentity,
   getTemporaryCurrentVideoTranscriptSegments,
   getTemporaryCurrentVideoTranscriptOwnerReadResolution,
   isTemporaryCurrentVideoTranscriptOwnerValidForIdentity,
@@ -201,6 +202,39 @@ export async function getCurrentVideoTranscriptEvidenceState(
   if (!temporaryOwner) return state;
   const temporaryState = getTemporaryCurrentVideoTranscriptEvidenceState(temporaryOwner, identity, now);
   return temporaryState.active ? temporaryState : state;
+}
+
+export async function getCurrentVideoActiveTranscriptSourceIdentityKeys(
+  identity: Pick<CurrentVideoTranscriptIdentity, 'bvid' | 'cid' | 'page'>,
+  temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
+): Promise<string[]> {
+  if (temporaryOwnerInvalidForIdentity(temporaryOwner, identity)) return [];
+
+  const temporaryIdentity = temporaryOwner
+    ? getTemporaryCurrentVideoTranscriptCurrentSourceIdentity(temporaryOwner)
+    : null;
+  if (
+    temporaryIdentity?.sourceIdentityKey
+    && temporaryIdentity.bvid === identity.bvid
+    && temporaryIdentity.cid === identity.cid
+    && temporaryIdentity.page === identity.page
+  ) {
+    return [temporaryIdentity.sourceIdentityKey];
+  }
+
+  const sources = await db.currentVideoTranscriptSources
+    .where('[bvid+cid+page]')
+    .equals([identity.bvid, identity.cid, identity.page])
+    .toArray();
+  if (temporaryOwnerInvalidForIdentity(temporaryOwner, identity)) return [];
+
+  const sourceIdentityKeys = Array.from(new Set(
+    sources
+      .filter(source => !source.stale && source.status === 'cached' && source.segmentCount > 0)
+      .map(source => (source.sourceIdentityKey ?? source.identityKey).trim())
+      .filter(Boolean),
+  ));
+  return sourceIdentityKeys.length === 1 ? sourceIdentityKeys : [];
 }
 
 export async function getCurrentVideoTranscriptSegments(

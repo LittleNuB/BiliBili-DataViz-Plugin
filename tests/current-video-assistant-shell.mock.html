@@ -74,6 +74,7 @@
       let knowledgeReadCount = 0;
       let playbackPosition = 12;
       let returnPointSeconds = null;
+      let videoDetectionReady = mockParams.get("deferVideoDetection") !== "1";
       let lastSearchResult = null;
       let subtitleSourceHash = mockParams.get("sourceVersion") === "v2" ? "mock-source-hash-hidden-v2" : "mock-source-hash-hidden";
       let subtitleBodyHash = mockParams.get("sourceVersion") === "v2" ? "mock-body-hash-hidden-v2" : "mock-body-hash-hidden";
@@ -81,6 +82,7 @@
       const subtitleSourceIdentityKey = () => `primary-text:bilibili_subtitle:${mockBvid}:${mockCid}:${mockPage}:zh-cn:${subtitleSourceHash}`;
       const runtimeMessages = [];
       const contentRuntimeListeners = [];
+      const storageChangeListeners = [];
       const extensionStorage = {};
       let deferPrimaryTextStorage = mockParams.get("deferPrimaryTextStorage") === "1";
       const rejectPrimaryTextStorage = mockParams.get("rejectPrimaryTextStorage") === "1";
@@ -90,9 +92,14 @@
       let primaryTextSelectionSaveSettledCount = 0;
       const pendingPrimaryTextStorageReads = [];
       const pendingPrimaryTextSelectionSaves = [];
+      const pendingProtectedResponses = [];
+      let deferNextProtectedAction = null;
       const initialPrimaryTextSelections = {};
       if (mockParams.get("savedSource") === "v1") {
         initialPrimaryTextSelections[`${mockBvid}:${baseMockCid}:1`] = `primary-text:bilibili_subtitle:${mockBvid}:${baseMockCid}:1:zh-cn:mock-source-hash-hidden-v1`;
+      }
+      if (mockParams.get("savedSource") === "current") {
+        initialPrimaryTextSelections[`${mockBvid}:${baseMockCid}:1`] = `primary-text:bilibili_subtitle:${mockBvid}:${baseMockCid}:1:zh-cn:${subtitleSourceHash}`;
       }
       if (mockParams.get("seedOtherSelections") === "1") {
         initialPrimaryTextSelections["BV1OtherSavedA:7101:1"] = "primary-text:bilibili_subtitle:BV1OtherSavedA:7101:1:zh-cn:source-a";
@@ -118,10 +125,36 @@
         },
       };
 
+      const pendingInitialViewFetches = [];
+      if (mockParams.get("deferInitialContext") === "1") {
+        window.__INITIAL_STATE__.videoData.cid = null;
+        window.__INITIAL_STATE__.videoData.pages = [];
+        window.fetch = () => new Promise((resolve) => {
+          pendingInitialViewFetches.push(() => resolve({
+            json: () => Promise.resolve({
+              code: 0,
+              data: {
+                aid: 119001,
+                bvid: "BV1ShellMock9",
+                cid: 2202,
+                title: "页内助手 Shell Mock 视频",
+                duration: 600,
+                desc: "延迟返回的旧分 P 上下文。",
+                owner: { mid: 42, name: "Mock UP" },
+                pages: [
+                  { page: 1, cid: 2202, part: "主视频", duration: 600 },
+                  { page: 2, cid: 3303, part: "第二分 P", duration: 420 },
+                ],
+              },
+            }),
+          }));
+        });
+      }
+
       Object.defineProperty(HTMLMediaElement.prototype, "duration", {
         configurable: true,
         get() {
-          return 600;
+          return videoDetectionReady ? 600 : 0;
         },
       });
       Object.defineProperty(HTMLMediaElement.prototype, "currentTime", {
@@ -574,6 +607,7 @@
 
       window.__assistantMockPlaybackPosition = () => playbackPosition;
       window.__assistantMockMessages = runtimeMessages;
+      window.__contentRuntimeListenersForQa = contentRuntimeListeners;
       window.__assistantMockStorage = extensionStorage;
       window.__assistantMockCurrentSourceIdentityKey = () => subtitleSourceIdentityKey();
       window.__assistantMockResolvePrimaryTextStorage = () => {
@@ -599,6 +633,53 @@
         for (const save of pending) save();
       };
       window.__assistantMockPrimaryTextSelectionSaveSettledCount = () => primaryTextSelectionSaveSettledCount;
+      window.__assistantMockClearMessages = () => {
+        runtimeMessages.splice(0);
+      };
+      window.__assistantMockResolveInitialViewFetch = () => {
+        const pending = pendingInitialViewFetches.splice(0);
+        for (const resolve of pending) resolve();
+      };
+      window.__assistantMockPendingInitialViewFetchCount = () => pendingInitialViewFetches.length;
+      window.__assistantMockReleaseVideoDetection = () => {
+        videoDetectionReady = true;
+        document.body.appendChild(document.createElement("i"));
+      };
+      window.__assistantMockNavigateToPartWithoutCollect = (page) => {
+        mockPage = Number(page) === 2 ? 2 : 1;
+        mockCid = mockPage === 2 ? 3303 : mockPrimaryCid;
+        Object.assign(window.__INITIAL_STATE__.videoData, {
+          cid: mockCid,
+          pages: [
+            { page: 1, cid: mockPrimaryCid, part: "主视频", duration: 600 },
+            { page: 2, cid: 3303, part: "第二分 P", duration: 420 },
+          ],
+        });
+        const nextUrl = new URL(location.href);
+        nextUrl.searchParams.set("p", String(mockPage));
+        history.replaceState({}, "", nextUrl);
+        document.body.appendChild(document.createElement("i"));
+      };
+      window.__assistantMockDeferNextProtectedAction = (action) => {
+        deferNextProtectedAction = String(action || "");
+      };
+      window.__assistantMockResolveProtectedResponses = () => {
+        const pending = pendingProtectedResponses.splice(0);
+        for (const resolve of pending) resolve();
+      };
+      const clearPrimaryTextSelectionsForQa = () => {
+        const oldValue = extensionStorage[primaryTextSelectionStorageKey];
+        delete extensionStorage[primaryTextSelectionStorageKey];
+        emitPrimaryTextStorageChange(oldValue, undefined);
+      };
+      window.__assistantMockClearPrimaryTextSelectionsForLocalSettings = clearPrimaryTextSelectionsForQa;
+      window.__assistantMockClearPrimaryTextSelectionsForClearAll = clearPrimaryTextSelectionsForQa;
+      window.__assistantMockSetInvalidPrimaryTextSelections = () => {
+        const oldValue = extensionStorage[primaryTextSelectionStorageKey];
+        const newValue = ["invalid-selection-map"];
+        extensionStorage[primaryTextSelectionStorageKey] = newValue;
+        emitPrimaryTextStorageChange(oldValue, newValue);
+      };
       window.__assistantMockSwitchToPart = (page) => {
         mockPage = Number(page) === 2 ? 2 : 1;
         mockCid = mockPage === 2 ? 3303 : mockPrimaryCid;
@@ -650,11 +731,12 @@
       window.__assistantMockSwitchDuringTranscript = () => {
         switchDuringNextTranscriptFetch = true;
       };
-      window.__assistantMockReplaceSubtitleSource = () => {
+      window.__assistantMockReplaceSubtitleSource = (version = "v2") => {
         subtitleCached = true;
-        subtitleSourceHash = "mock-source-hash-hidden-v2";
-        subtitleBodyHash = "mock-body-hash-hidden-v2";
-        subtitleTimelineHash = "mock-timeline-hash-hidden-v2";
+        const normalized = String(version || "v2").replace(/[^a-z0-9-]/gi, "") || "v2";
+        subtitleSourceHash = `mock-source-hash-hidden-${normalized}`;
+        subtitleBodyHash = `mock-body-hash-hidden-${normalized}`;
+        subtitleTimelineHash = `mock-timeline-hash-hidden-${normalized}`;
       };
 
       function searchCurrentVideoSegmentsResult(query) {
@@ -974,6 +1056,21 @@
         return Boolean(values && Object.prototype.hasOwnProperty.call(values, primaryTextSelectionStorageKey));
       }
 
+      function emitPrimaryTextStorageChange(oldValue, newValue) {
+        const changes = {
+          [primaryTextSelectionStorageKey]: { oldValue, newValue },
+        };
+        for (const listener of storageChangeListeners) listener(changes, "local");
+      }
+
+      function maybeDeferProtectedResponse(action, response) {
+        if (deferNextProtectedAction !== action) return Promise.resolve(response);
+        deferNextProtectedAction = null;
+        return new Promise((resolve) => {
+          pendingProtectedResponses.push(() => resolve(response));
+        });
+      }
+
       function savePrimaryTextSelectionFromBackground(params) {
         const persist = () => {
           if (rejectNextPrimaryTextStorageSet) {
@@ -987,7 +1084,9 @@
             ...existing,
             [partKey]: String(params?.selectedSourceIdentityKey || ""),
           };
+          const oldValue = extensionStorage[primaryTextSelectionStorageKey];
           extensionStorage[primaryTextSelectionStorageKey] = selections;
+          emitPrimaryTextStorageChange(oldValue, selections);
           if (rejectNextPrimaryTextStorageReadback) {
             rejectNextPrimaryTextStorageReadback = false;
             primaryTextSelectionSaveSettledCount += 1;
@@ -1042,16 +1141,16 @@
               return Promise.resolve({ success: true, data: evidence });
             }
             if (message.action === "GET_CURRENT_VIDEO_SUMMARY") {
-              return Promise.resolve({ success: true, data: currentSummary() });
+              return maybeDeferProtectedResponse(message.action, { success: true, data: currentSummary() });
             }
             if (message.action === "GET_VIDEO_KNOWLEDGE") {
-              return Promise.resolve({ success: true, data: currentVideoKnowledge() });
+              return maybeDeferProtectedResponse(message.action, { success: true, data: currentVideoKnowledge() });
             }
             if (message.action === "SEARCH_CURRENT_VIDEO_SEGMENTS") {
               if (String(message.params?.query || "").includes("后台失败")) {
                 return Promise.resolve({ success: false, error: "MOCK_SEGMENT_BACKEND_RAW_FAILURE" });
               }
-              return Promise.resolve({
+              return maybeDeferProtectedResponse(message.action, {
                 success: true,
                 data: searchCurrentVideoSegmentsResult(message.params?.query),
               });
@@ -1072,6 +1171,11 @@
           },
         },
         storage: {
+          onChanged: {
+            addListener(listener) {
+              storageChangeListeners.push(listener);
+            },
+          },
           local: {
             get(keys) {
               if ((deferPrimaryTextStorage || rejectPrimaryTextStorage) && readsPrimaryTextSelection(keys)) {
@@ -1098,12 +1202,20 @@
                   });
                 });
               }
+              const oldValue = extensionStorage[primaryTextSelectionStorageKey];
               Object.assign(extensionStorage, values || {});
+              if (writesPrimaryTextSelection(values)) {
+                emitPrimaryTextStorageChange(oldValue, extensionStorage[primaryTextSelectionStorageKey]);
+              }
               return Promise.resolve();
             },
             remove(keys) {
               for (const key of Array.isArray(keys) ? keys : [keys]) {
+                const oldValue = extensionStorage[key];
                 delete extensionStorage[key];
+                if (key === primaryTextSelectionStorageKey) {
+                  emitPrimaryTextStorageChange(oldValue, undefined);
+                }
               }
               return Promise.resolve();
             },

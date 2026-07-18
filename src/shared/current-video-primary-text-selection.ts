@@ -76,6 +76,17 @@ export function normalizeCurrentVideoPrimaryTextSelections(
   return selections;
 }
 
+export function normalizeCurrentVideoPrimaryTextSourceIdentityKeys(
+  values: readonly unknown[],
+): string[] {
+  return Array.from(new Set(
+    values
+      .filter((value): value is string => typeof value === 'string')
+      .map(value => value.trim())
+      .filter(Boolean),
+  ));
+}
+
 export async function readCurrentVideoPrimaryTextSelections(
   storage: CurrentVideoPrimaryTextSelectionReader,
 ): Promise<CurrentVideoPrimaryTextSelectionReadResult> {
@@ -111,16 +122,17 @@ export function resolveCurrentVideoPrimaryTextAuthorization(
   }
 
   const selections = normalizeCurrentVideoPrimaryTextSelections(input.selections);
+  const availableSourceIdentityKeys = normalizeCurrentVideoPrimaryTextSourceIdentityKeys(
+    input.availableSourceIdentityKeys,
+  );
   const savedSourceIdentityKey = selections[partKey] ?? null;
   if (savedSourceIdentityKey) {
-    return readyAuthorization(savedSourceIdentityKey, 'saved');
+    if (availableSourceIdentityKeys.includes(savedSourceIdentityKey)) {
+      return readyAuthorization(savedSourceIdentityKey, 'saved');
+    }
+    return blockedAuthorization('此前保存的主要文本来源已不可用，请到视频页助手重新选择当前来源。');
   }
 
-  const availableSourceIdentityKeys = Array.from(new Set(
-    input.availableSourceIdentityKeys
-      .map(value => value.trim())
-      .filter(Boolean),
-  ));
   if (availableSourceIdentityKeys.length === 1) {
     return readyAuthorization(availableSourceIdentityKeys[0], 'single_available');
   }

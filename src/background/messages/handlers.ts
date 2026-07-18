@@ -106,6 +106,7 @@ import {
   setDynamicBillFilterPreference,
 } from '../storage/dynamic-bill-repo';
 import {
+  getCurrentVideoActiveTranscriptSourceIdentityKeys,
   getCurrentVideoTranscriptEvidenceState,
   getCurrentVideoTranscriptSegments,
 } from '../storage/current-video-transcript-repo';
@@ -117,6 +118,10 @@ import {
 import { retainTemporaryTranscriptOwnerForContextSnapshot } from '../current-video-transcript-owner.ts';
 import { testAiConnection } from '../ai/openai-compatible';
 import { saveCurrentVideoPrimaryTextSelection } from '../storage/current-video-primary-text-selection-store.ts';
+import {
+  readCurrentVideoPrimaryTextSelections,
+  resolveCurrentVideoPrimaryTextAuthorization,
+} from '../../shared/current-video-primary-text-selection.ts';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
 const SUBTITLE_PROBE_CACHE_MS = 5 * 60 * 1000;
@@ -147,6 +152,7 @@ interface CurrentVideoContextLookupResult {
   tab: CurrentVideoTabSnapshot | null;
   context: CurrentVideoContextResult;
   temporaryOwner?: CurrentVideoTemporaryTranscriptOwner;
+  primaryTextAuthorized?: boolean;
 }
 
 interface BilibiliVideoUrlIdentity {
@@ -470,6 +476,9 @@ async function handleRequest<T>(
         return { success: true, data: primaryTextSelectionNotReadySummary() as T };
       }
       const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
+      if (!lookup.primaryTextAuthorized) {
+        return { success: true, data: primaryTextSelectionNotReadySummary() as T };
+      }
       const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(lookup.context, lookup.temporaryOwner);
       return { success: true, data: await generateCurrentVideoSummary(lookup.context, { transcriptSegments }) as T };
     }
@@ -478,6 +487,9 @@ async function handleRequest<T>(
         return { success: true, data: primaryTextSelectionNotReadyKnowledge() as T };
       }
       const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
+      if (!lookup.primaryTextAuthorized) {
+        return { success: true, data: primaryTextSelectionNotReadyKnowledge() as T };
+      }
       const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(lookup.context, lookup.temporaryOwner);
       return { success: true, data: buildVideoKnowledgeResult(lookup.context, { transcriptSegments }) as T };
     }
@@ -487,6 +499,9 @@ async function handleRequest<T>(
         return { success: true, data: primaryTextSelectionNotReadySegmentResult(query) as T };
       }
       const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
+      if (!lookup.primaryTextAuthorized) {
+        return { success: true, data: primaryTextSelectionNotReadySegmentResult(query) as T };
+      }
       const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(lookup.context, lookup.temporaryOwner);
       const videoKnowledge = buildVideoKnowledgeResult(lookup.context, { transcriptSegments });
       return {
@@ -666,6 +681,13 @@ async function requestCurrentVideoSegmentJump(
   }
 
   const lookup = await getCurrentVideoContextLookupWithSelection(params, requestTabId);
+  if (!lookup.primaryTextAuthorized) {
+    return blockedTimestampJumpResponse(
+      candidateId,
+      'no_context',
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    );
+  }
   const tabId = lookup.tab?.id ?? 0;
   if (!lookup.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(lookup.tab.url)) {
     return blockedTimestampJumpResponse(
@@ -788,14 +810,52 @@ async function getCurrentVideoContextLookupWithSelection(
   const options = currentVideoLookupOptions(params);
   const requestedSourceIdentityKey = selectedSourceIdentityKey(params);
   const lookup = await getRawCurrentVideoContextLookup(options, requestTabId);
-  if (lookup.context.kind !== 'video') return lookup;
-  const withSubtitle = await enrichCurrentVideoContextWithSubtitleProbe(lookup.context, options);
-  if (!requestedSourceIdentityKey) {
+  if (lookup.context.kind !== 'video') {
     return {
       ...lookup,
-      context: withoutSelectedCurrentVideoTranscriptEvidence(withSubtitle),
+      primaryTextAuthorized: false,
     };
   }
+
+  const readResult = await readCurrentVideoPrimaryTextSelections(chrome.storage.local);
+  if (readResult.status !== 'ready') {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(lookup.context),
+      primaryTextAuthorized: false,
+    };
+  }
+
+  const availableSourceIdentityKeys = lookup.context.cid
+    ? await getCurrentVideoActiveTranscriptSourceIdentityKeys({
+        bvid: lookup.context.bvid,
+        cid: lookup.context.cid,
+        page: lookup.context.currentPart.page,
+      }, lookup.temporaryOwner)
+    : [];
+  const authorization = resolveCurrentVideoPrimaryTextAuthorization({
+    readStatus: 'ready',
+    identity: {
+      bvid: lookup.context.bvid,
+      cid: lookup.context.cid,
+      page: lookup.context.currentPart.page,
+    },
+    selections: readResult.selections,
+    availableSourceIdentityKeys,
+  });
+  if (
+    !requestedSourceIdentityKey
+    || !authorization.ready
+    || authorization.selectedSourceIdentityKey !== requestedSourceIdentityKey
+  ) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(lookup.context),
+      primaryTextAuthorized: false,
+    };
+  }
+
+  const withSubtitle = await enrichCurrentVideoContextWithSubtitleProbe(lookup.context, options);
   return {
     ...lookup,
     context: await bindSelectedCurrentVideoTranscriptEvidence(
@@ -803,6 +863,7 @@ async function getCurrentVideoContextLookupWithSelection(
       requestedSourceIdentityKey,
       lookup.temporaryOwner,
     ),
+    primaryTextAuthorized: true,
   };
 }
 

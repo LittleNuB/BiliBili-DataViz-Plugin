@@ -11,12 +11,28 @@ const identity = {
 };
 const partKey = 'BV1Authorization:2001:1';
 
-test('saved exact source stays authoritative when the currently available source changed', () => {
+test('saved exact source fails closed when it is no longer currently available', () => {
   const authorization = resolveCurrentVideoPrimaryTextAuthorization({
     readStatus: 'ready',
     identity,
     selections: { [partKey]: 'saved-source-v1' },
-    availableSourceIdentityKeys: ['active-source-v2'],
+    availableSourceIdentityKeys: [' active-source-v2 ', '', 'active-source-v2'],
+  });
+
+  assert.equal(authorization.ready, false);
+  assert.equal(authorization.source, null);
+  assert.equal(authorization.selectedSourceIdentityKey, null);
+  assert.deepEqual(authorization.params, { primaryTextSelectionsReady: false });
+  assert.match(authorization.message ?? '', /视频页助手.*重新选择当前来源/);
+  assert.doesNotMatch(authorization.message ?? '', /saved-source|active-source|BVID|CID/);
+});
+
+test('saved exact source is authorized only after available keys are normalized', () => {
+  const authorization = resolveCurrentVideoPrimaryTextAuthorization({
+    readStatus: 'ready',
+    identity,
+    selections: { [partKey]: 'saved-source-v1' },
+    availableSourceIdentityKeys: [' ', ' saved-source-v1 ', 'saved-source-v1'],
   });
 
   assert.equal(authorization.ready, true);

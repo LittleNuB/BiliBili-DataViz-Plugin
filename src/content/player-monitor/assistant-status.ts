@@ -600,6 +600,9 @@ const primaryTextSelectionSaveFailedPartKeys = new Set<string>();
 let primaryTextSelectionsLoaded = false;
 let primaryTextSelectionsLoading = false;
 let primaryTextSelectionsReadFailed = false;
+let primaryTextSelectionsLoadRequestId = 0;
+let primaryTextSelectionsRevision = 0;
+let primaryTextSelectionStorageListenerRegistered = false;
 
 const assistantState: AssistantState = {
   expanded: false,
@@ -641,6 +644,7 @@ const assistantState: AssistantState = {
 
 export function renderCurrentVideoAssistant(context: CurrentVideoContextResult): void {
   injectStyle();
+  ensurePrimaryTextSelectionStorageListener();
   ensurePrimaryTextSelectionsLoaded();
   updateAssistantContext(context);
   renderAssistantShell();
@@ -960,10 +964,12 @@ async function selectPrimaryTextSourceForAssistant(
     page: context.currentPart.page,
   });
   if (!partKey) return;
+  const previousSourceIdentityKey = primaryTextSelections.get(partKey) ?? null;
   primaryTextSelectionSaveFailedPartKeys.delete(partKey);
   assistantState.primaryTextSaving = true;
   assistantState.primaryTextViewingSourceIdentityKey = sourceIdentityKey;
   assistantState.primaryTextStatus = `正在保存${label}作为当前视频助手来源...`;
+  const selectionsRevisionAtSubmit = primaryTextSelectionsRevision;
   renderAssistantShell();
 
   try {
@@ -984,17 +990,24 @@ async function selectPrimaryTextSourceForAssistant(
     ) {
       throw new Error('PRIMARY_TEXT_SELECTION_READBACK_MISMATCH');
     }
-    primaryTextSelections.clear();
-    for (const [savedPartKey, savedSourceIdentityKey] of Object.entries(persistedSelections)) {
-      primaryTextSelections.set(savedPartKey, savedSourceIdentityKey);
+    if (primaryTextSelectionsRevision === selectionsRevisionAtSubmit) {
+      replacePrimaryTextSelections(persistedSelections);
+      primaryTextSelectionsLoaded = true;
+      primaryTextSelectionsReadFailed = false;
     }
-    primaryTextSelectionsLoaded = true;
-    primaryTextSelectionsReadFailed = false;
     primaryTextSelectionSaveFailedPartKeys.delete(partKey);
     if (currentAssistantContextMatchesPartKey(partKey)) {
       assistantState.primaryTextStatus = `${label}已用于当前视频助手。`;
     }
   } catch {
+    if (primaryTextSelections.get(partKey) === sourceIdentityKey) {
+      if (previousSourceIdentityKey) {
+        primaryTextSelections.set(partKey, previousSourceIdentityKey);
+      } else {
+        primaryTextSelections.delete(partKey);
+      }
+      primaryTextSelectionsRevision += 1;
+    }
     primaryTextSelectionSaveFailedPartKeys.add(partKey);
     if (!primaryTextSelectionsLoaded) {
       primaryTextSelectionsReadFailed = true;
@@ -2376,15 +2389,15 @@ function contextStateKey(context: CurrentVideoContextResult): string {
 function ensurePrimaryTextSelectionsLoaded(): void {
   if (primaryTextSelectionsLoaded || primaryTextSelectionsLoading || primaryTextSelectionsReadFailed) return;
   primaryTextSelectionsLoading = true;
+  const requestId = primaryTextSelectionsLoadRequestId + 1;
+  primaryTextSelectionsLoadRequestId = requestId;
   chrome.storage?.local?.get(CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY)
     .then((stored) => {
-      primaryTextSelections.clear();
+      if (primaryTextSelectionsLoadRequestId !== requestId) return;
       const selections = normalizeCurrentVideoPrimaryTextSelections(
         stored?.[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY],
       );
-      for (const [partKey, sourceIdentityKey] of Object.entries(selections)) {
-        primaryTextSelections.set(partKey, sourceIdentityKey);
-      }
+      replacePrimaryTextSelections(selections);
       primaryTextSelectionsLoaded = true;
       primaryTextSelectionsLoading = false;
       primaryTextSelectionsReadFailed = false;
@@ -2394,6 +2407,7 @@ function ensurePrimaryTextSelectionsLoaded(): void {
       }
     })
     .catch(() => {
+      if (primaryTextSelectionsLoadRequestId !== requestId) return;
       primaryTextSelections.clear();
       primaryTextSelectionsLoaded = false;
       primaryTextSelectionsLoading = false;
@@ -2404,6 +2418,76 @@ function ensurePrimaryTextSelectionsLoaded(): void {
         renderAssistantShell();
       }
     });
+}
+
+function ensurePrimaryTextSelectionStorageListener(): void {
+  if (primaryTextSelectionStorageListenerRegistered) return;
+  const storageChanges = chrome.storage?.onChanged;
+  if (!storageChanges?.addListener) return;
+
+  storageChanges.addListener((changes, areaName) => {
+    if (
+      areaName !== 'local'
+      || !Object.prototype.hasOwnProperty.call(
+        changes,
+        CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
+      )
+    ) {
+      return;
+    }
+    const change = changes[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY];
+    const selections = normalizeCurrentVideoPrimaryTextSelections(change?.newValue);
+    primaryTextSelectionsLoadRequestId += 1;
+    primaryTextSelectionsRevision += 1;
+    replacePrimaryTextSelections(selections);
+    primaryTextSelectionsLoaded = true;
+    primaryTextSelectionsLoading = false;
+    primaryTextSelectionsReadFailed = false;
+    primaryTextSelectionSaveFailedPartKeys.clear();
+    invalidatePrimaryTextDependentAssistantState();
+    if (assistantState.context) {
+      updateAssistantContext(assistantState.context);
+      renderAssistantShell();
+    }
+  });
+  primaryTextSelectionStorageListenerRegistered = true;
+}
+
+function replacePrimaryTextSelections(selections: Record<string, string>): void {
+  primaryTextSelections.clear();
+  for (const [partKey, sourceIdentityKey] of Object.entries(selections)) {
+    primaryTextSelections.set(partKey, sourceIdentityKey);
+  }
+}
+
+function invalidatePrimaryTextDependentAssistantState(): void {
+  assistantState.summaryRequestId += 1;
+  assistantState.summary = null;
+  assistantState.summaryContextKey = '';
+  assistantState.summaryLoading = false;
+  assistantState.summaryError = null;
+
+  assistantState.knowledgeRequestId += 1;
+  assistantState.knowledge = null;
+  assistantState.knowledgeContextKey = '';
+  assistantState.knowledgeLoading = false;
+  assistantState.knowledgeError = null;
+
+  assistantState.segmentRequestId += 1;
+  assistantState.segmentResult = null;
+  assistantState.segmentContextKey = '';
+  assistantState.segmentLoading = false;
+  assistantState.segmentError = null;
+  assistantState.segmentPreviewCandidateId = null;
+  assistantState.segmentJumpStatus = null;
+  assistantState.segmentJumpLoading = false;
+  assistantState.segmentReturnAvailable = false;
+  assistantState.segmentReturnLoading = false;
+
+  assistantState.subtitleRequestId += 1;
+  assistantState.subtitleRefreshing = false;
+  assistantState.subtitleStatus = null;
+  assistantState.primaryTextStatus = null;
 }
 
 function selectedPrimaryTextSourceIdentityKey(context: CurrentVideoContext): string | null {
@@ -2471,7 +2555,7 @@ function compactStatusText(context: CurrentVideoContextResult | null): string {
   if (context.kind !== 'video') return '未识别到当前视频';
   if (context.transcriptEvidence?.active) return '已取得当前分 P 字幕正文';
   if (context.cid) return '已识别视频，等待字幕正文';
-  return '已识别视频，CID 待刷新';
+  return '已识别视频，分 P 身份待刷新';
 }
 
 function transcriptEvidenceLabel(context: CurrentVideoContext): string {
@@ -2532,7 +2616,7 @@ function summarySubtitleMessage(
 
   switch (diagnostics.status) {
     case 'missing_cid':
-      return '还没有拿到当前分 P 的 CID，暂时不能安全检测字幕正文。';
+      return '还没有确认当前分 P 的完整身份，暂时不能安全检测字幕正文。';
     case 'track_found':
       return '已发现字幕轨道，但还没有取得可引用的字幕正文。';
     case 'enable_ai_subtitle':

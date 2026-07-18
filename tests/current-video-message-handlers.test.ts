@@ -43,6 +43,7 @@ const tabs: FakeTab[] = [];
 const tabMessageHandlers = new Map<number, (message: unknown) => Promise<unknown> | unknown>();
 const storageValues: Record<string, unknown> = {};
 const storageGetCounts = new Map<string, number>();
+let rejectPrimaryTextSelectionStorageReads = false;
 
 installChromeFake();
 const { setupMessageHandlers } = await importBundledMessageHandlers();
@@ -642,6 +643,188 @@ test('background does not authorize active V2 when readiness is true without an 
   assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
 });
 
+test('protected handlers re-read persisted primary text authorization before touching exact transcript body', async (t) => {
+  await t.test('a saved replacement blocks the key that the UI read earlier', async () => {
+    resetChromeHarness();
+    await resetTranscriptDb();
+    const tabId = 18_609;
+    const context = handlerVideoContext('BV1FreshSelectionA', 4901);
+    const evidence = await seedHandlerTranscript(
+      context,
+      'fresh-selection-a',
+      'fresh selection replacement must block this exact body',
+    );
+    await db.currentVideoTranscriptSources
+      .where('identityKey')
+      .equals(evidence.sourceRecord.identityKey)
+      .modify({ lastAccessedAt: 1_000 });
+    const sourceBefore = await transcriptSource(evidence.sourceRecord.identityKey);
+    storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+      [`${context.bvid}:${context.cid}:1`]: 'replacement-source-key',
+    };
+    setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_000 }]);
+    await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+
+    const response = await searchWithExactSource(
+      tabId,
+      context,
+      evidence.sourceRecord.sourceIdentityKey,
+      'fresh selection replacement',
+    );
+    const selectedParams = {
+      primaryTextSelectionsReady: true,
+      selectedSourceIdentityKey: evidence.sourceRecord.sourceIdentityKey,
+    };
+    const summary = await sendRequest<CurrentVideoSummaryResult>({
+      action: 'GET_CURRENT_VIDEO_SUMMARY',
+      params: selectedParams,
+    }, tabId, context.url);
+    const knowledge = await sendRequest<VideoKnowledgeResult>({
+      action: 'GET_VIDEO_KNOWLEDGE',
+      params: selectedParams,
+    }, tabId, context.url);
+    const jump = await sendRequest<CurrentVideoTimestampJumpResponse>({
+      action: 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP',
+      params: {
+        ...selectedParams,
+        candidateId: 'fresh-selection-replaced-candidate',
+        query: 'fresh selection replacement',
+        confirmed: true,
+      },
+    }, tabId, context.url);
+
+    assert.equal(response.data?.status, 'no_evidence');
+    assert.equal(response.data?.candidates.length, 0);
+    assert.equal(summary.data?.status, 'cancelled');
+    assert.equal(summary.data?.sourceTier, null);
+    assert.equal(knowledge.data?.nodes.length, 0);
+    assert.equal(knowledge.data?.sourceState.transcriptEvidence, false);
+    assert.equal(jump.data?.ok, false);
+    assert.equal(jump.data?.targetSeconds, null);
+    assert.ok(storageReadCount(CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY) >= 4);
+    const sourceAfter = await transcriptSource(evidence.sourceRecord.identityKey);
+    assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
+  });
+
+  await t.test('selection storage read rejection fails closed', async () => {
+    resetChromeHarness();
+    await resetTranscriptDb();
+    const tabId = 18_610;
+    const context = handlerVideoContext('BV1FreshSelectionB', 4902);
+    const evidence = await seedHandlerTranscript(
+      context,
+      'fresh-selection-b',
+      'rejected selection storage must not expose this body',
+    );
+    await db.currentVideoTranscriptSources
+      .where('identityKey')
+      .equals(evidence.sourceRecord.identityKey)
+      .modify({ lastAccessedAt: 1_000 });
+    const sourceBefore = await transcriptSource(evidence.sourceRecord.identityKey);
+    rejectPrimaryTextSelectionStorageReads = true;
+    setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_100 }]);
+    await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+
+    const response = await searchWithExactSource(
+      tabId,
+      context,
+      evidence.sourceRecord.sourceIdentityKey,
+      'rejected selection storage',
+    );
+
+    assert.equal(response.data?.status, 'no_evidence');
+    assert.equal(response.data?.candidates.length, 0);
+    assert.ok(storageReadCount(CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY) >= 1);
+    const sourceAfter = await transcriptSource(evidence.sourceRecord.identityKey);
+    assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
+  });
+
+  await t.test('no saved choice keeps the unique current exact source available', async () => {
+    resetChromeHarness();
+    await resetTranscriptDb();
+    const tabId = 18_611;
+    const context = handlerVideoContext('BV1FreshSelectionC', 4903);
+    const evidence = await seedHandlerTranscript(
+      context,
+      'fresh-selection-c',
+      'unique current exact source remains available without a saved choice',
+    );
+    setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_200 }]);
+    await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+
+    const response = await searchWithExactSource(
+      tabId,
+      context,
+      evidence.sourceRecord.sourceIdentityKey,
+      'unique current exact source',
+    );
+
+    assert.equal(response.data?.status, 'ready');
+    assert.ok((response.data?.candidates.length ?? 0) > 0);
+    assert.ok(storageReadCount(CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY) >= 1);
+  });
+
+  await t.test('an old exact key is blocked when the current source is different', async () => {
+    resetChromeHarness();
+    await resetTranscriptDb();
+    const tabId = 18_612;
+    const context = handlerVideoContext('BV1FreshSelectionD', 4904);
+    const evidence = await seedHandlerTranscript(
+      context,
+      'fresh-selection-d',
+      'only the current exact source is eligible without a saved choice',
+    );
+    setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_300 }]);
+    await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+
+    const response = await searchWithExactSource(
+      tabId,
+      context,
+      `${evidence.sourceRecord.sourceIdentityKey}-old`,
+      'only the current exact source',
+    );
+
+    assert.equal(response.data?.status, 'no_evidence');
+    assert.equal(response.data?.candidates.length, 0);
+    assert.ok(storageReadCount(CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY) >= 1);
+  });
+
+  await t.test('an old language key is blocked when persistent metadata cannot prove one current source', async () => {
+    resetChromeHarness();
+    await resetTranscriptDb();
+    const tabId = 18_613;
+    const context = handlerVideoContext('BV1FreshSelectionE', 4905);
+    const chinese = await seedHandlerTranscript(
+      context,
+      'fresh-selection-e-zh',
+      '中文旧来源不能在当前来源不明确时继续授权',
+      'zh-CN',
+    );
+    await seedHandlerTranscript(
+      context,
+      'fresh-selection-e-en',
+      'an alternate language source is also active in persistent metadata',
+      'en-US',
+    );
+    storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+      [`${context.bvid}:${context.cid}:1`]: chinese.sourceRecord.sourceIdentityKey,
+    };
+    setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_400 }]);
+    await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+
+    const response = await searchWithExactSource(
+      tabId,
+      context,
+      chinese.sourceRecord.sourceIdentityKey,
+      '中文旧来源',
+    );
+
+    assert.equal(response.data?.status, 'no_evidence');
+    assert.equal(response.data?.candidates.length, 0);
+    assert.ok(storageReadCount(CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY) >= 1);
+  });
+});
+
 function handlerVideoContext(bvid: string, cid: number, page = 1): CurrentVideoContext {
   return {
     kind: 'video',
@@ -696,6 +879,46 @@ function handlerVideoContext(bvid: string, cid: number, page = 1): CurrentVideoC
   };
 }
 
+async function seedHandlerTranscript(
+  context: CurrentVideoContext,
+  trackId: string,
+  content: string,
+  language = 'zh-CN',
+) {
+  const evidence = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 2, to: 7, content }] },
+    {
+      bvid: context.bvid,
+      cid: context.cid as number,
+      page: context.currentPart.page,
+      language,
+      sourceType: 'bilibili_player_wbi_v2',
+      trackId,
+      trackUrlHost: 'aisubtitle.hdslb.com',
+      fetchedAt: 12_000,
+    },
+  );
+  await upsertCurrentVideoTranscriptEvidence(evidence);
+  return evidence;
+}
+
+async function searchWithExactSource(
+  tabId: number,
+  context: CurrentVideoContext,
+  sourceIdentityKey: string | undefined,
+  query: string,
+): Promise<BiliVizResponse<CurrentVideoSegmentRetrievalResult>> {
+  assert.ok(sourceIdentityKey);
+  return await sendRequest<CurrentVideoSegmentRetrievalResult>({
+    action: 'SEARCH_CURRENT_VIDEO_SEGMENTS',
+    params: {
+      query,
+      primaryTextSelectionsReady: true,
+      selectedSourceIdentityKey: sourceIdentityKey,
+    },
+  }, tabId, context.url);
+}
+
 function installChromeFake(): void {
   (globalThis as typeof globalThis & { chrome: unknown }).chrome = {
     runtime: {
@@ -733,6 +956,12 @@ function installChromeFake(): void {
       local: {
         get(keys: string | string[] | Record<string, unknown> | null | undefined) {
           recordStorageGet(keys);
+          if (rejectPrimaryTextSelectionStorageReads && readsStorageKey(
+            keys,
+            CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
+          )) {
+            return Promise.reject(new Error('PRIMARY_TEXT_SELECTION_STORAGE_READ_FAILED'));
+          }
           if (typeof keys === 'string') {
             return Promise.resolve({ [keys]: storageValues[keys] });
           }
@@ -768,6 +997,7 @@ function resetChromeHarness(): void {
     delete storageValues[key];
   }
   storageGetCounts.clear();
+  rejectPrimaryTextSelectionStorageReads = false;
 }
 
 function setTabs(nextTabs: FakeTab[]): void {
@@ -853,6 +1083,16 @@ function recordStorageGet(keys: string | string[] | Record<string, unknown> | nu
 
 function storageReadCount(key: string): number {
   return storageGetCounts.get(key) ?? 0;
+}
+
+function readsStorageKey(
+  keys: string | string[] | Record<string, unknown> | null | undefined,
+  expectedKey: string,
+): boolean {
+  if (typeof keys === 'string') return keys === expectedKey;
+  if (Array.isArray(keys)) return keys.includes(expectedKey);
+  if (keys && typeof keys === 'object') return expectedKey in keys;
+  return true;
 }
 
 async function importBundledMessageHandlers(): Promise<{

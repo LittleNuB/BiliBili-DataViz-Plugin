@@ -21,6 +21,10 @@ PROTECTED_ACTIONS = {
 FORBIDDEN_VISIBLE_TERMS = [
     "未消费",
     "猜你喜欢",
+    "BVID",
+    "CID",
+    "BV1PopupMock9",
+    "9201",
     "fallback",
     "transcript",
     "confidence",
@@ -134,24 +138,32 @@ def run_stale_saved_source_flow(page):
     assert_no_protected_actions(page)
 
     page.get_by_role("button", name="刷新摘要").click()
+    expect(page.get_by_text("此前保存的主要文本来源已不可用，请到视频页助手重新选择当前来源。").first).to_be_visible()
     page.get_by_role("button", name="刷新", exact=True).click()
     page.locator("input[placeholder='例如：模型架构那段']").fill("失效来源")
     page.get_by_role("button", name="检索", exact=True).click()
-    page.wait_for_function(
-        "(window.__popupMockMessages || []).some(message => message.action === 'SEARCH_CURRENT_VIDEO_SEGMENTS')"
-    )
     page.wait_for_timeout(50)
     expect(page.get_by_role("button", name="预览跳转")).to_have_count(0)
+    assert_no_protected_actions(page)
+    assert_clean_page(page)
 
-    saved_v1 = page.evaluate("window.__popupMockSourceV1")
-    active_v2 = page.evaluate("window.__popupMockSourceV2")
-    for action in ["GET_CURRENT_VIDEO_SUMMARY", "GET_VIDEO_KNOWLEDGE", "SEARCH_CURRENT_VIDEO_SEGMENTS"]:
-        message = last_message_for(page, action)
-        assert message
-        assert message["params"].get("primaryTextSelectionsReady") is True
-        assert message["params"].get("selectedSourceIdentityKey") == saved_v1
-        assert message["params"].get("selectedSourceIdentityKey") != active_v2
-    assert len(messages_for(page, "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP")) == 0
+
+def run_raw_unsuccessful_response_flow(page, query, action):
+    page.route("**/*", route_popup)
+    page.goto(f"{POPUP_URL}?{query}=1")
+    expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
+    page.locator("input[placeholder='例如：模型架构那段']").fill("受控失败")
+    page.get_by_role("button", name="检索", exact=True).click()
+    expect(page.get_by_role("button", name="预览跳转")).to_be_visible()
+    page.get_by_role("button", name="预览跳转").click()
+    page.get_by_role("button", name="确认跳转").click()
+
+    if action == "jump":
+        expect(page.get_by_text("未能完成跳转，请回到当前视频页确认页面和播放器状态后重试。")).to_be_visible()
+    else:
+        expect(page.get_by_role("button", name="返回原位置")).to_be_visible()
+        page.get_by_role("button", name="返回原位置").click()
+        expect(page.get_by_text("未能返回原位置，请回到当前视频页确认页面和播放器状态后重试。")).to_be_visible()
     assert_clean_page(page)
 
 
@@ -166,6 +178,14 @@ def run_blocked_flow(page, query, expected_message):
     page.get_by_role("button", name="刷新", exact=True).click()
     page.locator("input[placeholder='例如：模型架构那段']").fill("不应发送")
     page.get_by_role("button", name="检索", exact=True).click()
+    assert_no_protected_actions(page)
+    assert_clean_page(page)
+
+
+def run_missing_title_flow(page):
+    page.route("**/*", route_popup)
+    page.goto(f"{POPUP_URL}?missingTitle=1")
+    expect(page.get_by_text("当前视频", exact=True).first).to_be_visible()
     assert_no_protected_actions(page)
     assert_clean_page(page)
 
@@ -193,6 +213,16 @@ def main():
             assert not stale_errors, "\n".join(stale_errors)
             stale.close()
 
+            raw_jump, raw_jump_errors = new_checked_page(browser)
+            run_raw_unsuccessful_response_flow(raw_jump, "rawJumpFailure", "jump")
+            assert not raw_jump_errors, "\n".join(raw_jump_errors)
+            raw_jump.close()
+
+            raw_return, raw_return_errors = new_checked_page(browser)
+            run_raw_unsuccessful_response_flow(raw_return, "rawReturnFailure", "return")
+            assert not raw_return_errors, "\n".join(raw_return_errors)
+            raw_return.close()
+
             rejected, rejected_errors = new_checked_page(browser)
             run_blocked_flow(rejected, "rejectStorage=1", "保存的主要文本来源选择读取失败")
             assert not rejected_errors, "\n".join(rejected_errors)
@@ -203,7 +233,12 @@ def main():
             assert not missing_errors, "\n".join(missing_errors)
             missing.close()
 
-            print("current-video popup real UI QA passed: open/reprobe no generation, manual exact summary/knowledge/search/jump/return, stale saved source fail-closed, storage and identity failures blocked, no raw visible leak, no overflow, no console errors")
+            missing_title, missing_title_errors = new_checked_page(browser)
+            run_missing_title_flow(missing_title)
+            assert not missing_title_errors, "\n".join(missing_title_errors)
+            missing_title.close()
+
+            print("current-video popup real UI QA passed: open/reprobe no generation, manual exact summary/knowledge/search/jump/return, stale saved source blocked before submit, unsuccessful jump/return messages controlled, storage and identity failures blocked, no raw visible leak, no overflow, no console errors")
         finally:
             browser.close()
 

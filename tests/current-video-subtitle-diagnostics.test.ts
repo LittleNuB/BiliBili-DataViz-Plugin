@@ -25,11 +25,11 @@ test('explains metadata-only state and asks user to enable Chinese AI subtitles'
   assertNoRawUiLeak(state);
 });
 
-test('reports missing CID before subtitle detection or body caching', () => {
+test('reports incomplete part identity without exposing internal identity labels', () => {
   const state = buildCurrentVideoSubtitleDiagnostics(videoContext({ cid: null }));
 
   assert.equal(state.status, 'missing_cid');
-  assert.match(visibleText(state), /缺少 CID/);
+  assert.match(visibleText(state), /当前分 P 身份未就绪/);
   assert.match(visibleText(state), /重新检测字幕/);
   assertFeatureGatesUnavailable(state);
   assertNoRawUiLeak(state);
@@ -144,7 +144,7 @@ function assertFeatureGatesUnavailable(state: ReturnType<typeof buildCurrentVide
 function assertNoRawUiLeak(state: ReturnType<typeof buildCurrentVideoSubtitleDiagnostics>): void {
   assert.doesNotMatch(
     visibleText(state),
-    /sourceHash|segmentId|subtitle_url|endpoint path|\/x\/player|token|Cookie|profile|登录态|Key\.txt|本地 key|Chrome\\User Data/i,
+    /BVID|CID|sourceHash|segmentId|subtitle_url|endpoint path|\/x\/player|token|Cookie|profile|登录态|Key\.txt|本地 key|Chrome\\User Data/i,
   );
 }
 
