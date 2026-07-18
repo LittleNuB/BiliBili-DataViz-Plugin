@@ -11,12 +11,14 @@ import type {
   CurrentVideoTranscriptSourceRecord,
 } from '../../shared/types/current-video-transcript.ts';
 import {
-  clearTemporaryCurrentVideoTranscriptCacheForOwner,
+  buildTemporaryCurrentVideoTranscriptUnavailableState,
+  buildTemporaryCurrentVideoTranscriptWriteFailureState,
   getTemporaryCurrentVideoTranscriptEvidenceState,
   getTemporaryCurrentVideoTranscriptSegments,
+  getTemporaryCurrentVideoTranscriptOwnerReadResolution,
   isTemporaryCurrentVideoTranscriptOwnerValidForIdentity,
+  markTemporaryCurrentVideoTranscriptPersistentSource,
   putTemporaryCurrentVideoTranscriptEvidence,
-  type CurrentVideoTemporaryTranscriptPutResult,
   type CurrentVideoTemporaryTranscriptOwner,
 } from '../current-video-temporary-transcript-cache.ts';
 import {
@@ -36,7 +38,10 @@ export async function upsertCurrentVideoTranscriptEvidence(
   options: UpsertCurrentVideoTranscriptEvidenceOptions = {},
 ): Promise<CurrentVideoTranscriptEvidenceState> {
   let state: CurrentVideoTranscriptEvidenceState | null = null;
-  let ownerToClearAfterCommit: CurrentVideoTemporaryTranscriptOwner | null = null;
+  const persistentSourcesToMarkAfterCommit: Array<{
+    owner: CurrentVideoTemporaryTranscriptOwner;
+    source: CurrentVideoTranscriptSourceRecord;
+  }> = [];
   const expectedClearGeneration = options.expectedClearGeneration
     ?? getCurrentVideoTranscriptClearState().generation;
 
@@ -53,7 +58,7 @@ export async function upsertCurrentVideoTranscriptEvidence(
         options.temporaryOwner
         && !isTemporaryCurrentVideoTranscriptOwnerValidForIdentity(options.temporaryOwner, evidence.sourceRecord)
       ) {
-        state = temporaryTranscriptWriteFailureState(evidence, null);
+        state = buildTemporaryCurrentVideoTranscriptWriteFailureState(evidence, null);
         return;
       }
       const [sources, segments] = await Promise.all([
@@ -72,10 +77,8 @@ export async function upsertCurrentVideoTranscriptEvidence(
           ? putTemporaryCurrentVideoTranscriptEvidence(options.temporaryOwner, evidence)
           : null;
         if (temporaryResult?.status !== 'stored') {
-          state = temporaryTranscriptWriteFailureState(evidence, temporaryResult);
+          state = buildTemporaryCurrentVideoTranscriptWriteFailureState(evidence, temporaryResult);
         }
-      } else if (!plan.skippedPersistentWrite && options.temporaryOwner) {
-        ownerToClearAfterCommit = options.temporaryOwner;
       }
 
       if (!currentVideoTranscriptGenerationStillWritable(expectedClearGeneration)) {
@@ -96,11 +99,20 @@ export async function upsertCurrentVideoTranscriptEvidence(
         await db.currentVideoTranscriptSegments.bulkPut(plan.segmentsToPut);
       }
       state ??= plan.state;
+      if (!plan.skippedPersistentWrite && options.temporaryOwner) {
+        persistentSourcesToMarkAfterCommit.push({
+          owner: options.temporaryOwner,
+          source: plan.sourcesToPut[0] ?? evidence.sourceRecord,
+        });
+      }
     },
   );
 
-  if (ownerToClearAfterCommit) {
-    clearTemporaryCurrentVideoTranscriptCacheForOwner(ownerToClearAfterCommit);
+  for (const ownerSource of persistentSourcesToMarkAfterCommit) {
+    markTemporaryCurrentVideoTranscriptPersistentSource(
+      ownerSource.owner,
+      ownerSource.source,
+    );
   }
 
   if (!state) {
@@ -118,6 +130,44 @@ export async function getCurrentVideoTranscriptEvidenceState(
     db.currentVideoTranscriptSources.where('bvid').equals(identity.bvid).toArray(),
     db.currentVideoTranscriptSegments.where('bvid').equals(identity.bvid).toArray(),
   ]);
+
+  if (temporaryOwner) {
+    const ownerRead = getTemporaryCurrentVideoTranscriptOwnerReadResolution(
+      temporaryOwner,
+      identity,
+      now,
+    );
+    if (ownerRead) {
+      if (ownerRead.kind === 'mismatch') {
+        return ownerRead.state;
+      }
+
+      if (ownerRead.kind === 'temporary') {
+        const temporaryState = getTemporaryCurrentVideoTranscriptEvidenceState(
+          temporaryOwner,
+          ownerRead.identity,
+          now,
+        );
+        if (temporaryState.active) return temporaryState;
+      }
+
+      const persistentCurrentState = buildTranscriptEvidenceStateFromCache(
+        ownerRead.identity,
+        sources,
+        segments,
+        now,
+      );
+      if (persistentCurrentState.sourceIdentityKey && persistentCurrentState.active) {
+        await touchTranscriptSource(persistentCurrentState.sourceIdentityKey, now);
+        return persistentCurrentState;
+      }
+
+      if (ownerRead.kind === 'rejected') {
+        return ownerRead.state;
+      }
+      return buildTemporaryCurrentVideoTranscriptUnavailableState(ownerRead.identity, now);
+    }
+  }
 
   const state = buildTranscriptEvidenceStateFromCache(identity, sources, segments, now);
   if (state.sourceIdentityKey && state.active) {
@@ -137,11 +187,44 @@ export async function getCurrentVideoTranscriptSegments(
     .where('[bvid+cid+page]')
     .equals([identity.bvid, identity.cid, identity.page])
     .toArray();
+
+  if (temporaryOwner) {
+    const ownerRead = getTemporaryCurrentVideoTranscriptOwnerReadResolution(temporaryOwner, identity);
+    if (ownerRead) {
+      if (ownerRead.kind === 'mismatch') return [];
+      if (ownerRead.kind === 'temporary') {
+        const temporarySegments = getTemporaryCurrentVideoTranscriptSegments(
+          temporaryOwner,
+          ownerRead.identity,
+        );
+        if (temporarySegments.length > 0) return temporarySegments;
+      }
+
+      const persistentCurrentSegments = persistentTranscriptSegmentsForIdentity(
+        rows,
+        ownerRead.identity,
+      );
+      if (persistentCurrentSegments.length > 0) return persistentCurrentSegments;
+      return [];
+    }
+  }
+
+  const persistentSegments = persistentTranscriptSegmentsForIdentity(rows, identity);
+  if (persistentSegments.length > 0) return persistentSegments;
+  return temporaryOwner
+    ? getTemporaryCurrentVideoTranscriptSegments(temporaryOwner, identity)
+    : [];
+}
+
+function persistentTranscriptSegmentsForIdentity(
+  rows: CurrentVideoTranscriptSegment[],
+  identity: CurrentVideoTranscriptIdentity & { sourceHash?: string | null },
+): CurrentVideoTranscriptSegment[] {
   const expectedLanguage = languageKey(identity.language);
   const expectedSourceHash = identity.sourceHash ?? null;
   const expectedSourceIdentityKey = identity.sourceIdentityKey ?? null;
 
-  const persistentSegments = rows
+  return rows
     .filter(segment =>
       !segment.stale
       && (!identity.language || languageKey(segment.language) === expectedLanguage)
@@ -153,10 +236,6 @@ export async function getCurrentVideoTranscriptSegments(
       || legacySegmentSourceIdentity(segment) === expectedSourceIdentityKey,
     )
     .sort((a, b) => a.startSeconds - b.startSeconds || a.endSeconds - b.endSeconds);
-  if (persistentSegments.length > 0) return persistentSegments;
-  return temporaryOwner
-    ? getTemporaryCurrentVideoTranscriptSegments(temporaryOwner, identity)
-    : [];
 }
 
 async function touchTranscriptSource(sourceIdentityKey: string, now: number): Promise<void> {
@@ -205,53 +284,4 @@ function transcriptClearedBeforeWriteState(
     message: '字幕缓存已在本次检测过程中被清理；请重新检测当前视频字幕正文。',
     warnings: ['transcript_cache_cleared_during_request'],
   });
-}
-
-function temporaryTranscriptWriteFailureState(
-  evidence: CurrentVideoTranscriptEvidenceWrite,
-  result: CurrentVideoTemporaryTranscriptPutResult | null,
-): CurrentVideoTranscriptEvidenceState {
-  const status = result?.status ?? 'invalid_owner';
-  const copy = temporaryTranscriptFailureCopy(status);
-  return buildCurrentVideoTranscriptEvidenceState({
-    status: 'missing',
-    target: {
-      bvid: evidence.sourceRecord.bvid,
-      cid: evidence.sourceRecord.cid,
-      page: evidence.sourceRecord.page,
-      language: evidence.sourceRecord.language,
-    },
-    now: Date.now(),
-    sourceType: evidence.sourceRecord.sourceType,
-    reason: copy.reason,
-    message: copy.message,
-    warnings: [copy.warning],
-  });
-}
-
-function temporaryTranscriptFailureCopy(
-  status: CurrentVideoTemporaryTranscriptPutResult['status'],
-): { reason: string; message: string; warning: string } {
-  switch (status) {
-    case 'source_too_large':
-      return {
-        reason: 'temporary_transcript_source_too_large',
-        message: '这份字幕正文过大，本次未保留。你仍可使用播放器字幕；如内容发生变化，可稍后重新检测。',
-        warning: 'transcript_temporary_source_too_large',
-      };
-    case 'capacity_exceeded':
-      return {
-        reason: 'temporary_transcript_capacity_exceeded',
-        message: '当前临时字幕缓存已达到上限，未替换其他仍有效的视频页面；请关闭不需要的页面后重新检测。',
-        warning: 'transcript_temporary_capacity_exceeded',
-      };
-    case 'invalid_owner':
-    case 'stored':
-    default:
-      return {
-        reason: 'temporary_transcript_owner_missing',
-        message: '本次临时内容已失效，请重新检测字幕。',
-        warning: 'transcript_temporary_owner_missing',
-      };
-  }
 }

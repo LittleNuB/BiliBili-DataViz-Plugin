@@ -792,6 +792,211 @@ test('temporary capacity_exceeded replacement clears only the same owner old bod
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(otherOwner, transcriptIdentityFromEvidence(otherBody), 10_413).length, 1);
 });
 
+test('owner broad reads prefer active temporary body over stale persistent body', async () => {
+  await withFreshTranscriptRepo(async (repo) => {
+    const oldBody = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'old persistent body' }] },
+      baseNormalizeOptions({ bvid: 'BV1OwnerTempPref', cid: 6471, fetchedAt: 10_500 }),
+    );
+    const currentBody = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'new temporary body' }] },
+      baseNormalizeOptions({ bvid: 'BV1OwnerTempPref', cid: 6471, fetchedAt: 10_501 }),
+    );
+    const owner = temporaryOwner(131, currentBody);
+    const otherOwner = temporaryOwner(132, oldBody);
+
+    await repo.upsertCurrentVideoTranscriptEvidence(oldBody);
+    assert.equal(putTemporaryCurrentVideoTranscriptEvidence(owner, currentBody, 10_510).status, 'stored');
+
+    const ownerState = await repo.getCurrentVideoTranscriptEvidenceState({
+      bvid: oldBody.sourceRecord.bvid,
+      cid: oldBody.sourceRecord.cid,
+      page: oldBody.sourceRecord.page,
+    }, 10_520, owner);
+    assert.equal(ownerState.active, true);
+    assert.equal(ownerState.sourceIdentityKey, currentBody.sourceRecord.sourceIdentityKey);
+    assert.equal(ownerState.temporary, true);
+
+    const ownerSegments = await repo.getCurrentVideoTranscriptSegments({
+      bvid: oldBody.sourceRecord.bvid,
+      cid: oldBody.sourceRecord.cid,
+      page: oldBody.sourceRecord.page,
+      language: ownerState.language,
+      sourceIdentityKey: ownerState.sourceIdentityKey,
+      sourceHash: ownerState.sourceHash,
+    }, owner);
+    assert.deepEqual(ownerSegments.map(segment => segment.text), ['new temporary body']);
+
+    const otherState = await repo.getCurrentVideoTranscriptEvidenceState({
+      bvid: oldBody.sourceRecord.bvid,
+      cid: oldBody.sourceRecord.cid,
+      page: oldBody.sourceRecord.page,
+    }, 10_530, otherOwner);
+    assert.equal(otherState.active, true);
+    assert.equal(otherState.sourceIdentityKey, oldBody.sourceRecord.sourceIdentityKey);
+    assert.equal(otherState.persistent, true);
+  });
+});
+
+test('owner rejected source_too_large marker blocks stale persistent fallback', async () => {
+  await assertOwnerRejectedSourceBlocksPersistentFallback('source_too_large');
+});
+
+test('owner rejected capacity_exceeded marker blocks stale persistent fallback', async () => {
+  await assertOwnerRejectedSourceBlocksPersistentFallback('capacity_exceeded');
+});
+
+test('owner current-source marker may be satisfied by exact persistent body', async () => {
+  await withFreshTranscriptRepo(async (repo) => {
+    const oldBody = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'old exact persistent body' }] },
+      baseNormalizeOptions({ bvid: 'BV1OwnerPersistB', cid: 6481, fetchedAt: 10_700 }),
+    );
+    const currentBody = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'new exact persistent body' }] },
+      baseNormalizeOptions({ bvid: 'BV1OwnerPersistB', cid: 6481, fetchedAt: 10_701 }),
+    );
+    const owner = temporaryOwner(151, currentBody);
+
+    await repo.upsertCurrentVideoTranscriptEvidence(oldBody);
+    await repo.upsertCurrentVideoTranscriptEvidence(currentBody, { temporaryOwner: owner });
+
+    const broadState = await repo.getCurrentVideoTranscriptEvidenceState({
+      bvid: oldBody.sourceRecord.bvid,
+      cid: oldBody.sourceRecord.cid,
+      page: oldBody.sourceRecord.page,
+    }, 10_710, owner);
+    assert.equal(broadState.active, true);
+    assert.equal(broadState.sourceIdentityKey, currentBody.sourceRecord.sourceIdentityKey);
+    assert.equal(broadState.persistent, true);
+
+    const explicitOld = await repo.getCurrentVideoTranscriptEvidenceState(
+      transcriptIdentityFromEvidence(oldBody),
+      10_711,
+      owner,
+    );
+    assert.equal(explicitOld.active, false);
+    assert.equal(explicitOld.reason, 'requested_transcript_identity_not_current');
+    assert.equal((await repo.getCurrentVideoTranscriptSegments(
+      transcriptIdentityFromEvidence(oldBody),
+      owner,
+    )).length, 0);
+  });
+});
+
+test('rejected owner marker may use exact persistent current body without reviving old body', async () => {
+  await withFreshTranscriptRepo(async (repo) => {
+    const oldBody = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'old body before exact persistent current' }] },
+      baseNormalizeOptions({ bvid: 'BV1RejectExactB', cid: 6482, fetchedAt: 10_750 }),
+    );
+    const currentBody = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'already persisted current body' }] },
+      baseNormalizeOptions({ bvid: 'BV1RejectExactB', cid: 6482, fetchedAt: 10_751 }),
+    );
+    const owner = temporaryOwner(152, currentBody);
+    const otherOwner = temporaryOwner(153, oldBody);
+    const sourceBytes = temporaryStoredBytes(currentBody, 10_760);
+
+    await repo.upsertCurrentVideoTranscriptEvidence(oldBody);
+    await repo.upsertCurrentVideoTranscriptEvidence(currentBody);
+    assert.equal(putTemporaryCurrentVideoTranscriptEvidence(owner, currentBody, 10_760, {
+      maxSourceCount: CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES,
+      maxBytes: sourceBytes - 1,
+    }).status, 'source_too_large');
+
+    const ownerBroad = await repo.getCurrentVideoTranscriptEvidenceState({
+      bvid: oldBody.sourceRecord.bvid,
+      cid: oldBody.sourceRecord.cid,
+      page: oldBody.sourceRecord.page,
+    }, 10_761, owner);
+    assert.equal(ownerBroad.active, true);
+    assert.equal(ownerBroad.sourceIdentityKey, currentBody.sourceRecord.sourceIdentityKey);
+    assert.equal(ownerBroad.persistent, true);
+
+    const explicitOld = await repo.getCurrentVideoTranscriptEvidenceState(
+      transcriptIdentityFromEvidence(oldBody),
+      10_762,
+      owner,
+    );
+    assert.equal(explicitOld.active, false);
+    assert.equal(explicitOld.reason, 'temporary_transcript_source_too_large');
+
+    const otherExplicitOld = await repo.getCurrentVideoTranscriptEvidenceState(
+      transcriptIdentityFromEvidence(oldBody),
+      10_763,
+      otherOwner,
+    );
+    assert.equal(otherExplicitOld.active, true);
+    assert.equal(otherExplicitOld.sourceIdentityKey, oldBody.sourceRecord.sourceIdentityKey);
+  });
+});
+
+test('successful current-source write and owner release clear stale rejection marker', async () => {
+  await withFreshTranscriptRepo(async (repo) => {
+    const oldBody = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'old marker release body' }] },
+      baseNormalizeOptions({ bvid: 'BV1MarkerRelease', cid: 6491, fetchedAt: 10_800 }),
+    );
+    const currentBody = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'new marker release body' }] },
+      baseNormalizeOptions({ bvid: 'BV1MarkerRelease', cid: 6491, fetchedAt: 10_801 }),
+    );
+    const owner = temporaryOwner(161, currentBody);
+    const sourceBytes = temporaryStoredBytes(currentBody, 10_810);
+
+    await repo.upsertCurrentVideoTranscriptEvidence(oldBody);
+    assert.equal(putTemporaryCurrentVideoTranscriptEvidence(owner, currentBody, 10_810, {
+      maxSourceCount: CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES,
+      maxBytes: sourceBytes - 1,
+    }).status, 'source_too_large');
+    assert.equal((await repo.getCurrentVideoTranscriptEvidenceState({
+      bvid: oldBody.sourceRecord.bvid,
+      cid: oldBody.sourceRecord.cid,
+      page: oldBody.sourceRecord.page,
+    }, 10_811, owner)).reason, 'temporary_transcript_source_too_large');
+
+    await repo.upsertCurrentVideoTranscriptEvidence(currentBody, { temporaryOwner: owner });
+    const resolved = await repo.getCurrentVideoTranscriptEvidenceState({
+      bvid: oldBody.sourceRecord.bvid,
+      cid: oldBody.sourceRecord.cid,
+      page: oldBody.sourceRecord.page,
+    }, 10_812, owner);
+    assert.equal(resolved.active, true);
+    assert.equal(resolved.sourceIdentityKey, currentBody.sourceRecord.sourceIdentityKey);
+
+    retainTemporaryCurrentVideoTranscriptOwner({
+      ownerTabId: owner.ownerTabId,
+      bvid: 'BV1MarkerOther',
+      cid: 6492,
+      page: 1,
+    });
+    const returnedOwner = temporaryOwner(owner.ownerTabId, oldBody);
+    const explicitOldAfterNavigation = await repo.getCurrentVideoTranscriptEvidenceState(
+      transcriptIdentityFromEvidence(oldBody),
+      10_813,
+      returnedOwner,
+    );
+    assert.equal(explicitOldAfterNavigation.active, true);
+    assert.equal(explicitOldAfterNavigation.sourceIdentityKey, oldBody.sourceRecord.sourceIdentityKey);
+
+    const ownerToClear = temporaryOwner(162, currentBody);
+    assert.equal(putTemporaryCurrentVideoTranscriptEvidence(ownerToClear, currentBody, 10_814, {
+      maxSourceCount: CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES,
+      maxBytes: sourceBytes - 1,
+    }).status, 'source_too_large');
+    clearTemporaryCurrentVideoTranscriptCacheForTab(ownerToClear.ownerTabId);
+    const afterClearOwner = temporaryOwner(ownerToClear.ownerTabId, oldBody);
+    const explicitOldAfterClear = await repo.getCurrentVideoTranscriptEvidenceState(
+      transcriptIdentityFromEvidence(oldBody),
+      10_815,
+      afterClearOwner,
+    );
+    assert.equal(explicitOldAfterClear.active, true);
+    assert.equal(explicitOldAfterClear.sourceIdentityKey, oldBody.sourceRecord.sourceIdentityKey);
+  });
+});
+
 test('Dexie 0.12 subtitle cache upgrade clears only transcript tables transactionally', async () => {
   const tables = {
     currentVideoTranscriptSources: [{ identityKey: 'legacy-source' }],
@@ -1393,6 +1598,96 @@ function baseNormalizeOptions(overrides: Partial<Parameters<typeof normalizeBili
     fetchedAt: 1000,
     ...overrides,
   };
+}
+
+async function withFreshTranscriptRepo<T>(
+  callback: (repo: typeof import('../src/background/storage/current-video-transcript-repo.ts')) => Promise<T>,
+): Promise<T> {
+  clearTemporaryCurrentVideoTranscriptCache();
+  const { db } = await import('../src/background/storage/db.ts');
+  const repo = await import('../src/background/storage/current-video-transcript-repo.ts');
+  db.close();
+  await db.delete();
+  await db.open();
+  try {
+    return await callback(repo);
+  } finally {
+    db.close();
+    await db.delete();
+    clearTemporaryCurrentVideoTranscriptCache();
+  }
+}
+
+async function assertOwnerRejectedSourceBlocksPersistentFallback(
+  status: 'source_too_large' | 'capacity_exceeded',
+): Promise<void> {
+  await withFreshTranscriptRepo(async (repo) => {
+    const oldBody = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: `old persistent ${status}` }] },
+      baseNormalizeOptions({ bvid: `BV1Reject${status === 'source_too_large' ? 'Large' : 'Cap'}`, cid: status === 'source_too_large' ? 6472 : 6473, fetchedAt: 10_600 }),
+    );
+    const currentBody = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: `new rejected ${status}` }] },
+      baseNormalizeOptions({ bvid: oldBody.sourceRecord.bvid, cid: oldBody.sourceRecord.cid, fetchedAt: 10_601 }),
+    );
+    const owner = temporaryOwner(status === 'source_too_large' ? 141 : 142, currentBody);
+    const otherOwner = temporaryOwner(status === 'source_too_large' ? 143 : 144, oldBody);
+
+    await repo.upsertCurrentVideoTranscriptEvidence(oldBody);
+
+    let result: ReturnType<typeof putTemporaryCurrentVideoTranscriptEvidence>;
+    if (status === 'source_too_large') {
+      const sourceBytes = temporaryStoredBytes(currentBody, 10_610);
+      result = putTemporaryCurrentVideoTranscriptEvidence(owner, currentBody, 10_610, {
+        maxSourceCount: CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES,
+        maxBytes: sourceBytes - 1,
+      });
+    } else {
+      const filler = normalizeBilibiliTranscriptEvidence(
+        { body: [{ from: 0, to: 2, content: 'capacity filler temporary owner' }] },
+        baseNormalizeOptions({ bvid: 'BV1RejectCapFill', cid: 6474, fetchedAt: 10_602 }),
+      );
+      const fillerOwner = temporaryOwner(145, filler);
+      assert.equal(putTemporaryCurrentVideoTranscriptEvidence(fillerOwner, filler, 10_609).status, 'stored');
+      const retainedBytes = temporaryStoredBytes(filler, 10_609);
+      const sourceBytes = temporaryStoredBytes(currentBody, 10_610);
+      result = putTemporaryCurrentVideoTranscriptEvidence(owner, currentBody, 10_610, {
+        maxSourceCount: CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES,
+        maxBytes: retainedBytes + sourceBytes - 1,
+      });
+    }
+    assert.equal(result.status, status);
+
+    const broadState = await repo.getCurrentVideoTranscriptEvidenceState({
+      bvid: oldBody.sourceRecord.bvid,
+      cid: oldBody.sourceRecord.cid,
+      page: oldBody.sourceRecord.page,
+    }, 10_620, owner);
+    assert.equal(broadState.active, false);
+    assert.equal(broadState.reason, status === 'source_too_large'
+      ? 'temporary_transcript_source_too_large'
+      : 'temporary_transcript_capacity_exceeded');
+
+    const explicitOldState = await repo.getCurrentVideoTranscriptEvidenceState(
+      transcriptIdentityFromEvidence(oldBody),
+      10_621,
+      owner,
+    );
+    assert.equal(explicitOldState.active, false);
+    assert.equal(explicitOldState.reason, broadState.reason);
+    assert.equal((await repo.getCurrentVideoTranscriptSegments(
+      transcriptIdentityFromEvidence(oldBody),
+      owner,
+    )).length, 0);
+
+    const otherState = await repo.getCurrentVideoTranscriptEvidenceState({
+      bvid: oldBody.sourceRecord.bvid,
+      cid: oldBody.sourceRecord.cid,
+      page: oldBody.sourceRecord.page,
+    }, 10_622, otherOwner);
+    assert.equal(otherState.active, true);
+    assert.equal(otherState.sourceIdentityKey, oldBody.sourceRecord.sourceIdentityKey);
+  });
 }
 
 function temporaryOwner(ownerTabId: number, evidence: CurrentVideoTranscriptEvidenceWrite) {

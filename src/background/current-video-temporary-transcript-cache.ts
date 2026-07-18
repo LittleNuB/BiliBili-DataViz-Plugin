@@ -1,4 +1,5 @@
 import {
+  buildCurrentVideoTranscriptEvidenceState,
   buildTranscriptEvidenceStateFromCache,
   buildTranscriptIdentityKey,
   measureTranscriptPersistentBytes,
@@ -29,6 +30,41 @@ interface TemporaryTranscriptEntry {
   savedAt: number;
 }
 
+type CurrentVideoTemporaryTranscriptCurrentSourceStatus =
+  | 'temporary_cached'
+  | 'persistent_cached'
+  | 'source_too_large'
+  | 'capacity_exceeded';
+
+interface CurrentVideoTemporaryTranscriptCurrentSource {
+  owner: CurrentVideoTemporaryTranscriptOwner;
+  sourceIdentityKey: string;
+  sourceHash: string | null;
+  language: string | null;
+  sourceType: CurrentVideoTranscriptSourceRecord['sourceType'];
+  status: CurrentVideoTemporaryTranscriptCurrentSourceStatus;
+  savedAt: number;
+}
+
+export type CurrentVideoTemporaryTranscriptOwnerReadResolution =
+  | {
+      kind: 'temporary';
+      identity: CurrentVideoTranscriptIdentity;
+    }
+  | {
+      kind: 'persistent';
+      identity: CurrentVideoTranscriptIdentity;
+    }
+  | {
+      kind: 'rejected';
+      identity: CurrentVideoTranscriptIdentity;
+      state: CurrentVideoTranscriptEvidenceState;
+    }
+  | {
+      kind: 'mismatch';
+      state: CurrentVideoTranscriptEvidenceState;
+    };
+
 export type CurrentVideoTemporaryTranscriptPutStatus =
   | 'stored'
   | 'invalid_owner'
@@ -51,6 +87,7 @@ export interface CurrentVideoTemporaryTranscriptLimits {
 }
 
 const temporaryTranscriptSources = new Map<string, TemporaryTranscriptEntry>();
+const temporaryTranscriptCurrentSources = new Map<string, CurrentVideoTemporaryTranscriptCurrentSource>();
 const temporaryTranscriptTabGenerations = new Map<number, number>();
 const temporaryTranscriptTabOwners = new Map<number, CurrentVideoTemporaryTranscriptOwner>();
 
@@ -95,6 +132,7 @@ export function putTemporaryCurrentVideoTranscriptEvidence(
   );
   if (sourceBytes > normalizedLimits.maxBytes) {
     clearTemporaryCurrentVideoTranscriptSourceReplacement(owner);
+    setTemporaryCurrentVideoTranscriptCurrentSource(owner, source, 'source_too_large', now);
     return temporaryPutResult('source_too_large', normalizedLimits, {
       sourceIdentityKey,
       sourceBytes,
@@ -110,6 +148,7 @@ export function putTemporaryCurrentVideoTranscriptEvidence(
     || projectedBytes > normalizedLimits.maxBytes
   ) {
     clearTemporaryCurrentVideoTranscriptSourceReplacement(owner);
+    setTemporaryCurrentVideoTranscriptCurrentSource(owner, source, 'capacity_exceeded', now);
     return temporaryPutResult('capacity_exceeded', normalizedLimits, {
       sourceIdentityKey,
       sourceBytes,
@@ -119,6 +158,7 @@ export function putTemporaryCurrentVideoTranscriptEvidence(
   }
 
   clearTemporaryCurrentVideoTranscriptSourceReplacement(owner);
+  setTemporaryCurrentVideoTranscriptCurrentSource(owner, source, 'temporary_cached', now);
 
   temporaryTranscriptSources.set(entryKey(owner.ownerTabId, sourceIdentityKey), {
     owner: { ...owner },
@@ -132,6 +172,23 @@ export function putTemporaryCurrentVideoTranscriptEvidence(
     retainedBytes: projectedBytes,
     retainedSourceCount: projectedSourceCount,
   });
+}
+
+export function markTemporaryCurrentVideoTranscriptPersistentSource(
+  owner: CurrentVideoTemporaryTranscriptOwner,
+  sourceRecord: CurrentVideoTranscriptSourceRecord,
+  now = Date.now(),
+): void {
+  if (!validOwner(owner) || !ownerMatchesIdentity(owner, sourceRecord)) return;
+  const sourceIdentityKey = sourceRecord.sourceIdentityKey
+    ?? sourceRecord.identityKey
+    ?? buildTranscriptIdentityKey(sourceRecord);
+  clearTemporaryCurrentVideoTranscriptSourceReplacement(owner);
+  setTemporaryCurrentVideoTranscriptCurrentSource(owner, {
+    ...sourceRecord,
+    identityKey: sourceIdentityKey,
+    sourceIdentityKey,
+  }, 'persistent_cached', now);
 }
 
 export function getTemporaryCurrentVideoTranscriptEvidenceState(
@@ -172,6 +229,94 @@ export function getTemporaryCurrentVideoTranscriptSegments(
     .sort((a, b) => a.startSeconds - b.startSeconds || a.endSeconds - b.endSeconds);
 }
 
+export function getTemporaryCurrentVideoTranscriptOwnerReadResolution(
+  owner: CurrentVideoTemporaryTranscriptOwner,
+  identity: CurrentVideoTranscriptIdentity,
+  now = Date.now(),
+): CurrentVideoTemporaryTranscriptOwnerReadResolution | null {
+  if (!validOwner(owner) || !ownerMatchesIdentity(owner, identity)) return null;
+  const marker = temporaryTranscriptCurrentSources.get(currentSourceKey(owner));
+  if (!marker || !sameOwner(marker.owner, owner)) return null;
+  const currentIdentity = currentSourceIdentity(marker);
+  const requestedMatchesCurrentSource = requestedIdentityMatchesCurrentSource(marker, identity);
+  if (
+    (marker.status === 'source_too_large' || marker.status === 'capacity_exceeded')
+    && !requestedMatchesCurrentSource
+  ) {
+    return {
+      kind: 'mismatch',
+      state: buildTemporaryCurrentVideoTranscriptFailureState(
+        currentIdentity,
+        marker.sourceType,
+        marker.status,
+        now,
+      ),
+    };
+  }
+  if (!requestedMatchesCurrentSource) {
+    return {
+      kind: 'mismatch',
+      state: buildTemporaryCurrentVideoTranscriptCurrentSourceMismatchState(identity, now),
+    };
+  }
+
+  if (marker.status === 'temporary_cached') {
+    return { kind: 'temporary', identity: currentIdentity };
+  }
+  if (marker.status === 'persistent_cached') {
+    return { kind: 'persistent', identity: currentIdentity };
+  }
+  return {
+    kind: 'rejected',
+    identity: currentIdentity,
+    state: buildTemporaryCurrentVideoTranscriptFailureState(
+      currentIdentity,
+      marker.sourceType,
+      marker.status,
+      now,
+    ),
+  };
+}
+
+export function buildTemporaryCurrentVideoTranscriptUnavailableState(
+  identity: CurrentVideoTranscriptIdentity,
+  now = Date.now(),
+): CurrentVideoTranscriptEvidenceState {
+  return buildCurrentVideoTranscriptEvidenceState({
+    status: 'missing',
+    target: identity,
+    now,
+    sourceType: identity.sourceType ?? 'none',
+    sourceIdentityKey: identity.sourceIdentityKey ?? null,
+    sourceHash: identity.sourceHash ?? null,
+    reason: 'temporary_transcript_current_source_unavailable',
+    message: '当前页面刚检测到的字幕正文已不在临时内存中；不会自动回退到旧正文，请重新检测字幕。',
+    warnings: ['transcript_temporary_current_source_unavailable'],
+  });
+}
+
+export function buildTemporaryCurrentVideoTranscriptWriteFailureState(
+  evidence: CurrentVideoTranscriptEvidenceWrite,
+  result: CurrentVideoTemporaryTranscriptPutResult | null,
+): CurrentVideoTranscriptEvidenceState {
+  const status = result?.status ?? 'invalid_owner';
+  const copy = temporaryTranscriptFailureCopy(status);
+  return buildCurrentVideoTranscriptEvidenceState({
+    status: 'missing',
+    target: {
+      bvid: evidence.sourceRecord.bvid,
+      cid: evidence.sourceRecord.cid,
+      page: evidence.sourceRecord.page,
+      language: evidence.sourceRecord.language,
+    },
+    now: Date.now(),
+    sourceType: evidence.sourceRecord.sourceType,
+    reason: copy.reason,
+    message: copy.message,
+    warnings: [copy.warning],
+  });
+}
+
 export function isTemporaryCurrentVideoTranscriptOwnerValidForIdentity(
   owner: CurrentVideoTemporaryTranscriptOwner,
   identity: Pick<CurrentVideoTranscriptIdentity, 'bvid' | 'cid' | 'page'>,
@@ -200,6 +345,11 @@ export function retainTemporaryCurrentVideoTranscriptOwner(
       temporaryTranscriptSources.delete(key);
     }
   }
+  for (const [key, marker] of temporaryTranscriptCurrentSources) {
+    if (marker.owner.ownerTabId === retained.ownerTabId && !sameOwner(marker.owner, retained)) {
+      temporaryTranscriptCurrentSources.delete(key);
+    }
+  }
   return retained;
 }
 
@@ -209,13 +359,20 @@ export function clearTemporaryCurrentVideoTranscriptCacheForTab(ownerTabId: numb
       temporaryTranscriptSources.delete(key);
     }
   }
+  for (const [key, marker] of temporaryTranscriptCurrentSources) {
+    if (marker.owner.ownerTabId === ownerTabId) {
+      temporaryTranscriptCurrentSources.delete(key);
+    }
+  }
   invalidateTemporaryCurrentVideoTranscriptTab(ownerTabId);
 }
 
 export function clearTemporaryCurrentVideoTranscriptCacheForOwner(
   owner: CurrentVideoTemporaryTranscriptOwner,
 ): void {
+  if (!validOwner(owner)) return;
   clearTemporaryCurrentVideoTranscriptSourceReplacement(owner);
+  temporaryTranscriptCurrentSources.delete(currentSourceKey(owner));
 }
 
 export function clearTemporaryCurrentVideoTranscriptCache(): void {
@@ -223,8 +380,10 @@ export function clearTemporaryCurrentVideoTranscriptCache(): void {
     ...temporaryTranscriptTabGenerations.keys(),
     ...temporaryTranscriptTabOwners.keys(),
     ...Array.from(temporaryTranscriptSources.values()).map(entry => entry.owner.ownerTabId),
+    ...Array.from(temporaryTranscriptCurrentSources.values()).map(marker => marker.owner.ownerTabId),
   ]);
   temporaryTranscriptSources.clear();
+  temporaryTranscriptCurrentSources.clear();
   temporaryTranscriptTabOwners.clear();
   for (const ownerTabId of ownerTabIds) {
     invalidateTemporaryCurrentVideoTranscriptTab(ownerTabId);
@@ -266,8 +425,108 @@ function clearTemporaryCurrentVideoTranscriptSourceReplacement(
   }
 }
 
+function setTemporaryCurrentVideoTranscriptCurrentSource(
+  owner: CurrentVideoTemporaryTranscriptOwner,
+  source: CurrentVideoTranscriptSourceRecord,
+  status: CurrentVideoTemporaryTranscriptCurrentSourceStatus,
+  now: number,
+): void {
+  const sourceIdentityKey = source.sourceIdentityKey
+    ?? source.identityKey
+    ?? buildTranscriptIdentityKey(source);
+  temporaryTranscriptCurrentSources.set(currentSourceKey(owner), {
+    owner: { ...owner },
+    sourceIdentityKey,
+    sourceHash: source.sourceHash ?? null,
+    language: source.language,
+    sourceType: source.sourceType,
+    status,
+    savedAt: now,
+  });
+}
+
+function currentSourceIdentity(
+  marker: CurrentVideoTemporaryTranscriptCurrentSource,
+): CurrentVideoTranscriptIdentity {
+  return {
+    bvid: marker.owner.bvid,
+    cid: marker.owner.cid,
+    page: marker.owner.page,
+    language: marker.language,
+    sourceIdentityKey: marker.sourceIdentityKey,
+    sourceHash: marker.sourceHash,
+    sourceType: marker.sourceType,
+  };
+}
+
+function requestedIdentityMatchesCurrentSource(
+  marker: CurrentVideoTemporaryTranscriptCurrentSource,
+  identity: CurrentVideoTranscriptIdentity,
+): boolean {
+  if (identity.language && languageKey(identity.language) !== languageKey(marker.language)) {
+    return false;
+  }
+  if (identity.sourceIdentityKey && identity.sourceIdentityKey !== marker.sourceIdentityKey) {
+    return false;
+  }
+  if (identity.sourceHash && identity.sourceHash !== marker.sourceHash) {
+    return false;
+  }
+  return true;
+}
+
+function buildTemporaryCurrentVideoTranscriptCurrentSourceMismatchState(
+  identity: CurrentVideoTranscriptIdentity,
+  now: number,
+): CurrentVideoTranscriptEvidenceState {
+  return buildCurrentVideoTranscriptEvidenceState({
+    status: 'stale',
+    target: identity,
+    now,
+    sourceType: identity.sourceType ?? 'none',
+    sourceIdentityKey: identity.sourceIdentityKey ?? null,
+    sourceHash: identity.sourceHash ?? null,
+    reason: 'requested_transcript_identity_not_current',
+    message: '此前选择的字幕正文已不是当前页面刚检测到的正文；不会自动回退到旧正文，请重新检测或重新选择主要文本来源。',
+    warnings: ['transcript_current_source_mismatch'],
+  });
+}
+
+function buildTemporaryCurrentVideoTranscriptFailureState(
+  identity: CurrentVideoTranscriptIdentity,
+  sourceType: CurrentVideoTranscriptSourceRecord['sourceType'],
+  status: Extract<
+    CurrentVideoTemporaryTranscriptCurrentSourceStatus,
+    'source_too_large' | 'capacity_exceeded'
+  >,
+  now: number,
+): CurrentVideoTranscriptEvidenceState {
+  const copy = temporaryTranscriptFailureCopy(status);
+  return buildCurrentVideoTranscriptEvidenceState({
+    status: 'missing',
+    target: identity,
+    now,
+    sourceType,
+    sourceIdentityKey: identity.sourceIdentityKey ?? null,
+    sourceHash: identity.sourceHash ?? null,
+    reason: copy.reason,
+    message: copy.message,
+    warnings: [copy.warning],
+  });
+}
+
 function entryKey(ownerTabId: number, sourceIdentityKey: string): string {
   return `${ownerTabId}:${sourceIdentityKey}`;
+}
+
+function currentSourceKey(owner: CurrentVideoTemporaryTranscriptOwner): string {
+  return [
+    owner.ownerTabId,
+    owner.navigationGeneration,
+    owner.bvid,
+    owner.cid,
+    owner.page,
+  ].join(':');
 }
 
 function temporaryPutResult(
@@ -287,6 +546,33 @@ function temporaryPutResult(
     maxBytes: limits.maxBytes,
     maxSourceCount: limits.maxSourceCount,
   };
+}
+
+function temporaryTranscriptFailureCopy(
+  status: CurrentVideoTemporaryTranscriptPutResult['status'],
+): { reason: string; message: string; warning: string } {
+  switch (status) {
+    case 'source_too_large':
+      return {
+        reason: 'temporary_transcript_source_too_large',
+        message: '这份字幕正文过大，本次未保留。你仍可使用播放器字幕；如内容发生变化，可稍后重新检测。',
+        warning: 'transcript_temporary_source_too_large',
+      };
+    case 'capacity_exceeded':
+      return {
+        reason: 'temporary_transcript_capacity_exceeded',
+        message: '当前临时字幕缓存已达到上限，未替换其他仍有效的视频页面；请关闭不需要的页面后重新检测。',
+        warning: 'transcript_temporary_capacity_exceeded',
+      };
+    case 'invalid_owner':
+    case 'stored':
+    default:
+      return {
+        reason: 'temporary_transcript_owner_missing',
+        message: '本次临时内容已失效，请重新检测字幕。',
+        warning: 'transcript_temporary_owner_missing',
+      };
+  }
 }
 
 function normalizeTemporaryTranscriptLimits(
