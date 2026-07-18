@@ -49,6 +49,8 @@ import type {
   CurrentVideoTranscriptSourceRecord,
 } from '../src/shared/types/current-video-transcript.ts';
 
+type CurrentVideoTranscriptTestDb = typeof import('../src/background/storage/db.ts').db;
+
 test('normalizes Bilibili subtitle rows into stable transcript segments', () => {
   const evidence = normalizeBilibiliTranscriptEvidence(
     {
@@ -992,6 +994,115 @@ test('repo fails closed when an explicit temporary owner was invalidated before 
       transcriptIdentityFromEvidence(persistentA),
       validOwnerA,
     )).map(segment => segment.text), ['persistent A before tab switch']);
+  });
+});
+
+test('repo fails closed when owner changes while evidence state query is in flight', async () => {
+  await withFreshTranscriptRepo(async (repo) => {
+    const persistentA = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'persistent A during state race' }] },
+      baseNormalizeOptions({ bvid: 'BV1StateRaceA', cid: 6501, fetchedAt: 10_900 }),
+    );
+    const videoB = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'video B during state race' }] },
+      baseNormalizeOptions({ bvid: 'BV1StateRaceB', cid: 6502, fetchedAt: 10_901 }),
+    );
+    const owner = temporaryOwner(710, persistentA);
+
+    await repo.upsertCurrentVideoTranscriptEvidence(persistentA);
+
+    const { db } = await import('../src/background/storage/db.ts');
+    const { result: state, switched } = await withOwnerSwitchAfterSourceBvidRead(
+      db,
+      persistentA.sourceRecord.bvid,
+      () => moveTemporaryOwnerToEvidence(owner, videoB),
+      () => repo.getCurrentVideoTranscriptEvidenceState({
+        bvid: persistentA.sourceRecord.bvid,
+        cid: persistentA.sourceRecord.cid,
+        page: persistentA.sourceRecord.page,
+      }, 10_910, owner),
+    );
+
+    assert.equal(switched, true);
+    assert.equal(state.active, false);
+    assert.equal(state.reason, 'temporary_transcript_current_source_unavailable');
+
+    const sourceAfterRace = await db.currentVideoTranscriptSources
+      .where('identityKey')
+      .equals(persistentA.sourceRecord.identityKey)
+      .first();
+    assert.equal(sourceAfterRace?.lastAccessedAt, persistentA.sourceRecord.lastAccessedAt);
+  });
+});
+
+test('repo returns no segments when owner changes while segment query is in flight', async () => {
+  await withFreshTranscriptRepo(async (repo) => {
+    const persistentA = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'persistent A during segment race' }] },
+      baseNormalizeOptions({ bvid: 'BV1SegmentRaceA', cid: 6503, fetchedAt: 10_920 }),
+    );
+    const videoB = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'video B during segment race' }] },
+      baseNormalizeOptions({ bvid: 'BV1SegmentRaceB', cid: 6504, fetchedAt: 10_921 }),
+    );
+    const owner = temporaryOwner(711, persistentA);
+
+    await repo.upsertCurrentVideoTranscriptEvidence(persistentA);
+
+    const { db } = await import('../src/background/storage/db.ts');
+    const { result: segments, switched } = await withOwnerSwitchAfterSegmentIdentityRead(
+      db,
+      {
+        bvid: persistentA.sourceRecord.bvid,
+        cid: persistentA.sourceRecord.cid,
+        page: persistentA.sourceRecord.page,
+      },
+      () => moveTemporaryOwnerToEvidence(owner, videoB),
+      () => repo.getCurrentVideoTranscriptSegments(transcriptIdentityFromEvidence(persistentA), owner),
+    );
+
+    assert.equal(switched, true);
+    assert.deepEqual(segments, []);
+  });
+});
+
+test('repo fails closed when owner changes while persistent touch is in flight', async () => {
+  await withFreshTranscriptRepo(async (repo) => {
+    const persistentA = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'persistent A during touch race' }] },
+      baseNormalizeOptions({ bvid: 'BV1TouchRaceA', cid: 6505, fetchedAt: 10_930 }),
+    );
+    const videoB = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'video B during touch race' }] },
+      baseNormalizeOptions({ bvid: 'BV1TouchRaceB', cid: 6506, fetchedAt: 10_931 }),
+    );
+    const owner = temporaryOwner(712, persistentA);
+    const sourceIdentityKey = persistentA.sourceRecord.sourceIdentityKey;
+    assert.ok(sourceIdentityKey);
+
+    await repo.upsertCurrentVideoTranscriptEvidence(persistentA);
+
+    const { db } = await import('../src/background/storage/db.ts');
+    const { result: state, switched } = await withOwnerSwitchBeforeSourceTouch(
+      db,
+      sourceIdentityKey,
+      () => moveTemporaryOwnerToEvidence(owner, videoB),
+      () => repo.getCurrentVideoTranscriptEvidenceState({
+        bvid: persistentA.sourceRecord.bvid,
+        cid: persistentA.sourceRecord.cid,
+        page: persistentA.sourceRecord.page,
+      }, 10_940, owner),
+    );
+
+    assert.equal(switched, true);
+    assert.equal(state.active, false);
+    assert.equal(state.reason, 'temporary_transcript_current_source_unavailable');
+
+    const sourceAfterRace = await db.currentVideoTranscriptSources
+      .where('identityKey')
+      .equals(persistentA.sourceRecord.identityKey)
+      .first();
+    assert.equal(sourceAfterRace?.lastAccessedAt, persistentA.sourceRecord.lastAccessedAt);
   });
 });
 
@@ -2017,6 +2128,19 @@ function temporaryOwner(ownerTabId: number, evidence: CurrentVideoTranscriptEvid
   return owner;
 }
 
+function moveTemporaryOwnerToEvidence(
+  owner: ReturnType<typeof temporaryOwner>,
+  evidence: CurrentVideoTranscriptEvidenceWrite,
+): void {
+  const moved = retainTemporaryCurrentVideoTranscriptOwner({
+    ownerTabId: owner.ownerTabId,
+    bvid: evidence.sourceRecord.bvid,
+    cid: evidence.sourceRecord.cid,
+    page: evidence.sourceRecord.page,
+  });
+  assert.ok(moved);
+}
+
 function transcriptIdentityFromEvidence(evidence: CurrentVideoTranscriptEvidenceWrite) {
   return {
     bvid: evidence.sourceRecord.bvid,
@@ -2043,6 +2167,144 @@ function temporaryStoredBytes(evidence: CurrentVideoTranscriptEvidenceWrite, now
     sourceIdentityKey,
     stale: false,
   })));
+}
+
+async function withOwnerSwitchAfterSourceBvidRead<T>(
+  db: CurrentVideoTranscriptTestDb,
+  bvid: string,
+  switchOwner: () => void,
+  callback: () => Promise<T>,
+): Promise<{ result: T; switched: boolean }> {
+  const table = db.currentVideoTranscriptSources as any;
+  const originalWhere = table.where;
+  let switched = false;
+
+  table.where = (index: unknown) => {
+    const query = originalWhere.call(table, index);
+    if (index !== 'bvid') return query;
+
+    const originalEquals = query.equals.bind(query);
+    query.equals = (key: unknown) => {
+      const collection = originalEquals(key);
+      if (key !== bvid) return collection;
+
+      const originalToArray = collection.toArray.bind(collection);
+      collection.toArray = async () => {
+        const rows = await originalToArray();
+        if (!switched) {
+          switched = true;
+          switchOwner();
+        }
+        return rows;
+      };
+      return collection;
+    };
+    return query;
+  };
+
+  try {
+    return {
+      result: await callback(),
+      switched,
+    };
+  } finally {
+    table.where = originalWhere;
+  }
+}
+
+async function withOwnerSwitchAfterSegmentIdentityRead<T>(
+  db: CurrentVideoTranscriptTestDb,
+  identity: { bvid: string; cid: number; page: number },
+  switchOwner: () => void,
+  callback: () => Promise<T>,
+): Promise<{ result: T; switched: boolean }> {
+  const table = db.currentVideoTranscriptSegments as any;
+  const originalWhere = table.where;
+  let switched = false;
+
+  table.where = (index: unknown) => {
+    const query = originalWhere.call(table, index);
+    if (index !== '[bvid+cid+page]') return query;
+
+    const originalEquals = query.equals.bind(query);
+    query.equals = (key: unknown) => {
+      const collection = originalEquals(key);
+      if (!matchesTranscriptIdentityTuple(key, identity)) return collection;
+
+      const originalToArray = collection.toArray.bind(collection);
+      collection.toArray = async () => {
+        const rows = await originalToArray();
+        if (!switched) {
+          switched = true;
+          switchOwner();
+        }
+        return rows;
+      };
+      return collection;
+    };
+    return query;
+  };
+
+  try {
+    return {
+      result: await callback(),
+      switched,
+    };
+  } finally {
+    table.where = originalWhere;
+  }
+}
+
+async function withOwnerSwitchBeforeSourceTouch<T>(
+  db: CurrentVideoTranscriptTestDb,
+  sourceIdentityKey: string,
+  switchOwner: () => void,
+  callback: () => Promise<T>,
+): Promise<{ result: T; switched: boolean }> {
+  const table = db.currentVideoTranscriptSources as any;
+  const originalWhere = table.where;
+  let switched = false;
+
+  table.where = (index: unknown) => {
+    const query = originalWhere.call(table, index);
+    if (index !== 'identityKey') return query;
+
+    const originalEquals = query.equals.bind(query);
+    query.equals = (key: unknown) => {
+      const collection = originalEquals(key);
+      if (key !== sourceIdentityKey) return collection;
+
+      const originalModify = collection.modify.bind(collection);
+      collection.modify = async (...args: unknown[]) => {
+        if (!switched) {
+          switched = true;
+          switchOwner();
+        }
+        return await originalModify(...args);
+      };
+      return collection;
+    };
+    return query;
+  };
+
+  try {
+    return {
+      result: await callback(),
+      switched,
+    };
+  } finally {
+    table.where = originalWhere;
+  }
+}
+
+function matchesTranscriptIdentityTuple(
+  key: unknown,
+  identity: { bvid: string; cid: number; page: number },
+): boolean {
+  return Array.isArray(key)
+    && key[0] === identity.bvid
+    && key[1] === identity.cid
+    && key[2] === identity.page;
 }
 
 function memoryStore() {

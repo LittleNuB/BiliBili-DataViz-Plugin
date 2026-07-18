@@ -135,10 +135,8 @@ export async function getCurrentVideoTranscriptEvidenceState(
   now = Date.now(),
   temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
 ): Promise<CurrentVideoTranscriptEvidenceState> {
-  if (
-    temporaryOwner
-    && !isTemporaryCurrentVideoTranscriptOwnerValidForIdentity(temporaryOwner, identity)
-  ) {
+  const ownerStillValid = () => !temporaryOwnerInvalidForIdentity(temporaryOwner, identity);
+  if (!ownerStillValid()) {
     return buildTemporaryCurrentVideoTranscriptUnavailableState(identity, now);
   }
 
@@ -146,6 +144,10 @@ export async function getCurrentVideoTranscriptEvidenceState(
     db.currentVideoTranscriptSources.where('bvid').equals(identity.bvid).toArray(),
     db.currentVideoTranscriptSegments.where('bvid').equals(identity.bvid).toArray(),
   ]);
+
+  if (!ownerStillValid()) {
+    return buildTemporaryCurrentVideoTranscriptUnavailableState(identity, now);
+  }
 
   if (temporaryOwner) {
     const ownerRead = getTemporaryCurrentVideoTranscriptOwnerReadResolution(
@@ -174,7 +176,10 @@ export async function getCurrentVideoTranscriptEvidenceState(
         now,
       );
       if (persistentCurrentState.sourceIdentityKey && persistentCurrentState.active) {
-        await touchTranscriptSource(persistentCurrentState.sourceIdentityKey, now);
+        await touchTranscriptSource(persistentCurrentState.sourceIdentityKey, now, ownerStillValid);
+        if (!ownerStillValid()) {
+          return buildTemporaryCurrentVideoTranscriptUnavailableState(identity, now);
+        }
         return persistentCurrentState;
       }
 
@@ -187,7 +192,10 @@ export async function getCurrentVideoTranscriptEvidenceState(
 
   const state = buildTranscriptEvidenceStateFromCache(identity, sources, segments, now);
   if (state.sourceIdentityKey && state.active) {
-    await touchTranscriptSource(state.sourceIdentityKey, now);
+    await touchTranscriptSource(state.sourceIdentityKey, now, ownerStillValid);
+    if (!ownerStillValid()) {
+      return buildTemporaryCurrentVideoTranscriptUnavailableState(identity, now);
+    }
     return state;
   }
   if (!temporaryOwner) return state;
@@ -199,10 +207,7 @@ export async function getCurrentVideoTranscriptSegments(
   identity: CurrentVideoTranscriptIdentity & { sourceHash?: string | null },
   temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
 ): Promise<CurrentVideoTranscriptSegment[]> {
-  if (
-    temporaryOwner
-    && !isTemporaryCurrentVideoTranscriptOwnerValidForIdentity(temporaryOwner, identity)
-  ) {
+  if (temporaryOwnerInvalidForIdentity(temporaryOwner, identity)) {
     return [];
   }
 
@@ -210,6 +215,10 @@ export async function getCurrentVideoTranscriptSegments(
     .where('[bvid+cid+page]')
     .equals([identity.bvid, identity.cid, identity.page])
     .toArray();
+
+  if (temporaryOwnerInvalidForIdentity(temporaryOwner, identity)) {
+    return [];
+  }
 
   if (temporaryOwner) {
     const ownerRead = getTemporaryCurrentVideoTranscriptOwnerReadResolution(temporaryOwner, identity);
@@ -261,13 +270,29 @@ function persistentTranscriptSegmentsForIdentity(
     .sort((a, b) => a.startSeconds - b.startSeconds || a.endSeconds - b.endSeconds);
 }
 
-async function touchTranscriptSource(sourceIdentityKey: string, now: number): Promise<void> {
+async function touchTranscriptSource(
+  sourceIdentityKey: string,
+  now: number,
+  shouldTouch = () => true,
+): Promise<void> {
+  if (!shouldTouch()) return;
   await db.currentVideoTranscriptSources
     .where('identityKey')
     .equals(sourceIdentityKey)
     .modify((source: CurrentVideoTranscriptSourceRecord) => {
+      if (!shouldTouch()) return;
       source.lastAccessedAt = now;
     });
+}
+
+function temporaryOwnerInvalidForIdentity(
+  temporaryOwner: CurrentVideoTemporaryTranscriptOwner | undefined,
+  identity: Pick<CurrentVideoTranscriptIdentity, 'bvid' | 'cid' | 'page'>,
+): boolean {
+  return Boolean(
+    temporaryOwner
+    && !isTemporaryCurrentVideoTranscriptOwnerValidForIdentity(temporaryOwner, identity),
+  );
 }
 
 function legacySegmentSourceIdentity(segment: CurrentVideoTranscriptSegment): string {
