@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type {
   DynamicBillColumn,
   DynamicBillExplanationResult,
@@ -82,6 +82,10 @@ export function DynamicBillPage() {
   const [notice, setNotice] = useState("");
   const [feedbackState, setFeedbackState] =
     useState<DynamicBillFeedbackStateView>(EMPTY_FEEDBACK_STATE);
+  const undoingActionKeysRef = useRef<Set<string>>(new Set());
+  const [undoingActionKeys, setUndoingActionKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   const activeStatus =
     STATUS_FILTERS.find((item) => item.key === statusFilter) ?? STATUS_FILTERS[0];
@@ -257,6 +261,13 @@ export function DynamicBillPage() {
   }
 
   async function handleUndoLessReminder(action: DynamicBillPendingFeedbackActionView) {
+    if (undoingActionKeysRef.current.has(action.actionKey)) return;
+    undoingActionKeysRef.current.add(action.actionKey);
+    setUndoingActionKeys((current) => {
+      const next = new Set(current);
+      next.add(action.actionKey);
+      return next;
+    });
     setNotice("");
     try {
       const result = await requestSW<DynamicBillUndoFeedbackResult>(
@@ -264,7 +275,7 @@ export function DynamicBillPage() {
         { undoToken: action.undoToken },
       );
       await Promise.all([refreshBillItems(), refreshFeedbackState()]);
-      if (result.status === "undone") {
+      if (result.status === "undone" || result.status === "already_undone") {
         setNotice(`已撤销对「${action.creatorName}」的少提醒，本次不会计入有效次数。`);
       } else if (result.status === "expired") {
         setNotice("撤销窗口已经结束，这次少提醒已按本地规则生效。");
@@ -273,6 +284,13 @@ export function DynamicBillPage() {
       }
     } catch (error) {
       setNotice(dynamicBillFailureCopy("markProcessed", error));
+    } finally {
+      undoingActionKeysRef.current.delete(action.actionKey);
+      setUndoingActionKeys((current) => {
+        const next = new Set(current);
+        next.delete(action.actionKey);
+        return next;
+      });
     }
   }
 
@@ -495,6 +513,7 @@ export function DynamicBillPage() {
       <FeedbackStateDock
         resolvingCreatorMid={reviewPromptResolvingMid}
         state={feedbackState}
+        undoingActionKeys={undoingActionKeys}
         onUndo={handleUndoLessReminder}
         onOpenPrompt={handleReviewPromptOpen}
         onDismissPrompt={handleReviewPromptDismiss}
@@ -741,12 +760,14 @@ function FeedbackStateDock({
   onUndo,
   resolvingCreatorMid,
   state,
+  undoingActionKeys,
 }: {
   onDismissPrompt: (prompt: DynamicBillCreatorReviewPromptView) => void;
   onOpenPrompt: (prompt: DynamicBillCreatorReviewPromptView) => void;
   onUndo: (action: DynamicBillPendingFeedbackActionView) => void;
   resolvingCreatorMid: number | null;
   state: DynamicBillFeedbackStateView;
+  undoingActionKeys: Set<string>;
 }) {
   if (state.pendingActions.length === 0 && state.reviewPrompts.length === 0) {
     return null;
@@ -755,16 +776,12 @@ function FeedbackStateDock({
   return (
     <div className="dynamic-bill-feedback-dock" aria-live="polite">
       {state.pendingActions.map((action) => (
-        <section className="dynamic-bill-creator-review" key={action.actionKey}>
-          <strong>已少提醒「{action.creatorName}」</strong>
-          <span>
-            撤销窗口为 8 秒；窗口结束后才计入有效次数，并保持当前 30 天暂停。
-          </span>
-          <div className="dynamic-bill-feedback-actions">
-            <button type="button" onClick={() => onUndo(action)}>撤销</button>
-            <button type="button" disabled>等待生效</button>
-          </div>
-        </section>
+        <PendingFeedbackActionCard
+          action={action}
+          isUndoing={undoingActionKeys.has(action.actionKey)}
+          key={action.actionKey}
+          onUndo={onUndo}
+        />
       ))}
       {state.reviewPrompts.map((prompt) => {
         const isResolving = resolvingCreatorMid === prompt.creatorMid;
@@ -798,6 +815,37 @@ function FeedbackStateDock({
         );
       })}
     </div>
+  );
+}
+
+function PendingFeedbackActionCard({
+  action,
+  isUndoing,
+  onUndo,
+}: {
+  action: DynamicBillPendingFeedbackActionView;
+  isUndoing: boolean;
+  onUndo: (action: DynamicBillPendingFeedbackActionView) => void;
+}) {
+  return (
+    <section className="dynamic-bill-creator-review">
+      <strong>已少提醒「{action.creatorName}」</strong>
+      <span>
+        撤销窗口为 8 秒；窗口结束后才计入有效次数，并保持当前 30 天暂停。
+      </span>
+      <div className="dynamic-bill-feedback-actions">
+        <button
+          type="button"
+          aria-busy={isUndoing}
+          data-testid="dynamic-bill-feedback-undo"
+          disabled={isUndoing}
+          onClick={() => onUndo(action)}
+        >
+          {isUndoing ? "撤销中..." : "撤销"}
+        </button>
+        <button type="button" disabled>等待生效</button>
+      </div>
+    </section>
   );
 }
 

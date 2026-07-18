@@ -711,8 +711,12 @@ export async function handleRequest<T>(
       return { success: true, data: await getDynamicBillActiveCreatorPauseViews() as T };
     case 'RESTORE_DYNAMIC_BILL_CREATOR_REMINDER': {
       const creatorMid = normalizePositiveInteger(request.params?.creatorMid, 0);
+      const pauseVersion = requireStringParam(request.params?.pauseVersion, 'pauseVersion');
       if (creatorMid <= 0) throw new Error('INVALID_CREATOR_MID');
-      return { success: true, data: await restoreDynamicBillCreatorReminder(creatorMid) as T };
+      return {
+        success: true,
+        data: await restoreDynamicBillCreatorReminder(creatorMid, pauseVersion) as T,
+      };
     }
     case 'OPEN_DYNAMIC_BILL_VIDEO': {
       const billKey = requireStringParam(request.params?.billKey, 'billKey');

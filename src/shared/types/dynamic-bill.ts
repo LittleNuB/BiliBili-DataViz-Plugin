@@ -166,6 +166,7 @@ export interface DynamicBillPendingFeedbackActionView {
 }
 
 export interface DynamicBillCreatorPauseView {
+  version: string;
   creatorMid: number;
   creatorName: string;
   startedAt: number;
@@ -200,6 +201,7 @@ export interface DynamicBillLessReminderResult {
 
 export type DynamicBillUndoFeedbackResultStatus =
   | 'undone'
+  | 'already_undone'
   | 'expired'
   | 'invalid'
   | 'conflict';
@@ -207,6 +209,12 @@ export type DynamicBillUndoFeedbackResultStatus =
 export interface DynamicBillUndoFeedbackResult {
   status: DynamicBillUndoFeedbackResultStatus;
   item?: DynamicBillItem;
+}
+
+export interface DynamicBillRestoreCreatorReminderResult {
+  status: 'restored' | 'not_found' | 'stale';
+  pause?: DynamicBillCreatorPauseView;
+  currentPause?: DynamicBillCreatorPauseView;
 }
 
 export type DynamicBillReviewPromptResolveAction = 'open_space' | 'dismiss';

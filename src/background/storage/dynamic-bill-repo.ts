@@ -16,6 +16,7 @@ import type {
   DynamicBillPendingFeedbackActionView,
   DynamicBillReviewPromptResolveAction,
   DynamicBillReviewPromptResolveResult,
+  DynamicBillRestoreCreatorReminderResult,
   DynamicBillRotationRecord,
   DynamicBillStatus,
   DynamicBillStatusFilter,
@@ -315,6 +316,12 @@ export async function undoDynamicBillCreatorLessReminder(
         .equals(undoToken)
         .first();
       if (!action) return { status: 'invalid' };
+      if (action.state === 'undone') {
+        return {
+          status: 'already_undone',
+          item: await db.dynamicBillItems.where('billKey').equals(action.billKey).first(),
+        };
+      }
       if (action.state !== 'pending_undo') return { status: 'expired' };
       if (action.undoDeadlineAt <= now) return { status: 'expired' };
 
@@ -354,8 +361,9 @@ export async function undoDynamicBillCreatorLessReminder(
 
 export async function restoreDynamicBillCreatorReminder(
   creatorMid: number,
+  expectedPauseVersion: string,
   now = Date.now(),
-): Promise<DynamicBillCreatorPauseView | null> {
+): Promise<DynamicBillRestoreCreatorReminderResult> {
   await ensureDynamicBill013Migration();
   await finalizeExpiredDynamicBillFeedbackActions(now);
   return db.transaction('rw', db.dynamicBillCreatorPauses, async () => {
@@ -363,13 +371,29 @@ export async function restoreDynamicBillCreatorReminder(
       .where('creatorMid')
       .equals(creatorMid)
       .first();
-    if (!pause) return null;
+    if (!pause) return { status: 'not_found' };
 
-    const view = pause.expiresAt > now ? toCreatorPauseView(pause, now) : null;
-    if (pause.id !== undefined) {
-      await deleteCreatorPauseIfUnchanged(pause);
+    if (pause.expiresAt <= now) {
+      if (pause.id !== undefined) await db.dynamicBillCreatorPauses.delete(pause.id);
+      return { status: 'not_found' };
     }
-    return view;
+
+    const view = toCreatorPauseView(pause, now);
+    if (view.version !== expectedPauseVersion) {
+      return {
+        status: 'stale',
+        currentPause: view,
+      };
+    }
+    if (pause.id !== undefined) {
+      await db.dynamicBillCreatorPauses.delete(pause.id);
+    } else {
+      await db.dynamicBillCreatorPauses.where('creatorMid').equals(creatorMid).delete();
+    }
+    return {
+      status: 'restored',
+      pause: view,
+    };
   });
 }
 
@@ -983,29 +1007,6 @@ function pauseMatchesAction(
     && pause.source === 'user';
 }
 
-async function deleteCreatorPauseIfUnchanged(
-  pause: DynamicBillCreatorPauseRecord,
-): Promise<boolean> {
-  if (pause.id === undefined) return false;
-  const current = await db.dynamicBillCreatorPauses.get(pause.id);
-  if (!current || !sameCreatorPauseIdentity(current, pause)) return false;
-  await db.dynamicBillCreatorPauses.delete(pause.id);
-  return true;
-}
-
-function sameCreatorPauseIdentity(
-  current: DynamicBillCreatorPauseRecord,
-  expected: DynamicBillCreatorPauseRecord,
-): boolean {
-  return current.id === expected.id
-    && current.creatorMid === expected.creatorMid
-    && current.startedAt === expected.startedAt
-    && current.expiresAt === expected.expiresAt
-    && current.source === expected.source
-    && current.billKey === expected.billKey
-    && current.actionKey === expected.actionKey;
-}
-
 function itemMatchesPendingAction(
   item: DynamicBillItem,
   action: DynamicBillFeedbackActionRecord,
@@ -1033,6 +1034,7 @@ function toCreatorPauseView(
   now: number,
 ): DynamicBillCreatorPauseView {
   return {
+    version: creatorPauseVersion(pause),
     creatorMid: pause.creatorMid,
     creatorName: pause.creatorName,
     startedAt: pause.startedAt,
@@ -1040,6 +1042,18 @@ function toCreatorPauseView(
     source: pause.source,
     remainingDays: Math.max(0, Math.ceil((pause.expiresAt - now) / DAY_MS)),
   };
+}
+
+function creatorPauseVersion(pause: DynamicBillCreatorPauseRecord): string {
+  return [
+    pause.creatorMid,
+    pause.startedAt,
+    pause.expiresAt,
+    pause.source,
+    pause.billKey ?? '',
+    pause.actionKey ?? '',
+    pause.updatedAt,
+  ].join(':');
 }
 
 function toCreatorReviewPromptView(

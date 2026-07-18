@@ -21,7 +21,10 @@ import type {
   LocalDataPrivacySummary,
   SmartFavoriteIndexRebuildResult,
 } from '../../../src/shared/types/local-data-privacy';
-import type { DynamicBillCreatorPauseView } from '../../../src/shared/types/dynamic-bill';
+import type {
+  DynamicBillCreatorPauseView,
+  DynamicBillRestoreCreatorReminderResult,
+} from '../../../src/shared/types/dynamic-bill';
 import {
   formatSettingsError,
   normalizeSettingsUserConfig,
@@ -237,14 +240,27 @@ export function SettingsPage() {
     }
   }
 
-  async function restoreDynamicBillCreatorReminder(creatorMid: number, creatorName: string) {
+  async function restoreDynamicBillCreatorReminder(pause: DynamicBillCreatorPauseView) {
     setBusy('pause-restore');
     setNotice('');
     setError('');
+    setLocalDataError('');
     try {
-      await requestSW('RESTORE_DYNAMIC_BILL_CREATOR_REMINDER', { creatorMid });
+      const result = await requestSW<DynamicBillRestoreCreatorReminderResult>(
+        'RESTORE_DYNAMIC_BILL_CREATOR_REMINDER',
+        {
+          creatorMid: pause.creatorMid,
+          pauseVersion: pause.version,
+        },
+      );
       await refreshLocalData();
-      setNotice(`已恢复「${creatorName}」的动态账单提醒；这不会修改 B 站关注关系。`);
+      if (result.status === 'restored') {
+        setNotice(`已恢复「${pause.creatorName || `UP ${pause.creatorMid}`}」的动态账单提醒；这不会修改 B 站关注关系。`);
+      } else if (result.status === 'stale') {
+        setNotice('这条暂停提醒已经更新，已刷新列表；请按最新到期时间再恢复。');
+      } else {
+        setNotice('这条暂停提醒已经不存在，已刷新列表。');
+      }
     } catch (err) {
       setLocalDataError(formatLocalDataError(err));
     } finally {
@@ -558,7 +574,7 @@ function DynamicBillPauseList({
   pauses,
 }: {
   busy: boolean;
-  onRestore: (creatorMid: number, creatorName: string) => void;
+  onRestore: (pause: DynamicBillCreatorPauseView) => void;
   pauses: DynamicBillCreatorPauseView[];
 }) {
   return (
@@ -587,7 +603,7 @@ function DynamicBillPauseList({
                 type="button"
                 className="settings-action"
                 disabled={busy}
-                onClick={() => onRestore(pause.creatorMid, pause.creatorName || `UP ${pause.creatorMid}`)}
+                onClick={() => onRestore(pause)}
               >
                 恢复提醒
               </button>

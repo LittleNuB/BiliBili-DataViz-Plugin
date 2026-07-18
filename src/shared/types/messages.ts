@@ -19,6 +19,7 @@ import type {
   DynamicBillCreatorPauseView,
   DynamicBillLessReminderResult,
   DynamicBillOverview,
+  DynamicBillRestoreCreatorReminderResult,
   DynamicBillReviewPromptResolveResult,
   DynamicSyncResult,
   DynamicBillUndoFeedbackResult,
@@ -227,6 +228,7 @@ export type DynamicBillFeedbackStateResponse = BiliVizResponse<DynamicBillFeedba
 export type DynamicBillLessReminderResponse = BiliVizResponse<DynamicBillLessReminderResult | null>;
 export type DynamicBillUndoFeedbackResponse = BiliVizResponse<DynamicBillUndoFeedbackResult>;
 export type DynamicBillCreatorPauseListResponse = BiliVizResponse<DynamicBillCreatorPauseView[]>;
+export type DynamicBillRestoreCreatorReminderResponse = BiliVizResponse<DynamicBillRestoreCreatorReminderResult>;
 export type DynamicBillReviewPromptResolveResponse = BiliVizResponse<DynamicBillReviewPromptResolveResult>;
 export type HistoryTailProbeResponse = BiliVizResponse<HistoryTailProbeReport>;
 export type AiConnectionTestResponse = BiliVizResponse<AiConnectionTestResult>;

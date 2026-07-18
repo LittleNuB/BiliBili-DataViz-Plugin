@@ -132,6 +132,51 @@ test('undo within the durable window restores item fields and the previous pause
   assert.equal(await db.dynamicBillCreatorReviewPrompts.count(), 0);
 });
 
+test('repeated undo on the same token is idempotent before the deadline', { concurrency: false }, async () => {
+  await seedItem({ creatorMid: 113, status: 'opened', openedAt: NOW - 2_000 });
+  const applied = await dynamicBillRepo.applyDynamicBillCreatorLessReminder('bill-113', {
+    idempotencyKey: 'undo-idempotent',
+    now: NOW,
+  });
+  assert.ok(applied?.action);
+
+  const firstUndo = await dynamicBillRepo.undoDynamicBillCreatorLessReminder(
+    applied.action.undoToken,
+    NOW + 1_000,
+  );
+  const secondUndo = await dynamicBillRepo.undoDynamicBillCreatorLessReminder(
+    applied.action.undoToken,
+    NOW + 1_500,
+  );
+  const item = await db.dynamicBillItems.where('billKey').equals('bill-113').first();
+
+  assert.equal(firstUndo.status, 'undone');
+  assert.equal(secondUndo.status, 'already_undone');
+  assert.equal(item?.status, 'opened');
+  assert.equal(await db.dynamicBillCreatorPauses.where('creatorMid').equals(113).count(), 0);
+  assert.equal(await db.dynamicBillCreatorFeedbackCounts.count(), 0);
+});
+
+test('concurrent undo calls on one token do not report expired or finalize', { concurrency: false }, async () => {
+  await seedItem({ creatorMid: 114 });
+  const applied = await dynamicBillRepo.applyDynamicBillCreatorLessReminder('bill-114', {
+    idempotencyKey: 'undo-concurrent',
+    now: NOW,
+  });
+  assert.ok(applied?.action);
+
+  const results = await Promise.all([
+    dynamicBillRepo.undoDynamicBillCreatorLessReminder(applied.action.undoToken, NOW + 1_000),
+    dynamicBillRepo.undoDynamicBillCreatorLessReminder(applied.action.undoToken, NOW + 1_001),
+  ]);
+  const statuses = results.map(result => result.status).sort();
+
+  assert.deepEqual(statuses, ['already_undone', 'undone']);
+  assert.equal(await db.dynamicBillCreatorFeedbackCounts.count(), 0);
+  assert.equal(await db.dynamicBillCreatorPauses.where('creatorMid').equals(114).count(), 0);
+  assert.equal((await db.dynamicBillFeedbackActions.where('actionKey').equals(applied.action.actionKey).first())?.state, 'undone');
+});
+
 test('expired undo finalizes exactly once and old token fails closed', { concurrency: false }, async () => {
   await seedItem({ creatorMid: 103 });
   const applied = await dynamicBillRepo.applyDynamicBillCreatorLessReminder('bill-103', {
@@ -144,21 +189,26 @@ test('expired undo finalizes exactly once and old token fails closed', { concurr
     applied.action.undoToken,
     NOW + DYNAMIC_BILL_CREATOR_LESS_REMINDER_UNDO_WINDOW_MS + 1,
   );
-  await dynamicBillRepo.getDynamicBillFeedbackState(
+  const repeatedExpiredUndo = await dynamicBillRepo.undoDynamicBillCreatorLessReminder(
+    applied.action.undoToken,
     NOW + DYNAMIC_BILL_CREATOR_LESS_REMINDER_UNDO_WINDOW_MS + 2,
+  );
+  await dynamicBillRepo.getDynamicBillFeedbackState(
+    NOW + DYNAMIC_BILL_CREATOR_LESS_REMINDER_UNDO_WINDOW_MS + 3,
   );
   const count = await db.dynamicBillCreatorFeedbackCounts.where('creatorMid').equals(103).first();
 
   assert.equal(expiredUndo.status, 'expired');
+  assert.equal(repeatedExpiredUndo.status, 'expired');
   assert.equal(count?.effectiveCount, 1);
   assert.equal(await db.dynamicBillFeedbackActions.where('state').equals('finalized').count(), 1);
 });
 
 test('third effective less reminder creates one pending prompt, while undone third does not count', { concurrency: false }, async () => {
   await finalizeAction(104, 'bill-104-a', NOW);
-  await dynamicBillRepo.restoreDynamicBillCreatorReminder(104, NOW + 20_000);
+  await restoreCurrentPause(104, NOW + 20_000);
   await finalizeAction(104, 'bill-104-b', NOW + 40_000);
-  await dynamicBillRepo.restoreDynamicBillCreatorReminder(104, NOW + 60_000);
+  await restoreCurrentPause(104, NOW + 60_000);
   await seedItem({ creatorMid: 104, billKey: 'bill-104-c' });
   const thirdUndone = await dynamicBillRepo.applyDynamicBillCreatorLessReminder('bill-104-c', {
     idempotencyKey: 'third-undone',
@@ -186,9 +236,9 @@ test('third effective less reminder creates one pending prompt, while undone thi
 
 test('prompt buttons resolve once and do not change the current pause', { concurrency: false }, async () => {
   await finalizeAction(105, 'bill-105-a', NOW);
-  await dynamicBillRepo.restoreDynamicBillCreatorReminder(105, NOW + 20_000);
+  await restoreCurrentPause(105, NOW + 20_000);
   await finalizeAction(105, 'bill-105-b', NOW + 40_000);
-  await dynamicBillRepo.restoreDynamicBillCreatorReminder(105, NOW + 60_000);
+  await restoreCurrentPause(105, NOW + 60_000);
   await finalizeAction(105, 'bill-105-c', NOW + 80_000);
   const pauseBefore = await db.dynamicBillCreatorPauses.where('creatorMid').equals(105).first();
 
@@ -242,7 +292,70 @@ test('concurrent prompt open and dismiss are mutually exclusive', { concurrency:
   assert.equal(stored?.decision, stored?.state === 'opened' ? 'open_space' : 'dismiss');
 });
 
-test('settings restore and a new less reminder serialize without deleting a later pause', { concurrency: false }, async () => {
+test('same bill with different idempotency keys creates one pending action and finalizes once', { concurrency: false }, async () => {
+  await seedItem({ creatorMid: 115 });
+
+  const results = await Promise.all([
+    dynamicBillRepo.applyDynamicBillCreatorLessReminder('bill-115', {
+      idempotencyKey: 'same-bill-a',
+      now: NOW,
+    }),
+    dynamicBillRepo.applyDynamicBillCreatorLessReminder('bill-115', {
+      idempotencyKey: 'same-bill-b',
+      now: NOW + 1,
+    }),
+  ]);
+  const stateBeforeFinalize = await dynamicBillRepo.getDynamicBillFeedbackState(NOW + 1_000);
+
+  assert.equal(results.filter(result => result?.status === 'pending_undo').length, 1);
+  assert.equal(results.filter(result => result?.status === 'already_pending').length, 1);
+  assert.equal(await db.dynamicBillFeedbackActions.where('state').equals('pending_undo').count(), 1);
+  assert.equal(await db.dynamicBillCreatorPauses.where('creatorMid').equals(115).count(), 1);
+  assert.equal(stateBeforeFinalize.pendingActions.length, 1);
+
+  await dynamicBillRepo.getDynamicBillFeedbackState(
+    NOW + DYNAMIC_BILL_CREATOR_LESS_REMINDER_UNDO_WINDOW_MS + 2,
+  );
+  const count = await db.dynamicBillCreatorFeedbackCounts.where('creatorMid').equals(115).first();
+
+  assert.equal(count?.effectiveCount, 1);
+  assert.equal(await db.dynamicBillFeedbackActions.where('state').equals('finalized').count(), 1);
+});
+
+test('same creator on different bill keys has one pending action and one effective finalize', { concurrency: false }, async () => {
+  await seedItem({ creatorMid: 116, billKey: 'bill-116-a' });
+  await seedItem({ creatorMid: 116, billKey: 'bill-116-b' });
+
+  const results = await Promise.all([
+    dynamicBillRepo.applyDynamicBillCreatorLessReminder('bill-116-a', {
+      idempotencyKey: 'same-creator-a',
+      now: NOW,
+    }),
+    dynamicBillRepo.applyDynamicBillCreatorLessReminder('bill-116-b', {
+      idempotencyKey: 'same-creator-b',
+      now: NOW + 1,
+    }),
+  ]);
+  const items = await db.dynamicBillItems.where('creatorMid').equals(116).toArray();
+  const stateBeforeFinalize = await dynamicBillRepo.getDynamicBillFeedbackState(NOW + 1_000);
+
+  assert.equal(results.filter(result => result?.status === 'pending_undo').length, 1);
+  assert.equal(results.filter(result => result?.status === 'already_pending').length, 1);
+  assert.equal(await db.dynamicBillFeedbackActions.where('state').equals('pending_undo').count(), 1);
+  assert.equal(await db.dynamicBillCreatorPauses.where('creatorMid').equals(116).count(), 1);
+  assert.equal(items.filter(item => item.status === 'processed').length, 1);
+  assert.equal(stateBeforeFinalize.pendingActions.length, 1);
+
+  await dynamicBillRepo.getDynamicBillFeedbackState(
+    NOW + DYNAMIC_BILL_CREATOR_LESS_REMINDER_UNDO_WINDOW_MS + 2,
+  );
+  const count = await db.dynamicBillCreatorFeedbackCounts.where('creatorMid').equals(116).first();
+
+  assert.equal(count?.effectiveCount, 1);
+  assert.equal(await db.dynamicBillFeedbackActions.where('state').equals('finalized').count(), 1);
+});
+
+test('settings restore rejects a stale observed pause and preserves the later pause', { concurrency: false }, async () => {
   await seedItem({ creatorMid: 111 });
   await db.dynamicBillCreatorPauses.put({
     creatorMid: 111,
@@ -253,25 +366,23 @@ test('settings restore and a new less reminder serialize without deleting a late
     createdAt: NOW - DAY_MS,
     updatedAt: NOW - DAY_MS,
   });
+  const observed = (await dynamicBillRepo.getDynamicBillActiveCreatorPauseViews(NOW))
+    .find(pause => pause.creatorMid === 111);
+  assert.ok(observed);
 
-  const [restored, applied] = await Promise.all([
-    dynamicBillRepo.restoreDynamicBillCreatorReminder(111, NOW + 1),
-    dynamicBillRepo.applyDynamicBillCreatorLessReminder('bill-111', {
-      idempotencyKey: 'restore-apply-race',
-      now: NOW + 2,
-    }),
-  ]);
+  const applied = await dynamicBillRepo.applyDynamicBillCreatorLessReminder('bill-111', {
+    idempotencyKey: 'restore-stale-later-pause',
+    now: NOW + 2,
+  });
+  const restored = await dynamicBillRepo.restoreDynamicBillCreatorReminder(111, observed.version, NOW + 3);
   const finalPause = await db.dynamicBillCreatorPauses.where('creatorMid').equals(111).first();
 
   assert.ok(applied?.action);
-  if (restored?.source === 'migration') {
-    assert.equal(finalPause?.source, 'user');
-    assert.equal(finalPause?.actionKey, applied.action.actionKey);
-    assert.equal(finalPause?.expiresAt, NOW + 2 + 30 * DAY_MS);
-  } else {
-    assert.equal(restored?.source, 'user');
-    assert.equal(finalPause, undefined);
-  }
+  assert.equal(restored.status, 'stale');
+  assert.equal(restored.currentPause?.source, 'user');
+  assert.equal(finalPause?.source, 'user');
+  assert.equal(finalPause?.actionKey, applied.action.actionKey);
+  assert.equal(finalPause?.expiresAt, NOW + 2 + 30 * DAY_MS);
 });
 
 test('undo after settings restore does not resurrect or overwrite the restored pause state', { concurrency: false }, async () => {
@@ -290,14 +401,15 @@ test('undo after settings restore does not resurrect or overwrite the restored p
     now: NOW,
   });
   assert.ok(applied?.action);
+  const observed = (await dynamicBillRepo.getDynamicBillActiveCreatorPauseViews(NOW + 1))
+    .find(pause => pause.creatorMid === 112);
+  assert.ok(observed);
 
-  const [restored, undo] = await Promise.all([
-    dynamicBillRepo.restoreDynamicBillCreatorReminder(112, NOW + 1),
-    dynamicBillRepo.undoDynamicBillCreatorLessReminder(applied.action.undoToken, NOW + 2),
-  ]);
+  const restored = await dynamicBillRepo.restoreDynamicBillCreatorReminder(112, observed.version, NOW + 1);
+  const undo = await dynamicBillRepo.undoDynamicBillCreatorLessReminder(applied.action.undoToken, NOW + 2);
   const item = await db.dynamicBillItems.where('billKey').equals('bill-112').first();
 
-  assert.ok(restored?.source === 'user' || restored?.source === 'migration');
+  assert.equal(restored.status, 'restored');
   assert.equal(undo.status, 'undone');
   assert.equal(await db.dynamicBillCreatorPauses.where('creatorMid').equals(112).count(), 0);
   assert.equal(item?.status, 'opened');
@@ -312,8 +424,15 @@ test('settings restore deletes only the pause; expiry also cleans active pause s
     now: NOW,
   });
   assert.ok(applied?.action);
-  const restored = await dynamicBillRepo.restoreDynamicBillCreatorReminder(106, NOW + 1_000);
-  assert.equal(restored?.creatorMid, 106);
+  const observed = (await dynamicBillRepo.getDynamicBillActiveCreatorPauseViews(NOW + 1_000))
+    .find(pause => pause.creatorMid === 106);
+  assert.ok(observed);
+  const restored = await dynamicBillRepo.restoreDynamicBillCreatorReminder(106, observed.version, NOW + 1_000);
+  const secondRestore = await dynamicBillRepo.restoreDynamicBillCreatorReminder(106, observed.version, NOW + 1_001);
+
+  assert.equal(restored.status, 'restored');
+  assert.equal(restored.pause?.creatorMid, 106);
+  assert.equal(secondRestore.status, 'not_found');
   assert.equal(await db.dynamicBillCreatorPauses.count(), 0);
   assert.equal(await db.dynamicBillCreatorFeedbackCounts.count(), 0);
 
@@ -344,7 +463,7 @@ test('legacy feedback injected after migration does not affect new counts or pro
   });
 
   await finalizeAction(108, 'bill-108-a', NOW);
-  await dynamicBillRepo.restoreDynamicBillCreatorReminder(108, NOW + 20_000);
+  await restoreCurrentPause(108, NOW + 20_000);
   await finalizeAction(108, 'bill-108-b', NOW + 40_000);
   const count = await db.dynamicBillCreatorFeedbackCounts.where('creatorMid').equals(108).first();
 
@@ -365,11 +484,19 @@ async function finalizeAction(creatorMid: number, billKey: string, now: number):
   );
 }
 
+async function restoreCurrentPause(creatorMid: number, now: number): Promise<void> {
+  const pause = (await dynamicBillRepo.getDynamicBillActiveCreatorPauseViews(now))
+    .find(item => item.creatorMid === creatorMid);
+  assert.ok(pause, `Expected active pause for creator ${creatorMid}`);
+  const restored = await dynamicBillRepo.restoreDynamicBillCreatorReminder(creatorMid, pause.version, now);
+  assert.equal(restored.status, 'restored');
+}
+
 async function createPendingReviewPrompt(creatorMid: number, now: number): Promise<void> {
   await finalizeAction(creatorMid, `bill-${creatorMid}-a`, now);
-  await dynamicBillRepo.restoreDynamicBillCreatorReminder(creatorMid, now + 20_000);
+  await restoreCurrentPause(creatorMid, now + 20_000);
   await finalizeAction(creatorMid, `bill-${creatorMid}-b`, now + 40_000);
-  await dynamicBillRepo.restoreDynamicBillCreatorReminder(creatorMid, now + 60_000);
+  await restoreCurrentPause(creatorMid, now + 60_000);
   await finalizeAction(creatorMid, `bill-${creatorMid}-c`, now + 80_000);
 }
 

@@ -39,20 +39,26 @@ try {
   let navigationSeq = 0;
   const dashboardUrl = hash => `${baseUrl}/dashboard/index.html?qa=${++navigationSeq}#${hash}`;
 
-  await setViewport(cdp, 1366, 900);
+  await setViewport(cdp, 1280, 820);
   await navigate(cdp, dashboardUrl('dynamic-bill'));
   await waitFor(cdp, 'document.querySelector("[data-testid=\\"dynamic-bill-less-remind-creator\\"]") !== null');
+  await assertNoHorizontalOverflow(cdp, '1280px dynamic bill');
 
   await click(cdp, '[data-testid="dynamic-bill-less-remind-creator"]');
   await waitFor(cdp, 'document.body.innerText.includes("8 秒") && document.body.innerText.includes("撤销")');
+  await setViewport(cdp, 320, 760);
+  await assertNoHorizontalOverflow(cdp, '320px pending undo');
+  await assertFeedbackDockLayout(cdp, 'pending undo dock', ['撤销', '等待生效']);
   await assertNoRawLeak(cdp);
 
   await navigate(cdp, dashboardUrl('dynamic-bill'));
   await waitFor(cdp, 'Array.from(document.querySelectorAll("button")).some(button => button.textContent.includes("撤销"))');
-  await clickText(cdp, 'button', '撤销');
+  await doubleClick(cdp, '[data-testid="dynamic-bill-feedback-undo"]');
   await waitFor(cdp, 'document.body.innerText.includes("已撤销")');
-  await waitForQaState(cdp, 'state.pause === null && state.pendingAction === null && state.effectiveCount === 0');
+  await waitForQaState(cdp, 'state.pause === null && state.pendingAction === null && state.effectiveCount === 0 && state.undoRequestCount === 1');
+  await waitFor(cdp, '!document.body.innerText.includes("撤销窗口已经结束")');
 
+  await setViewport(cdp, 1280, 820);
   await click(cdp, '[data-testid="dynamic-bill-less-remind-creator"]');
   await expirePending(cdp);
   await navigate(cdp, dashboardUrl('dynamic-bill'));
@@ -70,6 +76,9 @@ try {
   await navigate(cdp, dashboardUrl('dynamic-bill'));
   await waitFor(cdp, 'document.querySelector("[data-testid=\\"dynamic-bill-review-open\\"]") !== null');
   await waitForQaState(cdp, 'state.effectiveCount === 3 && state.prompt && state.prompt.state === "pending" && state.promptCreatedCount === 1');
+  await setViewport(cdp, 320, 760);
+  await assertNoHorizontalOverflow(cdp, '320px review prompt');
+  await assertFeedbackDockLayout(cdp, 'review prompt dock', ['打开 UP 主页', '暂不处理']);
 
   await click(cdp, '[data-testid="dynamic-bill-review-open"]', { settleMs: 30 });
   await waitFor(cdp, 'Array.from(document.querySelectorAll("[data-testid^=\\"dynamic-bill-review-\\"]")).every(button => button.disabled)');
@@ -84,14 +93,9 @@ try {
   await waitFor(cdp, 'document.body.innerText.includes("当前没有暂停提醒的 UP")');
   await waitForQaState(cdp, 'state.pause === null && state.restoreCount === 1');
 
-  await setViewport(cdp, 320, 760);
   await navigate(cdp, dashboardUrl('dynamic-bill'));
   await waitFor(cdp, 'document.querySelector(".dynamic-bill-page") !== null');
-  const overflow = await evaluate(cdp, `(() => {
-    const root = document.documentElement;
-    return Math.max(root.scrollWidth, document.body.scrollWidth) - window.innerWidth;
-  })()`);
-  assert.ok(overflow <= 1, `320px viewport has horizontal overflow: ${overflow}`);
+  await assertNoHorizontalOverflow(cdp, '320px final dynamic bill');
 
   await assertNoRawLeak(cdp);
   assert.deepEqual(consoleErrors(), []);
@@ -344,6 +348,18 @@ async function clickText(cdp, selector, text) {
   await delay(160);
 }
 
+async function doubleClick(cdp, selector) {
+  await evaluate(cdp, `(() => {
+    const selector = ${JSON.stringify(selector)};
+    const element = document.querySelector(selector);
+    if (!element) throw new Error("Missing selector: " + selector);
+    element.click();
+    element.click();
+    return true;
+  })()`);
+  await delay(220);
+}
+
 async function waitFor(cdp, expression, timeoutMs = 6000) {
   const startedAt = Date.now();
   let lastError = '';
@@ -375,6 +391,84 @@ async function assertNoRawLeak(cdp) {
     assert.equal(text.includes(term), false, `Visible raw term leaked: ${term}`);
   }
   assert.equal(/未消费|猜你喜欢/.test(text), false, 'Visible banned Dynamic Bill wording leaked');
+}
+
+async function assertNoHorizontalOverflow(cdp, label) {
+  const overflow = await evaluate(cdp, `(() => {
+    const root = document.documentElement;
+    return Math.max(root.scrollWidth, document.body.scrollWidth) - window.innerWidth;
+  })()`);
+  assert.ok(overflow <= 1, `${label} has horizontal overflow: ${overflow}`);
+}
+
+async function assertFeedbackDockLayout(cdp, label, expectedButtonTexts) {
+  const result = await evaluate(cdp, `(() => {
+    const dock = document.querySelector('.dynamic-bill-feedback-dock');
+    if (!dock) return { missing: true };
+    const dockRect = rectData(dock.getBoundingClientRect());
+    const buttons = Array.from(dock.querySelectorAll('button')).map(button => ({
+      text: button.textContent.trim(),
+      disabled: button.disabled,
+      rect: rectData(button.getBoundingClientRect()),
+    }));
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const horizontalOverflow = Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) - window.innerWidth;
+    const overlaps = [];
+    for (let i = 0; i < buttons.length; i += 1) {
+      for (let j = i + 1; j < buttons.length; j += 1) {
+        if (rectsOverlap(buttons[i].rect, buttons[j].rect)) {
+          overlaps.push([buttons[i].text, buttons[j].text]);
+        }
+      }
+    }
+    return {
+      missing: false,
+      dockRect,
+      buttons,
+      viewport,
+      horizontalOverflow,
+      dockInViewport: inViewport(dockRect, viewport),
+      buttonsInViewport: buttons.every(button => button.rect.width > 20 && button.rect.height > 20 && inViewport(button.rect, viewport)),
+      overlaps,
+    };
+
+    function rectData(rect) {
+      return {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      };
+    }
+
+    function inViewport(rect, viewport) {
+      return rect.left >= -1
+        && rect.top >= -1
+        && rect.right <= viewport.width + 1
+        && rect.bottom <= viewport.height + 1;
+    }
+
+    function rectsOverlap(a, b) {
+      return a.left < b.right - 1
+        && a.right > b.left + 1
+        && a.top < b.bottom - 1
+        && a.bottom > b.top + 1;
+    }
+  })()`);
+
+  assert.equal(result.missing, false, `${label} is missing`);
+  assert.ok(result.horizontalOverflow <= 1, `${label} has horizontal overflow: ${result.horizontalOverflow}`);
+  assert.equal(result.dockInViewport, true, `${label} dock is outside viewport: ${JSON.stringify(result)}`);
+  assert.equal(result.buttonsInViewport, true, `${label} buttons are clipped: ${JSON.stringify(result)}`);
+  assert.deepEqual(result.overlaps, [], `${label} buttons overlap: ${JSON.stringify(result.overlaps)}`);
+  for (const text of expectedButtonTexts) {
+    assert.ok(
+      result.buttons.some(button => button.text.includes(text)),
+      `${label} missing button text: ${text}`,
+    );
+  }
 }
 
 async function evaluate(cdp, expression) {
@@ -437,6 +531,9 @@ function fixtureScript() {
       openedSpaceCount: 0,
       dismissedPromptCount: 0,
       restoreCount: 0,
+      undoneTokens: [],
+      undoRequestCount: 0,
+      lastUndoStatuses: [],
     };
   }
 
@@ -471,6 +568,13 @@ function fixtureScript() {
   }
 
   function applyLessReminder(state, now = Date.now()) {
+    if (state.pendingAction) {
+      return {
+        status: 'already_pending',
+        action: state.pendingAction,
+        item: state.item,
+      };
+    }
     const actionKey = 'qa-action-' + now + '-' + state.itemSeq;
     state.item = { ...state.item, status: 'processed', processedAt: now };
     state.pause = {
@@ -481,6 +585,7 @@ function fixtureScript() {
       source: 'user',
       remainingDays: 30,
       actionKey,
+      updatedAt: now,
     };
     state.pendingAction = {
       actionKey,
@@ -499,6 +604,9 @@ function fixtureScript() {
   }
 
   function undoLessReminder(state, undoToken) {
+    if (state.undoneTokens.includes(undoToken)) {
+      return { status: 'already_undone', item: state.item };
+    }
     if (!state.pendingAction || state.pendingAction.undoToken !== undoToken) {
       return { status: 'invalid' };
     }
@@ -506,6 +614,7 @@ function fixtureScript() {
     state.pause = null;
     state.item = { ...state.item, status: 'unopened' };
     delete state.item.processedAt;
+    state.undoneTokens.push(undoToken);
     return { status: 'undone', item: state.item };
   }
 
@@ -561,6 +670,7 @@ function fixtureScript() {
 
   function toPauseView(pause) {
     return {
+      version: pauseVersion(pause),
       creatorMid: pause.creatorMid,
       creatorName: pause.creatorName,
       startedAt: pause.startedAt,
@@ -568,6 +678,17 @@ function fixtureScript() {
       source: pause.source,
       remainingDays: Math.max(0, Math.ceil((pause.expiresAt - Date.now()) / DAY_MS)),
     };
+  }
+
+  function pauseVersion(pause) {
+    return [
+      pause.creatorMid,
+      pause.startedAt,
+      pause.expiresAt,
+      pause.source,
+      pause.actionKey || '',
+      pause.updatedAt || pause.startedAt,
+    ].join(':');
   }
 
   function makeItem(seq, status) {
@@ -681,6 +802,8 @@ function fixtureScript() {
         break;
       case 'UNDO_DYNAMIC_BILL_CREATOR_LESS_REMINDER':
         data = undoLessReminder(state, message.params?.undoToken);
+        state.undoRequestCount += 1;
+        state.lastUndoStatuses.push(data.status);
         break;
       case 'OPEN_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT':
         data = resolvePrompt(state, 'open_space');
@@ -694,9 +817,16 @@ function fixtureScript() {
         data = localDataSummary(state);
         break;
       case 'RESTORE_DYNAMIC_BILL_CREATOR_REMINDER':
-        state.pause = null;
-        state.restoreCount += 1;
-        data = null;
+        if (!state.pause) {
+          data = { status: 'not_found' };
+        } else if (pauseVersion(state.pause) !== message.params?.pauseVersion) {
+          data = { status: 'stale', currentPause: toPauseView(state.pause) };
+        } else {
+          const pause = toPauseView(state.pause);
+          state.pause = null;
+          state.restoreCount += 1;
+          data = { status: 'restored', pause };
+        }
         break;
       default:
         data = {};
