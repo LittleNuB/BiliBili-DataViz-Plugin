@@ -133,6 +133,7 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
   const upsertEvidence = options.upsertEvidence ?? defaultUpsertEvidence;
   let sawLoginRequired = false;
   let lastError: string | null = null;
+  let lastPreBodyFailure: CurrentVideoTranscriptEvidenceState | null = null;
 
   for (const attempt of PLAYER_INFO_ATTEMPTS) {
     try {
@@ -151,7 +152,7 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
       const tracks = extractSubtitleTrackCandidates(data, attempt);
 
       if (tracks.status !== 'ok') {
-        return buildCurrentVideoTranscriptEvidenceState({
+        const state = buildCurrentVideoTranscriptEvidenceState({
           status: tracks.status,
           target,
           now: options.now,
@@ -160,11 +161,16 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
           message: tracks.message,
           warnings: tracks.warnings,
         });
+        if (attempt.sourceType === 'bilibili_player_wbi_v2') {
+          lastPreBodyFailure = state;
+          continue;
+        }
+        return state;
       }
 
       const selected = selectSubtitleTrack(tracks.tracks, options.requestedLanguage);
       if (!selected) {
-        return buildCurrentVideoTranscriptEvidenceState({
+        const state = buildCurrentVideoTranscriptEvidenceState({
           status: 'language_mismatch',
           target,
           now: options.now,
@@ -173,11 +179,16 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
           message: '当前字幕来源没有匹配请求语言的字幕轨道；不会把其他语言字幕缓存为当前有效证据。',
           warnings: ['transcript_language_mismatch'],
         });
+        if (attempt.sourceType === 'bilibili_player_wbi_v2') {
+          lastPreBodyFailure = state;
+          continue;
+        }
+        return state;
       }
 
       const url = normalizeSubtitleUrl(selected.url);
       if (!url || !isAllowedSubtitleHost(url.hostname)) {
-        return buildCurrentVideoTranscriptEvidenceState({
+        const state = buildCurrentVideoTranscriptEvidenceState({
           status: 'track_unavailable',
           target,
           now: options.now,
@@ -186,6 +197,11 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
           message: '字幕轨道地址不可用或不属于受限的 B 站字幕域名；未读取正文。',
           warnings: ['subtitle_track_host_unsupported'],
         });
+        if (attempt.sourceType === 'bilibili_player_wbi_v2') {
+          lastPreBodyFailure = state;
+          continue;
+        }
+        return state;
       }
 
       const subtitleJson = await fetchSubtitleJson(url.toString());
@@ -235,6 +251,10 @@ async function cacheCurrentVideoTranscriptEvidenceInner(
       message: 'B 站字幕正文接口需要当前浏览器会话权限；未读取本地 Cookie 或登录态文件，当前仍使用元数据和简介作为本地证据结果。',
       warnings: ['transcript_login_required'],
     });
+  }
+
+  if (!lastError && lastPreBodyFailure) {
+    return lastPreBodyFailure;
   }
 
   return buildCurrentVideoTranscriptEvidenceState({

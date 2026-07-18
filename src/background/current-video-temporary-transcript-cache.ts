@@ -87,25 +87,29 @@ export function putTemporaryCurrentVideoTranscriptEvidence(
     stale: false,
   }));
   const sourceBytes = measureTranscriptPersistentBytes(source, segments);
-  if (sourceBytes > normalizedLimits.maxBytes) {
-    return temporaryPutResult('source_too_large', normalizedLimits, {
-      sourceIdentityKey,
-      sourceBytes,
-    });
-  }
-
   const retainedEntries = Array.from(temporaryTranscriptSources.values())
     .filter(entry => !sameOwner(entry.owner, owner));
   const retainedBytes = retainedEntries.reduce(
     (sum, entry) => sum + measureTranscriptPersistentBytes(entry.source, entry.segments),
     0,
   );
+  if (sourceBytes > normalizedLimits.maxBytes) {
+    clearTemporaryCurrentVideoTranscriptSourceReplacement(owner);
+    return temporaryPutResult('source_too_large', normalizedLimits, {
+      sourceIdentityKey,
+      sourceBytes,
+      retainedBytes,
+      retainedSourceCount: retainedEntries.length,
+    });
+  }
+
   const projectedSourceCount = retainedEntries.length + 1;
   const projectedBytes = retainedBytes + sourceBytes;
   if (
     projectedSourceCount > normalizedLimits.maxSourceCount
     || projectedBytes > normalizedLimits.maxBytes
   ) {
+    clearTemporaryCurrentVideoTranscriptSourceReplacement(owner);
     return temporaryPutResult('capacity_exceeded', normalizedLimits, {
       sourceIdentityKey,
       sourceBytes,

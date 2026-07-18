@@ -709,6 +709,89 @@ test('temporary transcript admission enforces cumulative bytes and single-source
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(firstOwner, transcriptIdentityFromEvidence(first), 9914).length, 1);
 });
 
+test('temporary source_too_large replacement clears only the same owner old body', () => {
+  clearTemporaryCurrentVideoTranscriptCache();
+  const oldBody = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '旧临时正文不能在新正文拒绝后复活。' }] },
+    baseNormalizeOptions({ bvid: 'BV1TempReplaceLarge', cid: 6451, fetchedAt: 10_300 }),
+  );
+  const otherBody = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '另一个页面的临时正文仍然可读。' }] },
+    baseNormalizeOptions({ bvid: 'BV1TempReplaceOtherA', cid: 6452, fetchedAt: 10_301 }),
+  );
+  const replacement = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '新正文超过单来源临时上限。'.repeat(16) }] },
+    baseNormalizeOptions({ bvid: 'BV1TempReplaceLarge', cid: 6451, fetchedAt: 10_302 }),
+  );
+  const owner = temporaryOwner(121, oldBody);
+  const otherOwner = temporaryOwner(122, otherBody);
+  const otherBytes = temporaryStoredBytes(otherBody, 10_311);
+  const replacementBytes = temporaryStoredBytes(replacement, 10_312);
+
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(owner, oldBody, 10_310).status, 'stored');
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(otherOwner, otherBody, 10_311).status, 'stored');
+
+  const rejected = putTemporaryCurrentVideoTranscriptEvidence(owner, replacement, 10_312, {
+    maxSourceCount: CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES,
+    maxBytes: replacementBytes - 1,
+  });
+
+  assert.equal(rejected.status, 'source_too_large');
+  assert.equal(rejected.sourceBytes, replacementBytes);
+  assert.equal(rejected.retainedSourceCount, 1);
+  assert.equal(rejected.retainedBytes, otherBytes);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(owner, {
+    bvid: oldBody.sourceRecord.bvid,
+    cid: oldBody.sourceRecord.cid,
+    page: oldBody.sourceRecord.page,
+    language: oldBody.sourceRecord.language,
+  }, 10_313).length, 0);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(otherOwner, transcriptIdentityFromEvidence(otherBody), 10_313).length, 1);
+});
+
+test('temporary capacity_exceeded replacement clears only the same owner old body', () => {
+  clearTemporaryCurrentVideoTranscriptCache();
+  const oldBody = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '旧临时正文不能在容量拒绝后复活。' }] },
+    baseNormalizeOptions({ bvid: 'BV1TempReplaceCap', cid: 6461, fetchedAt: 10_400 }),
+  );
+  const otherBody = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '容量拒绝不能驱逐这个仍有效页面。'.repeat(10) }] },
+    baseNormalizeOptions({ bvid: 'BV1TempReplaceOtherB', cid: 6462, fetchedAt: 10_401 }),
+  );
+  const replacement = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '新正文单独可放入，但加上其他页面会超过总量。'.repeat(8) }] },
+    baseNormalizeOptions({ bvid: 'BV1TempReplaceCap', cid: 6461, fetchedAt: 10_402 }),
+  );
+  const owner = temporaryOwner(123, oldBody);
+  const otherOwner = temporaryOwner(124, otherBody);
+  const otherBytes = temporaryStoredBytes(otherBody, 10_411);
+  const replacementBytes = temporaryStoredBytes(replacement, 10_412);
+  const maxBytes = replacementBytes + Math.max(1, Math.floor(otherBytes / 2));
+
+  assert.ok(replacementBytes <= maxBytes);
+  assert.ok(otherBytes + replacementBytes > maxBytes);
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(owner, oldBody, 10_410).status, 'stored');
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(otherOwner, otherBody, 10_411).status, 'stored');
+
+  const rejected = putTemporaryCurrentVideoTranscriptEvidence(owner, replacement, 10_412, {
+    maxSourceCount: CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES,
+    maxBytes,
+  });
+
+  assert.equal(rejected.status, 'capacity_exceeded');
+  assert.equal(rejected.sourceBytes, replacementBytes);
+  assert.equal(rejected.retainedSourceCount, 1);
+  assert.equal(rejected.retainedBytes, otherBytes);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(owner, {
+    bvid: oldBody.sourceRecord.bvid,
+    cid: oldBody.sourceRecord.cid,
+    page: oldBody.sourceRecord.page,
+    language: oldBody.sourceRecord.language,
+  }, 10_413).length, 0);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(otherOwner, transcriptIdentityFromEvidence(otherBody), 10_413).length, 1);
+});
+
 test('Dexie 0.12 subtitle cache upgrade clears only transcript tables transactionally', async () => {
   const tables = {
     currentVideoTranscriptSources: [{ identityKey: 'legacy-source' }],
@@ -811,6 +894,124 @@ test('background cache fetch keeps raw subtitle URL internal and reports languag
   assert.deepEqual(temporaryOwnerSeen, temporaryOwnerScope);
   assert.match(fetchedUrl, /^https:\/\/aisubtitle\.hdslb\.com\//);
   assert.doesNotMatch(JSON.stringify(state), /private-track|subtitle_url|token=secret|SESSDATA|Key\.txt/i);
+});
+
+test('background cache falls back from WBI missing or empty tracks to v2 cached body', async () => {
+  const scenarios = [
+    { label: 'missing', wbiData: {} },
+    { label: 'empty', wbiData: { subtitle: { subtitles: [] } } },
+  ];
+
+  for (const scenario of scenarios) {
+    const store = memoryStore();
+    const attempts: Array<{ sourceType: string; sourcePath: string }> = [];
+    const fetchedUrls: string[] = [];
+    let upsertCount = 0;
+    const context = videoContext({
+      bvid: `BV1Fallback${scenario.label}`,
+      cid: scenario.label === 'missing' ? 6601 : 6602,
+    });
+    const state = await cacheCurrentVideoTranscriptEvidence(context, {
+      now: scenario.label === 'missing' ? 10_500 : 10_600,
+      requestedLanguage: 'zh-CN',
+      fetchPlayerInfo: async (_target, options) => {
+        attempts.push({ sourceType: options.sourceType, sourcePath: options.sourcePath });
+        if (options.sourceType === 'bilibili_player_wbi_v2') return scenario.wbiData;
+        return {
+          subtitle: {
+            subtitles: [
+              {
+                id: 'v2-track',
+                lan: 'zh-CN',
+                subtitle_url: `//aisubtitle.hdslb.com/bfs/ai_subtitle/${scenario.label}-v2.json?token=secret`,
+              },
+            ],
+          },
+        };
+      },
+      fetchSubtitleJson: async (url) => {
+        fetchedUrls.push(url);
+        return { body: [{ from: 0, to: 2, content: `${scenario.label} fallback body` }] };
+      },
+      upsertEvidence: async (evidence) => {
+        upsertCount += 1;
+        return store.upsert(evidence);
+      },
+    });
+
+    assert.deepEqual(attempts, [
+      { sourceType: 'bilibili_player_wbi_v2', sourcePath: '/x/player/wbi/v2' },
+      { sourceType: 'bilibili_player_v2', sourcePath: '/x/player/v2' },
+    ]);
+    assert.equal(state.status, 'cached');
+    assert.equal(state.active, true);
+    assert.equal(state.sourceType, 'bilibili_player_v2');
+    assert.equal(state.language, 'zh-CN');
+    assert.equal(fetchedUrls.length, 1);
+    assert.equal(upsertCount, 1);
+    assert.doesNotMatch(JSON.stringify(state), /subtitle_url|token=secret|aisubtitle|fallback-(missing|empty)-v2/i);
+  }
+});
+
+test('background cache falls back from WBI language mismatch to v2 requested language body', async () => {
+  const store = memoryStore();
+  const attempts: Array<{ sourceType: string; sourcePath: string }> = [];
+  const fetchedUrls: string[] = [];
+  let upsertCount = 0;
+  const state = await cacheCurrentVideoTranscriptEvidence(videoContext({
+    bvid: 'BV1FallbackLang',
+    cid: 6611,
+  }), {
+    now: 10_700,
+    requestedLanguage: 'en-US',
+    fetchPlayerInfo: async (_target, options) => {
+      attempts.push({ sourceType: options.sourceType, sourcePath: options.sourcePath });
+      if (options.sourceType === 'bilibili_player_wbi_v2') {
+        return {
+          subtitle: {
+            subtitles: [
+              {
+                id: 'wbi-zh',
+                lan: 'zh-CN',
+                subtitle_url: '//aisubtitle.hdslb.com/bfs/ai_subtitle/wbi-zh.json?token=secret',
+              },
+            ],
+          },
+        };
+      }
+      return {
+        subtitle: {
+          subtitles: [
+            {
+              id: 'v2-en',
+              lan: 'en-US',
+              subtitle_url: '//aisubtitle.hdslb.com/bfs/ai_subtitle/v2-en.json?token=secret',
+            },
+          ],
+        },
+      };
+    },
+    fetchSubtitleJson: async (url) => {
+      fetchedUrls.push(url);
+      return { body: [{ from: 0, to: 2, content: 'requested language fallback body' }] };
+    },
+    upsertEvidence: async (evidence) => {
+      upsertCount += 1;
+      return store.upsert(evidence);
+    },
+  });
+
+  assert.deepEqual(attempts, [
+    { sourceType: 'bilibili_player_wbi_v2', sourcePath: '/x/player/wbi/v2' },
+    { sourceType: 'bilibili_player_v2', sourcePath: '/x/player/v2' },
+  ]);
+  assert.equal(state.status, 'cached');
+  assert.equal(state.active, true);
+  assert.equal(state.sourceType, 'bilibili_player_v2');
+  assert.equal(state.language, 'en-US');
+  assert.equal(fetchedUrls.length, 1);
+  assert.equal(upsertCount, 1);
+  assert.doesNotMatch(JSON.stringify(state), /subtitle_url|token=secret|aisubtitle|wbi-zh|v2-en/i);
 });
 
 test('background cache scopes in-flight temporary subtitle fetches by tab generation', async () => {
@@ -1214,6 +1415,23 @@ function transcriptIdentityFromEvidence(evidence: CurrentVideoTranscriptEvidence
     sourceIdentityKey: evidence.sourceRecord.sourceIdentityKey,
     sourceHash: evidence.sourceRecord.sourceHash,
   };
+}
+
+function temporaryStoredBytes(evidence: CurrentVideoTranscriptEvidenceWrite, now: number): number {
+  const sourceIdentityKey = evidence.sourceRecord.sourceIdentityKey ?? evidence.sourceRecord.identityKey;
+  return measureTranscriptPersistentBytes({
+    ...evidence.sourceRecord,
+    identityKey: sourceIdentityKey,
+    sourceIdentityKey,
+    partIdentityKey: evidence.sourceRecord.partIdentityKey,
+    persistent: false,
+    stale: false,
+    lastAccessedAt: now,
+  }, evidence.segments.map(segment => ({
+    ...segment,
+    sourceIdentityKey,
+    stale: false,
+  })));
 }
 
 function memoryStore() {
