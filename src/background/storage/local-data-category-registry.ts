@@ -287,7 +287,7 @@ async function collectCurrentVideoSubtitleUsage(
       .filter((value): value is string => Boolean(value)),
   ).size;
   const usageBytes = sources.length > 0 || segments.length > 0
-    ? serializedSize({ sources, segments })
+    ? serializedRowsSize([...sources, ...segments])
     : 0;
   return {
     count: sourceIdentityCount,
@@ -347,6 +347,10 @@ function serializedSize(value: unknown): number {
     return new TextEncoder().encode(text).byteLength;
   }
   return text.length;
+}
+
+function serializedRowsSize(rows: unknown[]): number {
+  return rows.reduce<number>((sum, row) => sum + serializedSize(row), 0);
 }
 
 function sourceIdentityKey(row: unknown): string | null {

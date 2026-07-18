@@ -128,6 +128,17 @@ test('registered categories collect usage, clear independently, and read back th
   assert.ok(usageBefore.every(usage => usage.usageBytes > 0));
   assert.equal(usageBefore[2].details?.currentVideoSubtitleSources, 1);
   assert.equal(usageBefore[2].details?.currentVideoSubtitleSegments, 1);
+  const subtitleRows = [
+    registryRow('currentVideoTranscriptSources'),
+    registryRow('currentVideoTranscriptSegments'),
+  ];
+  const subtitleRecordSumBytes = subtitleRows.reduce((sum, row) => sum + utf8JsonBytes(row), 0);
+  const subtitleWrappedBytes = utf8JsonBytes({
+    sources: [subtitleRows[0]],
+    segments: [subtitleRows[1]],
+  });
+  assert.equal(usageBefore[2].usageBytes, subtitleRecordSumBytes);
+  assert.ok(usageBefore[2].usageBytes < subtitleWrappedBytes);
 
   const history = categories[0];
   const favorites = categories[1];
@@ -397,4 +408,8 @@ function assertCleanUserCopy(text: string): void {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function utf8JsonBytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }

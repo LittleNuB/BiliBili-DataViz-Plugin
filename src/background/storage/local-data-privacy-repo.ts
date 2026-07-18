@@ -201,7 +201,7 @@ async function summarizeCurrentVideoSubtitles(): Promise<LocalDataPrivacySummary
     staleSegmentCount,
     cachedVideoCount,
     usageBytes: sources.length > 0 || segments.length > 0
-      ? serializedSize({ sources, segments })
+      ? serializedRowsSize([...sources, ...segments])
       : 0,
     lastUpdatedAt: normalizeNullableTimestamp(lastUpdated?.updatedAt),
   };
@@ -319,4 +319,8 @@ function serializedSize(value: unknown): number {
     return new TextEncoder().encode(text).byteLength;
   }
   return text.length;
+}
+
+function serializedRowsSize(rows: unknown[]): number {
+  return rows.reduce<number>((sum, row) => sum + serializedSize(row), 0);
 }

@@ -905,6 +905,14 @@ async function requestFreshCurrentVideoContext(
     if (response?.kind !== 'video') return response ?? null;
     if (extractBvidFromUrl(tabUrl) !== response.bvid) return null;
     currentVideoContexts.set(tabId, response);
+    if (response.cid) {
+      retainTemporaryCurrentVideoTranscriptOwner({
+        ownerTabId: tabId,
+        bvid: response.bvid,
+        cid: response.cid,
+        page: response.currentPart.page,
+      });
+    }
     return response;
   } catch {
     return null;
@@ -961,12 +969,12 @@ async function temporaryTranscriptOwnerForContext(
   const target = await resolveCurrentVideoLookupState(requestTabId);
   const ownerTabId = target.tab?.id ?? 0;
   if (ownerTabId <= 0) return undefined;
-  return {
+  return retainTemporaryCurrentVideoTranscriptOwner({
     ownerTabId,
     bvid: context.bvid,
     cid: context.cid,
     page: context.currentPart.page,
-  };
+  }) ?? undefined;
 }
 
 async function resolveCurrentVideoLookupState(

@@ -475,6 +475,55 @@ test('keeps oversize subtitle body readable only in temporary source memory', ()
   assert.equal(cleared.length, 0);
 });
 
+test('rejects late temporary subtitle writes after tab generation is cleared', () => {
+  clearTemporaryCurrentVideoTranscriptCache();
+  const evidence = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '迟到的临时字幕不能复活。' }] },
+    baseNormalizeOptions({ bvid: 'BV1LateOwner', cid: 6211, fetchedAt: 9520 }),
+  );
+  const identity = {
+    bvid: evidence.sourceRecord.bvid,
+    cid: evidence.sourceRecord.cid,
+    page: evidence.sourceRecord.page,
+    language: evidence.sourceRecord.language,
+    sourceIdentityKey: evidence.sourceRecord.sourceIdentityKey,
+    sourceHash: evidence.sourceRecord.sourceHash,
+  };
+  const oldOwner = temporaryOwner(72, evidence);
+
+  clearTemporaryCurrentVideoTranscriptCacheForTab(oldOwner.ownerTabId);
+  const returnedSameVideoOwner = temporaryOwner(72, evidence);
+
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(oldOwner, evidence, 9530), false);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(returnedSameVideoOwner, identity, 9540).length, 0);
+
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(returnedSameVideoOwner, evidence, 9550), true);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(returnedSameVideoOwner, identity, 9560).length, 1);
+});
+
+test('rejects late temporary subtitle writes after clear all invalidates owners', () => {
+  clearTemporaryCurrentVideoTranscriptCache();
+  const evidence = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '清理全部后的迟到正文也不能复活。' }] },
+    baseNormalizeOptions({ bvid: 'BV1LateClearAll', cid: 6221, fetchedAt: 9570 }),
+  );
+  const identity = {
+    bvid: evidence.sourceRecord.bvid,
+    cid: evidence.sourceRecord.cid,
+    page: evidence.sourceRecord.page,
+    language: evidence.sourceRecord.language,
+    sourceIdentityKey: evidence.sourceRecord.sourceIdentityKey,
+    sourceHash: evidence.sourceRecord.sourceHash,
+  };
+  const oldOwner = temporaryOwner(73, evidence);
+
+  clearTemporaryCurrentVideoTranscriptCache();
+  const returnedSameVideoOwner = temporaryOwner(73, evidence);
+
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(oldOwner, evidence, 9580), false);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(returnedSameVideoOwner, identity, 9590).length, 0);
+});
+
 test('isolates temporary transcript bodies by tab and releases only the navigating tab', () => {
   clearTemporaryCurrentVideoTranscriptCache();
   const evidence = normalizeBilibiliTranscriptEvidence(
@@ -586,12 +635,13 @@ test('background cache fetch keeps raw subtitle URL internal and reports languag
   let protectedKeys: string[] = [];
   let temporaryOwnerSeen: unknown = null;
   const protectedIdentityKey = 'primary-text:bilibili_subtitle:BV1Protected:202:1:zh-cn:protected';
-  const temporaryOwnerScope = {
+  const temporaryOwnerScope = retainTemporaryCurrentVideoTranscriptOwner({
     ownerTabId: 91,
     bvid: 'BV1Transcript00',
     cid: 101,
     page: 1,
-  };
+  });
+  assert.ok(temporaryOwnerScope);
   const fetchTargets: Array<{ bvid: string; aid?: number | null; cid: number; page: number | null }> = [];
   const context = {
     ...videoContext(),
@@ -634,6 +684,79 @@ test('background cache fetch keeps raw subtitle URL internal and reports languag
   assert.deepEqual(temporaryOwnerSeen, temporaryOwnerScope);
   assert.match(fetchedUrl, /^https:\/\/aisubtitle\.hdslb\.com\//);
   assert.doesNotMatch(JSON.stringify(state), /private-track|subtitle_url|token=secret|SESSDATA|Key\.txt/i);
+});
+
+test('background cache scopes in-flight temporary subtitle fetches by tab generation', async () => {
+  clearTemporaryCurrentVideoTranscriptCache();
+  const context = videoContext();
+  const ownerOne = retainTemporaryCurrentVideoTranscriptOwner({
+    ownerTabId: 92,
+    bvid: context.bvid,
+    cid: context.cid as number,
+    page: context.currentPart.page,
+  });
+  const ownerTwo = retainTemporaryCurrentVideoTranscriptOwner({
+    ownerTabId: 93,
+    bvid: context.bvid,
+    cid: context.cid as number,
+    page: context.currentPart.page,
+  });
+  assert.ok(ownerOne);
+  assert.ok(ownerTwo);
+  const ownersSeen: number[] = [];
+  let fetchCount = 0;
+  const fetchPlayerInfo = async () => ({
+    subtitle: {
+      subtitles: [
+        {
+          id: 7,
+          lan: 'zh-CN',
+          subtitle_url: '//aisubtitle.hdslb.com/bfs/ai_subtitle/shared.json',
+        },
+      ],
+    },
+  });
+  const fetchSubtitleJson = async () => {
+    fetchCount += 1;
+    return { body: [{ from: 0, to: 2, content: `tab scoped body ${fetchCount}` }] };
+  };
+  const upsertEvidence = async (
+    evidence: CurrentVideoTranscriptEvidenceWrite,
+    options?: { temporaryOwner?: typeof ownerOne },
+  ) => {
+    const owner = options?.temporaryOwner;
+    assert.ok(owner);
+    ownersSeen.push(owner.ownerTabId);
+    assert.equal(putTemporaryCurrentVideoTranscriptEvidence(owner, evidence), true);
+    return getTemporaryCurrentVideoTranscriptEvidenceState(owner, {
+      bvid: evidence.sourceRecord.bvid,
+      cid: evidence.sourceRecord.cid,
+      page: evidence.sourceRecord.page,
+      language: evidence.sourceRecord.language,
+      sourceIdentityKey: evidence.sourceRecord.sourceIdentityKey,
+      sourceHash: evidence.sourceRecord.sourceHash,
+    });
+  };
+
+  await Promise.all([
+    cacheCurrentVideoTranscriptEvidence(context, {
+      now: 5420,
+      temporaryOwner: ownerOne,
+      fetchPlayerInfo,
+      fetchSubtitleJson,
+      upsertEvidence,
+    }),
+    cacheCurrentVideoTranscriptEvidence(context, {
+      now: 5420,
+      temporaryOwner: ownerTwo,
+      fetchPlayerInfo,
+      fetchSubtitleJson,
+      upsertEvidence,
+    }),
+  ]);
+
+  assert.deepEqual(ownersSeen.sort((a, b) => a - b), [92, 93]);
+  assert.equal(fetchCount, 2);
 });
 
 test('background cache blocks unsupported subtitle hosts before fetching body', async () => {
@@ -812,12 +935,14 @@ function baseNormalizeOptions(overrides: Partial<Parameters<typeof normalizeBili
 }
 
 function temporaryOwner(ownerTabId: number, evidence: CurrentVideoTranscriptEvidenceWrite) {
-  return {
+  const owner = retainTemporaryCurrentVideoTranscriptOwner({
     ownerTabId,
     bvid: evidence.sourceRecord.bvid,
     cid: evidence.sourceRecord.cid,
     page: evidence.sourceRecord.page,
-  };
+  });
+  assert.ok(owner);
+  return owner;
 }
 
 function memoryStore() {

@@ -84,6 +84,9 @@ export async function cacheCurrentVideoTranscriptEvidence(
     context.cid,
     context.currentPart.page,
     normalizeLanguage(options.requestedLanguage) ?? 'auto',
+    options.temporaryOwner
+      ? `${options.temporaryOwner.ownerTabId}:${options.temporaryOwner.navigationGeneration}`
+      : 'persistent',
   ].join(':');
   const existing = inFlightTranscriptCaches.get(key);
   if (existing) return existing;

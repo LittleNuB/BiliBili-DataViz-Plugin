@@ -17,6 +17,7 @@ export interface CurrentVideoTemporaryTranscriptOwner {
   bvid: string;
   cid: number;
   page: number;
+  navigationGeneration: number;
 }
 
 interface TemporaryTranscriptEntry {
@@ -27,6 +28,13 @@ interface TemporaryTranscriptEntry {
 }
 
 const temporaryTranscriptSources = new Map<string, TemporaryTranscriptEntry>();
+const temporaryTranscriptTabGenerations = new Map<number, number>();
+const temporaryTranscriptTabOwners = new Map<number, CurrentVideoTemporaryTranscriptOwner>();
+
+type CurrentVideoTemporaryTranscriptOwnerInput = Omit<
+  CurrentVideoTemporaryTranscriptOwner,
+  'navigationGeneration'
+>;
 
 export function putTemporaryCurrentVideoTranscriptEvidence(
   owner: CurrentVideoTemporaryTranscriptOwner,
@@ -35,7 +43,6 @@ export function putTemporaryCurrentVideoTranscriptEvidence(
 ): boolean {
   if (!validOwner(owner) || !ownerMatchesIdentity(owner, evidence.sourceRecord)) return false;
 
-  retainTemporaryCurrentVideoTranscriptOwner(owner);
   clearTemporaryCurrentVideoTranscriptSourceReplacement(owner);
 
   const sourceIdentityKey = evidence.sourceRecord.sourceIdentityKey
@@ -105,13 +112,27 @@ export function getTemporaryCurrentVideoTranscriptSegments(
 }
 
 export function retainTemporaryCurrentVideoTranscriptOwner(
-  owner: CurrentVideoTemporaryTranscriptOwner,
-): void {
+  owner: CurrentVideoTemporaryTranscriptOwnerInput,
+): CurrentVideoTemporaryTranscriptOwner | null {
+  if (!validOwnerInput(owner)) return null;
+  const previousOwner = temporaryTranscriptTabOwners.get(owner.ownerTabId);
+  let navigationGeneration = temporaryTranscriptTabGenerations.get(owner.ownerTabId) ?? 0;
+  if (previousOwner && !sameOwnerIdentity(previousOwner, owner)) {
+    navigationGeneration += 1;
+  }
+  const retained = {
+    ...owner,
+    navigationGeneration,
+  };
+  temporaryTranscriptTabGenerations.set(owner.ownerTabId, navigationGeneration);
+  temporaryTranscriptTabOwners.set(owner.ownerTabId, retained);
+
   for (const [key, entry] of temporaryTranscriptSources) {
-    if (entry.owner.ownerTabId === owner.ownerTabId && !sameOwner(entry.owner, owner)) {
+    if (entry.owner.ownerTabId === retained.ownerTabId && !sameOwner(entry.owner, retained)) {
       temporaryTranscriptSources.delete(key);
     }
   }
+  return retained;
 }
 
 export function clearTemporaryCurrentVideoTranscriptCacheForTab(ownerTabId: number): void {
@@ -120,6 +141,7 @@ export function clearTemporaryCurrentVideoTranscriptCacheForTab(ownerTabId: numb
       temporaryTranscriptSources.delete(key);
     }
   }
+  invalidateTemporaryCurrentVideoTranscriptTab(ownerTabId);
 }
 
 export function clearTemporaryCurrentVideoTranscriptCacheForOwner(
@@ -129,7 +151,16 @@ export function clearTemporaryCurrentVideoTranscriptCacheForOwner(
 }
 
 export function clearTemporaryCurrentVideoTranscriptCache(): void {
+  const ownerTabIds = new Set<number>([
+    ...temporaryTranscriptTabGenerations.keys(),
+    ...temporaryTranscriptTabOwners.keys(),
+    ...Array.from(temporaryTranscriptSources.values()).map(entry => entry.owner.ownerTabId),
+  ]);
   temporaryTranscriptSources.clear();
+  temporaryTranscriptTabOwners.clear();
+  for (const ownerTabId of ownerTabIds) {
+    invalidateTemporaryCurrentVideoTranscriptTab(ownerTabId);
+  }
 }
 
 function matchingTemporaryEntries(
@@ -182,12 +213,22 @@ function entryKey(ownerTabId: number, sourceIdentityKey: string): string {
   return `${ownerTabId}:${sourceIdentityKey}`;
 }
 
-function validOwner(owner: CurrentVideoTemporaryTranscriptOwner): boolean {
+function validOwnerInput(owner: CurrentVideoTemporaryTranscriptOwnerInput): boolean {
   return Number.isInteger(owner.ownerTabId)
     && owner.ownerTabId > 0
     && Boolean(owner.bvid)
     && Number.isFinite(owner.cid)
     && Number.isFinite(owner.page);
+}
+
+function validOwner(owner: CurrentVideoTemporaryTranscriptOwner): boolean {
+  if (!validOwnerInput(owner)) return false;
+  if (!Number.isInteger(owner.navigationGeneration) || owner.navigationGeneration < 0) return false;
+  if ((temporaryTranscriptTabGenerations.get(owner.ownerTabId) ?? 0) !== owner.navigationGeneration) {
+    return false;
+  }
+  const retained = temporaryTranscriptTabOwners.get(owner.ownerTabId);
+  return Boolean(retained && sameOwner(retained, owner));
 }
 
 function ownerMatchesIdentity(
@@ -206,7 +247,25 @@ function sameOwner(
   return left.ownerTabId === right.ownerTabId
     && left.bvid === right.bvid
     && left.cid === right.cid
+    && left.page === right.page
+    && left.navigationGeneration === right.navigationGeneration;
+}
+
+function sameOwnerIdentity(
+  left: CurrentVideoTemporaryTranscriptOwnerInput,
+  right: CurrentVideoTemporaryTranscriptOwnerInput,
+): boolean {
+  return left.ownerTabId === right.ownerTabId
+    && left.bvid === right.bvid
+    && left.cid === right.cid
     && left.page === right.page;
+}
+
+function invalidateTemporaryCurrentVideoTranscriptTab(ownerTabId: number): void {
+  if (!Number.isInteger(ownerTabId) || ownerTabId <= 0) return;
+  const generation = (temporaryTranscriptTabGenerations.get(ownerTabId) ?? 0) + 1;
+  temporaryTranscriptTabGenerations.set(ownerTabId, generation);
+  temporaryTranscriptTabOwners.delete(ownerTabId);
 }
 
 function languageKey(value: string | null | undefined): string {
