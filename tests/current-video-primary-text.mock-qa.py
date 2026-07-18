@@ -64,6 +64,14 @@ def last_message_for(page, action):
     )
 
 
+def message_count_for(page, action):
+    return page.evaluate(
+        """(action) => (window.__assistantMockMessages || [])
+            .filter((message) => message.action === action).length""",
+        action,
+    )
+
+
 def assert_no_full_text_or_search(page):
     actions = message_actions(page)
     leaked = [action for action in actions if action in FULL_TEXT_OR_SEARCH_ACTIONS]
@@ -142,6 +150,43 @@ def run_flow(page):
     assert_no_horizontal_overflow(page)
 
 
+def run_missing_selection_flow(page):
+    page.route("**/*", route_mock)
+    page.goto(MOCK_URL)
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+
+    page.get_by_text("展开助手").click()
+    expect(page.get_by_text("主要文本来源").first).to_be_visible()
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    expect(page.get_by_text("B站字幕").first).to_be_visible()
+    page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕").get_by_role("button", name="用于视频助手").click()
+    expect(page.get_by_text("已用于当前视频助手").first).to_be_visible()
+
+    storage_after_select = page.evaluate("window.__assistantMockStorage.currentVideoPrimaryTextSelections || {}")
+    saved_keys = list(storage_after_select.values())
+    assert saved_keys, "explicit V1 source selection was not saved"
+    saved_v1_key = saved_keys[0]
+
+    page.evaluate("window.__assistantMockReplaceSubtitleSource()")
+    search_count_before = message_count_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS")
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    page.wait_for_function(
+        """(expected) => [...(window.__assistantMockMessages || [])].reverse().some(
+            (message) => message.action === "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE"
+                && message.params?.selectedSourceIdentityKey === expected
+        )""",
+        arg=saved_v1_key,
+    )
+
+    expect(page.get_by_text("此前选择的主要文本来源已经不可用").first).to_be_visible()
+    expect(page.locator("textarea")).to_be_disabled()
+    expect(page.get_by_role("button", name="提问")).to_be_disabled()
+    assert message_count_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS") == search_count_before
+
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
 def run_late_switch_flow(page):
     page.route("**/*", route_mock)
     page.goto(MOCK_URL)
@@ -167,6 +212,11 @@ def main():
             run_late_switch_flow(late_switch)
             assert not late_switch_errors, "\n".join(late_switch_errors)
             late_switch.close()
+
+            missing_selection, missing_selection_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_missing_selection_flow(missing_selection)
+            assert not missing_selection_errors, "\n".join(missing_selection_errors)
+            missing_selection.close()
 
             desktop, desktop_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
             run_flow(desktop)

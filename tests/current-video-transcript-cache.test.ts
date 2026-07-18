@@ -674,6 +674,50 @@ test('temporary transcript admission rejects a fifth live owner without evicting
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(fifthOwner, transcriptIdentityFromEvidence(fifth), 9825).length, 1);
 });
 
+test('temporary transcript admission counts shared source identity once across owners', () => {
+  clearTemporaryCurrentVideoTranscriptCache();
+  const shared = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '同一字幕身份被两个打开页面复用。' }] },
+    baseNormalizeOptions({ bvid: 'BV1TempSharedA', cid: 6501, fetchedAt: 9850 }),
+  );
+  const sharedIdentity = transcriptIdentityFromEvidence(shared);
+  const sharedOwnerOne = temporaryOwner(171, shared);
+  const sharedOwnerTwo = temporaryOwner(172, shared);
+
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(sharedOwnerOne, shared, 9860).status, 'stored');
+  const sharedSecond = putTemporaryCurrentVideoTranscriptEvidence(sharedOwnerTwo, shared, 9861);
+  assert.equal(sharedSecond.status, 'stored');
+  assert.equal(sharedSecond.retainedSourceCount, 1);
+
+  for (let index = 0; index < CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES - 1; index += 1) {
+    const evidence = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: `第 ${index + 2} 个唯一字幕身份。` }] },
+      baseNormalizeOptions({ bvid: `BV1TempUnique${index}`, cid: 6510 + index, fetchedAt: 9862 + index }),
+    );
+    const owner = temporaryOwner(173 + index, evidence);
+    const stored = putTemporaryCurrentVideoTranscriptEvidence(owner, evidence, 9862 + index);
+    assert.equal(stored.status, 'stored');
+    assert.equal(stored.retainedSourceCount, 2 + index);
+  }
+
+  const fifthUnique = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '第五个唯一字幕身份才应该被拒绝。' }] },
+    baseNormalizeOptions({ bvid: 'BV1TempUniqueE', cid: 6520, fetchedAt: 9870 }),
+  );
+  const fifthOwner = temporaryOwner(180, fifthUnique);
+  const rejected = putTemporaryCurrentVideoTranscriptEvidence(fifthOwner, fifthUnique, 9871);
+  assert.equal(rejected.status, 'capacity_exceeded');
+  assert.equal(rejected.retainedSourceCount, CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES);
+
+  clearTemporaryCurrentVideoTranscriptCacheForTab(sharedOwnerOne.ownerTabId);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(sharedOwnerTwo, sharedIdentity, 9872).length, 1);
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(fifthOwner, fifthUnique, 9873).status, 'capacity_exceeded');
+
+  clearTemporaryCurrentVideoTranscriptCacheForTab(sharedOwnerTwo.ownerTabId);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(sharedOwnerTwo, sharedIdentity, 9874).length, 0);
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(fifthOwner, fifthUnique, 9875).status, 'stored');
+});
+
 test('temporary transcript admission enforces cumulative bytes and single-source byte caps', () => {
   clearTemporaryCurrentVideoTranscriptCache();
   const first = normalizeBilibiliTranscriptEvidence(
@@ -707,6 +751,43 @@ test('temporary transcript admission enforces cumulative bytes and single-source
   });
   assert.equal(singleTooLarge.status, 'source_too_large');
   assert.equal(getTemporaryCurrentVideoTranscriptSegments(firstOwner, transcriptIdentityFromEvidence(first), 9914).length, 1);
+});
+
+test('temporary transcript byte cap counts shared source identity once across owners', () => {
+  clearTemporaryCurrentVideoTranscriptCache();
+  const shared = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '同一字幕身份的正文体积不能因两个页面重复计量。'.repeat(16) }] },
+    baseNormalizeOptions({ bvid: 'BV1TempSharedBytes', cid: 6531, fetchedAt: 9950 }),
+  );
+  const other = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 0, to: 2, content: '另一个唯一字幕身份仍应受总量上限限制。' }] },
+    baseNormalizeOptions({ bvid: 'BV1TempSharedBytesB', cid: 6532, fetchedAt: 9951 }),
+  );
+  const sharedOwnerOne = temporaryOwner(181, shared);
+  const sharedOwnerTwo = temporaryOwner(182, shared);
+  const otherOwner = temporaryOwner(183, other);
+  const sharedBytes = temporaryStoredBytes(shared, 9960);
+  const otherBytes = temporaryStoredBytes(other, 9962);
+
+  assert.equal(putTemporaryCurrentVideoTranscriptEvidence(sharedOwnerOne, shared, 9960, {
+    maxSourceCount: CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES,
+    maxBytes: sharedBytes,
+  }).status, 'stored');
+  const sharedSecond = putTemporaryCurrentVideoTranscriptEvidence(sharedOwnerTwo, shared, 9961, {
+    maxSourceCount: CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES,
+    maxBytes: sharedBytes,
+  });
+  assert.equal(sharedSecond.status, 'stored');
+  assert.equal(sharedSecond.retainedBytes, sharedBytes);
+  assert.equal(sharedSecond.retainedSourceCount, 1);
+
+  const rejectedOther = putTemporaryCurrentVideoTranscriptEvidence(otherOwner, other, 9962, {
+    maxSourceCount: CURRENT_VIDEO_TEMPORARY_TRANSCRIPT_MAX_SOURCES,
+    maxBytes: sharedBytes + otherBytes - 1,
+  });
+  assert.equal(rejectedOther.status, 'capacity_exceeded');
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(sharedOwnerOne, transcriptIdentityFromEvidence(shared), 9963).length, 1);
+  assert.equal(getTemporaryCurrentVideoTranscriptSegments(sharedOwnerTwo, transcriptIdentityFromEvidence(shared), 9963).length, 1);
 });
 
 test('temporary source_too_large replacement clears only the same owner old body', () => {
@@ -1047,6 +1128,60 @@ test('repo fails closed and skips owner current-source marker when clear generat
       transcriptIdentityFromEvidence(oldBody),
       10_823,
       owner,
+    );
+    assert.equal(explicitOld.active, true);
+    assert.equal(explicitOld.sourceIdentityKey, oldBody.sourceRecord.sourceIdentityKey);
+  });
+});
+
+test('repo fails closed when temporary owner changes after persistent commit', async () => {
+  await withFreshTranscriptRepo(async (repo) => {
+    const oldBody = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'old body before post commit owner switch' }] },
+      baseNormalizeOptions({ bvid: 'BV1PostOwnerSwitch', cid: 6494, fetchedAt: 10_830 }),
+    );
+    const currentBody = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'current body persisted before owner invalidation' }] },
+      baseNormalizeOptions({ bvid: 'BV1PostOwnerSwitch', cid: 6494, fetchedAt: 10_831 }),
+    );
+    const owner = temporaryOwner(164, currentBody);
+
+    await repo.upsertCurrentVideoTranscriptEvidence(oldBody);
+
+    const { db } = await import('../src/background/storage/db.ts');
+    const originalTransaction = db.transaction;
+    const runOriginalTransaction = originalTransaction.bind(db) as (...transactionArgs: unknown[]) => Promise<unknown>;
+    let ownerSwitched = false;
+    db.transaction = (async (...args: unknown[]) => {
+      const result = await runOriginalTransaction(...args);
+      if (!ownerSwitched) {
+        ownerSwitched = true;
+        retainTemporaryCurrentVideoTranscriptOwner({
+          ownerTabId: owner.ownerTabId,
+          bvid: 'BV1PostOwnerOther',
+          cid: 6495,
+          page: 1,
+        });
+      }
+      return result;
+    }) as typeof db.transaction;
+
+    try {
+      const currentState = await repo.upsertCurrentVideoTranscriptEvidence(currentBody, {
+        temporaryOwner: owner,
+      });
+      assert.equal(ownerSwitched, true);
+      assert.equal(currentState.active, false);
+      assert.equal(currentState.reason, 'temporary_transcript_owner_missing');
+    } finally {
+      db.transaction = originalTransaction;
+    }
+
+    const returnedOwner = temporaryOwner(owner.ownerTabId, oldBody);
+    const explicitOld = await repo.getCurrentVideoTranscriptEvidenceState(
+      transcriptIdentityFromEvidence(oldBody),
+      10_832,
+      returnedOwner,
     );
     assert.equal(explicitOld.active, true);
     assert.equal(explicitOld.sourceIdentityKey, oldBody.sourceRecord.sourceIdentityKey);

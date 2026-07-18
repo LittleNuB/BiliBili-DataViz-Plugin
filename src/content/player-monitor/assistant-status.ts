@@ -998,6 +998,8 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
     '问这个视频，或描述想跳到的片段。助手会先回答，再列出引用片段和手动跳转操作。',
   );
 
+  const primaryTextBlockReason = primaryTextSubmissionBlockMessage(buildPrimaryTextStateForContext(context));
+
   const form = document.createElement('div');
   form.className = 'bdc-assistant-search-form';
 
@@ -1007,6 +1009,7 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
   input.maxLength = 120;
   input.placeholder = '问这个视频，或描述想跳到的片段';
   input.value = assistantState.segmentQuery;
+  input.disabled = Boolean(primaryTextBlockReason);
   input.setAttribute('aria-label', '问这个视频，或描述想跳到的片段');
   input.addEventListener('input', () => {
     assistantState.segmentQuery = input.value;
@@ -1025,11 +1028,18 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
     () => {
       void searchCurrentVideoSegmentsFromPage();
     },
-    assistantState.segmentLoading || !context.bvid,
+    assistantState.segmentLoading || !context.bvid || Boolean(primaryTextBlockReason),
   ));
   block.appendChild(form);
 
-  if (!context.transcriptEvidence?.active) {
+  if (primaryTextBlockReason) {
+    appendText(
+      block,
+      'div',
+      'bdc-assistant-subtitle-detail',
+      primaryTextBlockReason,
+    );
+  } else if (!context.transcriptEvidence?.active) {
     appendText(
       block,
       'div',
@@ -1779,12 +1789,11 @@ async function searchCurrentVideoSegmentsFromPage(): Promise<void> {
     renderAssistantShell();
     return;
   }
-  const primaryTextState = buildPrimaryTextStateForContext(assistantState.context);
-  if (
-    primaryTextState.sources.length > 1
-    && !primaryTextState.selectedSourceIdentityKey
-  ) {
-    assistantState.segmentError = '请先明确选择一个主要文本来源，再向当前视频提问。';
+  const primaryTextBlockReason = primaryTextSubmissionBlockMessage(
+    buildPrimaryTextStateForContext(assistantState.context),
+  );
+  if (primaryTextBlockReason) {
+    assistantState.segmentError = primaryTextBlockReason;
     assistantState.segmentResult = null;
     renderAssistantShell();
     return;
@@ -1837,6 +1846,17 @@ async function confirmCurrentVideoSegmentJumpFromPage(
     assistantState.segmentReturnAvailable = false;
     renderAssistantShell();
     return;
+  }
+  if (assistantState.context?.kind === 'video') {
+    const primaryTextBlockReason = primaryTextSubmissionBlockMessage(
+      buildPrimaryTextStateForContext(assistantState.context),
+    );
+    if (primaryTextBlockReason) {
+      assistantState.segmentJumpStatus = primaryTextBlockReason;
+      assistantState.segmentReturnAvailable = false;
+      renderAssistantShell();
+      return;
+    }
   }
 
   assistantState.segmentJumpLoading = true;
@@ -2267,10 +2287,26 @@ function activePrimaryTextSourceIdentityKey(context: CurrentVideoContext): strin
   return buildPrimaryTextStateForContext(context).activeSourceIdentityKey;
 }
 
+function primaryTextSubmissionBlockMessage(
+  primaryTextState: ReturnType<typeof buildPrimaryTextStateForContext>,
+): string | null {
+  if (primaryTextState.state.status === 'selected_source_missing') {
+    return '此前选择的主要文本来源已不可用。请重新检测字幕正文，或重新选择新的主要文本来源后再提问。';
+  }
+  if (
+    primaryTextState.sources.length > 1
+    && !primaryTextState.selectedSourceIdentityKey
+  ) {
+    return '请先明确选择一个主要文本来源，再向当前视频提问。';
+  }
+  return null;
+}
+
 function currentPrimaryTextRequestParams(): Record<string, unknown> {
   const context = assistantState.context;
   if (context?.kind !== 'video') return {};
-  const selectedSourceIdentityKey = activePrimaryTextSourceIdentityKey(context);
+  const selectedSourceIdentityKey = selectedPrimaryTextSourceIdentityKey(context)
+    ?? activePrimaryTextSourceIdentityKey(context);
   return selectedSourceIdentityKey ? { selectedSourceIdentityKey } : {};
 }
 

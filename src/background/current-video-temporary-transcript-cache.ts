@@ -25,9 +25,16 @@ export interface CurrentVideoTemporaryTranscriptOwner {
 
 interface TemporaryTranscriptEntry {
   owner: CurrentVideoTemporaryTranscriptOwner;
+  sourceIdentityKey: string;
+  savedAt: number;
+}
+
+interface TemporaryTranscriptBody {
   source: CurrentVideoTranscriptSourceRecord;
   segments: CurrentVideoTranscriptSegment[];
+  retainedBytes: number;
   savedAt: number;
+  ownerKeys: Set<string>;
 }
 
 type CurrentVideoTemporaryTranscriptCurrentSourceStatus =
@@ -86,7 +93,15 @@ export interface CurrentVideoTemporaryTranscriptLimits {
   maxBytes: number;
 }
 
-const temporaryTranscriptSources = new Map<string, TemporaryTranscriptEntry>();
+interface TemporaryTranscriptProjectedUsage {
+  retainedBytes: number;
+  retainedSourceCount: number;
+  projectedBytes: number;
+  projectedSourceCount: number;
+}
+
+const temporaryTranscriptSources = new Map<string, TemporaryTranscriptBody>();
+const temporaryTranscriptOwnerEntries = new Map<string, TemporaryTranscriptEntry>();
 const temporaryTranscriptCurrentSources = new Map<string, CurrentVideoTemporaryTranscriptCurrentSource>();
 const temporaryTranscriptTabGenerations = new Map<number, number>();
 const temporaryTranscriptTabOwners = new Map<number, CurrentVideoTemporaryTranscriptOwner>();
@@ -124,11 +139,10 @@ export function putTemporaryCurrentVideoTranscriptEvidence(
     stale: false,
   }));
   const sourceBytes = measureTranscriptPersistentBytes(source, segments);
-  const retainedEntries = Array.from(temporaryTranscriptSources.values())
-    .filter(entry => !sameOwner(entry.owner, owner));
-  const retainedBytes = retainedEntries.reduce(
-    (sum, entry) => sum + measureTranscriptPersistentBytes(entry.source, entry.segments),
-    0,
+  const projectedUsage = projectTemporaryTranscriptUsageForReplacement(
+    owner,
+    sourceIdentityKey,
+    sourceBytes,
   );
   if (sourceBytes > normalizedLimits.maxBytes) {
     clearTemporaryCurrentVideoTranscriptSourceReplacement(owner);
@@ -136,41 +150,33 @@ export function putTemporaryCurrentVideoTranscriptEvidence(
     return temporaryPutResult('source_too_large', normalizedLimits, {
       sourceIdentityKey,
       sourceBytes,
-      retainedBytes,
-      retainedSourceCount: retainedEntries.length,
+      retainedBytes: projectedUsage.retainedBytes,
+      retainedSourceCount: projectedUsage.retainedSourceCount,
     });
   }
 
-  const projectedSourceCount = retainedEntries.length + 1;
-  const projectedBytes = retainedBytes + sourceBytes;
   if (
-    projectedSourceCount > normalizedLimits.maxSourceCount
-    || projectedBytes > normalizedLimits.maxBytes
+    projectedUsage.projectedSourceCount > normalizedLimits.maxSourceCount
+    || projectedUsage.projectedBytes > normalizedLimits.maxBytes
   ) {
     clearTemporaryCurrentVideoTranscriptSourceReplacement(owner);
     setTemporaryCurrentVideoTranscriptCurrentSource(owner, source, 'capacity_exceeded', now);
     return temporaryPutResult('capacity_exceeded', normalizedLimits, {
       sourceIdentityKey,
       sourceBytes,
-      retainedBytes,
-      retainedSourceCount: retainedEntries.length,
+      retainedBytes: projectedUsage.retainedBytes,
+      retainedSourceCount: projectedUsage.retainedSourceCount,
     });
   }
 
   clearTemporaryCurrentVideoTranscriptSourceReplacement(owner);
   setTemporaryCurrentVideoTranscriptCurrentSource(owner, source, 'temporary_cached', now);
-
-  temporaryTranscriptSources.set(entryKey(owner.ownerTabId, sourceIdentityKey), {
-    owner: { ...owner },
-    source,
-    segments,
-    savedAt: now,
-  });
+  attachTemporaryTranscriptOwnerToBody(owner, sourceIdentityKey, source, segments, sourceBytes, now);
   return temporaryPutResult('stored', normalizedLimits, {
     sourceIdentityKey,
     sourceBytes,
-    retainedBytes: projectedBytes,
-    retainedSourceCount: projectedSourceCount,
+    retainedBytes: projectedUsage.projectedBytes,
+    retainedSourceCount: projectedUsage.projectedSourceCount,
   });
 }
 
@@ -196,11 +202,11 @@ export function getTemporaryCurrentVideoTranscriptEvidenceState(
   identity: CurrentVideoTranscriptIdentity,
   now = Date.now(),
 ): CurrentVideoTranscriptEvidenceState {
-  const entries = matchingTemporaryEntries(owner, identity, now);
+  const bodies = matchingTemporaryBodies(owner, identity, now);
   return buildTranscriptEvidenceStateFromCache(
     identity,
-    entries.map(entry => entry.source),
-    entries.flatMap(entry => entry.segments),
+    bodies.map(body => body.source),
+    bodies.flatMap(body => body.segments),
     now,
   );
 }
@@ -212,11 +218,15 @@ export function getTemporaryCurrentVideoTranscriptSegments(
 ): CurrentVideoTranscriptSegment[] {
   const state = getTemporaryCurrentVideoTranscriptEvidenceState(owner, identity, now);
   if (!state.active || !state.sourceIdentityKey) return [];
-  const entry = temporaryTranscriptSources.get(entryKey(owner.ownerTabId, state.sourceIdentityKey));
+  const ownerKey = temporaryTranscriptOwnerEntryKey(owner, state.sourceIdentityKey);
+  const entry = temporaryTranscriptOwnerEntries.get(ownerKey);
   if (!entry || !sameOwner(entry.owner, owner)) return [];
-  entry.source.lastAccessedAt = now;
+  const body = temporaryTranscriptSources.get(entry.sourceIdentityKey);
+  if (!body) return [];
+  body.source.lastAccessedAt = now;
+  body.savedAt = now;
   entry.savedAt = now;
-  return entry.segments
+  return body.segments
     .filter(segment =>
       !segment.stale
       && segment.bvid === identity.bvid
@@ -340,9 +350,9 @@ export function retainTemporaryCurrentVideoTranscriptOwner(
   temporaryTranscriptTabGenerations.set(owner.ownerTabId, navigationGeneration);
   temporaryTranscriptTabOwners.set(owner.ownerTabId, retained);
 
-  for (const [key, entry] of temporaryTranscriptSources) {
+  for (const [key, entry] of temporaryTranscriptOwnerEntries) {
     if (entry.owner.ownerTabId === retained.ownerTabId && !sameOwner(entry.owner, retained)) {
-      temporaryTranscriptSources.delete(key);
+      detachTemporaryTranscriptOwnerEntry(key, entry);
     }
   }
   for (const [key, marker] of temporaryTranscriptCurrentSources) {
@@ -354,9 +364,9 @@ export function retainTemporaryCurrentVideoTranscriptOwner(
 }
 
 export function clearTemporaryCurrentVideoTranscriptCacheForTab(ownerTabId: number): void {
-  for (const [key, entry] of temporaryTranscriptSources) {
+  for (const [key, entry] of temporaryTranscriptOwnerEntries) {
     if (entry.owner.ownerTabId === ownerTabId) {
-      temporaryTranscriptSources.delete(key);
+      detachTemporaryTranscriptOwnerEntry(key, entry);
     }
   }
   for (const [key, marker] of temporaryTranscriptCurrentSources) {
@@ -379,10 +389,11 @@ export function clearTemporaryCurrentVideoTranscriptCache(): void {
   const ownerTabIds = new Set<number>([
     ...temporaryTranscriptTabGenerations.keys(),
     ...temporaryTranscriptTabOwners.keys(),
-    ...Array.from(temporaryTranscriptSources.values()).map(entry => entry.owner.ownerTabId),
+    ...Array.from(temporaryTranscriptOwnerEntries.values()).map(entry => entry.owner.ownerTabId),
     ...Array.from(temporaryTranscriptCurrentSources.values()).map(marker => marker.owner.ownerTabId),
   ]);
   temporaryTranscriptSources.clear();
+  temporaryTranscriptOwnerEntries.clear();
   temporaryTranscriptCurrentSources.clear();
   temporaryTranscriptTabOwners.clear();
   for (const ownerTabId of ownerTabIds) {
@@ -390,38 +401,119 @@ export function clearTemporaryCurrentVideoTranscriptCache(): void {
   }
 }
 
-function matchingTemporaryEntries(
+function matchingTemporaryBodies(
   owner: CurrentVideoTemporaryTranscriptOwner,
   identity: CurrentVideoTranscriptIdentity,
   now: number,
-): TemporaryTranscriptEntry[] {
+): TemporaryTranscriptBody[] {
   if (!validOwner(owner) || !ownerMatchesIdentity(owner, identity)) return [];
-  const entries: TemporaryTranscriptEntry[] = [];
-  for (const entry of temporaryTranscriptSources.values()) {
+  const bodies: TemporaryTranscriptBody[] = [];
+  for (const entry of temporaryTranscriptOwnerEntries.values()) {
     if (!sameOwner(entry.owner, owner)) continue;
-    if (identity.sourceIdentityKey && entry.source.sourceIdentityKey !== identity.sourceIdentityKey) {
+    const body = temporaryTranscriptSources.get(entry.sourceIdentityKey);
+    if (!body) continue;
+    if (identity.sourceIdentityKey && body.source.sourceIdentityKey !== identity.sourceIdentityKey) {
       continue;
     }
-    if (identity.language && languageKey(entry.source.language) !== languageKey(identity.language)) {
+    if (identity.language && languageKey(body.source.language) !== languageKey(identity.language)) {
       continue;
     }
-    if (identity.sourceHash && entry.source.sourceHash !== identity.sourceHash) {
+    if (identity.sourceHash && body.source.sourceHash !== identity.sourceHash) {
       continue;
     }
-    entry.source.lastAccessedAt = now;
+    body.source.lastAccessedAt = now;
+    body.savedAt = now;
     entry.savedAt = now;
-    entries.push(entry);
+    bodies.push(body);
   }
-  return entries;
+  return bodies;
 }
 
 function clearTemporaryCurrentVideoTranscriptSourceReplacement(
   owner: CurrentVideoTemporaryTranscriptOwner,
 ): void {
-  for (const [key, entry] of temporaryTranscriptSources) {
+  for (const [key, entry] of temporaryTranscriptOwnerEntries) {
     if (sameOwner(entry.owner, owner)) {
-      temporaryTranscriptSources.delete(key);
+      detachTemporaryTranscriptOwnerEntry(key, entry);
     }
+  }
+}
+
+function projectTemporaryTranscriptUsageForReplacement(
+  owner: CurrentVideoTemporaryTranscriptOwner,
+  sourceIdentityKey: string,
+  sourceBytes: number,
+): TemporaryTranscriptProjectedUsage {
+  const retainedSourceKeys = new Set(temporaryTranscriptSources.keys());
+
+  for (const [ownerKey, entry] of temporaryTranscriptOwnerEntries) {
+    if (!sameOwner(entry.owner, owner)) continue;
+    const body = temporaryTranscriptSources.get(entry.sourceIdentityKey);
+    if (!body) continue;
+    const remainingOwnerCount = body.ownerKeys.has(ownerKey)
+      ? body.ownerKeys.size - 1
+      : body.ownerKeys.size;
+    if (remainingOwnerCount <= 0) {
+      retainedSourceKeys.delete(entry.sourceIdentityKey);
+    }
+  }
+
+  let retainedBytes = 0;
+  for (const key of retainedSourceKeys) {
+    retainedBytes += temporaryTranscriptSources.get(key)?.retainedBytes ?? 0;
+  }
+
+  const incomingAlreadyRetained = retainedSourceKeys.has(sourceIdentityKey);
+  return {
+    retainedBytes,
+    retainedSourceCount: retainedSourceKeys.size,
+    projectedBytes: retainedBytes + (incomingAlreadyRetained ? 0 : sourceBytes),
+    projectedSourceCount: retainedSourceKeys.size + (incomingAlreadyRetained ? 0 : 1),
+  };
+}
+
+function attachTemporaryTranscriptOwnerToBody(
+  owner: CurrentVideoTemporaryTranscriptOwner,
+  sourceIdentityKey: string,
+  source: CurrentVideoTranscriptSourceRecord,
+  segments: CurrentVideoTranscriptSegment[],
+  retainedBytes: number,
+  now: number,
+): void {
+  const ownerKey = temporaryTranscriptOwnerEntryKey(owner, sourceIdentityKey);
+  let body = temporaryTranscriptSources.get(sourceIdentityKey);
+  if (!body) {
+    body = {
+      source,
+      segments,
+      retainedBytes,
+      savedAt: now,
+      ownerKeys: new Set(),
+    };
+    temporaryTranscriptSources.set(sourceIdentityKey, body);
+  } else {
+    body.source.lastAccessedAt = now;
+    body.savedAt = now;
+  }
+
+  body.ownerKeys.add(ownerKey);
+  temporaryTranscriptOwnerEntries.set(ownerKey, {
+    owner: { ...owner },
+    sourceIdentityKey,
+    savedAt: now,
+  });
+}
+
+function detachTemporaryTranscriptOwnerEntry(
+  ownerKey: string,
+  entry: TemporaryTranscriptEntry,
+): void {
+  temporaryTranscriptOwnerEntries.delete(ownerKey);
+  const body = temporaryTranscriptSources.get(entry.sourceIdentityKey);
+  if (!body) return;
+  body.ownerKeys.delete(ownerKey);
+  if (body.ownerKeys.size === 0) {
+    temporaryTranscriptSources.delete(entry.sourceIdentityKey);
   }
 }
 
@@ -515,8 +607,18 @@ function buildTemporaryCurrentVideoTranscriptFailureState(
   });
 }
 
-function entryKey(ownerTabId: number, sourceIdentityKey: string): string {
-  return `${ownerTabId}:${sourceIdentityKey}`;
+function temporaryTranscriptOwnerEntryKey(
+  owner: CurrentVideoTemporaryTranscriptOwner,
+  sourceIdentityKey: string,
+): string {
+  return [
+    owner.ownerTabId,
+    owner.navigationGeneration,
+    owner.bvid,
+    owner.cid,
+    owner.page,
+    sourceIdentityKey,
+  ].join(':');
 }
 
 function currentSourceKey(owner: CurrentVideoTemporaryTranscriptOwner): string {
@@ -589,7 +691,7 @@ function normalizeTemporaryTranscriptLimits(
 
 function temporaryTranscriptRetainedBytes(): number {
   return Array.from(temporaryTranscriptSources.values())
-    .reduce((sum, entry) => sum + measureTranscriptPersistentBytes(entry.source, entry.segments), 0);
+    .reduce((sum, body) => sum + body.retainedBytes, 0);
 }
 
 function validOwnerInput(owner: CurrentVideoTemporaryTranscriptOwnerInput): boolean {

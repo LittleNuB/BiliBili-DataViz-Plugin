@@ -71,9 +71,9 @@
       let playbackPosition = 12;
       let returnPointSeconds = null;
       let lastSearchResult = null;
-      const subtitleSourceHash = "mock-source-hash-hidden";
-      const subtitleBodyHash = "mock-body-hash-hidden";
-      const subtitleTimelineHash = "mock-timeline-hash-hidden";
+      let subtitleSourceHash = "mock-source-hash-hidden";
+      let subtitleBodyHash = "mock-body-hash-hidden";
+      let subtitleTimelineHash = "mock-timeline-hash-hidden";
       const subtitleSourceIdentityKey = () => `primary-text:bilibili_subtitle:${mockBvid}:${mockCid}:${mockPage}:zh-cn:${subtitleSourceHash}`;
       const runtimeMessages = [];
       const extensionStorage = {};
@@ -552,6 +552,12 @@
       window.__assistantMockStorage = extensionStorage;
       window.__assistantMockSwitchDuringTranscript = () => {
         switchDuringNextTranscriptFetch = true;
+      };
+      window.__assistantMockReplaceSubtitleSource = () => {
+        subtitleCached = true;
+        subtitleSourceHash = "mock-source-hash-hidden-v2";
+        subtitleBodyHash = "mock-body-hash-hidden-v2";
+        subtitleTimelineHash = "mock-timeline-hash-hidden-v2";
       };
 
       function searchCurrentVideoSegmentsResult(query) {

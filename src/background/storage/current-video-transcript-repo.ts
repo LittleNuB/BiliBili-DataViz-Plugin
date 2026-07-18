@@ -110,6 +110,11 @@ export async function upsertCurrentVideoTranscriptEvidence(
 
   if (!currentVideoTranscriptGenerationStillWritable(expectedClearGeneration)) {
     state = transcriptClearedBeforeWriteState(evidence);
+  } else if (
+    options.temporaryOwner
+    && !isTemporaryCurrentVideoTranscriptOwnerValidForIdentity(options.temporaryOwner, evidence.sourceRecord)
+  ) {
+    state = buildTemporaryCurrentVideoTranscriptWriteFailureState(evidence, null);
   } else {
     for (const ownerSource of persistentSourcesToMarkAfterCommit) {
       markTemporaryCurrentVideoTranscriptPersistentSource(
