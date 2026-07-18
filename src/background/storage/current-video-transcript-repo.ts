@@ -108,11 +108,15 @@ export async function upsertCurrentVideoTranscriptEvidence(
     },
   );
 
-  for (const ownerSource of persistentSourcesToMarkAfterCommit) {
-    markTemporaryCurrentVideoTranscriptPersistentSource(
-      ownerSource.owner,
-      ownerSource.source,
-    );
+  if (!currentVideoTranscriptGenerationStillWritable(expectedClearGeneration)) {
+    state = transcriptClearedBeforeWriteState(evidence);
+  } else {
+    for (const ownerSource of persistentSourcesToMarkAfterCommit) {
+      markTemporaryCurrentVideoTranscriptPersistentSource(
+        ownerSource.owner,
+        ownerSource.source,
+      );
+    }
   }
 
   if (!state) {

@@ -997,6 +997,62 @@ test('successful current-source write and owner release clear stale rejection ma
   });
 });
 
+test('repo fails closed and skips owner current-source marker when clear generation changes after persistent commit', async () => {
+  await withFreshTranscriptRepo(async (repo) => {
+    const oldBody = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'old body before post commit clear' }] },
+      baseNormalizeOptions({ bvid: 'BV1PostCommitClear', cid: 6493, fetchedAt: 10_820 }),
+    );
+    const currentBody = normalizeBilibiliTranscriptEvidence(
+      { body: [{ from: 0, to: 2, content: 'current body persisted before marker' }] },
+      baseNormalizeOptions({ bvid: 'BV1PostCommitClear', cid: 6493, fetchedAt: 10_821 }),
+    );
+    const owner = temporaryOwner(163, currentBody);
+
+    await repo.upsertCurrentVideoTranscriptEvidence(oldBody);
+
+    const { db } = await import('../src/background/storage/db.ts');
+    const originalTransaction = db.transaction;
+    const runOriginalTransaction = originalTransaction.bind(db) as (...transactionArgs: unknown[]) => Promise<unknown>;
+    let clearInjected = false;
+    db.transaction = (async (...args: unknown[]) => {
+      const result = await runOriginalTransaction(...args);
+      if (!clearInjected) {
+        clearInjected = true;
+        await runCurrentVideoTranscriptClearCoordinator(async () => undefined);
+      }
+      return result;
+    }) as typeof db.transaction;
+
+    try {
+      const currentState = await repo.upsertCurrentVideoTranscriptEvidence(currentBody, {
+        temporaryOwner: owner,
+      });
+      assert.equal(clearInjected, true);
+      assert.equal(currentState.active, false);
+      assert.equal(currentState.reason, 'transcript_cache_cleared_during_request');
+    } finally {
+      db.transaction = originalTransaction;
+    }
+
+    const exactCurrent = await repo.getCurrentVideoTranscriptEvidenceState(
+      transcriptIdentityFromEvidence(currentBody),
+      10_822,
+      owner,
+    );
+    assert.equal(exactCurrent.active, true);
+    assert.equal(exactCurrent.sourceIdentityKey, currentBody.sourceRecord.sourceIdentityKey);
+
+    const explicitOld = await repo.getCurrentVideoTranscriptEvidenceState(
+      transcriptIdentityFromEvidence(oldBody),
+      10_823,
+      owner,
+    );
+    assert.equal(explicitOld.active, true);
+    assert.equal(explicitOld.sourceIdentityKey, oldBody.sourceRecord.sourceIdentityKey);
+  });
+});
+
 test('Dexie 0.12 subtitle cache upgrade clears only transcript tables transactionally', async () => {
   const tables = {
     currentVideoTranscriptSources: [{ identityKey: 'legacy-source' }],
