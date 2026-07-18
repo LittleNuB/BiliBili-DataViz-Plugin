@@ -447,6 +447,79 @@ test('background keeps an exact missing saved V1 selection inactive without touc
   assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
 });
 
+test('background does not authorize active V2 when readiness is true without an exact source key', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+
+  const tabId = 18_607;
+  const context = handlerVideoContext('BV1NoExactKey9', 4701, 1);
+  const evidenceV2 = normalizeBilibiliTranscriptEvidence(
+    { body: [{ from: 20, to: 25, content: 'persistent V2 requires an exact primary text identity' }] },
+    {
+      bvid: context.bvid,
+      cid: context.cid as number,
+      page: context.currentPart.page,
+      language: 'zh-CN',
+      sourceType: 'bilibili_player_wbi_v2',
+      trackId: 'no-exact-key-v2',
+      trackUrlHost: 'aisubtitle.hdslb.com',
+      fetchedAt: 11_500,
+    },
+  );
+  await upsertCurrentVideoTranscriptEvidence(evidenceV2);
+  await db.currentVideoTranscriptSources
+    .where('identityKey')
+    .equals(evidenceV2.sourceRecord.identityKey)
+    .modify({ lastAccessedAt: 1_000 });
+  const sourceBefore = await transcriptSource(evidenceV2.sourceRecord.identityKey);
+
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 6_000 }]);
+  await sendContentMessage({
+    action: 'CURRENT_VIDEO_CONTEXT_UPDATE',
+    payload: context,
+  }, tabId, context.url);
+
+  const readyWithoutSource = { primaryTextSelectionsReady: true };
+  const summary = await sendRequest<CurrentVideoSummaryResult>({
+    action: 'GET_CURRENT_VIDEO_SUMMARY',
+    params: readyWithoutSource,
+  }, tabId, context.url);
+  const knowledge = await sendRequest<VideoKnowledgeResult>({
+    action: 'GET_VIDEO_KNOWLEDGE',
+    params: readyWithoutSource,
+  }, tabId, context.url);
+  const search = await sendRequest<CurrentVideoSegmentRetrievalResult>({
+    action: 'SEARCH_CURRENT_VIDEO_SEGMENTS',
+    params: {
+      ...readyWithoutSource,
+      query: 'persistent V2 requires an exact primary text identity',
+    },
+  }, tabId, context.url);
+  const jump = await sendRequest<CurrentVideoTimestampJumpResponse>({
+    action: 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP',
+    params: {
+      ...readyWithoutSource,
+      candidateId: 'no-exact-key-candidate',
+      query: 'persistent V2 requires an exact primary text identity',
+      confirmed: true,
+    },
+  }, tabId, context.url);
+
+  assert.notEqual(summary.data?.sourceTier, 'transcript_summary');
+  assert.equal(summary.data?.evidence.some(item => item.source === 'transcript'), false);
+  assert.equal(summary.data?.timestampRanges.length, 0);
+  assert.equal(knowledge.data?.sourceState.transcriptEvidence, false);
+  assert.equal(knowledge.data?.nodes.some(node => node.source === 'transcript'), false);
+  assert.equal(search.data?.status, 'no_evidence');
+  assert.equal(search.data?.candidates.length, 0);
+  assert.equal(search.data?.evidenceState.transcriptSegmentCount, 0);
+  assert.equal(jump.data?.ok, false);
+  assert.equal(jump.data?.targetSeconds, null);
+
+  const sourceAfter = await transcriptSource(evidenceV2.sourceRecord.identityKey);
+  assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
+});
+
 function handlerVideoContext(bvid: string, cid: number, page = 1): CurrentVideoContext {
   return {
     kind: 'video',

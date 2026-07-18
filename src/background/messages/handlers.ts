@@ -810,13 +810,15 @@ async function getCurrentVideoContextLookupWithSelection(
 ): Promise<CurrentVideoContextLookupResult> {
   const options = currentVideoLookupOptions(params);
   const requestedSourceIdentityKey = selectedSourceIdentityKey(params);
-  if (!requestedSourceIdentityKey) {
-    return await getCurrentVideoContextLookup(options, requestTabId);
-  }
-
   const lookup = await getRawCurrentVideoContextLookup(options, requestTabId);
   if (lookup.context.kind !== 'video') return lookup;
   const withSubtitle = await enrichCurrentVideoContextWithSubtitleProbe(lookup.context, options);
+  if (!requestedSourceIdentityKey) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(withSubtitle),
+    };
+  }
   return {
     ...lookup,
     context: await bindSelectedCurrentVideoTranscriptEvidence(
@@ -825,6 +827,30 @@ async function getCurrentVideoContextLookupWithSelection(
       lookup.temporaryOwner,
     ),
   };
+}
+
+function withoutSelectedCurrentVideoTranscriptEvidence(
+  context: CurrentVideoContext,
+): CurrentVideoContext {
+  return withTranscriptEvidenceState(
+    {
+      ...context,
+      warnings: context.warnings.filter(warning => warning !== 'transcript_evidence_cached'),
+    },
+    buildCurrentVideoTranscriptEvidenceState({
+      status: 'missing',
+      target: {
+        bvid: context.bvid,
+        cid: context.cid,
+        page: context.currentPart.page,
+      },
+      now: Date.now(),
+      sourceType: context.subtitleProbe?.sourceType ?? 'none',
+      reason: 'primary_text_source_identity_required',
+      message: '当前请求没有绑定精确的主要文本来源，因此不会读取字幕正文。',
+      warnings: ['primary_text_source_identity_required'],
+    }),
+  );
 }
 
 async function getCurrentVideoContextLookup(
