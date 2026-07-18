@@ -22,6 +22,10 @@ import type { CurrentVideoSummaryResult } from '../src/shared/types/current-vide
 import type { VideoKnowledgeResult } from '../src/shared/types/video-knowledge.ts';
 import { db } from '../src/background/storage/db.ts';
 import { upsertCurrentVideoTranscriptEvidence } from '../src/background/storage/current-video-transcript-repo.ts';
+import {
+  CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
+  type SaveCurrentVideoPrimaryTextSelectionResult,
+} from '../src/shared/current-video-primary-text-selection.ts';
 
 type RuntimeListener = (
   message: unknown,
@@ -43,6 +47,46 @@ const storageGetCounts = new Map<string, number>();
 installChromeFake();
 const { setupMessageHandlers } = await importBundledMessageHandlers();
 setupMessageHandlers();
+
+test('background selection action serializes interleaved tab saves without replacing other parts', async () => {
+  resetChromeHarness();
+  const storageKey = CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY;
+  storageValues[storageKey] = {
+    'BV1SavedA:1001:1': 'source-a',
+    'BV1SavedB:1002:2': 'source-b',
+  };
+
+  const [tabOne, tabTwo] = await Promise.all([
+    sendRequest<SaveCurrentVideoPrimaryTextSelectionResult>({
+      action: 'SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION' as BiliVizRequest['action'],
+      params: {
+        bvid: 'BV1SavedC',
+        cid: 1003,
+        page: 3,
+        selectedSourceIdentityKey: 'source-c',
+      },
+    }, 19_001, 'https://www.bilibili.com/video/BV1SavedC?p=3'),
+    sendRequest<SaveCurrentVideoPrimaryTextSelectionResult>({
+      action: 'SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION' as BiliVizRequest['action'],
+      params: {
+        bvid: 'BV1SavedD',
+        cid: 1004,
+        page: 4,
+        selectedSourceIdentityKey: 'source-d',
+      },
+    }, 19_002, 'https://www.bilibili.com/video/BV1SavedD?p=4'),
+  ]);
+
+  assert.equal(tabOne.success, true);
+  assert.equal(tabTwo.success, true);
+  assert.deepEqual(storageValues[storageKey], {
+    'BV1SavedA:1001:1': 'source-a',
+    'BV1SavedB:1002:2': 'source-b',
+    'BV1SavedC:1003:3': 'source-c',
+    'BV1SavedD:1004:4': 'source-d',
+  });
+  assert.deepEqual(tabTwo.data?.selections, storageValues[storageKey]);
+});
 
 test('fixed popup tab owner keeps A context readable after active tab switches to B', () => {
   clearTemporaryCurrentVideoTranscriptCache();

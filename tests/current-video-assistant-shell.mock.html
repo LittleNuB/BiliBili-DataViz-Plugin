@@ -59,11 +59,13 @@
       }
     </style>
     <script>
-      const mockBvid = "BV1ShellMock9";
+      let mockBvid = "BV1ShellMock9";
+      let mockTitle = "页内助手 Shell Mock 视频";
       const mockParams = new URLSearchParams(location.search);
       const primaryTextSelectionStorageKey = "currentVideoPrimaryTextSelections";
       const baseMockCid = 2202;
-      let mockCid = baseMockCid;
+      let mockPrimaryCid = baseMockCid;
+      let mockCid = mockPrimaryCid;
       let mockPage = 1;
       let subtitleCached = mockParams.get("subtitleCached") === "1";
       let switchDuringNextTranscriptFetch = false;
@@ -78,15 +80,26 @@
       let subtitleTimelineHash = mockParams.get("sourceVersion") === "v2" ? "mock-timeline-hash-hidden-v2" : "mock-timeline-hash-hidden";
       const subtitleSourceIdentityKey = () => `primary-text:bilibili_subtitle:${mockBvid}:${mockCid}:${mockPage}:zh-cn:${subtitleSourceHash}`;
       const runtimeMessages = [];
+      const contentRuntimeListeners = [];
       const extensionStorage = {};
       let deferPrimaryTextStorage = mockParams.get("deferPrimaryTextStorage") === "1";
       const rejectPrimaryTextStorage = mockParams.get("rejectPrimaryTextStorage") === "1";
       let rejectNextPrimaryTextStorageSet = false;
+      let rejectNextPrimaryTextStorageReadback = false;
+      let deferNextPrimaryTextSelectionSave = false;
+      let primaryTextSelectionSaveSettledCount = 0;
       const pendingPrimaryTextStorageReads = [];
+      const pendingPrimaryTextSelectionSaves = [];
+      const initialPrimaryTextSelections = {};
       if (mockParams.get("savedSource") === "v1") {
-        extensionStorage[primaryTextSelectionStorageKey] = {
-          [`${mockBvid}:${baseMockCid}:1`]: `primary-text:bilibili_subtitle:${mockBvid}:${baseMockCid}:1:zh-cn:mock-source-hash-hidden-v1`,
-        };
+        initialPrimaryTextSelections[`${mockBvid}:${baseMockCid}:1`] = `primary-text:bilibili_subtitle:${mockBvid}:${baseMockCid}:1:zh-cn:mock-source-hash-hidden-v1`;
+      }
+      if (mockParams.get("seedOtherSelections") === "1") {
+        initialPrimaryTextSelections["BV1OtherSavedA:7101:1"] = "primary-text:bilibili_subtitle:BV1OtherSavedA:7101:1:zh-cn:source-a";
+        initialPrimaryTextSelections["BV1OtherSavedB:7202:2"] = "primary-text:local_transcript:BV1OtherSavedB:7202:2:zh-cn:source-b";
+      }
+      if (Object.keys(initialPrimaryTextSelections).length > 0) {
+        extensionStorage[primaryTextSelectionStorageKey] = initialPrimaryTextSelections;
       }
 
       window.__INITIAL_STATE__ = {
@@ -94,12 +107,13 @@
           aid: 119001,
           bvid: mockBvid,
           cid: mockCid,
-          title: "页内助手 Shell Mock 视频",
+          title: mockTitle,
           duration: 600,
           desc: "这个 mock 用于验证 Bili-Bill 当前视频页内助手的展开、字幕重新检测和摘要刷新。",
           owner: { mid: 42, name: "Mock UP" },
           pages: [
             { page: 1, cid: mockCid, part: "主视频", duration: 600 },
+            { page: 2, cid: 3303, part: "第二分 P", duration: 420 },
           ],
         },
       };
@@ -159,13 +173,13 @@
           bvid: mockBvid,
           aid: 119001,
           cid: mockCid,
-          title: "页内助手 Shell Mock 视频",
+          title: mockTitle,
           authorName: "Mock UP",
           authorMid: 42,
           durationSeconds: 600,
           currentPart: { page: mockPage, title: mockPage === 1 ? "主视频" : "第二分 P", total: 2 },
           parts: [
-            { page: 1, cid: baseMockCid, title: "主视频", durationSeconds: 600 },
+            { page: 1, cid: mockPrimaryCid, title: "主视频", durationSeconds: 600 },
             { page: 2, cid: 3303, title: "第二分 P", durationSeconds: 420 },
           ],
           chapters: [],
@@ -574,6 +588,65 @@
       window.__assistantMockRejectNextPrimaryTextStorageSet = () => {
         rejectNextPrimaryTextStorageSet = true;
       };
+      window.__assistantMockRejectNextPrimaryTextStorageReadback = () => {
+        rejectNextPrimaryTextStorageReadback = true;
+      };
+      window.__assistantMockDeferNextPrimaryTextSelectionSave = () => {
+        deferNextPrimaryTextSelectionSave = true;
+      };
+      window.__assistantMockResolvePrimaryTextSelectionSave = () => {
+        const pending = pendingPrimaryTextSelectionSaves.splice(0);
+        for (const save of pending) save();
+      };
+      window.__assistantMockPrimaryTextSelectionSaveSettledCount = () => primaryTextSelectionSaveSettledCount;
+      window.__assistantMockSwitchToPart = (page) => {
+        mockPage = Number(page) === 2 ? 2 : 1;
+        mockCid = mockPage === 2 ? 3303 : mockPrimaryCid;
+        const nextUrl = new URL(location.href);
+        nextUrl.searchParams.set("p", String(mockPage));
+        history.replaceState({}, "", nextUrl);
+        return collectAssistantContextAfterMockSwitch();
+      };
+      window.__assistantMockSwitchToVideo = () => {
+        mockBvid = "BV1OtherMock8";
+        mockTitle = "延迟保存后切换的新视频";
+        mockPrimaryCid = 4404;
+        mockCid = mockPrimaryCid;
+        mockPage = 1;
+        Object.assign(window.__INITIAL_STATE__.videoData, {
+          bvid: mockBvid,
+          cid: mockCid,
+          title: mockTitle,
+          pages: [
+            { page: 1, cid: mockPrimaryCid, part: "主视频", duration: 600 },
+            { page: 2, cid: 5505, part: "第二分 P", duration: 420 },
+          ],
+        });
+        const nextUrl = new URL(location.href);
+        nextUrl.pathname = `/video/${mockBvid}`;
+        nextUrl.searchParams.delete("p");
+        history.replaceState({}, "", nextUrl);
+        return collectAssistantContextAfterMockSwitch();
+      };
+      function collectAssistantContextAfterMockSwitch() {
+        return new Promise((resolve, reject) => {
+          const listener = contentRuntimeListeners[0];
+          if (!listener) {
+            reject(new Error("mock content runtime listener is unavailable"));
+            return;
+          }
+          try {
+            const keepOpen = listener(
+              { action: "COLLECT_CURRENT_VIDEO_CONTEXT", payload: {} },
+              {},
+              resolve,
+            );
+            if (keepOpen !== true) reject(new Error("mock content runtime listener did not keep the channel open"));
+          } catch (error) {
+            reject(error);
+          }
+        });
+      }
       window.__assistantMockSwitchDuringTranscript = () => {
         switchDuringNextTranscriptFetch = true;
       };
@@ -601,6 +674,27 @@
             limitations: ["只检索当前视频本地证据。"],
             evidenceState: {
               transcriptSegmentCount: subtitleCached ? 3 : 0,
+              timedKnowledgeNodeCount: 0,
+              metadataHintAvailable: true,
+              contextFresh: true,
+            },
+            aiRerank: segmentAiState(),
+          };
+          return withQa(lastSearchResult);
+        }
+
+        if (normalized.includes("没有候选")) {
+          lastSearchResult = {
+            status: "no_evidence",
+            query: normalized,
+            normalizedQuery: normalized,
+            title: "页内助手 Shell Mock 视频",
+            generatedAt: Date.now(),
+            candidates: [],
+            summary: "当前字幕正文里没有找到能回答这个问题的片段。",
+            limitations: ["请换成更接近字幕原文的关键词后重试。"],
+            evidenceState: {
+              transcriptSegmentCount: 3,
               timedKnowledgeNodeCount: 0,
               metadataHintAvailable: true,
               contextFresh: true,
@@ -880,18 +974,62 @@
         return Boolean(values && Object.prototype.hasOwnProperty.call(values, primaryTextSelectionStorageKey));
       }
 
+      function savePrimaryTextSelectionFromBackground(params) {
+        const persist = () => {
+          if (rejectNextPrimaryTextStorageSet) {
+            rejectNextPrimaryTextStorageSet = false;
+            primaryTextSelectionSaveSettledCount += 1;
+            return { success: false, error: "MOCK_PRIMARY_TEXT_STORAGE_WRITE_FAILED" };
+          }
+          const partKey = `${params?.bvid}:${params?.cid}:${params?.page}`;
+          const existing = storageGetResult(primaryTextSelectionStorageKey)[primaryTextSelectionStorageKey] || {};
+          const selections = {
+            ...existing,
+            [partKey]: String(params?.selectedSourceIdentityKey || ""),
+          };
+          extensionStorage[primaryTextSelectionStorageKey] = selections;
+          if (rejectNextPrimaryTextStorageReadback) {
+            rejectNextPrimaryTextStorageReadback = false;
+            primaryTextSelectionSaveSettledCount += 1;
+            return { success: false, error: "MOCK_PRIMARY_TEXT_STORAGE_READBACK_FAILED" };
+          }
+          primaryTextSelectionSaveSettledCount += 1;
+          return {
+            success: true,
+            data: {
+              partKey,
+              selectedSourceIdentityKey: selections[partKey],
+              selections: { ...selections },
+            },
+          };
+        };
+
+        if (deferNextPrimaryTextSelectionSave) {
+          deferNextPrimaryTextSelectionSave = false;
+          return new Promise((resolve) => {
+            pendingPrimaryTextSelectionSaves.push(() => resolve(persist()));
+          });
+        }
+        return Promise.resolve(persist());
+      }
+
       window.chrome = {
         runtime: {
           getURL(path) {
             return `/${path}`;
           },
           onMessage: {
-            addListener() {},
+            addListener(listener) {
+              contentRuntimeListeners.push(listener);
+            },
           },
           sendMessage(message) {
             runtimeMessages.push(message);
             if (message.action === "GET_CURRENT_VIDEO_CONTEXT") {
               return Promise.resolve({ success: true, data: currentContext() });
+            }
+            if (message.action === "SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION") {
+              return savePrimaryTextSelectionFromBackground(message.params);
             }
             if (message.action === "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE") {
               subtitleCached = true;
@@ -910,6 +1048,9 @@
               return Promise.resolve({ success: true, data: currentVideoKnowledge() });
             }
             if (message.action === "SEARCH_CURRENT_VIDEO_SEGMENTS") {
+              if (String(message.params?.query || "").includes("后台失败")) {
+                return Promise.resolve({ success: false, error: "MOCK_SEGMENT_BACKEND_RAW_FAILURE" });
+              }
               return Promise.resolve({
                 success: true,
                 data: searchCurrentVideoSegmentsResult(message.params?.query),
@@ -947,6 +1088,15 @@
               if (rejectNextPrimaryTextStorageSet && writesPrimaryTextSelection(values)) {
                 rejectNextPrimaryTextStorageSet = false;
                 return Promise.reject(new Error("MOCK_PRIMARY_TEXT_STORAGE_WRITE_FAILED"));
+              }
+              if (deferNextPrimaryTextSelectionSave && writesPrimaryTextSelection(values)) {
+                deferNextPrimaryTextSelectionSave = false;
+                return new Promise((resolve) => {
+                  pendingPrimaryTextSelectionSaves.push(() => {
+                    Object.assign(extensionStorage, values || {});
+                    resolve();
+                  });
+                });
               }
               Object.assign(extensionStorage, values || {});
               return Promise.resolve();

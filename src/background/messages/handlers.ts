@@ -116,6 +116,7 @@ import {
 } from '../current-video-temporary-transcript-cache.ts';
 import { retainTemporaryTranscriptOwnerForContextSnapshot } from '../current-video-transcript-owner.ts';
 import { testAiConnection } from '../ai/openai-compatible';
+import { saveCurrentVideoPrimaryTextSelection } from '../storage/current-video-primary-text-selection-store.ts';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
 const SUBTITLE_PROBE_CACHE_MS = 5 * 60 * 1000;
@@ -444,6 +445,22 @@ async function handleRequest<T>(
       return { success: true, data: await clearAllLocalData(request.params?.confirmation) as T };
     case 'GET_CURRENT_VIDEO_CONTEXT':
       return { success: true, data: await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(request.params), requestTabId) as T };
+    case 'SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION': {
+      const cid = requirePositiveIntegerParam(request.params?.cid, 'cid');
+      const page = requirePositiveIntegerParam(request.params?.page, 'page');
+      return {
+        success: true,
+        data: await saveCurrentVideoPrimaryTextSelection({
+          bvid: requireStringParam(request.params?.bvid, 'bvid'),
+          cid,
+          page,
+          selectedSourceIdentityKey: requireStringParam(
+            request.params?.selectedSourceIdentityKey,
+            'selectedSourceIdentityKey',
+          ),
+        }) as T,
+      };
+    }
     case 'PROBE_CURRENT_VIDEO_SUBTITLE_SOURCE':
       return { success: true, data: await probeSubtitleSourceForActiveTab(request.params, requestTabId) as T };
     case 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE':
@@ -1238,6 +1255,12 @@ function normalizeDynamicBillFeedbackScope(value: unknown): DynamicBillFeedbackS
 function requireStringParam(value: unknown, name: string): string {
   if (typeof value === 'string' && value.trim()) return value;
   throw new Error(`MISSING_${name.toUpperCase()}`);
+}
+
+function requirePositiveIntegerParam(value: unknown, name: string): number {
+  const numeric = Number(value);
+  if (Number.isInteger(numeric) && numeric > 0) return numeric;
+  throw new Error(`INVALID_${name.toUpperCase()}`);
 }
 
 function normalizeAiConfigParam(value: unknown): UserConfig['ai'] {

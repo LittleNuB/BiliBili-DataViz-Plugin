@@ -23,6 +23,11 @@ import {
   buildCurrentVideoSubtitleDiagnostics,
   type CurrentVideoSubtitleDiagnostics,
 } from '../src/shared/current-video-subtitle-diagnostics';
+import {
+  readCurrentVideoPrimaryTextSelections,
+  resolveCurrentVideoPrimaryTextAuthorization,
+  type CurrentVideoPrimaryTextAuthorization,
+} from '../src/shared/current-video-primary-text-selection.ts';
 import { ProgressRing } from './components/ProgressRing';
 import { QuickStats as QuickStatsPanel } from './components/QuickStats';
 import { OpenDashboard } from './components/OpenDashboard';
@@ -34,6 +39,7 @@ export function App() {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [subtitleProbeLoading, setSubtitleProbeLoading] = useState(false);
   const [subtitleProbeStatus, setSubtitleProbeStatus] = useState<string | null>(null);
+  const [currentVideoActionError, setCurrentVideoActionError] = useState<string | null>(null);
   const [tailProbeReport, setTailProbeReport] = useState<HistoryTailProbeReport | null>(null);
   const [tailProbeLoading, setTailProbeLoading] = useState(false);
   const [tailProbeError, setTailProbeError] = useState<string | null>(null);
@@ -42,8 +48,6 @@ export function App() {
   useEffect(() => {
     fetchStats(false);
     fetchCurrentVideoContext();
-    fetchCurrentVideoSummary();
-    fetchVideoKnowledge();
     const timer = window.setInterval(refreshSyncStatus, 1500);
     return () => window.clearInterval(timer);
   }, []);
@@ -73,57 +77,57 @@ export function App() {
   }
 
   async function fetchCurrentVideoSummary() {
+    const context = currentVideoContext;
+    const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
+    if (!authorization.ready) {
+      setCurrentVideoActionError(authorization.message);
+      return;
+    }
     const requestId = summaryRequestRef.current + 1;
     summaryRequestRef.current = requestId;
+    setCurrentVideoActionError(null);
     setSummaryLoading(true);
     setCurrentVideoSummary(loadingCurrentVideoSummary());
     try {
-      const summary = await requestSW<CurrentVideoSummaryResult>('GET_CURRENT_VIDEO_SUMMARY');
+      const summary = await requestSW<CurrentVideoSummaryResult>(
+        'GET_CURRENT_VIDEO_SUMMARY',
+        authorization.params,
+      );
       if (summaryRequestRef.current !== requestId) return;
       setCurrentVideoSummary(summary);
-    } catch (e) {
+    } catch {
       if (summaryRequestRef.current !== requestId) return;
-      setCurrentVideoSummary({
-        ...loadingCurrentVideoSummary(),
-        status: 'cancelled',
-        title: '当前视频摘要不可用',
-        summary: (e as Error).message,
-        limitations: ['在采用 AI 结果前，本地摘要请求已经失败。'],
-      });
+      setCurrentVideoSummary(null);
+      setCurrentVideoActionError('摘要读取失败，请确认当前 B 站视频页仍然打开后重试。');
     } finally {
       if (summaryRequestRef.current === requestId) setSummaryLoading(false);
     }
   }
 
   async function fetchVideoKnowledge() {
+    const context = currentVideoContext;
+    const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
+    if (!authorization.ready) {
+      setCurrentVideoActionError(authorization.message);
+      return;
+    }
+    setCurrentVideoActionError(null);
     try {
-      const result = await requestSW<VideoKnowledgeResult>('GET_VIDEO_KNOWLEDGE');
+      const result = await requestSW<VideoKnowledgeResult>(
+        'GET_VIDEO_KNOWLEDGE',
+        authorization.params,
+      );
       setVideoKnowledge(result);
-    } catch (e) {
-      setVideoKnowledge({
-        status: 'no_context',
-        title: '视频知识节点不可用',
-        generatedAt: Date.now(),
-        sourceState: {
-          metadata: false,
-          description: false,
-          pages: false,
-          chapters: false,
-          transcript: false,
-          transcriptEvidence: false,
-          contentText: false,
-        },
-        transcriptEvidence: null,
-        nodes: [],
-        warnings: ['video_knowledge_request_failed'],
-        limitations: [(e as Error).message],
-      });
+    } catch {
+      setVideoKnowledge(null);
+      setCurrentVideoActionError('知识节点读取失败，请确认当前 B 站视频页仍然打开后重试。');
     }
   }
 
   async function reprobeCurrentVideoSubtitle() {
     setSubtitleProbeLoading(true);
     setSubtitleProbeStatus(null);
+    setCurrentVideoActionError(null);
     try {
       const firstContext = await requestSW<CurrentVideoContextResult>('GET_CURRENT_VIDEO_CONTEXT', {
         forceContextRefresh: true,
@@ -140,12 +144,10 @@ export function App() {
         ? { ...refreshedContext, transcriptEvidence }
         : refreshedContext;
       setCurrentVideoContext(contextWithEvidence);
+      setCurrentVideoSummary(null);
+      setVideoKnowledge(null);
       const diagnostics = buildCurrentVideoSubtitleDiagnostics(contextWithEvidence);
       setSubtitleProbeStatus(`${diagnostics.title}：${diagnostics.message}`);
-      await Promise.all([
-        fetchCurrentVideoSummary(),
-        fetchVideoKnowledge(),
-      ]);
     } catch {
       setSubtitleProbeStatus('重新检测失败：请确认当前 B 站视频页仍然打开，并在播放器里开启中文 AI 字幕后重试。');
     } finally {
@@ -360,6 +362,7 @@ export function App() {
         loading={summaryLoading}
         subtitleProbeLoading={subtitleProbeLoading}
         subtitleProbeStatus={subtitleProbeStatus}
+        currentVideoActionError={currentVideoActionError}
         onRefresh={fetchCurrentVideoSummary}
         onCancel={cancelCurrentVideoSummary}
         onReprobeSubtitle={reprobeCurrentVideoSubtitle}
@@ -541,6 +544,7 @@ function CurrentVideoAssistantStatus({
   loading,
   subtitleProbeLoading,
   subtitleProbeStatus,
+  currentVideoActionError,
   onRefresh,
   onCancel,
   onReprobeSubtitle,
@@ -553,6 +557,7 @@ function CurrentVideoAssistantStatus({
   loading: boolean;
   subtitleProbeLoading: boolean;
   subtitleProbeStatus: string | null;
+  currentVideoActionError: string | null;
   onRefresh: () => void;
   onCancel: () => void;
   onReprobeSubtitle: () => void;
@@ -581,6 +586,15 @@ function CurrentVideoAssistantStatus({
       setSegmentReturnAvailable(false);
       return;
     }
+    const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
+    if (!authorization.ready) {
+      setSegmentError(authorization.message);
+      setSegmentResult(null);
+      setSegmentPreviewCandidateId(null);
+      setSegmentJumpStatus(null);
+      setSegmentReturnAvailable(false);
+      return;
+    }
 
     setSegmentLoading(true);
     setSegmentError(null);
@@ -590,10 +604,11 @@ function CurrentVideoAssistantStatus({
     try {
       const result = await requestSW<CurrentVideoSegmentRetrievalResult>('SEARCH_CURRENT_VIDEO_SEGMENTS', {
         query,
+        ...authorization.params,
       });
       setSegmentResult(result);
-    } catch (e) {
-      setSegmentError((e as Error).message);
+    } catch {
+      setSegmentError('片段检索失败，请确认当前 B 站视频页仍然打开后重试。');
       setSegmentResult(null);
     } finally {
       setSegmentLoading(false);
@@ -606,6 +621,12 @@ function CurrentVideoAssistantStatus({
       setSegmentJumpStatus(candidate.jumpPreview.message);
       return;
     }
+    const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
+    if (!authorization.ready) {
+      setSegmentJumpStatus(authorization.message);
+      setSegmentReturnAvailable(false);
+      return;
+    }
 
     setSegmentJumpStatus('正在确认跳转...');
     try {
@@ -613,11 +634,12 @@ function CurrentVideoAssistantStatus({
         query: segmentResult.query,
         candidateId: candidate.id,
         confirmed: true,
+        ...authorization.params,
       });
       setSegmentJumpStatus(result.message);
       setSegmentReturnAvailable(result.ok && result.returnPointSeconds !== null);
-    } catch (e) {
-      setSegmentJumpStatus((e as Error).message);
+    } catch {
+      setSegmentJumpStatus('跳转确认失败，请确认当前 B 站视频页仍然打开后重试。');
       setSegmentReturnAvailable(false);
     }
   }
@@ -628,8 +650,8 @@ function CurrentVideoAssistantStatus({
       const result = await requestSW<CurrentVideoTimestampReturnResponse>('RETURN_CURRENT_VIDEO_SEGMENT_JUMP');
       setSegmentJumpStatus(result.message);
       if (result.ok) setSegmentReturnAvailable(false);
-    } catch (e) {
-      setSegmentJumpStatus((e as Error).message);
+    } catch {
+      setSegmentJumpStatus('返回原位置失败，请确认当前 B 站视频页仍然打开后重试。');
     }
   }
 
@@ -719,6 +741,11 @@ function CurrentVideoAssistantStatus({
             {subtitleProbeStatus && (
               <div style={{ color: '#C8E6FF', fontSize: '9px', lineHeight: 1.45, marginTop: '5px' }}>
                 {subtitleProbeStatus}
+              </div>
+            )}
+            {currentVideoActionError && (
+              <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45, marginTop: '5px' }}>
+                {currentVideoActionError}
               </div>
             )}
           </div>
@@ -1254,6 +1281,47 @@ function VideoKnowledgePanel({
   );
 }
 
+async function popupCurrentVideoPrimaryTextAuthorization(
+  context: CurrentVideoContextResult | null,
+): Promise<CurrentVideoPrimaryTextAuthorization> {
+  if (context?.kind !== 'video') {
+    return {
+      ready: false,
+      source: null,
+      selectedSourceIdentityKey: null,
+      message: '当前没有可用的视频上下文，请保持 B 站视频页打开后重试。',
+      params: { primaryTextSelectionsReady: false },
+    };
+  }
+
+  const readResult = await readCurrentVideoPrimaryTextSelections(chrome.storage.local);
+  const evidence = context.transcriptEvidence;
+  const availableSourceIdentityKeys = (
+    context.cid
+    && evidence?.active === true
+    && evidence.bvid === context.bvid
+    && evidence.cid === context.cid
+    && evidence.page === context.currentPart.page
+    && evidence.sourceIdentityKey
+    && evidence.sourceHash
+    && evidence.bodyHash
+    && evidence.timelineHash
+  )
+    ? [evidence.sourceIdentityKey]
+    : [];
+
+  return resolveCurrentVideoPrimaryTextAuthorization({
+    readStatus: readResult.status,
+    identity: {
+      bvid: context.bvid,
+      cid: context.cid,
+      page: context.currentPart.page,
+    },
+    selections: readResult.selections,
+    availableSourceIdentityKeys,
+  });
+}
+
 function availabilityLabel(value: string): string {
   switch (value) {
     case 'available':
@@ -1289,7 +1357,7 @@ function subtitleDiagnosticsBackground(state: CurrentVideoSubtitleDiagnostics): 
 }
 
 function videoKnowledgeNotice(knowledge: VideoKnowledgeResult | null, transcriptNodeCount: number): string {
-  if (!knowledge) return '正在读取当前视频的知识节点。';
+  if (!knowledge) return '尚未读取当前视频知识节点，请手动刷新。';
   if (transcriptNodeCount > 0) {
     return `已用当前视频本地字幕证据生成 ${transcriptNodeCount} 个节点；时间范围只来自字幕片段，暂不提供跳转。`;
   }

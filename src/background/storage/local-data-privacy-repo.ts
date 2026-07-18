@@ -20,6 +20,7 @@ import {
   coordinateBlindBoxDrawHistoryClear,
   getBlindBoxRecentDrawnBvids,
 } from './blind-box-draw-history-repo.ts';
+import { coordinateCurrentVideoPrimaryTextSelectionClear } from './current-video-primary-text-selection-store.ts';
 
 export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySummary> {
   await ensureDynamicBill013Migration();
@@ -98,26 +99,27 @@ export async function clearAllLocalData(confirmation: unknown): Promise<LocalDat
   if (await getHistorySyncing()) {
     throw new Error('HISTORY_SYNC_IN_PROGRESS');
   }
-  return await runCurrentVideoTranscriptClearCoordinator(async () =>
-    coordinateBlindBoxDrawHistoryClear(async recentDrawnBvids => {
-      const counts = await collectClearCounts(recentDrawnBvids.length);
-      await db.transaction('rw', db.tables, async () => {
-        for (const table of db.tables) {
-          await table.clear();
-        }
-      });
-      await chrome.storage.local.clear();
-      clearTemporaryCurrentVideoTranscriptCache();
+  return await coordinateCurrentVideoPrimaryTextSelectionClear(async () =>
+    runCurrentVideoTranscriptClearCoordinator(async () =>
+      coordinateBlindBoxDrawHistoryClear(async recentDrawnBvids => {
+        const counts = await collectClearCounts(recentDrawnBvids.length);
+        await db.transaction('rw', db.tables, async () => {
+          for (const table of db.tables) {
+            await table.clear();
+          }
+        });
+        await chrome.storage.local.clear();
+        clearTemporaryCurrentVideoTranscriptCache();
 
-      return {
-        operation: 'clear_all_local_data',
-        completedAt: Date.now(),
-        cleared: {
-          ...counts,
-          localSettings: true,
-        },
-      };
-    }));
+        return {
+          operation: 'clear_all_local_data',
+          completedAt: Date.now(),
+          cleared: {
+            ...counts,
+            localSettings: true,
+          },
+        };
+      })));
 }
 
 async function summarizeHistory(): Promise<LocalDataPrivacySummary['history']> {

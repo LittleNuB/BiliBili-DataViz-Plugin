@@ -22,6 +22,7 @@ import {
   type LocalDataCategoryTable,
 } from '../src/background/storage/local-data-category-registry.ts';
 import { BLIND_BOX_DRAW_HISTORY_STORAGE_KEY } from '../src/background/storage/blind-box-draw-history-repo.ts';
+import { CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY } from '../src/shared/current-video-primary-text-selection.ts';
 import type {
   LocalDataOperationResult,
   LocalDataPrivacySummary,
@@ -124,7 +125,7 @@ test('registered categories collect usage, clear independently, and read back th
   const categories = createRegisteredLocalDataCategories(dependencies);
   const usageBefore = await Promise.all(categories.map(category => category.collectUsage()));
 
-  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 1, 6, 2, 2]);
+  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 1, 6, 2, 3]);
   assert.ok(usageBefore.every(usage => usage.usageBytes > 0));
   assert.equal(usageBefore[2].details?.currentVideoSubtitleSources, 1);
   assert.equal(usageBefore[2].details?.currentVideoSubtitleSegments, 1);
@@ -158,6 +159,10 @@ test('registered categories collect usage, clear independently, and read back th
       assert.equal(clearResult.cleared.dynamicBillCreatorPauses, 1);
       assert.equal(clearResult.cleared.dynamicBillRotationRecords, 1);
       assert.equal('dynamicBillFeedback' in clearResult.cleared, false);
+    }
+    if (category.id === 'currentVideoSubtitles') {
+      const localSettings = categories.find(entry => entry.id === 'localSettings');
+      assert.equal((await localSettings?.collectUsage())?.count, 3, 'subtitle clear must preserve source choices');
     }
     const readback = await category.readAfterClear();
     assert.equal(readback.count, 0, category.label);
@@ -320,6 +325,9 @@ function createRegistryDependencies(): LocalDataCategoryRegistryDependencies {
     [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY, ['BV1LATEST01', 'BV1LATEST02']],
     ['userConfig', { assistant: {} }],
     ['floatingPopupWindowId', 7],
+    [CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY, {
+      'BV1Settings:101:1': 'primary-text:bilibili_subtitle:BV1Settings:101:1:zh-cn:hash',
+    }],
   ]);
 
   return {

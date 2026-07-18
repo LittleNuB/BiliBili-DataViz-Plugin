@@ -14,6 +14,12 @@ import {
   collectBlindBoxDrawHistoryUsage,
   readBlindBoxDrawHistoryAfterClear,
 } from './blind-box-draw-history-repo.ts';
+import {
+  CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
+} from '../../shared/current-video-primary-text-selection.ts';
+import {
+  coordinateCurrentVideoPrimaryTextSelectionClear,
+} from './current-video-primary-text-selection-store.ts';
 
 type AnyTable = Table<any, any, any>;
 
@@ -35,6 +41,7 @@ const DYNAMIC_BILL_STORAGE_KEYS = [
 const LOCAL_SETTING_STORAGE_KEYS = [
   'userConfig',
   'floatingPopupWindowId',
+  CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
 ];
 
 export type LocalDataCategoryTableName =
@@ -150,7 +157,13 @@ export function createRegisteredLocalDataCategories(
       dynamicBillRotationRecords: counts[5] ?? 0,
     })),
     blindBoxDrawHistoryCategory(dependencies),
-    storageCategory(dependencies, 'localSettings', '本地 AI 设置', LOCAL_SETTING_STORAGE_KEYS),
+    storageCategory(
+      dependencies,
+      'localSettings',
+      '本地 AI 设置',
+      LOCAL_SETTING_STORAGE_KEYS,
+      coordinateCurrentVideoPrimaryTextSelectionClear,
+    ),
   ];
 }
 
@@ -242,6 +255,7 @@ function storageCategory(
   id: LocalDataCategoryRegistration['id'],
   label: string,
   storageKeys: string[],
+  coordinateClear?: <T>(clear: () => Promise<T>) => Promise<T>,
 ): LocalDataCategoryRegistration {
   const collectUsage = () => collectStorageUsage(dependencies.storage, storageKeys);
   return {
@@ -250,8 +264,12 @@ function storageCategory(
     includeInClearAll: true,
     collectUsage,
     clear: async (): Promise<LocalDataCategoryClearResult> => {
-      await removeStorageKeys(dependencies.storage, storageKeys);
-      return { cleared: { localSettings: true } };
+      const clear = async (): Promise<LocalDataCategoryClearResult> => {
+        await removeStorageKeys(dependencies.storage, storageKeys);
+        return { cleared: { localSettings: true } };
+      };
+      if (coordinateClear) return coordinateClear(clear);
+      return clear();
     },
     readAfterClear: async () => {
       const usage = await collectUsage();
