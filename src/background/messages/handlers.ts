@@ -1014,6 +1014,7 @@ async function requestCurrentVideoSubtitleJump(
         evidencePreview: line.text,
         sourceIdentityKey: source.identity.sourceIdentityKey,
         operationLeaseId,
+        returnAuthorizationKind: 'subtitle_view',
       },
     });
     return response as CurrentVideoTimestampJumpResponse;
@@ -1211,6 +1212,7 @@ async function requestCurrentVideoSegmentJump(
         evidencePreview: preview.evidencePreview,
         sourceIdentityKey: operationGuard.sourceIdentityKey,
         operationLeaseId,
+        returnAuthorizationKind: 'primary_text',
       },
     });
     return response as CurrentVideoTimestampJumpResponse;
@@ -1350,6 +1352,7 @@ async function requestCurrentVideoHighlightJump(
         evidencePreview: highlight.description,
         sourceIdentityKey: operationGuard.sourceIdentityKey,
         operationLeaseId,
+        returnAuthorizationKind: 'primary_text',
       },
     });
     return response as CurrentVideoTimestampJumpResponse;

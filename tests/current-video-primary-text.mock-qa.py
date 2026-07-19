@@ -228,7 +228,32 @@ def run_subtitle_single_source_flow(page):
     expect(assistant.get_by_role("radiogroup", name="字幕查看来源")).to_have_count(0)
 
     initial_position = page.evaluate("window.__assistantMockPlaybackPosition()")
-    expect(assistant.locator(".bdc-assistant-subtitle-row").filter(has_text="开场介绍子代理和当前视频助手。").first).to_be_visible()
+    first_row = assistant.locator(".bdc-assistant-subtitle-row").filter(has_text="开场介绍子代理和当前视频助手。").first
+    search = page.get_by_label("搜索当前字幕来源")
+    search.focus()
+    page.evaluate("window.__assistantMockSetPlaybackPosition(4)")
+    page.wait_for_function(
+        """() => [...document.querySelectorAll('.bdc-assistant-subtitle-row-active')]
+            .some((row) => row.textContent.includes('这里说明 Tool Use 可以帮助调用本地工具。'))"""
+    )
+    expect(search).to_be_focused()
+    first_row.focus()
+    page.evaluate("window.__assistantMockSetPlaybackPosition(8)")
+    page.wait_for_function(
+        """() => [...document.querySelectorAll('.bdc-assistant-subtitle-row-active')]
+            .some((row) => row.textContent.includes('100万上下文不等于可以混用视频来源。'))"""
+    )
+    expect(first_row).to_be_focused()
+    export_button = assistant.get_by_role("button", name="导出 TXT")
+    export_button.focus()
+    page.evaluate("window.__assistantMockSetPlaybackPosition(12)")
+    page.wait_for_function(
+        """() => [...document.querySelectorAll('.bdc-assistant-subtitle-row-active')]
+            .some((row) => row.textContent.includes('字幕搜索只在当前查看来源内进行。'))"""
+    )
+    expect(export_button).to_be_focused()
+
+    expect(first_row).to_be_visible()
     assistant.locator(".bdc-assistant-subtitle-row").filter(has_text="这里说明 Tool Use 可以帮助调用本地工具。").first.click()
     expect(assistant.get_by_text("字幕原文：这里说明 Tool Use 可以帮助调用本地工具。")).to_be_visible()
     assert page.evaluate("window.__assistantMockPlaybackPosition()") == initial_position
@@ -237,7 +262,6 @@ def run_subtitle_single_source_flow(page):
     assistant.get_by_role("button", name="回到当前字幕").click()
     expect(assistant.get_by_role("button", name="正在跟随播放")).to_be_visible()
 
-    search = page.get_by_label("搜索当前字幕来源")
     search.fill("子代理")
     assistant.get_by_role("button", name="查找").click()
     expect(assistant.get_by_text("找到 1 处匹配。")).to_be_visible()
@@ -1273,6 +1297,8 @@ def run_tab_isolation_flow(page):
     expect(page.get_by_role("button", name="重新检测字幕")).to_have_count(1)
     assert_only_assistant_tab(page, "summary")
     expect(page.get_by_role("tab", name="摘要")).to_have_attribute("aria-selected", "true")
+    expect(page.get_by_role("tab", name="摘要")).to_have_attribute("aria-controls", "bdc-current-video-assistant-panel-summary")
+    expect(page.get_by_role("tab", name="亮点")).not_to_have_attribute("aria-controls", "bdc-current-video-assistant-panel-highlights")
     expect(section.locator(".bdc-assistant-citation-title").filter(has_text="摘要")).to_be_visible()
     expect(section.locator(".bdc-assistant-citation-title").filter(has_text="关键要点")).to_be_visible()
     expect(section.locator(".bdc-assistant-candidate-card")).to_have_count(0)
@@ -1315,6 +1341,28 @@ def run_tab_isolation_flow(page):
     expect(page.locator("textarea")).to_have_count(0)
 
     assert_no_full_text_or_search(page)
+    assert_clean_visible_text(page)
+
+
+def run_content_subtitle_return_toast_flow(page):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+
+    page.evaluate(
+        "window.__assistantMockStartContentTimestampJump('subtitle-return-toast', 'subtitle-line', 3, 'subtitle_view')"
+    )
+    response = wait_for_content_timestamp_result(page, "subtitle-return-toast")
+    assert response["ok"] is True, response
+    toast = page.locator("#bdc-current-video-return")
+    expect(toast).to_be_visible()
+    toast.get_by_role("button", name="返回").click()
+    page.wait_for_function(
+        """() => (window.__assistantMockMessages || [])
+            .some((message) => message.action === 'RETURN_CURRENT_VIDEO_SUBTITLE_JUMP')"""
+    )
+    assert message_count_for(page, "RETURN_CURRENT_VIDEO_SUBTITLE_JUMP") == 1
+    assert message_count_for(page, "RETURN_CURRENT_VIDEO_SEGMENT_JUMP") == 0
     assert_clean_visible_text(page)
     assert_no_horizontal_overflow(page)
 
@@ -1734,6 +1782,11 @@ def main():
             assert not content_timestamp_errors, "\n".join(content_timestamp_errors)
             content_timestamp.close()
 
+            subtitle_return_toast, subtitle_return_toast_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_content_subtitle_return_toast_flow(subtitle_return_toast)
+            assert not subtitle_return_toast_errors, "\n".join(subtitle_return_toast_errors)
+            subtitle_return_toast.close()
+
             history_jump, history_jump_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
             run_history_only_navigation_blocks_timestamp_jump(history_jump)
             assert not history_jump_errors, "\n".join(history_jump_errors)
@@ -1874,7 +1927,7 @@ def main():
             assert not mobile_errors, "\n".join(mobile_errors)
             mobile.close()
 
-            print("current-video primary-text real UI QA passed: isolated summary/highlights/QA/subtitle tabs on desktop and mobile, subtitle B站/local source viewing/search/follow/jump/export/stale and late-response races, 4/8 highlights, cache-only restore, authorization-off/live-disabled prior result, live model-change cancellation and exact-model cache refresh, failed-refresh old-result preservation, runtime-only reopen preservation, disabled/unconfigured/no-text/generating-cancel/invalid/error states, source-change cancellation, preview replacement rejection, preview/confirm/return, no legacy summary action, responsive no-overflow/no-console/raw-copy checks, plus existing primary-text and timestamp race coverage")
+            print("current-video primary-text real UI QA passed: isolated summary/highlights/QA/subtitle tabs on desktop and mobile with keyboard focus and active-panel ARIA, subtitle B站/local source viewing/search/follow focus preservation/jump/export/stale and late-response races, subtitle-view toast return routing without primary selection, 4/8 highlights, cache-only restore, authorization-off/live-disabled prior result, live model-change cancellation and exact-model cache refresh, failed-refresh old-result preservation, runtime-only reopen preservation, disabled/unconfigured/no-text/generating-cancel/invalid/error states, source-change cancellation, preview replacement rejection, preview/confirm/return, no legacy summary action, responsive no-overflow/no-console/raw-copy checks, plus existing primary-text and timestamp race coverage")
         finally:
             browser.close()
 

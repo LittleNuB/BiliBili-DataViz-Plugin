@@ -1795,6 +1795,7 @@ test('jump operation lease is denied when selection changes before content consu
   let seekCount = 0;
   setTabMessageHandler(tabId, async (message) => {
     const payload = contentTimestampPayload(message, 'CURRENT_VIDEO_TIMESTAMP_JUMP');
+    assert.equal(payload.returnAuthorizationKind, 'primary_text');
     await sendRequest<SaveCurrentVideoPrimaryTextSelectionResult>({
       action: 'SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION',
       params: {
@@ -1910,6 +1911,7 @@ test('subtitle jump lease is denied when the exact viewing source is replaced be
   let seekCount = 0;
   setTabMessageHandler(tabId, async (message) => {
     const payload = contentTimestampPayload(message, 'CURRENT_VIDEO_TIMESTAMP_JUMP');
+    assert.equal(payload.returnAuthorizationKind, 'subtitle_view');
     const replacement = await seedHandlerTranscript(
       context,
       tabId,

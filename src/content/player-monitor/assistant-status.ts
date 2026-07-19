@@ -1124,7 +1124,7 @@ function appendAssistantTabs(parent: HTMLElement): void {
     element.id = assistantTabId(tab.key);
     element.setAttribute('role', 'tab');
     element.setAttribute('aria-selected', active ? 'true' : 'false');
-    element.setAttribute('aria-controls', assistantPanelId(tab.key));
+    if (active) element.setAttribute('aria-controls', assistantPanelId(tab.key));
     element.tabIndex = active ? 0 : -1;
     element.addEventListener('keydown', (event) => {
       const currentIndex = tabItems.findIndex(item => item.key === assistantState.activeTab);
@@ -1681,6 +1681,7 @@ function appendSubtitleReader(
       active ? 'bdc-assistant-subtitle-row-active' : '',
       previewing ? 'bdc-assistant-subtitle-row-preview' : '',
     ].filter(Boolean).join(' ');
+    if (active) row.setAttribute('aria-current', 'true');
     row.addEventListener('click', () => {
       openSubtitleLinePreview(source, line.lineId, 'manual_scroll');
     });
@@ -3124,8 +3125,26 @@ function updateSubtitleFollowFromPlayback(): void {
     source.lines,
   );
   if (next.activeLineId !== assistantState.subtitleFollow.activeLineId || next.mode !== assistantState.subtitleFollow.mode) {
+    const previousActiveLineId = assistantState.subtitleFollow.activeLineId;
     assistantState.subtitleFollow = next;
-    renderAssistantShell();
+    updateSubtitleActiveLineInDom(previousActiveLineId, next.activeLineId);
+    queueSubtitleActiveLineScroll();
+  }
+}
+
+function updateSubtitleActiveLineInDom(previousLineId: string | null, nextLineId: string | null): void {
+  const root = document.getElementById(CARD_ID);
+  const rows = Array.from(root?.querySelectorAll<HTMLElement>('[data-subtitle-line-id]') ?? []);
+  for (const row of rows) {
+    const lineId = row.dataset.subtitleLineId ?? null;
+    if (lineId !== previousLineId && lineId !== nextLineId) continue;
+    const active = lineId === nextLineId;
+    row.classList.toggle('bdc-assistant-subtitle-row-active', active);
+    if (active) {
+      row.setAttribute('aria-current', 'true');
+    } else {
+      row.removeAttribute('aria-current');
+    }
   }
 }
 

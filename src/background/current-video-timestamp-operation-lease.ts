@@ -1,6 +1,7 @@
-import type { CurrentVideoTimestampOperationKind } from '../shared/types/current-video-segment-retrieval.ts';
-
-export type CurrentVideoTimestampOperationAuthorizationKind = 'primary_text' | 'subtitle_view';
+import type {
+  CurrentVideoTimestampOperationAuthorizationKind,
+  CurrentVideoTimestampOperationKind,
+} from '../shared/types/current-video-segment-retrieval.ts';
 
 export interface CurrentVideoTimestampOperationLeaseBinding {
   tabId: number;

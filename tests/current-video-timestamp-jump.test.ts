@@ -273,6 +273,7 @@ function jumpPayload(): CurrentVideoTimestampJumpContentPayload {
     evidencePreview: '讲到模型架构的字幕片段。',
     sourceIdentityKey: sourceIdentityKey(),
     operationLeaseId: 'lease:jump:test',
+    returnAuthorizationKind: 'primary_text',
   };
 }
 
