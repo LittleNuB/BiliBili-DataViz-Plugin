@@ -40,6 +40,7 @@ import type {
   CurrentVideoTimestampJumpResponse,
   CurrentVideoTimestampReturnResponse,
 } from './current-video-segment-retrieval';
+import type { CurrentVideoSubtitleViewSourcesResult } from '../current-video-subtitle-view.ts';
 import type { CurrentVideoRelatedFavoritesResponse } from './current-video-related-favorites';
 import type { CurrentVideoSummaryHighlightsResult } from './current-video-summary';
 import type { VideoKnowledgeResult } from './video-knowledge';
@@ -84,10 +85,13 @@ export type RequestAction =
   | 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS'
   | 'GET_VIDEO_KNOWLEDGE'
   | 'SEARCH_CURRENT_VIDEO_SEGMENTS'
+  | 'GET_CURRENT_VIDEO_SUBTITLE_VIEW_SOURCES'
   | 'GET_CURRENT_VIDEO_RELATED_FAVORITES'
   | 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP'
   | 'REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP'
+  | 'REQUEST_CURRENT_VIDEO_SUBTITLE_JUMP'
   | 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP'
+  | 'RETURN_CURRENT_VIDEO_SUBTITLE_JUMP'
   | 'CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE'
   | 'GET_SMART_FAVORITES'
   | 'GET_SMART_FAVORITES_BY_PATH'
@@ -217,6 +221,7 @@ export type CurrentVideoTranscriptEvidenceResponse = BiliVizResponse<CurrentVide
 export type CurrentVideoSummaryHighlightsResponse = BiliVizResponse<CurrentVideoSummaryHighlightsResult>;
 export type VideoKnowledgeResponse = BiliVizResponse<VideoKnowledgeResult>;
 export type CurrentVideoSegmentRetrievalResponse = BiliVizResponse<CurrentVideoSegmentRetrievalResult>;
+export type CurrentVideoSubtitleViewSourcesResponse = BiliVizResponse<CurrentVideoSubtitleViewSourcesResult>;
 export type CurrentVideoRelatedFavoritesMessageResponse = BiliVizResponse<CurrentVideoRelatedFavoritesResponse>;
 export type CurrentVideoTimestampJumpMessageResponse = BiliVizResponse<CurrentVideoTimestampJumpResponse>;
 export type CurrentVideoTimestampReturnMessageResponse = BiliVizResponse<CurrentVideoTimestampReturnResponse>;

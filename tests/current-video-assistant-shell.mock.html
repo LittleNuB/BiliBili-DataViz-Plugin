@@ -73,6 +73,7 @@
       let mockCid = mockPrimaryCid;
       let mockPage = 1;
       let subtitleCached = mockParams.get("subtitleCached") === "1";
+      let localTranscriptAvailable = mockParams.get("localTranscript") === "1";
       let switchDuringNextTranscriptFetch = false;
       let summaryGeneration = 0;
       let summaryCacheResult = null;
@@ -218,11 +219,11 @@
           ["source" + "Hash"]: subtitleCached ? subtitleSourceHash : null,
           bodyHash: subtitleCached ? subtitleBodyHash : null,
           timelineHash: subtitleCached ? subtitleTimelineHash : null,
-          segmentCount: subtitleCached ? 2 : 0,
+          segmentCount: subtitleCached ? 4 : 0,
           staleSegmentCount: 0,
           serializedBytes: subtitleCached ? 3200 : 0,
           coverageStartSeconds: subtitleCached ? 0 : null,
-          coverageEndSeconds: subtitleCached ? 8 : null,
+          coverageEndSeconds: subtitleCached ? 16 : null,
           fetchedAt: subtitleCached ? Date.now() : null,
           updatedAt: subtitleCached ? Date.now() : null,
           reason: subtitleCached ? "transcript_segments_cached" : "transcript_not_cached",
@@ -277,9 +278,9 @@
                 sourcePath: "/x/player/wbi/v2",
                 needLoginSubtitle: null,
                 trackCount: 1,
-                segmentCount: 2,
+                segmentCount: 4,
                 coverageStartSeconds: 0,
-                coverageEndSeconds: 8,
+                coverageEndSeconds: 16,
                 languages: ["zh-CN"],
                 tracks: [],
                 reason: "subtitle_tracks_available",
@@ -900,6 +901,155 @@
         const minutes = Math.floor(safe / 60);
         const rest = safe % 60;
         return `${minutes}:${String(rest).padStart(2, "0")}`;
+      }
+
+      function subtitleRows() {
+        return [
+          { lineId: "bili-line-1", startSeconds: 0, endSeconds: 3, text: "开场介绍子代理和当前视频助手。" },
+          { lineId: "bili-line-2", startSeconds: 3, endSeconds: 7, text: "这里说明 Tool Use 可以帮助调用本地工具。" },
+          { lineId: "bili-line-3", startSeconds: 7, endSeconds: 11, text: "100万上下文不等于可以混用视频来源。" },
+          { lineId: "bili-line-4", startSeconds: 11, endSeconds: 16, text: "字幕搜索只在当前查看来源内进行。" },
+        ];
+      }
+
+      function localTranscriptRows() {
+        return [
+          { lineId: "local-line-1", startSeconds: 1, endSeconds: 4, text: "本地完成稿记录了本地字幕稿已经结束。" },
+          { lineId: "local-line-2", startSeconds: 4, endSeconds: 8, text: "Local source mentions SubAgent with English casing." },
+          { lineId: "local-line-3", startSeconds: 8, endSeconds: 12, text: "这一行只存在于本地完成稿。" },
+        ];
+      }
+
+      function localTranscriptSourceIdentityKey() {
+        return `primary-text:local_transcript:${mockBvid}:${mockCid}:${mockPage}:zh-cn:mock-local-source-hash-hidden`;
+      }
+
+      function subtitleLineBindingKey(sourceIdentityKey, line, index) {
+        return [
+          "mock-binding",
+          sourceIdentityKey,
+          index,
+          Math.round(line.startSeconds * 1000),
+          Math.round(line.endSeconds * 1000),
+          encodeURIComponent(line.text),
+        ].join(":");
+      }
+
+      function subtitleViewSource(kind) {
+        const isLocal = kind === "local_transcript";
+        const sourceIdentityKey = isLocal ? localTranscriptSourceIdentityKey() : subtitleSourceIdentityKey();
+        const rows = isLocal ? localTranscriptRows() : subtitleRows();
+        const sourceLabel = isLocal ? "本地转录" : "B站字幕";
+        const identity = {
+          bvid: mockBvid,
+          cid: mockCid,
+          page: mockPage,
+          source: kind,
+          sourceType: isLocal ? "local_transcript" : "bilibili_player_wbi_v2",
+          language: "zh-CN",
+          bodyHash: isLocal ? "mock-local-body-hash-hidden" : subtitleBodyHash,
+          timelineHash: isLocal ? "mock-local-timeline-hash-hidden" : subtitleTimelineHash,
+          sourceHash: isLocal ? "mock-local-source-hash-hidden" : subtitleSourceHash,
+          sourceIdentityKey,
+          lineCount: rows.length,
+        };
+        return {
+          identity,
+          sourceLabel,
+          status: "available",
+          lineCount: rows.length,
+          byteSize: rows.reduce((sum, row) => sum + row.text.length, 0),
+          temporary: false,
+          lines: rows.map((line, index) => ({
+            ...line,
+            lineBindingKey: subtitleLineBindingKey(sourceIdentityKey, line, index),
+            sourceIdentityKey,
+            bvid: mockBvid,
+            cid: mockCid,
+            page: mockPage,
+            source: kind,
+            sourceLabel,
+            language: "zh-CN",
+          })),
+        };
+      }
+
+      function subtitleViewSourcesResult() {
+        const sources = [];
+        if (subtitleCached) sources.push(subtitleViewSource("bilibili_subtitle"));
+        if (localTranscriptAvailable) sources.push(subtitleViewSource("local_transcript"));
+        if (sources.length === 0) {
+          return {
+            status: "requires_user_subtitle",
+            message: "B站字幕需要先在播放器里手动开启中文 AI 字幕；已完成的本地字幕稿只有存在时才会显示。",
+            checkedAt: Date.now(),
+            contextKey: `${mockBvid}:${mockCid}:${mockPage}:${subtitleCached ? subtitleSourceIdentityKey() : "no-source"}`,
+            title: mockTitle,
+            partTitle: mockPage === 1 ? "主视频" : "第二分 P",
+            durationSeconds: 600,
+            sources,
+          };
+        }
+        return {
+          status: "ready",
+          message: `已读取 ${sources.length} 个字幕来源。`,
+          checkedAt: Date.now(),
+          contextKey: `${mockBvid}:${mockCid}:${mockPage}:${sources[0].identity.sourceIdentityKey}`,
+          title: mockTitle,
+          partTitle: mockPage === 1 ? "主视频" : "第二分 P",
+          durationSeconds: 600,
+          sources,
+        };
+      }
+
+      function requestCurrentVideoSubtitleJump(params) {
+        const source = subtitleViewSourcesResult().sources
+          .find(item => item.identity.sourceIdentityKey === params?.sourceIdentityKey);
+        const line = source?.lines.find(item =>
+          item.lineId === params?.lineId
+          && item.lineBindingKey === params?.lineBindingKey
+        );
+        if (params?.confirmed !== true) {
+          return {
+            ok: false,
+            message: "需要先确认跳转。",
+            candidateId: String(params?.lineId || ""),
+            targetSeconds: null,
+            targetTimeLabel: null,
+            returnPointSeconds: null,
+            sourceLabel: null,
+            confidence: null,
+          };
+        }
+        if (!source || !line) {
+          return {
+            ok: false,
+            message: "当前字幕来源或字幕行已变化，请重新打开预览后再跳转。",
+            candidateId: String(params?.lineId || ""),
+            targetSeconds: null,
+            targetTimeLabel: null,
+            returnPointSeconds: null,
+            sourceLabel: null,
+            confidence: null,
+          };
+        }
+        returnPointSeconds = playbackPosition;
+        playbackPosition = line.startSeconds;
+        writeRuntimeLog(`字幕跳转到 ${formatMockTime(line.startSeconds)}`);
+        return {
+          ok: true,
+          message: `已跳到 ${formatMockTime(line.startSeconds)}，可返回 ${formatMockTime(returnPointSeconds)}。`,
+          candidateId: line.lineId,
+          targetSeconds: line.startSeconds,
+          targetTimeLabel: formatMockTime(line.startSeconds),
+          returnPointSeconds,
+          sourceLabel: source.sourceLabel,
+          confidence: 1,
+        };
+      }
+
+      function returnCurrentVideoSubtitleJump() {
+        return returnCurrentVideoSegmentJump();
       }
 
       function writeRuntimeLog(text) {
@@ -1629,6 +1779,9 @@
               }
               return Promise.resolve({ success: true, data: evidence });
             }
+            if (message.action === "GET_CURRENT_VIDEO_SUBTITLE_VIEW_SOURCES") {
+              return Promise.resolve({ success: true, data: subtitleViewSourcesResult() });
+            }
             if (message.action === "GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE") {
               return maybeDeferProtectedResponse(message.action, { success: true, data: summaryCacheResponse(message.params) });
             }
@@ -1664,10 +1817,22 @@
                 data: requestCurrentVideoSegmentJump(message.params),
               });
             }
+            if (message.action === "REQUEST_CURRENT_VIDEO_SUBTITLE_JUMP") {
+              return Promise.resolve({
+                success: true,
+                data: requestCurrentVideoSubtitleJump(message.params),
+              });
+            }
             if (message.action === "RETURN_CURRENT_VIDEO_SEGMENT_JUMP") {
               return maybeDeferProtectedResponse(message.action, {
                 success: true,
                 data: returnCurrentVideoSegmentJump(),
+              });
+            }
+            if (message.action === "RETURN_CURRENT_VIDEO_SUBTITLE_JUMP") {
+              return Promise.resolve({
+                success: true,
+                data: returnCurrentVideoSubtitleJump(),
               });
             }
             if (message.action === "CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE") {

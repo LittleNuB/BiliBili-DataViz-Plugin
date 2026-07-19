@@ -196,6 +196,142 @@ def run_flow(page):
     assert_no_horizontal_overflow(page)
 
 
+def read_download_text(download):
+    path = download.path()
+    if not path:
+        raise AssertionError("download path was not available")
+    return Path(path).read_text(encoding="utf-8")
+
+
+def open_subtitle_tab(page, query="subtitleCached=1&sourceVersion=v2"):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?{query}")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+    page.get_by_text("展开助手").click()
+    page.get_by_role("tab", name="字幕").click()
+    expect(page.get_by_label("搜索当前字幕来源")).to_be_visible()
+    return page.locator("#bdc-current-video-assistant")
+
+
+def run_subtitle_single_source_flow(page):
+    assistant = open_subtitle_tab(page)
+    assert "GET_CURRENT_VIDEO_SUBTITLE_VIEW_SOURCES" in message_actions(page)
+    assert message_count_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS") == 0
+    expect(assistant.get_by_text("正在查看：B站字幕").first).to_be_visible()
+    expect(assistant.get_by_text("本地转录")).to_have_count(0)
+    expect(assistant.get_by_role("button", name="查看这个来源")).to_have_count(0)
+
+    initial_position = page.evaluate("window.__assistantMockPlaybackPosition()")
+    expect(assistant.locator(".bdc-assistant-subtitle-row").filter(has_text="开场介绍子代理和当前视频助手。").first).to_be_visible()
+    assistant.locator(".bdc-assistant-subtitle-row").filter(has_text="这里说明 Tool Use 可以帮助调用本地工具。").first.click()
+    expect(assistant.get_by_text("字幕原文：这里说明 Tool Use 可以帮助调用本地工具。")).to_be_visible()
+    assert page.evaluate("window.__assistantMockPlaybackPosition()") == initial_position
+    expect(assistant.get_by_text("已暂停跟随：正在手动浏览字幕。")).to_be_visible()
+
+    assistant.get_by_role("button", name="回到当前字幕").click()
+    expect(assistant.get_by_role("button", name="正在跟随播放")).to_be_visible()
+
+    search = page.get_by_label("搜索当前字幕来源")
+    search.fill("子代理")
+    assistant.get_by_role("button", name="查找").click()
+    expect(assistant.get_by_text("找到 1 处匹配。")).to_be_visible()
+    expect(assistant.locator(".bdc-assistant-subtitle-result").filter(has_text="开场介绍子代理和当前视频助手。").first).to_be_visible()
+    assert message_count_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS") == 0
+
+    search.fill("tool use")
+    assistant.get_by_role("button", name="查找").click()
+    expect(assistant.get_by_text("找到 1 处匹配。")).to_be_visible()
+    expect(assistant.locator(".bdc-assistant-subtitle-result").filter(has_text="这里说明 Tool Use 可以帮助调用本地工具。").first).to_be_visible()
+
+    search.fill("视频")
+    assistant.get_by_role("button", name="查找").click()
+    expect(assistant.get_by_text("找到 2 处匹配。")).to_be_visible()
+    assistant.get_by_role("button", name="下一个").click()
+    expect(assistant.get_by_text("已暂停跟随：正在查看搜索结果。")).to_be_visible()
+    assistant.get_by_role("button", name="上一个").click()
+
+    search.fill("完全不存在")
+    assistant.get_by_role("button", name="查找").click()
+    expect(assistant.get_by_text("当前字幕来源里没有匹配结果。")).to_be_visible()
+
+    page.evaluate("window.__assistantMockSetPlaybackPosition(12)")
+    assistant.locator(".bdc-assistant-subtitle-row").filter(has_text="这里说明 Tool Use 可以帮助调用本地工具。").first.click()
+    expect(assistant.get_by_text("确认跳转前预览")).to_be_visible()
+    assert page.evaluate("window.__assistantMockPlaybackPosition()") == 12
+    assistant.get_by_role("button", name="确认跳转").click()
+    expect(assistant.get_by_text("可返回 0:12")).to_be_visible()
+    assert page.evaluate("window.__assistantMockPlaybackPosition()") == 3
+    assert last_message_for(page, "REQUEST_CURRENT_VIDEO_SUBTITLE_JUMP")["params"]["confirmed"] is True
+    assistant.get_by_role("button", name="返回原位置").click()
+    expect(assistant.get_by_text("已返回 0:12")).to_be_visible()
+    assert page.evaluate("window.__assistantMockPlaybackPosition()") == 12
+
+    with page.expect_download() as txt_info:
+        assistant.get_by_role("button", name="导出 TXT").click()
+    txt_download = txt_info.value
+    assert txt_download.suggested_filename == "页内助手 Shell Mock 视频-主视频-B站字幕-字幕全文.txt"
+    txt = read_download_text(txt_download)
+    assert "字幕全文（B站字幕）" in txt
+    assert "[0:03-0:07] 这里说明 Tool Use 可以帮助调用本地工具。" in txt
+
+    with page.expect_download() as srt_info:
+        assistant.get_by_role("button", name="导出 SRT").click()
+    srt_download = srt_info.value
+    assert srt_download.suggested_filename == "页内助手 Shell Mock 视频-主视频-B站字幕-字幕全文.srt"
+    srt = read_download_text(srt_download)
+    assert "1\n00:00:00,000 --> 00:00:03,000\n开场介绍子代理和当前视频助手。" in srt
+    assert "4\n00:00:11,000 --> 00:00:16,000\n字幕搜索只在当前查看来源内进行。" in srt
+
+    actions = message_actions(page)
+    assert "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS" not in actions
+    assert "GET_VIDEO_KNOWLEDGE" not in actions
+    assert message_count_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS") == 0
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_subtitle_dual_source_independence_flow(page):
+    assistant = open_subtitle_tab(page, "subtitleCached=1&sourceVersion=v2&savedSource=current&localTranscript=1")
+    expect(assistant.get_by_text("B站字幕").first).to_be_visible()
+    expect(assistant.get_by_text("本地转录").first).to_be_visible()
+    storage_before = page.evaluate("JSON.stringify(window.__assistantMockStorage.currentVideoPrimaryTextSelections || {})")
+    source_cards = assistant.locator(".bdc-assistant-source-card")
+    source_cards.filter(has_text="本地转录").get_by_role("button", name="查看这个来源").click()
+    expect(assistant.locator(".bdc-assistant-subtitle-row").filter(has_text="Local source mentions SubAgent with English casing.").first).to_be_visible()
+    storage_after = page.evaluate("JSON.stringify(window.__assistantMockStorage.currentVideoPrimaryTextSelections || {})")
+    assert storage_before == storage_after, "subtitle viewing source switch changed primary assistant selection"
+    assert message_count_for(page, "SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION") == 0
+
+    page.get_by_label("搜索当前字幕来源").fill("SubAgent")
+    assistant.get_by_role("button", name="查找").click()
+    expect(assistant.get_by_text("找到 1 处匹配。")).to_be_visible()
+    expect(assistant.locator(".bdc-assistant-subtitle-result").filter(has_text="Local source mentions SubAgent with English casing.").first).to_be_visible()
+    page.get_by_label("搜索当前字幕来源").fill("Tool Use")
+    assistant.get_by_role("button", name="查找").click()
+    expect(assistant.get_by_text("当前字幕来源里没有匹配结果。")).to_be_visible()
+
+    with page.expect_download() as download_info:
+        assistant.get_by_role("button", name="导出 SRT").click()
+    download = download_info.value
+    assert download.suggested_filename == "页内助手 Shell Mock 视频-主视频-本地转录-字幕全文.srt"
+    assert "这一行只存在于本地完成稿。" in read_download_text(download)
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_subtitle_stale_source_flow(page):
+    assistant = open_subtitle_tab(page)
+    page.evaluate("window.__assistantMockSetPlaybackPosition(20)")
+    assistant.locator(".bdc-assistant-subtitle-row").filter(has_text="开场介绍子代理和当前视频助手。").first.click()
+    expect(assistant.get_by_text("确认跳转前预览")).to_be_visible()
+    page.evaluate("window.__assistantMockReplaceSubtitleSource('v9')")
+    assistant.get_by_role("button", name="确认跳转").click()
+    expect(assistant.get_by_text("当前字幕来源或字幕行已变化，请重新打开预览后再跳转。")).to_be_visible()
+    assert page.evaluate("window.__assistantMockPlaybackPosition()") == 20
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
 def run_missing_selection_flow(page):
     page.route("**/*", route_mock)
     page.goto(MOCK_URL)
@@ -1612,6 +1748,26 @@ def main():
             assert not backend_failure_errors, "\n".join(backend_failure_errors)
             backend_failure.close()
 
+            subtitle_desktop, subtitle_desktop_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_subtitle_single_source_flow(subtitle_desktop)
+            assert not subtitle_desktop_errors, "\n".join(subtitle_desktop_errors)
+            subtitle_desktop.close()
+
+            subtitle_mobile, subtitle_mobile_errors = new_checked_page(browser, viewport={"width": 390, "height": 760}, is_mobile=True)
+            run_subtitle_single_source_flow(subtitle_mobile)
+            assert not subtitle_mobile_errors, "\n".join(subtitle_mobile_errors)
+            subtitle_mobile.close()
+
+            subtitle_dual, subtitle_dual_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_subtitle_dual_source_independence_flow(subtitle_dual)
+            assert not subtitle_dual_errors, "\n".join(subtitle_dual_errors)
+            subtitle_dual.close()
+
+            subtitle_stale, subtitle_stale_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_subtitle_stale_source_flow(subtitle_stale)
+            assert not subtitle_stale_errors, "\n".join(subtitle_stale_errors)
+            subtitle_stale.close()
+
             late_switch, late_switch_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
             run_late_switch_flow(late_switch)
             assert not late_switch_errors, "\n".join(late_switch_errors)
@@ -1632,7 +1788,7 @@ def main():
             assert not mobile_errors, "\n".join(mobile_errors)
             mobile.close()
 
-            print("current-video primary-text real UI QA passed: in-page combined summary/key-points/highlights, 4/8 highlights, cache-only restore, authorization-off/live-disabled prior result, live model-change cancellation and exact-model cache refresh, failed-refresh old-result preservation, runtime-only reopen preservation, disabled/unconfigured/no-text/generating-cancel/invalid/error states, source-change cancellation, preview replacement rejection, preview/confirm/return, no legacy summary action, responsive no-overflow/no-console/raw-copy checks, plus existing primary-text and timestamp race coverage")
+            print("current-video primary-text real UI QA passed: in-page combined summary/key-points/highlights, subtitle tab B站/local source viewing/search/follow/jump/export/stale races, 4/8 highlights, cache-only restore, authorization-off/live-disabled prior result, live model-change cancellation and exact-model cache refresh, failed-refresh old-result preservation, runtime-only reopen preservation, disabled/unconfigured/no-text/generating-cancel/invalid/error states, source-change cancellation, preview replacement rejection, preview/confirm/return, no legacy summary action, responsive no-overflow/no-console/raw-copy checks, plus existing primary-text and timestamp race coverage")
         finally:
             browser.close()
 

@@ -15,6 +15,13 @@ import type {
   CurrentVideoTimestampJumpResponse,
   CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
+import type {
+  CurrentVideoSubtitleFollowState,
+  CurrentVideoSubtitleLine,
+  CurrentVideoSubtitleSearchState,
+  CurrentVideoSubtitleViewingSource,
+  CurrentVideoSubtitleViewSourcesResult,
+} from '../../shared/current-video-subtitle-view.ts';
 import type { CurrentVideoRelatedFavoritesResponse } from '../../shared/types/current-video-related-favorites';
 import type {
   SmartFavoriteQaCitedVideo,
@@ -35,6 +42,19 @@ import {
   buildCurrentVideoPrimaryTextState,
   type CurrentVideoPrimaryTextSourceOption,
 } from '../../shared/current-video-primary-text';
+import {
+  buildCurrentVideoSubtitleJumpPreview,
+  buildSubtitleExportFilename,
+  currentVideoSubtitleContextKey,
+  formatSubtitleSrt,
+  formatSubtitleTxt,
+  navigateCurrentVideoSubtitleSearchResult,
+  reduceCurrentVideoSubtitleFollowState,
+  searchCurrentVideoSubtitleLines,
+  selectDefaultSubtitleViewingSource,
+  shouldShowSubtitleViewingSourceSwitcher,
+  validateSubtitleViewingIdentity,
+} from '../../shared/current-video-subtitle-view.ts';
 import {
   asPriorGeneratedCurrentVideoSummaryHighlights,
   cancelledCurrentVideoSummaryHighlights,
@@ -275,6 +295,30 @@ const CSS = `
   border-color: rgba(255, 207, 138, 0.32);
   color: #ffcf8a;
 }
+#${CARD_ID} .bdc-assistant-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+}
+#${CARD_ID} .bdc-assistant-tab {
+  min-width: 0;
+  min-height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.055);
+  color: #c9d0dd;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  padding: 6px 4px;
+}
+#${CARD_ID} .bdc-assistant-tab-active {
+  border-color: rgba(251, 114, 153, 0.45);
+  background: rgba(251, 114, 153, 0.20);
+  color: #ffffff;
+}
 #${CARD_ID} .bdc-assistant-subtitle-box {
   border-radius: 8px;
   padding: 10px;
@@ -327,6 +371,12 @@ const CSS = `
   gap: 6px;
   margin-top: 8px;
 }
+#${CARD_ID} .bdc-assistant-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
 #${CARD_ID} .bdc-assistant-status {
   color: #c8e6ff;
   font-size: 11px;
@@ -361,6 +411,98 @@ const CSS = `
 #${CARD_ID} .bdc-assistant-search-input:focus {
   border-color: rgba(251, 114, 153, 0.55);
   outline: none;
+}
+#${CARD_ID} .bdc-assistant-subtitle-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+  width: 100%;
+}
+#${CARD_ID} .bdc-assistant-subtitle-search-input {
+  min-width: 0;
+  min-height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  background: rgba(10, 12, 21, 0.72);
+  color: #f4f7fb;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+  padding: 7px 9px;
+}
+#${CARD_ID} .bdc-assistant-subtitle-search-input::placeholder {
+  color: #747d90;
+}
+#${CARD_ID} .bdc-assistant-subtitle-search-input:focus {
+  border-color: rgba(251, 114, 153, 0.55);
+  outline: none;
+}
+#${CARD_ID} .bdc-assistant-subtitle-reader {
+  max-height: min(48vh, 360px);
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 8px;
+  background: rgba(10, 12, 21, 0.42);
+  margin-top: 10px;
+}
+#${CARD_ID} .bdc-assistant-subtitle-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 8px;
+  text-align: left;
+}
+#${CARD_ID} .bdc-assistant-subtitle-row:last-child {
+  border-bottom: 0;
+}
+#${CARD_ID} .bdc-assistant-subtitle-row-active {
+  background: rgba(127, 219, 255, 0.11);
+}
+#${CARD_ID} .bdc-assistant-subtitle-row-preview {
+  outline: 1px solid rgba(255, 179, 71, 0.40);
+  outline-offset: -1px;
+}
+#${CARD_ID} .bdc-assistant-subtitle-time {
+  color: #9bd6ff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+#${CARD_ID} .bdc-assistant-subtitle-line-text {
+  color: #f1f5ff;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+#${CARD_ID} .bdc-assistant-subtitle-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+#${CARD_ID} .bdc-assistant-subtitle-result {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 7px;
+  text-align: left;
+}
+#${CARD_ID} .bdc-assistant-subtitle-result-active {
+  border-color: rgba(255, 179, 71, 0.36);
+  background: rgba(255, 179, 71, 0.08);
 }
 #${CARD_ID} .bdc-assistant-retrieval-status {
   font-size: 11px;
@@ -561,6 +703,13 @@ const CSS = `
   #${CARD_ID} .bdc-assistant-search-form .bdc-assistant-button {
     width: 100%;
   }
+  #${CARD_ID} .bdc-assistant-subtitle-search-row {
+    grid-template-columns: 1fr;
+  }
+  #${CARD_ID} .bdc-assistant-subtitle-row,
+  #${CARD_ID} .bdc-assistant-subtitle-result {
+    grid-template-columns: 1fr;
+  }
 }
 @media (max-height: 520px) {
   #${CARD_ID}.bdc-assistant-expanded {
@@ -570,8 +719,11 @@ const CSS = `
 }
 `;
 
+type AssistantTab = 'summary' | 'highlights' | 'qa' | 'subtitles';
+
 interface AssistantState {
   expanded: boolean;
+  activeTab: AssistantTab;
   context: CurrentVideoContextResult | null;
   contextKey: string;
   summary: CurrentVideoSummaryHighlightsResult | null;
@@ -615,6 +767,22 @@ interface AssistantState {
   subtitleRefreshing: boolean;
   subtitleStatus: string | null;
   subtitleRequestId: number;
+  subtitleView: CurrentVideoSubtitleViewSourcesResult | null;
+  subtitleViewContextKey: string;
+  subtitleViewLoading: boolean;
+  subtitleViewError: string | null;
+  subtitleViewRequestId: number;
+  subtitleViewingSourceIdentityKey: string | null;
+  subtitleSearchQuery: string;
+  subtitleSearch: CurrentVideoSubtitleSearchState | null;
+  subtitleFollow: CurrentVideoSubtitleFollowState;
+  subtitlePreviewLineId: string | null;
+  subtitleJumpStatus: string | null;
+  subtitleJumpLoading: boolean;
+  subtitleReturnAvailable: boolean;
+  subtitleReturnLoading: boolean;
+  subtitleTimestampRequestId: number;
+  subtitleExportStatus: string | null;
 }
 
 interface InPageSummaryHighlightsRequest {
@@ -639,6 +807,7 @@ let primaryTextSelectionStorageListenerRegistered = false;
 
 const assistantState: AssistantState = {
   expanded: false,
+  activeTab: 'summary',
   context: null,
   contextKey: '',
   summary: null,
@@ -682,7 +851,29 @@ const assistantState: AssistantState = {
   subtitleRefreshing: false,
   subtitleStatus: null,
   subtitleRequestId: 0,
+  subtitleView: null,
+  subtitleViewContextKey: '',
+  subtitleViewLoading: false,
+  subtitleViewError: null,
+  subtitleViewRequestId: 0,
+  subtitleViewingSourceIdentityKey: null,
+  subtitleSearchQuery: '',
+  subtitleSearch: null,
+  subtitleFollow: {
+    mode: 'following',
+    activeLineId: null,
+    pausedReason: null,
+  },
+  subtitlePreviewLineId: null,
+  subtitleJumpStatus: null,
+  subtitleJumpLoading: false,
+  subtitleReturnAvailable: false,
+  subtitleReturnLoading: false,
+  subtitleTimestampRequestId: 0,
+  subtitleExportStatus: null,
 };
+let subtitleFollowTimer: number | null = null;
+let subtitleProgrammaticScrollUntil = 0;
 
 export function renderCurrentVideoAssistant(context: CurrentVideoContextResult): void {
   injectStyle();
@@ -698,6 +889,9 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
 
 function updateAssistantContext(context: CurrentVideoContextResult): void {
   const nextKey = contextStateKey(context);
+  const previousSubtitleKey = subtitleContextKeyForContext(assistantState.context);
+  const nextSubtitleKey = subtitleContextKeyForContext(context);
+  const subtitleKeyChanged = previousSubtitleKey !== nextSubtitleKey;
   if (assistantState.contextKey !== nextKey) {
     invalidateSegmentTimestampRequests();
     assistantState.summary = null;
@@ -729,6 +923,28 @@ function updateAssistantContext(context: CurrentVideoContextResult): void {
     assistantState.primaryTextViewingSourceIdentityKey = null;
     assistantState.primaryTextStatus = null;
     assistantState.subtitleStatus = null;
+    if (subtitleKeyChanged) {
+      assistantState.subtitleView = null;
+      assistantState.subtitleViewContextKey = '';
+      assistantState.subtitleViewLoading = false;
+      assistantState.subtitleViewError = null;
+      assistantState.subtitleViewRequestId += 1;
+      assistantState.subtitleViewingSourceIdentityKey = null;
+      assistantState.subtitleSearchQuery = '';
+      assistantState.subtitleSearch = null;
+      assistantState.subtitleFollow = {
+        mode: 'following',
+        activeLineId: null,
+        pausedReason: 'source_changed',
+      };
+      assistantState.subtitlePreviewLineId = null;
+      assistantState.subtitleJumpStatus = null;
+      assistantState.subtitleJumpLoading = false;
+      assistantState.subtitleReturnAvailable = false;
+      assistantState.subtitleReturnLoading = false;
+      assistantState.subtitleTimestampRequestId += 1;
+      assistantState.subtitleExportStatus = null;
+    }
   }
   assistantState.context = context;
   assistantState.contextKey = nextKey;
@@ -753,6 +969,7 @@ function renderAssistantShell(): void {
   if (!existing) {
     document.body.appendChild(root);
   }
+  syncSubtitleFollowTimer();
 }
 
 function renderCollapsedCard(root: HTMLElement): void {
@@ -821,9 +1038,14 @@ function renderExpandedPanel(root: HTMLElement): void {
     appendSubtitleDiagnostics(body, context);
     appendVideoIdentity(body, context);
     appendPrimaryTextSourceSwitcher(body, context);
-    appendSummary(body);
-    appendVideoKnowledge(body, context);
-    appendSegmentSearch(body, context);
+    appendAssistantTabs(body);
+    if (assistantState.activeTab === 'subtitles') {
+      appendSubtitleView(body, context);
+    } else {
+      appendSummary(body);
+      appendVideoKnowledge(body, context);
+      appendSegmentSearch(body, context);
+    }
   } else {
     const empty = section('当前视频');
     appendText(empty, 'div', 'bdc-assistant-video-title', '没有当前视频上下文');
@@ -838,6 +1060,33 @@ function renderExpandedPanel(root: HTMLElement): void {
 
   panel.appendChild(body);
   root.appendChild(panel);
+}
+
+function appendAssistantTabs(parent: HTMLElement): void {
+  const tabs = document.createElement('div');
+  tabs.className = 'bdc-assistant-tabs';
+  tabs.setAttribute('role', 'tablist');
+  for (const tab of [
+    { key: 'summary' as const, label: '摘要' },
+    { key: 'highlights' as const, label: '亮点' },
+    { key: 'qa' as const, label: '问答' },
+    { key: 'subtitles' as const, label: '字幕' },
+  ]) {
+    const active = assistantState.activeTab === tab.key;
+    const element = button(
+      tab.label,
+      active ? 'bdc-assistant-tab bdc-assistant-tab-active' : 'bdc-assistant-tab',
+      () => {
+        assistantState.activeTab = tab.key;
+        renderAssistantShell();
+        if (tab.key === 'subtitles') void ensureSubtitleViewLoaded(false);
+      },
+    );
+    element.setAttribute('role', 'tab');
+    element.setAttribute('aria-selected', active ? 'true' : 'false');
+    tabs.appendChild(element);
+  }
+  parent.appendChild(tabs);
 }
 
 function appendVideoIdentity(parent: HTMLElement, context: CurrentVideoContext): void {
@@ -1139,6 +1388,316 @@ function appendSubtitleDiagnostics(parent: HTMLElement, context: CurrentVideoCon
 
   block.appendChild(box);
   parent.appendChild(block);
+}
+
+function appendSubtitleView(parent: HTMLElement, context: CurrentVideoContext): void {
+  const block = section('字幕', 'bdc-assistant-section-primary');
+  const head = block.querySelector('.bdc-assistant-section-head');
+  head?.appendChild(button(
+    assistantState.subtitleViewLoading ? '读取中...' : '刷新',
+    'bdc-assistant-button bdc-assistant-button-quiet',
+    () => { void ensureSubtitleViewLoaded(true); },
+    assistantState.subtitleViewLoading,
+  ));
+
+  if (!currentSubtitleViewIsFresh() && !assistantState.subtitleViewLoading) {
+    void ensureSubtitleViewLoaded(false);
+  }
+
+  appendText(
+    block,
+    'div',
+    'bdc-assistant-muted',
+    '这里只查看当前字幕来源；切换查看来源不会改变用于视频助手的主要文本来源，也不会请求 AI。',
+  );
+
+  if (assistantState.subtitleViewLoading) {
+    appendText(block, 'div', 'bdc-assistant-status', '正在读取当前分 P 的字幕全文...');
+  }
+  if (assistantState.subtitleViewError) {
+    const error = appendText(block, 'div', 'bdc-assistant-retrieval-status', assistantState.subtitleViewError);
+    error.style.color = '#ffcf8a';
+  }
+
+  const result = currentSubtitleViewResult();
+  if (!result) {
+    if (!assistantState.subtitleViewLoading) {
+      appendText(block, 'div', 'bdc-assistant-subtitle-text', '正在确认当前分 P 是否已有可展示字幕全文。');
+    }
+    parent.appendChild(block);
+    return;
+  }
+
+  if (result.status !== 'ready' || result.sources.length === 0) {
+    appendText(block, 'div', 'bdc-assistant-subtitle-text', safeVisibleText(result.message));
+    appendText(block, 'div', 'bdc-assistant-subtitle-detail', subtitleViewActionText(result));
+    parent.appendChild(block);
+    return;
+  }
+
+  const source = currentSubtitleViewingSource();
+  if (!source || !validateSubtitleViewingIdentity(context, source)) {
+    appendText(block, 'div', 'bdc-assistant-subtitle-text', '字幕来源已变化，请刷新字幕页后再查看。');
+    parent.appendChild(block);
+    return;
+  }
+
+  appendSubtitleSourceSelector(block, result, source);
+  appendSubtitleFollowControls(block, source);
+  appendSubtitleSearch(block, source);
+  appendSubtitleJumpStatus(block);
+  appendSubtitleReader(block, source);
+  appendSubtitlePreview(block, source);
+  appendSubtitleExportControls(block, source);
+
+  parent.appendChild(block);
+  queueSubtitleActiveLineScroll();
+}
+
+function appendSubtitleSourceSelector(
+  parent: HTMLElement,
+  result: CurrentVideoSubtitleViewSourcesResult,
+  activeSource: CurrentVideoSubtitleViewingSource,
+): void {
+  if (!shouldShowSubtitleViewingSourceSwitcher(result.sources)) {
+    const meta = document.createElement('div');
+    meta.className = 'bdc-assistant-candidate-meta';
+    appendBadge(meta, `正在查看：${activeSource.sourceLabel}`);
+    appendBadge(meta, `${activeSource.lineCount} 条`);
+    if (activeSource.temporary) appendBadge(meta, '本次临时可用');
+    parent.appendChild(meta);
+    return;
+  }
+
+  const list = document.createElement('div');
+  list.className = 'bdc-assistant-source-list';
+  for (const source of result.sources) {
+    const active = source.identity.sourceIdentityKey === activeSource.identity.sourceIdentityKey;
+    const card = document.createElement('article');
+    card.className = [
+      'bdc-assistant-source-card',
+      active ? 'bdc-assistant-source-card-viewing' : '',
+    ].filter(Boolean).join(' ');
+    appendText(card, 'div', 'bdc-assistant-source-title', source.sourceLabel);
+    appendText(card, 'div', 'bdc-assistant-subtitle-detail', `${source.lineCount} 条，可查看、搜索和导出。`);
+    const actions = document.createElement('div');
+    actions.className = 'bdc-assistant-source-actions';
+    actions.appendChild(button(
+      active ? '正在查看' : '查看这个来源',
+      active
+        ? 'bdc-assistant-button bdc-assistant-button-quiet'
+        : 'bdc-assistant-button bdc-assistant-button-primary',
+      () => {
+        selectSubtitleViewingSource(source.identity.sourceIdentityKey);
+      },
+      active,
+    ));
+    card.appendChild(actions);
+    list.appendChild(card);
+  }
+  parent.appendChild(list);
+}
+
+function appendSubtitleFollowControls(
+  parent: HTMLElement,
+  source: CurrentVideoSubtitleViewingSource,
+): void {
+  const actions = document.createElement('div');
+  actions.className = 'bdc-assistant-inline-actions';
+  actions.appendChild(button(
+    assistantState.subtitleFollow.mode === 'following' ? '正在跟随播放' : '回到当前字幕',
+    assistantState.subtitleFollow.mode === 'following'
+      ? 'bdc-assistant-button bdc-assistant-button-quiet'
+      : 'bdc-assistant-button bdc-assistant-button-primary',
+    () => {
+      resumeSubtitleFollow(source);
+    },
+  ));
+  parent.appendChild(actions);
+
+  if (assistantState.subtitleFollow.mode === 'paused') {
+    appendText(parent, 'div', 'bdc-assistant-subtitle-detail', subtitleFollowPausedText());
+  }
+  if (readCurrentPlaybackSeconds() === null) {
+    appendText(parent, 'div', 'bdc-assistant-subtitle-detail', '播放器暂不可读，字幕仍可查看；跳转或跟随需要保持视频播放器可用。');
+  }
+}
+
+function appendSubtitleSearch(
+  parent: HTMLElement,
+  source: CurrentVideoSubtitleViewingSource,
+): void {
+  const form = document.createElement('div');
+  form.className = 'bdc-assistant-search-form';
+
+  const row = document.createElement('div');
+  row.className = 'bdc-assistant-subtitle-search-row';
+  const input = document.createElement('input');
+  input.className = 'bdc-assistant-subtitle-search-input';
+  input.type = 'search';
+  input.maxLength = 80;
+  input.placeholder = '搜索当前字幕来源';
+  input.value = assistantState.subtitleSearchQuery;
+  input.setAttribute('aria-label', '搜索当前字幕来源');
+  input.addEventListener('input', () => {
+    assistantState.subtitleSearchQuery = input.value;
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      runSubtitleSearch(source);
+    }
+  });
+  row.appendChild(input);
+  row.appendChild(button('查找', 'bdc-assistant-button bdc-assistant-button-primary', () => {
+    runSubtitleSearch(source);
+  }));
+  form.appendChild(row);
+  parent.appendChild(form);
+
+  const search = currentSubtitleSearchForSource(source);
+  if (!search) return;
+
+  const status = appendText(parent, 'div', 'bdc-assistant-retrieval-status', safeVisibleText(search.message));
+  status.style.color = search.results.length > 0 ? '#a0e7a0' : '#ffcf8a';
+  if (search.results.length > 0) {
+    const actions = document.createElement('div');
+    actions.className = 'bdc-assistant-inline-actions';
+    actions.appendChild(button('上一个', 'bdc-assistant-button bdc-assistant-button-quiet', () => {
+      navigateSubtitleSearch(source, 'previous');
+    }));
+    actions.appendChild(button('下一个', 'bdc-assistant-button bdc-assistant-button-quiet', () => {
+      navigateSubtitleSearch(source, 'next');
+    }));
+    parent.appendChild(actions);
+
+    const list = document.createElement('div');
+    list.className = 'bdc-assistant-subtitle-results';
+    for (const [index, result] of search.results.slice(0, 12).entries()) {
+      const active = index === search.activeIndex;
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = active
+        ? 'bdc-assistant-subtitle-result bdc-assistant-subtitle-result-active'
+        : 'bdc-assistant-subtitle-result';
+      item.addEventListener('click', () => {
+        openSubtitleLinePreview(source, result.lineId, 'search_navigation');
+      });
+      appendText(item, 'span', 'bdc-assistant-subtitle-time', result.timeRangeLabel);
+      appendText(item, 'span', 'bdc-assistant-subtitle-line-text', safeVisibleText(result.text));
+      list.appendChild(item);
+    }
+    parent.appendChild(list);
+  }
+}
+
+function appendSubtitleReader(
+  parent: HTMLElement,
+  source: CurrentVideoSubtitleViewingSource,
+): void {
+  const reader = document.createElement('div');
+  reader.className = 'bdc-assistant-subtitle-reader';
+  reader.addEventListener('scroll', () => {
+    if (Date.now() < subtitleProgrammaticScrollUntil) return;
+    pauseSubtitleFollow('manual_scroll');
+  }, { passive: true });
+
+  for (const line of source.lines) {
+    const active = line.lineId === assistantState.subtitleFollow.activeLineId;
+    const previewing = line.lineId === assistantState.subtitlePreviewLineId;
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.dataset.subtitleLineId = line.lineId;
+    row.className = [
+      'bdc-assistant-subtitle-row',
+      active ? 'bdc-assistant-subtitle-row-active' : '',
+      previewing ? 'bdc-assistant-subtitle-row-preview' : '',
+    ].filter(Boolean).join(' ');
+    row.addEventListener('click', () => {
+      openSubtitleLinePreview(source, line.lineId, 'manual_scroll');
+    });
+    appendText(row, 'span', 'bdc-assistant-subtitle-time', formatSubtitleRowTime(line));
+    appendText(row, 'span', 'bdc-assistant-subtitle-line-text', safeVisibleText(line.text));
+    reader.appendChild(row);
+  }
+  parent.appendChild(reader);
+}
+
+function appendSubtitlePreview(
+  parent: HTMLElement,
+  source: CurrentVideoSubtitleViewingSource,
+): void {
+  const line = currentSubtitlePreviewLine(source);
+  if (!line) return;
+  const preview = buildCurrentVideoSubtitleJumpPreview(source, line);
+  const panel = document.createElement('div');
+  panel.className = 'bdc-assistant-jump-preview';
+  appendText(panel, 'div', 'bdc-assistant-jump-preview-title', '确认跳转前预览');
+  appendText(panel, 'div', 'bdc-assistant-candidate-evidence', `时间范围：${safeVisibleText(preview.timeRangeLabel)}`);
+  appendText(panel, 'div', 'bdc-assistant-subtitle-detail', `来源：${source.sourceLabel}`);
+  appendText(panel, 'div', 'bdc-assistant-candidate-evidence', `字幕原文：${safeVisibleText(preview.sourceText)}`);
+  appendText(panel, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(preview.message));
+
+  const actions = document.createElement('div');
+  actions.className = 'bdc-assistant-jump-actions';
+  actions.appendChild(button(
+    assistantState.subtitleJumpLoading ? '确认中...' : '确认跳转',
+    'bdc-assistant-button bdc-assistant-button-warn',
+    () => {
+      void confirmCurrentVideoSubtitleJumpFromPage(source, line);
+    },
+    assistantState.subtitleJumpLoading || assistantState.subtitleReturnLoading || !preview.canJump,
+  ));
+  actions.appendChild(button(
+    '取消',
+    'bdc-assistant-button bdc-assistant-button-quiet',
+    () => {
+      assistantState.subtitlePreviewLineId = null;
+      assistantState.subtitleJumpStatus = null;
+      renderAssistantShell();
+    },
+    assistantState.subtitleJumpLoading || assistantState.subtitleReturnLoading,
+  ));
+  panel.appendChild(actions);
+  parent.appendChild(panel);
+}
+
+function appendSubtitleJumpStatus(parent: HTMLElement): void {
+  if (!assistantState.subtitleJumpStatus && !assistantState.subtitleReturnAvailable) return;
+  const status = document.createElement('div');
+  status.className = 'bdc-assistant-jump-status';
+  appendText(status, 'div', 'bdc-assistant-jump-preview-title', '跳转状态');
+  appendText(status, 'div', '', safeVisibleText(assistantState.subtitleJumpStatus ?? '已记录跳转前位置，可返回原位置。'));
+  if (assistantState.subtitleReturnAvailable) {
+    const actions = document.createElement('div');
+    actions.className = 'bdc-assistant-jump-actions';
+    actions.appendChild(button(
+      assistantState.subtitleReturnLoading ? '返回中...' : '返回原位置',
+      'bdc-assistant-button bdc-assistant-button-warn',
+      () => { void returnCurrentVideoSubtitleJumpFromPage(); },
+      assistantState.subtitleReturnLoading || assistantState.subtitleJumpLoading,
+    ));
+    status.appendChild(actions);
+  }
+  parent.appendChild(status);
+}
+
+function appendSubtitleExportControls(
+  parent: HTMLElement,
+  source: CurrentVideoSubtitleViewingSource,
+): void {
+  const actions = document.createElement('div');
+  actions.className = 'bdc-assistant-inline-actions';
+  actions.appendChild(button('导出 TXT', 'bdc-assistant-button bdc-assistant-button-quiet', () => {
+    exportSubtitleSource(source, 'txt');
+  }));
+  actions.appendChild(button('导出 SRT', 'bdc-assistant-button bdc-assistant-button-quiet', () => {
+    exportSubtitleSource(source, 'srt');
+  }));
+  parent.appendChild(actions);
+  if (assistantState.subtitleExportStatus) {
+    appendText(parent, 'div', 'bdc-assistant-status', safeVisibleText(assistantState.subtitleExportStatus));
+  }
 }
 
 function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext): void {
@@ -2036,6 +2595,448 @@ function appendVideoKnowledgeLimitations(parent: HTMLElement, knowledge: VideoKn
   if (limitations) {
     appendText(parent, 'div', 'bdc-assistant-subtitle-detail', limitations);
   }
+}
+
+async function ensureSubtitleViewLoaded(force: boolean): Promise<void> {
+  if (assistantState.context?.kind !== 'video') return;
+  if (assistantState.subtitleViewLoading) return;
+  const contextKey = currentVideoSubtitleContextKey(assistantState.context);
+  if (!force && currentSubtitleViewIsFresh()) return;
+
+  const requestId = assistantState.subtitleViewRequestId + 1;
+  assistantState.subtitleViewRequestId = requestId;
+  assistantState.subtitleViewLoading = true;
+  assistantState.subtitleViewError = null;
+  if (force) assistantState.subtitleExportStatus = null;
+  renderAssistantShell();
+
+  try {
+    const result = await sendRuntimeRequest<CurrentVideoSubtitleViewSourcesResult>(
+      'GET_CURRENT_VIDEO_SUBTITLE_VIEW_SOURCES',
+      {},
+    );
+    if (assistantState.subtitleViewRequestId !== requestId || subtitleContextKeyForCurrentState() !== contextKey) return;
+    assistantState.subtitleView = result;
+    assistantState.subtitleViewContextKey = contextKey;
+    const previousSourceKey = assistantState.subtitleViewingSourceIdentityKey;
+    const source = selectDefaultSubtitleViewingSource(result.sources, previousSourceKey);
+    const sourceChanged = previousSourceKey !== (source?.identity.sourceIdentityKey ?? null);
+    assistantState.subtitleViewingSourceIdentityKey = source?.identity.sourceIdentityKey ?? null;
+    if (!source || sourceChanged || force) {
+      clearSubtitleSearchAndPreview();
+      assistantState.subtitleFollow = source
+        ? reduceCurrentVideoSubtitleFollowState(
+            { mode: 'following', activeLineId: null, pausedReason: null },
+            { type: 'resume_follow', currentSeconds: readCurrentPlaybackSeconds() ?? 0 },
+            source.lines,
+          )
+        : { mode: 'paused', activeLineId: null, pausedReason: 'source_changed' };
+    }
+    if (result.status !== 'ready') {
+      assistantState.subtitleViewingSourceIdentityKey = null;
+    }
+  } catch {
+    if (assistantState.subtitleViewRequestId !== requestId) return;
+    assistantState.subtitleViewError = '字幕全文读取失败，请确认当前 B 站视频页仍然打开后重试。';
+  } finally {
+    if (assistantState.subtitleViewRequestId === requestId) {
+      assistantState.subtitleViewLoading = false;
+      renderAssistantShell();
+    }
+  }
+}
+
+function currentSubtitleViewIsFresh(): boolean {
+  const currentKey = subtitleContextKeyForCurrentState();
+  return Boolean(
+    currentKey
+    && assistantState.subtitleView
+    && assistantState.subtitleViewContextKey === currentKey,
+  );
+}
+
+function currentSubtitleViewResult(): CurrentVideoSubtitleViewSourcesResult | null {
+  return currentSubtitleViewIsFresh() ? assistantState.subtitleView : null;
+}
+
+function currentSubtitleViewingSource(): CurrentVideoSubtitleViewingSource | null {
+  const result = currentSubtitleViewResult();
+  if (!result) return null;
+  return selectDefaultSubtitleViewingSource(result.sources, assistantState.subtitleViewingSourceIdentityKey);
+}
+
+function selectSubtitleViewingSource(sourceIdentityKey: string): void {
+  const result = currentSubtitleViewResult();
+  const source = result?.sources.find(item => item.identity.sourceIdentityKey === sourceIdentityKey) ?? null;
+  if (!source) {
+    assistantState.subtitleJumpStatus = '字幕来源已变化，请刷新字幕页后再查看。';
+    renderAssistantShell();
+    return;
+  }
+  assistantState.subtitleViewingSourceIdentityKey = source.identity.sourceIdentityKey;
+  clearSubtitleSearchAndPreview();
+  assistantState.subtitleFollow = reduceCurrentVideoSubtitleFollowState(
+    { mode: 'following', activeLineId: null, pausedReason: null },
+    { type: 'resume_follow', currentSeconds: readCurrentPlaybackSeconds() ?? 0 },
+    source.lines,
+  );
+  renderAssistantShell();
+}
+
+function clearSubtitleSearchAndPreview(): void {
+  assistantState.subtitleSearchQuery = '';
+  assistantState.subtitleSearch = null;
+  assistantState.subtitlePreviewLineId = null;
+  assistantState.subtitleJumpStatus = null;
+  assistantState.subtitleJumpLoading = false;
+  assistantState.subtitleReturnAvailable = false;
+  assistantState.subtitleReturnLoading = false;
+  assistantState.subtitleExportStatus = null;
+  assistantState.subtitleTimestampRequestId += 1;
+}
+
+function subtitleViewActionText(result: CurrentVideoSubtitleViewSourcesResult): string {
+  switch (result.status) {
+    case 'requires_user_subtitle':
+      return '请先在播放器中开启中文 AI 字幕，再点击“重新检测字幕”。正式完成的本地字幕稿存在时才会出现切换入口。';
+    case 'empty':
+      return '当前来源没有有效字幕行，不能搜索、跳转或导出。';
+    case 'malformed':
+      return '为避免展示错误时间轴，暂不读取这份字幕。';
+    case 'detecting':
+      return '检测完成前不会展示或导出字幕，也不会请求 AI。';
+    case 'no_context':
+      return '请在 B 站视频页内使用当前视频助手。';
+    case 'local_absent':
+      return '正式完成的本地字幕稿存在时才会显示可切换来源。';
+    case 'unavailable':
+    default:
+      return '当前没有可展示的字幕全文。';
+  }
+}
+
+function runSubtitleSearch(source: CurrentVideoSubtitleViewingSource): void {
+  const search = searchCurrentVideoSubtitleLines(source, assistantState.subtitleSearchQuery);
+  assistantState.subtitleSearch = search;
+  assistantState.subtitleExportStatus = null;
+  if (search.results.length > 0) {
+    const first = search.results[search.activeIndex];
+    openSubtitleLinePreview(source, first.lineId, 'search_navigation', false);
+  } else {
+    assistantState.subtitlePreviewLineId = null;
+    assistantState.subtitleFollow = reduceCurrentVideoSubtitleFollowState(
+      assistantState.subtitleFollow,
+      { type: 'search_navigation', lineId: assistantState.subtitleFollow.activeLineId },
+      source.lines,
+    );
+  }
+  renderAssistantShell();
+}
+
+function currentSubtitleSearchForSource(
+  source: CurrentVideoSubtitleViewingSource,
+): CurrentVideoSubtitleSearchState | null {
+  const search = assistantState.subtitleSearch;
+  if (!search || search.query !== assistantState.subtitleSearchQuery.trim()) return null;
+  if (search.results.some(result => result.sourceIdentityKey !== source.identity.sourceIdentityKey)) {
+    return null;
+  }
+  return search;
+}
+
+function navigateSubtitleSearch(
+  source: CurrentVideoSubtitleViewingSource,
+  direction: 'previous' | 'next',
+): void {
+  const current = currentSubtitleSearchForSource(source);
+  if (!current) return;
+  const next = navigateCurrentVideoSubtitleSearchResult(current, direction);
+  assistantState.subtitleSearch = next;
+  const result = next.results[next.activeIndex];
+  if (result) {
+    openSubtitleLinePreview(source, result.lineId, 'search_navigation', false);
+  }
+  renderAssistantShell();
+}
+
+function openSubtitleLinePreview(
+  source: CurrentVideoSubtitleViewingSource,
+  lineId: string,
+  reason: 'manual_scroll' | 'search_navigation',
+  rerender = true,
+): void {
+  const line = source.lines.find(item => item.lineId === lineId) ?? null;
+  if (!line) {
+    assistantState.subtitleJumpStatus = '字幕行已变化，请刷新字幕页后再查看。';
+    if (rerender) renderAssistantShell();
+    return;
+  }
+  assistantState.subtitlePreviewLineId = line.lineId;
+  assistantState.subtitleJumpStatus = null;
+  assistantState.subtitleExportStatus = null;
+  assistantState.subtitleFollow = reduceCurrentVideoSubtitleFollowState(
+    assistantState.subtitleFollow,
+    reason === 'search_navigation'
+      ? { type: 'search_navigation', lineId: line.lineId }
+      : { type: 'manual_scroll' },
+    source.lines,
+  );
+  assistantState.subtitleFollow = {
+    ...assistantState.subtitleFollow,
+    activeLineId: line.lineId,
+  };
+  if (rerender) renderAssistantShell();
+}
+
+function pauseSubtitleFollow(reason: 'manual_scroll' | 'search_navigation'): void {
+  if (assistantState.subtitleFollow.mode !== 'following') return;
+  const source = currentSubtitleViewingSource();
+  if (!source) return;
+  assistantState.subtitleFollow = reduceCurrentVideoSubtitleFollowState(
+    assistantState.subtitleFollow,
+    reason === 'manual_scroll' ? { type: 'manual_scroll' } : { type: 'search_navigation' },
+    source.lines,
+  );
+  renderAssistantShell();
+}
+
+function resumeSubtitleFollow(source: CurrentVideoSubtitleViewingSource): void {
+  const currentSeconds = readCurrentPlaybackSeconds();
+  if (currentSeconds === null) {
+    assistantState.subtitleJumpStatus = '播放器暂不可读，不能回到当前字幕。请保持视频播放器可用后再试。';
+    renderAssistantShell();
+    return;
+  }
+  assistantState.subtitleFollow = reduceCurrentVideoSubtitleFollowState(
+    assistantState.subtitleFollow,
+    { type: 'resume_follow', currentSeconds },
+    source.lines,
+  );
+  assistantState.subtitlePreviewLineId = assistantState.subtitleFollow.activeLineId;
+  assistantState.subtitleJumpStatus = null;
+  renderAssistantShell();
+}
+
+async function confirmCurrentVideoSubtitleJumpFromPage(
+  source: CurrentVideoSubtitleViewingSource,
+  line: CurrentVideoSubtitleLine,
+): Promise<void> {
+  if (assistantState.subtitleJumpLoading || assistantState.subtitleReturnLoading) return;
+  const context = assistantState.context;
+  const currentSource = currentSubtitleViewingSource();
+  if (
+    context?.kind !== 'video'
+    || !currentSource
+    || currentSource.identity.sourceIdentityKey !== source.identity.sourceIdentityKey
+    || !validateSubtitleViewingIdentity(context, currentSource)
+    || !currentSource.lines.some(item => item.lineId === line.lineId && item.lineBindingKey === line.lineBindingKey)
+  ) {
+    assistantState.subtitleJumpStatus = '字幕来源已变化，请重新打开预览后再跳转。';
+    assistantState.subtitleReturnAvailable = false;
+    renderAssistantShell();
+    return;
+  }
+
+  const operationId = assistantState.subtitleTimestampRequestId + 1;
+  const contextKey = assistantState.contextKey;
+  assistantState.subtitleTimestampRequestId = operationId;
+  assistantState.subtitleJumpLoading = true;
+  assistantState.subtitleReturnLoading = false;
+  assistantState.subtitleReturnAvailable = false;
+  assistantState.subtitleJumpStatus = '正在确认跳转...';
+  renderAssistantShell();
+
+  try {
+    const response = await sendRuntimeRequest<CurrentVideoTimestampJumpResponse>(
+      'REQUEST_CURRENT_VIDEO_SUBTITLE_JUMP',
+      {
+        sourceIdentityKey: currentSource.identity.sourceIdentityKey,
+        lineId: line.lineId,
+        lineBindingKey: line.lineBindingKey,
+        confirmed: true,
+      },
+    );
+    if (assistantState.subtitleTimestampRequestId !== operationId || assistantState.contextKey !== contextKey) return;
+    assistantState.subtitleJumpStatus = timestampJumpStatusText(response);
+    assistantState.subtitleReturnAvailable = response.ok && response.returnPointSeconds !== null;
+    if (response.ok) {
+      assistantState.subtitlePreviewLineId = null;
+    }
+  } catch {
+    if (assistantState.subtitleTimestampRequestId !== operationId) return;
+    assistantState.subtitleJumpStatus = '跳转失败：请确认当前 B 站视频页仍然打开，并稍后重试。';
+    assistantState.subtitleReturnAvailable = false;
+  } finally {
+    if (assistantState.subtitleTimestampRequestId === operationId) {
+      assistantState.subtitleJumpLoading = false;
+      renderAssistantShell();
+    }
+  }
+}
+
+async function returnCurrentVideoSubtitleJumpFromPage(): Promise<void> {
+  if (assistantState.subtitleReturnLoading || assistantState.subtitleJumpLoading) return;
+  const source = currentSubtitleViewingSource();
+  if (!source) {
+    assistantState.subtitleJumpStatus = '字幕来源已变化，请刷新字幕页后再返回。';
+    renderAssistantShell();
+    return;
+  }
+
+  const operationId = assistantState.subtitleTimestampRequestId + 1;
+  const contextKey = assistantState.contextKey;
+  assistantState.subtitleTimestampRequestId = operationId;
+  assistantState.subtitleReturnLoading = true;
+  assistantState.subtitleJumpStatus = '正在返回原位置...';
+  renderAssistantShell();
+
+  try {
+    const response = await sendRuntimeRequest<CurrentVideoTimestampReturnResponse>(
+      'RETURN_CURRENT_VIDEO_SUBTITLE_JUMP',
+      { sourceIdentityKey: source.identity.sourceIdentityKey },
+    );
+    if (assistantState.subtitleTimestampRequestId !== operationId || assistantState.contextKey !== contextKey) return;
+    assistantState.subtitleJumpStatus = timestampReturnStatusText(response);
+    if (response.ok) assistantState.subtitleReturnAvailable = false;
+  } catch {
+    if (assistantState.subtitleTimestampRequestId !== operationId) return;
+    assistantState.subtitleJumpStatus = '返回失败：请确认当前 B 站视频页仍然打开，并稍后重试。';
+  } finally {
+    if (assistantState.subtitleTimestampRequestId === operationId) {
+      assistantState.subtitleReturnLoading = false;
+      renderAssistantShell();
+    }
+  }
+}
+
+function exportSubtitleSource(
+  source: CurrentVideoSubtitleViewingSource,
+  extension: 'txt' | 'srt',
+): void {
+  const context = assistantState.context;
+  if (context?.kind !== 'video' || !validateSubtitleViewingIdentity(context, source)) {
+    assistantState.subtitleExportStatus = '字幕来源已变化，请刷新字幕页后再导出。';
+    renderAssistantShell();
+    return;
+  }
+  try {
+    const content = extension === 'txt'
+      ? formatSubtitleTxt(source, { title: context.title, partTitle: context.currentPart.title })
+      : formatSubtitleSrt(source);
+    const filename = buildSubtitleExportFilename({
+      title: context.title,
+      partTitle: context.currentPart.title,
+      sourceLabel: source.sourceLabel,
+      extension,
+    });
+    const blob = new Blob([content], {
+      type: extension === 'txt' ? 'text/plain;charset=utf-8' : 'application/x-subrip;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    assistantState.subtitleExportStatus = `已准备导出 ${filename}。`;
+  } catch {
+    assistantState.subtitleExportStatus = '导出失败，请稍后重试。';
+  }
+  renderAssistantShell();
+}
+
+function subtitleContextKeyForCurrentState(): string {
+  const context = assistantState.context;
+  return context?.kind === 'video' ? currentVideoSubtitleContextKey(context) : '';
+}
+
+function subtitleContextKeyForContext(context: CurrentVideoContextResult | null): string {
+  return context?.kind === 'video' ? currentVideoSubtitleContextKey(context) : '';
+}
+
+function currentSubtitlePreviewLine(
+  source: CurrentVideoSubtitleViewingSource,
+): CurrentVideoSubtitleLine | null {
+  const lineId = assistantState.subtitlePreviewLineId;
+  if (!lineId) return null;
+  return source.lines.find(line => line.lineId === lineId) ?? null;
+}
+
+function formatSubtitleRowTime(line: CurrentVideoSubtitleLine): string {
+  return `${formatDuration(line.startSeconds)}-${formatDuration(line.endSeconds)}`;
+}
+
+function subtitleFollowPausedText(): string {
+  switch (assistantState.subtitleFollow.pausedReason) {
+    case 'search_navigation':
+      return '已暂停跟随：正在查看搜索结果。';
+    case 'source_changed':
+      return '已暂停跟随：字幕来源已变化。';
+    case 'manual_scroll':
+    default:
+      return '已暂停跟随：正在手动浏览字幕。';
+  }
+}
+
+function readCurrentPlaybackSeconds(): number | null {
+  const video = document.querySelector('video');
+  if (!(video instanceof HTMLVideoElement)) return null;
+  const currentTime = video.currentTime;
+  return Number.isFinite(currentTime) ? Math.max(0, currentTime) : null;
+}
+
+function syncSubtitleFollowTimer(): void {
+  const source = currentSubtitleViewingSource();
+  const shouldRun = assistantState.expanded
+    && assistantState.activeTab === 'subtitles'
+    && assistantState.subtitleFollow.mode === 'following'
+    && Boolean(source);
+  if (!shouldRun) {
+    if (subtitleFollowTimer !== null) {
+      window.clearInterval(subtitleFollowTimer);
+      subtitleFollowTimer = null;
+    }
+    return;
+  }
+  if (subtitleFollowTimer !== null) return;
+  subtitleFollowTimer = window.setInterval(updateSubtitleFollowFromPlayback, 600);
+}
+
+function updateSubtitleFollowFromPlayback(): void {
+  const source = currentSubtitleViewingSource();
+  if (!source || assistantState.subtitleFollow.mode !== 'following') {
+    syncSubtitleFollowTimer();
+    return;
+  }
+  const currentSeconds = readCurrentPlaybackSeconds();
+  if (currentSeconds === null) return;
+  const next = reduceCurrentVideoSubtitleFollowState(
+    assistantState.subtitleFollow,
+    { type: 'playback_tick', currentSeconds },
+    source.lines,
+  );
+  if (next.activeLineId !== assistantState.subtitleFollow.activeLineId || next.mode !== assistantState.subtitleFollow.mode) {
+    assistantState.subtitleFollow = next;
+    renderAssistantShell();
+  }
+}
+
+function queueSubtitleActiveLineScroll(): void {
+  if (assistantState.activeTab !== 'subtitles') return;
+  window.setTimeout(scrollActiveSubtitleLineIntoView, 0);
+}
+
+function scrollActiveSubtitleLineIntoView(): void {
+  const lineId = assistantState.subtitleFollow.activeLineId ?? assistantState.subtitlePreviewLineId;
+  if (!lineId) return;
+  const root = document.getElementById(CARD_ID);
+  const rows = Array.from(root?.querySelectorAll<HTMLElement>('[data-subtitle-line-id]') ?? []);
+  const row = rows.find(item => item.dataset.subtitleLineId === lineId);
+  if (!row) return;
+  subtitleProgrammaticScrollUntil = Date.now() + 250;
+  row.scrollIntoView({ block: 'nearest' });
 }
 
 async function loadCurrentVideoRelatedFavoritesFromPage(force: boolean): Promise<void> {
