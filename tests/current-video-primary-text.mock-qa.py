@@ -698,6 +698,40 @@ def run_content_timestamp_operation_epoch_flow(page):
     assert_clean_visible_text(page)
 
 
+def run_history_only_navigation_blocks_timestamp_jump(page):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&savedSource=current")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+
+    initial_position = page.evaluate("window.__assistantMockPlaybackPosition()")
+    page.evaluate("window.__assistantMockReplaceHistoryOnlyToPart(2)")
+    page.evaluate("window.__assistantMockStartContentTimestampJump('history-only-jump', 'history-only-jump', 4)")
+    response = wait_for_content_timestamp_result(page, "history-only-jump")
+    assert response["ok"] is False
+    assert "当前视频" in response["message"]
+    assert page.evaluate("window.__assistantMockPlaybackPosition()") == initial_position
+    expect(page.locator("#bdc-current-video-return")).to_have_count(0)
+    assert_clean_visible_text(page)
+
+
+def run_history_only_navigation_blocks_timestamp_return(page):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&savedSource=current")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+
+    page.evaluate("window.__assistantMockStartContentTimestampJump('history-return-seed', 'history-return-seed', 8)")
+    seed_response = wait_for_content_timestamp_result(page, "history-return-seed")
+    assert seed_response["ok"] is True
+    seeded_position = page.evaluate("window.__assistantMockPlaybackPosition()")
+    page.evaluate("window.__assistantMockReplaceHistoryOnlyToPart(2)")
+    page.evaluate("window.__assistantMockStartContentTimestampReturn('history-only-return')")
+    response = wait_for_content_timestamp_result(page, "history-only-return")
+    assert response["ok"] is False
+    assert page.evaluate("window.__assistantMockPlaybackPosition()") == seeded_position
+    expect(page.locator("#bdc-current-video-return")).to_have_count(0)
+    assert_clean_visible_text(page)
+
+
 def run_content_timestamp_return_epoch_flow(page):
     page.route("**/*", route_mock)
     page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&savedSource=current")
@@ -1127,6 +1161,16 @@ def main():
             assert not content_timestamp_errors, "\n".join(content_timestamp_errors)
             content_timestamp.close()
 
+            history_jump, history_jump_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_history_only_navigation_blocks_timestamp_jump(history_jump)
+            assert not history_jump_errors, "\n".join(history_jump_errors)
+            history_jump.close()
+
+            history_return, history_return_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_history_only_navigation_blocks_timestamp_return(history_return)
+            assert not history_return_errors, "\n".join(history_return_errors)
+            history_return.close()
+
             content_return, content_return_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
             run_content_timestamp_return_epoch_flow(content_return)
             assert not content_return_errors, "\n".join(content_return_errors)
@@ -1222,7 +1266,7 @@ def main():
             assert not mobile_errors, "\n".join(mobile_errors)
             mobile.close()
 
-            print("current-video primary-text real UI QA passed: missing-title identity shielding, late jump/return invalidation across part/video/selection/newer operations, delayed player replacement rebind, same-element reuse, removed/zero-duration replacement recovery, deferred and rejected storage readiness, live local-settings/clear-all selection invalidation with late-response rejection, collect/detect navigation epoch isolation, controlled jump/return failures, serialized save/readback rollback, save-pending operation gates, save-time part/video context switch isolation, missing saved source, single-source fallback, desktop/mobile source selection, no automatic full-text request, search no-candidate/backend-failure states, search/jump/return, no raw visible leak, no overflow, no console errors")
+            print("current-video primary-text real UI QA passed: missing-title identity shielding, late jump/return invalidation across history-only/part/video/selection/newer operations, delayed player replacement rebind, same-element reuse, removed/zero-duration replacement recovery, deferred and rejected storage readiness, live local-settings/clear-all selection invalidation with late-response rejection, collect/detect navigation epoch isolation, controlled jump/return failures, serialized save/readback rollback, save-pending operation gates, save-time part/video context switch isolation, missing saved source, single-source fallback, desktop/mobile source selection, no automatic full-text request, search no-candidate/backend-failure states, search/jump/return, no raw visible leak, no overflow, no console errors")
         finally:
             browser.close()
 

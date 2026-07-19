@@ -215,6 +215,7 @@ async function collectAndPublishCurrentVideoContext(
 async function handleCurrentVideoTimestampJump(
   payload: CurrentVideoTimestampJumpContentPayload,
 ): Promise<CurrentVideoTimestampJumpResponse> {
+  handlePossibleNavigation();
   const operation = beginTimestampOperation(true);
   const operationLeaseAuthorized = await consumeCurrentVideoTimestampOperationLease('jump', payload);
   if (!timestampOperationIsCurrent(operation)) {
@@ -239,6 +240,7 @@ async function handleCurrentVideoTimestampJump(
 async function handleCurrentVideoTimestampReturn(
   payload: CurrentVideoTimestampReturnContentPayload | null = null,
 ): Promise<CurrentVideoTimestampReturnResponse> {
+  handlePossibleNavigation();
   const operation = beginTimestampOperation(false);
   const returnPoint = currentVideoTimestampReturnPoint;
   const operationLeaseAuthorized = payload

@@ -113,7 +113,9 @@ import {
   getCurrentVideoTranscriptSegments,
 } from '../storage/current-video-transcript-repo';
 import {
+  buildTemporaryCurrentVideoTranscriptUnavailableState,
   clearTemporaryCurrentVideoTranscriptCacheForTab,
+  getTemporaryCurrentVideoTranscriptOwnerReadResolution,
   retainTemporaryCurrentVideoTranscriptOwner,
   type CurrentVideoTemporaryTranscriptOwner,
 } from '../current-video-temporary-transcript-cache.ts';
@@ -1297,11 +1299,16 @@ async function enrichCurrentVideoContextWithTranscriptEvidence(
     }));
   }
 
-  const state = await getCurrentVideoTranscriptEvidenceState({
+  const identity = {
     bvid: context.bvid,
     cid: context.cid,
     page: context.currentPart.page,
-  }, Date.now(), temporaryOwner);
+  };
+  const now = Date.now();
+  const state = temporaryOwner
+    && !getTemporaryCurrentVideoTranscriptOwnerReadResolution(temporaryOwner, identity, now)
+    ? buildTemporaryCurrentVideoTranscriptUnavailableState(identity, now)
+    : await getCurrentVideoTranscriptEvidenceState(identity, now, temporaryOwner);
   return withTranscriptEvidenceState(context, state);
 }
 

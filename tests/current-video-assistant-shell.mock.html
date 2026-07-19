@@ -707,6 +707,11 @@
         history.replaceState({}, "", nextUrl);
         document.body.appendChild(document.createElement("i"));
       };
+      window.__assistantMockReplaceHistoryOnlyToPart = (page) => {
+        const nextUrl = new URL(location.href);
+        nextUrl.searchParams.set("p", String(Number(page) === 2 ? 2 : 1));
+        history.replaceState({}, "", nextUrl);
+      };
       window.__assistantMockDeferNextProtectedAction = (action) => {
         deferNextProtectedAction = String(action || "");
       };

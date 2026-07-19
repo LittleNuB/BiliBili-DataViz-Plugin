@@ -996,6 +996,31 @@ test('protected actions require current-source confirmation after service-worker
     return { ok: true };
   });
 
+  const contextAfterRestart = await sendRequest<CurrentVideoContext>({
+    action: 'GET_CURRENT_VIDEO_CONTEXT',
+    params: {},
+  }, tabId, context.url);
+  assert.equal(contextAfterRestart.success, true);
+  assert.equal(contextAfterRestart.data?.kind, 'video');
+  assert.equal(
+    contextAfterRestart.data?.kind === 'video'
+      ? contextAfterRestart.data.transcriptEvidence?.active
+      : null,
+    false,
+  );
+  assert.equal(
+    contextAfterRestart.data?.kind === 'video'
+      ? contextAfterRestart.data.transcriptEvidence?.segmentCount
+      : null,
+    0,
+  );
+  assert.match(
+    contextAfterRestart.data?.kind === 'video'
+      ? contextAfterRestart.data.transcriptEvidence?.message ?? ''
+      : '',
+    /重新检测字幕/,
+  );
+
   for (const action of ['summary', 'knowledge', 'search', 'jump'] as const) {
     const response = await invokeProtectedHandlerAction(action, tabId, context, sourceIdentityKey);
     assertProtectedActionBlocked(action, response);
