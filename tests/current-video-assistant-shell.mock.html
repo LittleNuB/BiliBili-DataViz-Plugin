@@ -1780,7 +1780,10 @@
               return Promise.resolve({ success: true, data: evidence });
             }
             if (message.action === "GET_CURRENT_VIDEO_SUBTITLE_VIEW_SOURCES") {
-              return Promise.resolve({ success: true, data: subtitleViewSourcesResult() });
+              return maybeDeferProtectedResponse(message.action, {
+                success: true,
+                data: subtitleViewSourcesResult(),
+              });
             }
             if (message.action === "GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE") {
               return maybeDeferProtectedResponse(message.action, { success: true, data: summaryCacheResponse(message.params) });

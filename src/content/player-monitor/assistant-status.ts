@@ -319,6 +319,39 @@ const CSS = `
   background: rgba(251, 114, 153, 0.20);
   color: #ffffff;
 }
+#${CARD_ID} .bdc-assistant-tab-panel {
+  margin-top: 10px;
+}
+#${CARD_ID} .bdc-assistant-segmented-control {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid rgba(127, 219, 255, 0.28);
+  border-radius: 8px;
+  background: rgba(10, 12, 21, 0.56);
+  margin-top: 8px;
+}
+#${CARD_ID} .bdc-assistant-segmented-option {
+  min-width: 0;
+  min-height: 34px;
+  border: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.10);
+  background: transparent;
+  color: #c9d0dd;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.25;
+  padding: 7px 8px;
+}
+#${CARD_ID} .bdc-assistant-segmented-option:last-child {
+  border-right: 0;
+}
+#${CARD_ID} .bdc-assistant-segmented-option-active {
+  background: rgba(127, 219, 255, 0.16);
+  color: #ffffff;
+}
 #${CARD_ID} .bdc-assistant-subtitle-box {
   border-radius: 8px;
   padding: 10px;
@@ -1039,12 +1072,20 @@ function renderExpandedPanel(root: HTMLElement): void {
     appendVideoIdentity(body, context);
     appendPrimaryTextSourceSwitcher(body, context);
     appendAssistantTabs(body);
-    if (assistantState.activeTab === 'subtitles') {
-      appendSubtitleView(body, context);
-    } else {
-      appendSummary(body);
-      appendVideoKnowledge(body, context);
-      appendSegmentSearch(body, context);
+    switch (assistantState.activeTab) {
+      case 'highlights':
+        appendHighlights(body);
+        break;
+      case 'qa':
+        appendSegmentSearch(body, context);
+        break;
+      case 'subtitles':
+        appendSubtitleView(body, context);
+        break;
+      case 'summary':
+      default:
+        appendSummary(body);
+        break;
     }
   } else {
     const empty = section('当前视频');
@@ -1066,12 +1107,14 @@ function appendAssistantTabs(parent: HTMLElement): void {
   const tabs = document.createElement('div');
   tabs.className = 'bdc-assistant-tabs';
   tabs.setAttribute('role', 'tablist');
-  for (const tab of [
+  tabs.setAttribute('aria-label', '当前视频助手页签');
+  const tabItems = [
     { key: 'summary' as const, label: '摘要' },
     { key: 'highlights' as const, label: '亮点' },
     { key: 'qa' as const, label: '问答' },
     { key: 'subtitles' as const, label: '字幕' },
-  ]) {
+  ];
+  for (const tab of tabItems) {
     const active = assistantState.activeTab === tab.key;
     const element = button(
       tab.label,
@@ -1082,11 +1125,53 @@ function appendAssistantTabs(parent: HTMLElement): void {
         if (tab.key === 'subtitles') void ensureSubtitleViewLoaded(false);
       },
     );
+    element.id = assistantTabId(tab.key);
     element.setAttribute('role', 'tab');
     element.setAttribute('aria-selected', active ? 'true' : 'false');
+    element.setAttribute('aria-controls', assistantPanelId(tab.key));
+    element.tabIndex = active ? 0 : -1;
+    element.addEventListener('keydown', (event) => {
+      const currentIndex = tabItems.findIndex(item => item.key === assistantState.activeTab);
+      const move = (nextIndex: number) => {
+        const next = tabItems[(nextIndex + tabItems.length) % tabItems.length];
+        assistantState.activeTab = next.key;
+        renderAssistantShell();
+        document.getElementById(assistantTabId(next.key))?.focus();
+        if (next.key === 'subtitles') void ensureSubtitleViewLoaded(false);
+      };
+      if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        move(currentIndex + 1);
+      } else if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        move(currentIndex - 1);
+      } else if (event.key === 'Home') {
+        event.preventDefault();
+        move(0);
+      } else if (event.key === 'End') {
+        event.preventDefault();
+        move(tabItems.length - 1);
+      }
+    });
     tabs.appendChild(element);
   }
   parent.appendChild(tabs);
+}
+
+function assistantTabId(tab: AssistantTab): string {
+  return `${CARD_ID}-tab-${tab}`;
+}
+
+function assistantPanelId(tab: AssistantTab): string {
+  return `${CARD_ID}-panel-${tab}`;
+}
+
+function markAssistantTabPanel(panel: HTMLElement, tab: AssistantTab): void {
+  panel.id = assistantPanelId(tab);
+  panel.classList.add('bdc-assistant-tab-panel');
+  panel.setAttribute('role', 'tabpanel');
+  panel.setAttribute('aria-labelledby', assistantTabId(tab));
+  panel.dataset.assistantTabContent = tab;
 }
 
 function appendVideoIdentity(parent: HTMLElement, context: CurrentVideoContext): void {
@@ -1392,6 +1477,7 @@ function appendSubtitleDiagnostics(parent: HTMLElement, context: CurrentVideoCon
 
 function appendSubtitleView(parent: HTMLElement, context: CurrentVideoContext): void {
   const block = section('字幕', 'bdc-assistant-section-primary');
+  markAssistantTabPanel(block, 'subtitles');
   const head = block.querySelector('.bdc-assistant-section-head');
   head?.appendChild(button(
     assistantState.subtitleViewLoading ? '读取中...' : '刷新',
@@ -1442,7 +1528,7 @@ function appendSubtitleView(parent: HTMLElement, context: CurrentVideoContext): 
     return;
   }
 
-  appendSubtitleSourceSelector(block, result, source);
+  appendSubtitleSourceSelector(block, result, source, context);
   appendSubtitleFollowControls(block, source);
   appendSubtitleSearch(block, source);
   appendSubtitleJumpStatus(block);
@@ -1458,44 +1544,83 @@ function appendSubtitleSourceSelector(
   parent: HTMLElement,
   result: CurrentVideoSubtitleViewSourcesResult,
   activeSource: CurrentVideoSubtitleViewingSource,
+  context: CurrentVideoContext,
 ): void {
+  const primaryTextState = buildPrimaryTextStateForContext(context);
+  const activePrimarySourceIdentityKey = primaryTextState.activeSourceIdentityKey
+    ?? primaryTextState.selectedSourceIdentityKey;
   if (!shouldShowSubtitleViewingSourceSwitcher(result.sources)) {
     const meta = document.createElement('div');
     meta.className = 'bdc-assistant-candidate-meta';
     appendBadge(meta, `正在查看：${activeSource.sourceLabel}`);
+    if (activeSource.identity.sourceIdentityKey === activePrimarySourceIdentityKey) {
+      appendBadge(meta, '视频助手正在使用');
+    }
     appendBadge(meta, `${activeSource.lineCount} 条`);
     if (activeSource.temporary) appendBadge(meta, '本次临时可用');
     parent.appendChild(meta);
     return;
   }
 
-  const list = document.createElement('div');
-  list.className = 'bdc-assistant-source-list';
-  for (const source of result.sources) {
+  const segmented = document.createElement('div');
+  segmented.className = 'bdc-assistant-segmented-control';
+  segmented.setAttribute('role', 'radiogroup');
+  segmented.setAttribute('aria-label', '字幕查看来源');
+  const switchableSources = result.sources.filter(source =>
+    (source.status === 'available' || source.status === 'temporary')
+    && source.lines.length > 0,
+  );
+  for (const [sourceIndex, source] of switchableSources.entries()) {
     const active = source.identity.sourceIdentityKey === activeSource.identity.sourceIdentityKey;
-    const card = document.createElement('article');
-    card.className = [
-      'bdc-assistant-source-card',
-      active ? 'bdc-assistant-source-card-viewing' : '',
-    ].filter(Boolean).join(' ');
-    appendText(card, 'div', 'bdc-assistant-source-title', source.sourceLabel);
-    appendText(card, 'div', 'bdc-assistant-subtitle-detail', `${source.lineCount} 条，可查看、搜索和导出。`);
-    const actions = document.createElement('div');
-    actions.className = 'bdc-assistant-source-actions';
-    actions.appendChild(button(
-      active ? '正在查看' : '查看这个来源',
-      active
-        ? 'bdc-assistant-button bdc-assistant-button-quiet'
-        : 'bdc-assistant-button bdc-assistant-button-primary',
+    const usedByAssistant = source.identity.sourceIdentityKey === activePrimarySourceIdentityKey;
+    const option = button(
+      usedByAssistant ? `${source.sourceLabel}（视频助手正在使用）` : source.sourceLabel,
+      [
+        'bdc-assistant-segmented-option',
+        active ? 'bdc-assistant-segmented-option-active' : '',
+      ].filter(Boolean).join(' '),
       () => {
-        selectSubtitleViewingSource(source.identity.sourceIdentityKey);
+        if (!active) selectSubtitleViewingSource(source.identity.sourceIdentityKey);
       },
-      active,
-    ));
-    card.appendChild(actions);
-    list.appendChild(card);
+      false,
+    );
+    option.setAttribute('role', 'radio');
+    option.setAttribute('aria-checked', active ? 'true' : 'false');
+    option.dataset.subtitleSourceIndex = String(sourceIndex);
+    option.tabIndex = active ? 0 : -1;
+    option.addEventListener('keydown', (event) => {
+      let nextIndex: number | null = null;
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+        nextIndex = (sourceIndex + 1) % switchableSources.length;
+      } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+        nextIndex = (sourceIndex - 1 + switchableSources.length) % switchableSources.length;
+      } else if (event.key === 'Home') {
+        nextIndex = 0;
+      } else if (event.key === 'End') {
+        nextIndex = switchableSources.length - 1;
+      }
+      if (nextIndex === null || nextIndex === sourceIndex) return;
+      event.preventDefault();
+      selectSubtitleViewingSource(switchableSources[nextIndex].identity.sourceIdentityKey);
+      window.requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>(
+          `#${CARD_ID} [data-subtitle-source-index="${nextIndex}"]`,
+        )?.focus();
+      });
+    });
+    segmented.appendChild(option);
   }
-  parent.appendChild(list);
+  parent.appendChild(segmented);
+
+  const meta = document.createElement('div');
+  meta.className = 'bdc-assistant-candidate-meta';
+  appendBadge(meta, `正在查看：${activeSource.sourceLabel}`);
+  appendBadge(meta, `${activeSource.lineCount} 条`);
+  if (activeSource.identity.sourceIdentityKey === activePrimarySourceIdentityKey) {
+    appendBadge(meta, '视频助手正在使用');
+  }
+  if (activeSource.temporary) appendBadge(meta, '本次临时可用');
+  parent.appendChild(meta);
 }
 
 function appendSubtitleFollowControls(
@@ -1702,6 +1827,7 @@ function appendSubtitleExportControls(
 
 function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext): void {
   const block = section('问这个视频', 'bdc-assistant-section-primary');
+  markAssistantTabPanel(block, 'qa');
   appendText(block, 'div', 'bdc-assistant-video-title', context.title ?? '当前视频');
   appendText(
     block,
@@ -2256,7 +2382,16 @@ function appendSegmentLimitations(
 }
 
 function appendSummary(parent: HTMLElement): void {
-  const block = section('摘要与亮点', 'bdc-assistant-section-primary');
+  appendSummaryHighlightsPanel(parent, 'summary');
+}
+
+function appendHighlights(parent: HTMLElement): void {
+  appendSummaryHighlightsPanel(parent, 'highlights');
+}
+
+function appendSummaryHighlightsPanel(parent: HTMLElement, view: 'summary' | 'highlights'): void {
+  const block = section(view === 'summary' ? '摘要' : '亮点', 'bdc-assistant-section-primary');
+  markAssistantTabPanel(block, view);
   const context = assistantState.context?.kind === 'video' ? assistantState.context : null;
   const primaryTextBlockReason = context
     ? primaryTextSubmissionBlockMessage(buildPrimaryTextStateForContext(context))
@@ -2336,7 +2471,7 @@ function appendSummary(parent: HTMLElement): void {
     safeVisibleText(summary.message),
   );
 
-  if (summary.status === 'ready') {
+  if (summary.status === 'ready' && view === 'summary') {
     appendText(block, 'div', 'bdc-assistant-citation-title', '摘要');
     for (const sentence of summary.summarySentences) {
       appendText(block, 'div', 'bdc-assistant-summary-text', safeVisibleText(sentence.text));
@@ -2352,6 +2487,7 @@ function appendSummary(parent: HTMLElement): void {
     }
     block.appendChild(list);
 
+  } else if (summary.status === 'ready') {
     appendText(block, 'div', 'bdc-assistant-citation-title', '视频亮点');
     const highlights = document.createElement('div');
     highlights.className = 'bdc-assistant-candidate-list';
@@ -2615,11 +2751,20 @@ async function ensureSubtitleViewLoaded(force: boolean): Promise<void> {
       'GET_CURRENT_VIDEO_SUBTITLE_VIEW_SOURCES',
       {},
     );
-    if (assistantState.subtitleViewRequestId !== requestId || subtitleContextKeyForCurrentState() !== contextKey) return;
+    if (
+      assistantState.subtitleViewRequestId !== requestId
+      || subtitleContextKeyForCurrentState() !== contextKey
+    ) return;
     assistantState.subtitleView = result;
     assistantState.subtitleViewContextKey = contextKey;
     const previousSourceKey = assistantState.subtitleViewingSourceIdentityKey;
-    const source = selectDefaultSubtitleViewingSource(result.sources, previousSourceKey);
+    const primaryTextState = assistantState.context?.kind === 'video'
+      ? buildPrimaryTextStateForContext(assistantState.context)
+      : null;
+    const primarySourceKey = primaryTextState?.activeSourceIdentityKey
+      ?? primaryTextState?.selectedSourceIdentityKey
+      ?? null;
+    const source = selectDefaultSubtitleViewingSource(result.sources, previousSourceKey ?? primarySourceKey);
     const sourceChanged = previousSourceKey !== (source?.identity.sourceIdentityKey ?? null);
     assistantState.subtitleViewingSourceIdentityKey = source?.identity.sourceIdentityKey ?? null;
     if (!source || sourceChanged || force) {
@@ -2673,18 +2818,36 @@ function selectSubtitleViewingSource(sourceIdentityKey: string): void {
     renderAssistantShell();
     return;
   }
+  const query = assistantState.subtitleSearchQuery;
   assistantState.subtitleViewingSourceIdentityKey = source.identity.sourceIdentityKey;
-  clearSubtitleSearchAndPreview();
-  assistantState.subtitleFollow = reduceCurrentVideoSubtitleFollowState(
-    { mode: 'following', activeLineId: null, pausedReason: null },
-    { type: 'resume_follow', currentSeconds: readCurrentPlaybackSeconds() ?? 0 },
-    source.lines,
-  );
+  clearSubtitleSearchAndPreview({ preserveQuery: true });
+  if (query.trim()) {
+    const search = searchCurrentVideoSubtitleLines(source, query);
+    assistantState.subtitleSearch = search;
+    const active = search.results[search.activeIndex];
+    if (active) {
+      openSubtitleLinePreview(source, active.lineId, 'search_navigation', false);
+    } else {
+      assistantState.subtitleFollow = reduceCurrentVideoSubtitleFollowState(
+        { mode: 'following', activeLineId: null, pausedReason: null },
+        { type: 'search_navigation' },
+        source.lines,
+      );
+    }
+  } else {
+    assistantState.subtitleFollow = reduceCurrentVideoSubtitleFollowState(
+      { mode: 'following', activeLineId: null, pausedReason: null },
+      { type: 'resume_follow', currentSeconds: readCurrentPlaybackSeconds() ?? 0 },
+      source.lines,
+    );
+  }
   renderAssistantShell();
 }
 
-function clearSubtitleSearchAndPreview(): void {
-  assistantState.subtitleSearchQuery = '';
+function clearSubtitleSearchAndPreview(options: { preserveQuery?: boolean } = {}): void {
+  if (!options.preserveQuery) {
+    assistantState.subtitleSearchQuery = '';
+  }
   assistantState.subtitleSearch = null;
   assistantState.subtitlePreviewLineId = null;
   assistantState.subtitleJumpStatus = null;
@@ -2737,7 +2900,7 @@ function currentSubtitleSearchForSource(
   source: CurrentVideoSubtitleViewingSource,
 ): CurrentVideoSubtitleSearchState | null {
   const search = assistantState.subtitleSearch;
-  if (!search || search.query !== assistantState.subtitleSearchQuery.trim()) return null;
+  if (!search || search.query !== assistantState.subtitleSearchQuery.replace(/\s+/g, ' ').trim()) return null;
   if (search.results.some(result => result.sourceIdentityKey !== source.identity.sourceIdentityKey)) {
     return null;
   }

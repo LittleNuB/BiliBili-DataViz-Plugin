@@ -413,7 +413,10 @@ export function formatSubtitleTxt(
   source: CurrentVideoSubtitleViewingSource,
   input: { title?: string | null; partTitle?: string | null } = {},
 ): string {
-  const heading = [input.title?.trim(), input.partTitle?.trim()]
+  const heading = [
+    sanitizeSubtitleVisibleMetadata(input.title),
+    sanitizeSubtitleVisibleMetadata(input.partTitle),
+  ]
     .filter(Boolean)
     .join(' - ') || '当前视频';
   const lines = [
@@ -479,6 +482,12 @@ function normalizeSubtitleLines(
   text: string;
 }> {
   return lines
+    .filter(line =>
+      Number.isFinite(line.startSeconds)
+      && line.startSeconds >= 0
+      && Number.isFinite(line.endSeconds)
+      && line.endSeconds > line.startSeconds,
+    )
     .map(line => ({
       lineId: line.lineId?.trim() || null,
       startSeconds: normalizeSeconds(line.startSeconds),
@@ -511,14 +520,22 @@ function buildSubtitleLineBindingKey(
 }
 
 function sanitizeChineseFilenamePart(value: string | null | undefined): string {
-  return String(value ?? '')
-    .replace(/\b(?:fallback|transcript|confidence|sourceHash|segmentId|subtitle_url|BVID|CID)\b/gi, '')
+  return sanitizeSubtitleVisibleMetadata(value)
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/[. ]+$/g, '')
     .replace(/^[. ]+/g, '')
     .trim()
     .slice(0, 60);
+}
+
+function sanitizeSubtitleVisibleMetadata(value: string | null | undefined): string {
+  return String(value ?? '')
+    .replace(/\b(?:fallback|transcript|confidence|sourceHash|segmentId|subtitle_url|BVID|CID)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s:：._-]+|[\s:：._-]+$/g, '')
+    .trim()
+    .slice(0, 160);
 }
 
 function normalizeSubtitleText(value: string): string {

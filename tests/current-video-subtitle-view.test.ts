@@ -64,10 +64,11 @@ test('subtitle export formats TXT and SRT from real rows with safe Chinese filen
   ]);
 
   const txt = formatSubtitleTxt(bilibili, {
-    title: '测试视频:BVID sourceHash',
-    partTitle: '第/一?P',
+    title: '测试视频:BVID CID fallback transcript confidence sourceHash segmentId subtitle_url',
+    partTitle: '第/一?P sourceHash',
   });
-  assert.match(txt, /^测试视频:BVID sourceHash - 第\/一\?P 字幕全文（B站字幕）/);
+  assert.match(txt, /^测试视频 - 第\/一\?P 字幕全文（B站字幕）/);
+  assert.doesNotMatch(txt.split('\n', 1)[0], /fallback|transcript|confidence|sourceHash|segmentId|subtitle_url|BVID|CID/i);
   assert.match(txt, /\[0:00-0:03\] 第一句字幕/);
   assert.match(txt, /\[0:04-0:08\] 第二句字幕/);
 
@@ -84,13 +85,36 @@ test('subtitle export formats TXT and SRT from real rows with safe Chinese filen
   ].join('\n'));
 
   const filename = buildSubtitleExportFilename({
-    title: '测试视频:BVID sourceHash / 第*一集',
+    title: '测试视频:BVID fallback transcript confidence sourceHash segmentId subtitle_url / 第*一集',
     partTitle: 'P1<CID>',
     sourceLabel: 'B站字幕',
     extension: 'srt',
   });
   assert.equal(filename, '测试视频 第 一集-P1-B站字幕-字幕全文.srt');
-  assert.doesNotMatch(filename, /BVID|CID|sourceHash|[<>:"/\\|?*]/);
+  assert.doesNotMatch(filename, /fallback|transcript|confidence|sourceHash|segmentId|subtitle_url|BVID|CID|[<>:"/\\|?*]/i);
+});
+
+test('subtitle source drops invalid timelines instead of fabricating a zero-second start', () => {
+  const result = buildCurrentVideoSubtitleViewingSource({
+    bvid: 'BV1SubtitleView',
+    cid: 123,
+    page: 1,
+    source: 'bilibili_subtitle',
+    sourceType: 'bilibili_player_wbi_v2',
+    language: 'zh-CN',
+    lines: [
+      { startSeconds: Number.NaN, endSeconds: 2, text: '非法空值时间' },
+      { startSeconds: -1, endSeconds: 2, text: '非法负数时间' },
+      { startSeconds: 2, endSeconds: Number.POSITIVE_INFINITY, text: '非法无限时间' },
+      { startSeconds: 3.25, endSeconds: 5.5, text: '真实时间行' },
+    ],
+  });
+
+  assert.ok(result);
+  assert.equal(result.lineCount, 1);
+  assert.equal(result.lines[0].startSeconds, 3.25);
+  assert.equal(result.lines[0].endSeconds, 5.5);
+  assert.equal(result.lines[0].text, '真实时间行');
 });
 
 test('subtitle viewing source identity is isolated from video, part, and source selection state', () => {
