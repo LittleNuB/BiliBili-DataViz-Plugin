@@ -21,6 +21,10 @@ import type {
   CurrentVideoSummaryHighlightBinding,
   CurrentVideoSummaryHighlightsResult,
 } from '../src/shared/types/current-video-summary';
+import type {
+  CurrentVideoFullTextQaCitation,
+  CurrentVideoFullTextQaResult,
+} from '../src/shared/types/current-video-full-text-qa';
 import type { VideoKnowledgeNode, VideoKnowledgeResult } from '../src/shared/types/video-knowledge';
 import {
   asPriorGeneratedCurrentVideoSummaryHighlights,
@@ -1002,24 +1006,46 @@ function CurrentVideoAssistantStatus({
   const [segmentReturnAvailable, setSegmentReturnAvailable] = useState(false);
   const [segmentJumpLoading, setSegmentJumpLoading] = useState(false);
   const [segmentReturnLoading, setSegmentReturnLoading] = useState(false);
+  const [fullTextQaResult, setFullTextQaResult] = useState<CurrentVideoFullTextQaResult | null>(null);
+  const [fullTextQaLoading, setFullTextQaLoading] = useState(false);
+  const [fullTextQaError, setFullTextQaError] = useState<string | null>(null);
+  const [fullTextQaPreviewCitationId, setFullTextQaPreviewCitationId] = useState<string | null>(null);
+  const [fullTextQaJumpStatus, setFullTextQaJumpStatus] = useState<string | null>(null);
+  const [fullTextQaReturnAvailable, setFullTextQaReturnAvailable] = useState(false);
+  const [fullTextQaJumpLoading, setFullTextQaJumpLoading] = useState(false);
+  const [fullTextQaReturnLoading, setFullTextQaReturnLoading] = useState(false);
   const [highlightPreview, setHighlightPreview] = useState<CurrentVideoSummaryHighlightBinding | null>(null);
   const [highlightJumpStatus, setHighlightJumpStatus] = useState<string | null>(null);
   const [highlightReturnAvailable, setHighlightReturnAvailable] = useState(false);
   const [highlightJumpLoading, setHighlightJumpLoading] = useState(false);
   const [highlightReturnLoading, setHighlightReturnLoading] = useState(false);
   const segmentSearchRequestRef = useRef(0);
+  const fullTextQaRequestRef = useRef(0);
   const timestampRequestRef = useRef(0);
   const segmentSearchBusyRef = useRef(false);
   const timestampBusyRef = useRef(false);
+  const fullTextQaBusyRef = useRef(false);
+  const fullTextQaActiveRequestRef = useRef<{
+    requestId: string;
+    turnId: string;
+    params: Record<string, unknown>;
+  } | null>(null);
   const subtitleDiagnostics = buildCurrentVideoSubtitleDiagnostics(context, {
     refreshing: subtitleProbeLoading,
   });
 
   useEffect(() => {
+    const activeQaRequest = fullTextQaActiveRequestRef.current;
+    if (activeQaRequest) {
+      void requestSW('CANCEL_CURRENT_VIDEO_FULL_TEXT_QA', activeQaRequest.params).catch(() => undefined);
+      fullTextQaActiveRequestRef.current = null;
+    }
     segmentSearchRequestRef.current += 1;
+    fullTextQaRequestRef.current += 1;
     timestampRequestRef.current += 1;
     segmentSearchBusyRef.current = false;
     timestampBusyRef.current = false;
+    fullTextQaBusyRef.current = false;
     setSegmentLoading(false);
     setSegmentJumpLoading(false);
     setSegmentReturnLoading(false);
@@ -1030,6 +1056,14 @@ function CurrentVideoAssistantStatus({
     setSegmentPreviewCandidateId(null);
     setSegmentJumpStatus(null);
     setSegmentReturnAvailable(false);
+    setFullTextQaResult(null);
+    setFullTextQaLoading(false);
+    setFullTextQaError(null);
+    setFullTextQaPreviewCitationId(null);
+    setFullTextQaJumpStatus(null);
+    setFullTextQaReturnAvailable(false);
+    setFullTextQaJumpLoading(false);
+    setFullTextQaReturnLoading(false);
     setHighlightPreview(null);
     setHighlightJumpStatus(null);
     setHighlightReturnAvailable(false);
@@ -1124,6 +1158,163 @@ function CurrentVideoAssistantStatus({
       if (scopedActionIsCurrent(action, timestampRequestRef)) {
         timestampBusyRef.current = false;
         setHighlightReturnLoading(false);
+      }
+    }
+  }
+
+  async function askCurrentVideoFullText(retryTurnId?: string, retryQuestion?: string) {
+    const question = (retryQuestion ?? segmentQuery).replace(/\s+/g, ' ').trim();
+    if (!question) {
+      setFullTextQaError('请输入一个关于当前视频的问题。');
+      return;
+    }
+    if (subtitleProbeLoading || fullTextQaBusyRef.current || timestampBusyRef.current) return;
+
+    const action = beginScopedAction(fullTextQaRequestRef);
+    fullTextQaBusyRef.current = true;
+    setFullTextQaLoading(true);
+    setFullTextQaError(null);
+    setFullTextQaResult(null);
+    setFullTextQaPreviewCitationId(null);
+    setFullTextQaJumpStatus(null);
+    setFullTextQaReturnAvailable(false);
+    const requestId = createCurrentVideoFullTextRequestId('cvqa-popup');
+    const turnId = retryTurnId?.trim() || createCurrentVideoFullTextRequestId('cvqa-turn');
+    if (retryQuestion !== undefined) setSegmentQuery(question);
+    const baseParams = { requestId, turnId, question };
+    fullTextQaActiveRequestRef.current = { requestId, turnId, params: baseParams };
+    try {
+      const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
+      if (!scopedActionIsCurrent(action, fullTextQaRequestRef)) return;
+      if (!authorization.ready) {
+        setFullTextQaError(authorization.message);
+        return;
+      }
+      const params = { ...baseParams, ...authorization.params };
+      fullTextQaActiveRequestRef.current = { requestId, turnId, params };
+      const result = await requestSW<CurrentVideoFullTextQaResult>('ASK_CURRENT_VIDEO_FULL_TEXT', params);
+      if (
+        !scopedActionIsCurrent(action, fullTextQaRequestRef)
+        || fullTextQaActiveRequestRef.current?.requestId !== requestId
+        || result.requestId !== requestId
+        || result.turnId !== turnId
+      ) return;
+      setFullTextQaResult(result);
+    } catch {
+      if (!scopedActionIsCurrent(action, fullTextQaRequestRef)) return;
+      setFullTextQaError('回答失败，问题已保留。请确认当前视频页和 AI 设置后重试。');
+    } finally {
+      if (scopedActionIsCurrent(action, fullTextQaRequestRef)) {
+        fullTextQaBusyRef.current = false;
+        fullTextQaActiveRequestRef.current = null;
+        setFullTextQaLoading(false);
+      }
+    }
+  }
+
+  function cancelCurrentVideoFullTextQa() {
+    const active = fullTextQaActiveRequestRef.current;
+    if (!active) return;
+    fullTextQaRequestRef.current += 1;
+    fullTextQaActiveRequestRef.current = null;
+    fullTextQaBusyRef.current = false;
+    setFullTextQaLoading(false);
+    setFullTextQaResult(null);
+    setFullTextQaError('本次回答已取消，问题已保留。');
+    setFullTextQaPreviewCitationId(null);
+    setFullTextQaJumpStatus(null);
+    setFullTextQaReturnAvailable(false);
+    void requestSW('CANCEL_CURRENT_VIDEO_FULL_TEXT_QA', active.params).catch(() => undefined);
+  }
+
+  async function confirmFullTextQaCitationJump(citation: CurrentVideoFullTextQaCitation) {
+    if (
+      !fullTextQaResult
+      || fullTextQaPreviewCitationId !== citation.id
+      || subtitleProbeLoading
+      || fullTextQaBusyRef.current
+      || timestampBusyRef.current
+    ) return;
+    const currentCitation = fullTextQaResult.citations.find(item =>
+      item.binding.requestId === citation.binding.requestId
+      && item.binding.turnId === citation.binding.turnId
+      && item.binding.citationId === citation.binding.citationId
+    );
+    if (!currentCitation) {
+      setFullTextQaPreviewCitationId(null);
+      setFullTextQaJumpStatus('引用结果已变化，请重新预览后再跳转。');
+      return;
+    }
+    const action = beginScopedAction(timestampRequestRef);
+    timestampBusyRef.current = true;
+    setFullTextQaJumpLoading(true);
+    setFullTextQaReturnLoading(false);
+    setFullTextQaReturnAvailable(false);
+    setFullTextQaJumpStatus('正在确认跳转...');
+    try {
+      const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
+      if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
+      if (!authorization.ready) {
+        setFullTextQaJumpStatus(authorization.message);
+        return;
+      }
+      const result = await requestSW<CurrentVideoTimestampJumpResponse>(
+        'REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP',
+        { ...citation.binding, confirmed: true, ...authorization.params },
+      );
+      if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
+      setFullTextQaJumpStatus(result.ok
+        ? '已跳到引用位置，可返回原位置。'
+        : '引用结果或页面状态已变化，请重新提交问题后再试。');
+      setFullTextQaReturnAvailable(result.ok && result.returnPointSeconds !== null);
+      setFullTextQaPreviewCitationId(null);
+    } catch {
+      if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
+      setFullTextQaJumpStatus('引用跳转失败，请确认当前 B 站视频页仍然打开后重试。');
+      setFullTextQaReturnAvailable(false);
+    } finally {
+      if (scopedActionIsCurrent(action, timestampRequestRef)) {
+        timestampBusyRef.current = false;
+        setFullTextQaJumpLoading(false);
+      }
+    }
+  }
+
+  async function returnFullTextQaCitationJump() {
+    if (
+      !fullTextQaReturnAvailable
+      || subtitleProbeLoading
+      || fullTextQaBusyRef.current
+      || timestampBusyRef.current
+    ) return;
+    const action = beginScopedAction(timestampRequestRef);
+    timestampBusyRef.current = true;
+    setFullTextQaReturnLoading(true);
+    setFullTextQaJumpStatus('正在返回原位置...');
+    try {
+      const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
+      if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
+      if (!authorization.ready) {
+        setFullTextQaJumpStatus(authorization.message);
+        setFullTextQaReturnAvailable(false);
+        return;
+      }
+      const result = await requestSW<CurrentVideoTimestampReturnResponse>(
+        'RETURN_CURRENT_VIDEO_SEGMENT_JUMP',
+        authorization.params,
+      );
+      if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
+      setFullTextQaJumpStatus(result.ok
+        ? '已返回原位置。'
+        : '未能返回原位置，请回到当前视频页确认页面和播放器状态后重试。');
+      if (result.ok) setFullTextQaReturnAvailable(false);
+    } catch {
+      if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
+      setFullTextQaJumpStatus('返回原位置失败，请确认当前 B 站视频页仍然打开后重试。');
+    } finally {
+      if (scopedActionIsCurrent(action, timestampRequestRef)) {
+        timestampBusyRef.current = false;
+        setFullTextQaReturnLoading(false);
       }
     }
   }
@@ -1411,23 +1602,25 @@ function CurrentVideoAssistantStatus({
             loading={knowledgeLoading || subtitleProbeLoading}
             onRefresh={onRefreshKnowledge}
           />
-          <CurrentVideoSegmentRetrievalPanel
-            subtitleDiagnostics={subtitleDiagnostics}
+          <CurrentVideoFullTextQaPanel
+            context={context}
             query={segmentQuery}
-            result={segmentResult}
-            loading={segmentLoading}
-            error={segmentError}
-            previewCandidateId={segmentPreviewCandidateId}
-            jumpStatus={segmentJumpStatus}
-            returnAvailable={segmentReturnAvailable}
-            jumpLoading={segmentJumpLoading}
-            returnLoading={segmentReturnLoading}
+            result={fullTextQaResult}
+            loading={fullTextQaLoading}
+            error={fullTextQaError}
+            previewCitationId={fullTextQaPreviewCitationId}
+            jumpStatus={fullTextQaJumpStatus}
+            returnAvailable={fullTextQaReturnAvailable}
+            jumpLoading={fullTextQaJumpLoading}
+            returnLoading={fullTextQaReturnLoading}
             operationBlocked={subtitleProbeLoading}
             onQueryChange={setSegmentQuery}
-            onSearch={searchCurrentVideoSegments}
-            onPreviewCandidate={setSegmentPreviewCandidateId}
-            onConfirmJump={confirmSegmentJump}
-            onReturn={returnSegmentJump}
+            onSubmit={() => { void askCurrentVideoFullText(); }}
+            onCancel={cancelCurrentVideoFullTextQa}
+            onRetry={(turnId, question) => { void askCurrentVideoFullText(turnId, question); }}
+            onPreviewCitation={setFullTextQaPreviewCitationId}
+            onConfirmJump={confirmFullTextQaCitationJump}
+            onReturn={returnFullTextQaCitationJump}
             onOpenSettings={onOpenSettings}
           />
           <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
@@ -1755,6 +1948,360 @@ function HighlightJumpPreview({
           type="button"
           onClick={onCancel}
           disabled={disabled}
+          style={{
+            background: 'transparent',
+            color: '#C8C8D8',
+            border: '1px solid rgba(255,255,255,0.14)',
+            borderRadius: '6px',
+            cursor: disabled ? 'default' : 'pointer',
+            fontSize: '10px',
+            padding: '5px 7px',
+          }}
+        >
+          取消
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CurrentVideoFullTextQaPanel({
+  context,
+  query,
+  result,
+  loading,
+  error,
+  previewCitationId,
+  jumpStatus,
+  returnAvailable,
+  jumpLoading,
+  returnLoading,
+  operationBlocked,
+  onQueryChange,
+  onSubmit,
+  onCancel,
+  onRetry,
+  onPreviewCitation,
+  onConfirmJump,
+  onReturn,
+  onOpenSettings,
+}: {
+  context: CurrentVideoContextResult | null;
+  query: string;
+  result: CurrentVideoFullTextQaResult | null;
+  loading: boolean;
+  error: string | null;
+  previewCitationId: string | null;
+  jumpStatus: string | null;
+  returnAvailable: boolean;
+  jumpLoading: boolean;
+  returnLoading: boolean;
+  operationBlocked: boolean;
+  onQueryChange: (query: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+  onRetry: (turnId: string, question: string) => void;
+  onPreviewCitation: (citationId: string | null) => void;
+  onConfirmJump: (citation: CurrentVideoFullTextQaCitation) => void;
+  onReturn: () => void;
+  onOpenSettings: () => void;
+}) {
+  const previewCitation = result?.citations.find(citation => citation.id === previewCitationId) ?? null;
+  const timestampLoading = jumpLoading || returnLoading;
+  const controlsDisabled = loading || timestampLoading || operationBlocked;
+  const hasAnswer = Boolean(result?.answer.trim());
+
+  return (
+    <div style={{
+      marginTop: '8px',
+      padding: '8px',
+      border: '1px solid rgba(251, 114, 153, 0.24)',
+      borderRadius: '6px',
+      background: 'rgba(251, 114, 153, 0.07)',
+    }}>
+      <div style={{ color: '#FFD6E2', fontSize: '10px', fontWeight: 700 }}>
+        问这个视频
+      </div>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit();
+        }}
+      >
+        <textarea
+          value={query}
+          maxLength={500}
+          rows={3}
+          onInput={(event) => onQueryChange((event.currentTarget as HTMLTextAreaElement).value)}
+          placeholder="例如：作者为什么认为这个方法更可靠？"
+          style={{
+            boxSizing: 'border-box',
+            width: '100%',
+            marginTop: '6px',
+            resize: 'vertical',
+            minHeight: '58px',
+            maxHeight: '120px',
+            background: 'rgba(255,255,255,0.08)',
+            color: '#E8E8F2',
+            border: '1px solid rgba(255,255,255,0.14)',
+            borderRadius: '6px',
+            fontSize: '11px',
+            lineHeight: 1.45,
+            padding: '7px 8px',
+            outline: 'none',
+          }}
+        />
+        <div style={{ color: '#A0A0B0', fontSize: '9px', lineHeight: 1.45, marginTop: '4px' }}>
+          {currentVideoFullTextQaActionNotice(context, result)}
+        </div>
+        <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+          <button
+            type="submit"
+            disabled={controlsDisabled || !query.trim()}
+            style={{
+              flex: 1,
+              background: controlsDisabled || !query.trim() ? 'rgba(251, 114, 153, 0.12)' : '#FB7299',
+              color: controlsDisabled || !query.trim() ? '#A0A0B0' : '#fff',
+              border: '1px solid rgba(251, 114, 153, 0.36)',
+              borderRadius: '6px',
+              cursor: controlsDisabled || !query.trim() ? 'default' : 'pointer',
+              fontSize: '10px',
+              fontWeight: 700,
+              padding: '6px 8px',
+            }}
+          >
+            {loading ? '回答中...' : '提问'}
+          </button>
+          {loading && (
+            <button
+              type="button"
+              onClick={onCancel}
+              style={{
+                background: 'transparent',
+                color: '#C8C8D8',
+                border: '1px solid rgba(255,255,255,0.14)',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '10px',
+                padding: '6px 8px',
+              }}
+            >
+              取消
+            </button>
+          )}
+        </div>
+      </form>
+
+      {error && (
+        <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45, marginTop: '7px' }}>
+          {error}
+        </div>
+      )}
+
+      {result && (
+        <div style={{ marginTop: '8px', borderTop: '1px solid rgba(255,255,255,0.09)', paddingTop: '7px' }}>
+          <div style={{ color: fullTextQaStatusColor(result.status), fontSize: '10px', lineHeight: 1.45, fontWeight: 700 }}>
+            {result.status === 'ready' ? '回答' : fullTextQaStatusLabel(result.status)}
+          </div>
+          {hasAnswer ? (
+            <div style={{ color: '#E8E8F2', fontSize: '10px', lineHeight: 1.55, marginTop: '4px', whiteSpace: 'pre-wrap' }}>
+              {safeFullTextQaVisibleText(result.answer)}
+            </div>
+          ) : (
+            <div style={{ color: '#C8C8D8', fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
+              {safeFullTextQaVisibleText(result.message)}
+            </div>
+          )}
+          {result.sourceLabel && (
+            <div style={{ color: '#A0A0B0', fontSize: '9px', lineHeight: 1.45, marginTop: '5px' }}>
+              {fullTextQaSourceLine(result)}
+            </div>
+          )}
+          {result.status === 'ready' && result.citations.length > 0 && (
+            <div style={{ marginTop: '7px' }}>
+              <div style={{ color: '#C8E6FF', fontSize: '10px', lineHeight: 1.45, fontWeight: 700 }}>
+                引用片段
+              </div>
+              {result.citations.slice(0, 3).map((citation, index) => (
+                <CurrentVideoFullTextQaCitationRow
+                  key={citation.id}
+                  citation={citation}
+                  index={index}
+                  selected={citation.id === previewCitationId}
+                  disabled={controlsDisabled}
+                  onPreview={onPreviewCitation}
+                />
+              ))}
+            </div>
+          )}
+          {previewCitation && (
+            <CurrentVideoFullTextQaCitationPreview
+              citation={previewCitation}
+              disabled={controlsDisabled}
+              loading={jumpLoading}
+              onConfirm={() => onConfirmJump(previewCitation)}
+              onCancel={() => onPreviewCitation(null)}
+            />
+          )}
+          {jumpStatus && (
+            <div style={{ color: jumpStatus.includes('失败') || jumpStatus.includes('不可') || jumpStatus.includes('变化') ? '#FFCF8A' : '#A0E7A0', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
+              {jumpStatus}
+            </div>
+          )}
+          {returnAvailable && (
+            <button
+              type="button"
+              onClick={onReturn}
+              disabled={controlsDisabled}
+              style={{
+                marginTop: '6px',
+                width: '100%',
+                background: 'rgba(255, 179, 71, 0.18)',
+                color: '#FFCF8A',
+                border: '1px solid rgba(255, 179, 71, 0.34)',
+                borderRadius: '6px',
+                cursor: controlsDisabled ? 'default' : 'pointer',
+                fontSize: '10px',
+                fontWeight: 700,
+                padding: '5px 7px',
+              }}
+            >
+              {returnLoading ? '返回中...' : '返回原位置'}
+            </button>
+          )}
+          {result.canRetry && result.status !== 'ready' && (
+            <button
+              type="button"
+              onClick={() => onRetry(result.turnId, result.question)}
+              disabled={controlsDisabled}
+              style={{
+                marginTop: '6px',
+                width: '100%',
+                background: 'rgba(251, 114, 153, 0.16)',
+                color: '#FFD6E2',
+                border: '1px solid rgba(251, 114, 153, 0.30)',
+                borderRadius: '6px',
+                cursor: controlsDisabled ? 'default' : 'pointer',
+                fontSize: '10px',
+                fontWeight: 700,
+                padding: '5px 7px',
+              }}
+            >
+              重新提交
+            </button>
+          )}
+          {needsAiSettingsLink(result.status) && (
+            <SettingsInlineButton onClick={onOpenSettings} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CurrentVideoFullTextQaCitationRow({
+  citation,
+  index,
+  selected,
+  disabled,
+  onPreview,
+}: {
+  citation: CurrentVideoFullTextQaCitation;
+  index: number;
+  selected: boolean;
+  disabled: boolean;
+  onPreview: (citationId: string | null) => void;
+}) {
+  return (
+    <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'flex-start' }}>
+        <div style={{ color: '#E8E8F2', fontSize: '10px', lineHeight: 1.4, fontWeight: 650 }}>
+          引用 {index + 1}
+        </div>
+        <div style={{ color: '#C8E6FF', fontSize: '9px', lineHeight: 1.4, flex: '0 0 auto' }}>
+          {citation.timeRangeLabel}
+        </div>
+      </div>
+      <div style={{ color: '#C8C8D8', fontSize: '9px', lineHeight: 1.45, marginTop: '3px' }}>
+        {safeFullTextQaVisibleText(citation.evidenceText)}
+      </div>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onPreview(selected ? null : citation.id)}
+        style={{
+          marginTop: '5px',
+          background: 'rgba(0, 161, 214, 0.20)',
+          color: '#C8E6FF',
+          border: '1px solid rgba(127, 219, 255, 0.32)',
+          borderRadius: '6px',
+          cursor: disabled ? 'default' : 'pointer',
+          fontSize: '10px',
+          padding: '4px 7px',
+        }}
+      >
+        {selected ? '收起预览' : '预览跳转'}
+      </button>
+    </div>
+  );
+}
+
+function CurrentVideoFullTextQaCitationPreview({
+  citation,
+  disabled,
+  loading,
+  onConfirm,
+  onCancel,
+}: {
+  citation: CurrentVideoFullTextQaCitation;
+  disabled: boolean;
+  loading: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div style={{
+      marginTop: '8px',
+      padding: '8px',
+      border: '1px solid rgba(255,179,71,0.28)',
+      borderRadius: '6px',
+      background: 'rgba(255,179,71,0.08)',
+    }}>
+      <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45, fontWeight: 700 }}>
+        确认跳转前预览
+      </div>
+      <div style={{ color: '#E8E8F2', fontSize: '10px', lineHeight: 1.45, marginTop: '4px' }}>
+        目标时间：{citation.timeRangeLabel}
+      </div>
+      <div style={{ color: '#C8E6FF', fontSize: '9px', lineHeight: 1.45, marginTop: '3px' }}>
+        片段内容：{safeFullTextQaVisibleText(citation.evidenceText)}
+      </div>
+      <div style={{ color: '#A0E7A0', fontSize: '9px', lineHeight: 1.45, marginTop: '3px' }}>
+        确认后才会跳转，可再返回原位置。
+      </div>
+      <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onConfirm}
+          style={{
+            flex: 1,
+            background: disabled ? 'rgba(255,255,255,0.08)' : '#FFB347',
+            color: disabled ? '#9090A0' : '#1A1A2E',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: disabled ? 'default' : 'pointer',
+            fontSize: '10px',
+            fontWeight: 700,
+            padding: '5px 7px',
+          }}
+        >
+          {loading ? '确认中...' : '确认跳转'}
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onCancel}
           style={{
             background: 'transparent',
             color: '#C8C8D8',
@@ -2455,6 +3002,95 @@ function currentVideoSummaryActionNotice(
     return `可发送正文规模：${lineCount} 行，约 ${formatBytes(bytes)}。只有点击生成才会发送；等待时间和费用由你配置的 AI 服务决定。`;
   }
   return '当前没有可发送的正文。只有在视频页选择主要文本来源后，才可以手动生成。';
+}
+
+function currentVideoFullTextQaActionNotice(
+  context: CurrentVideoContextResult | null,
+  result: CurrentVideoFullTextQaResult | null,
+): string {
+  const durationSeconds = context?.kind === 'video'
+    ? context.currentPart.page > 0
+      ? context.parts.find(part => part.page === context.currentPart.page)?.durationSeconds ?? context.durationSeconds
+      : context.durationSeconds
+    : null;
+  const durationLabel = typeof durationSeconds === 'number' && durationSeconds > 0
+    ? `，视频约 ${formatPopupDuration(durationSeconds)}`
+    : '';
+  if (result) {
+    return `每次提交都会发送当前分 P 的完整主要文本（${formatTextSize(result.textSize)}${durationLabel}）。长文本可能等待更久并产生更多费用，系统不会静默截短。`;
+  }
+  if (context?.kind === 'video') {
+    const lineCount = context.transcriptEvidence?.segmentCount ?? 0;
+    const bytes = context.transcriptEvidence?.serializedBytes ?? 0;
+    return `每次提交都会发送当前分 P 的完整主要文本（${lineCount} 行，约 ${formatBytes(bytes)}${durationLabel}）。长文本可能等待更久并产生更多费用，系统不会静默截短。`;
+  }
+  return '当前没有可发送的主要文本。进入 B 站视频页并确认文本来源后再提交。';
+}
+
+function fullTextQaStatusLabel(status: CurrentVideoFullTextQaResult['status']): string {
+  switch (status) {
+    case 'unsupported':
+      return '文本依据不足';
+    case 'no_context':
+      return '当前视频不可用';
+    case 'no_text':
+      return '当前文本不可用';
+    case 'disabled':
+      return '功能未开启';
+    case 'not_configured':
+      return 'AI 服务未配置';
+    case 'context_too_long':
+      return '正文超出所选模型限制';
+    case 'cancelled':
+      return '已取消';
+    case 'invalid_output':
+      return '回答未通过校验';
+    case 'error':
+      return '回答失败';
+    case 'ready':
+      return '回答';
+    default:
+      return '未完成';
+  }
+}
+
+function fullTextQaStatusColor(status: CurrentVideoFullTextQaResult['status']): string {
+  if (status === 'ready') return '#A0E7A0';
+  if (status === 'unsupported') return '#C8E6FF';
+  return '#FFCF8A';
+}
+
+function safeFullTextQaVisibleText(value: string): string {
+  return value
+    .replace(/document is not defined/gi, '运行状态不可用')
+    .replace(
+      /\b(?:subtitle_url|sourceHash|segmentIds?|candidateId|nodeId|sourceId|BVID|CID)\s*[:=]\s*[^\s,;，；。！？!?]+/gi,
+      '内部信息已隐藏',
+    )
+    .replace(/\bBV[0-9A-Za-z]{10}\b/gi, '视频编号已隐藏')
+    .replace(
+      /\b(?:fallback|transcript|confidence|sourceHash|segmentIds?|subtitle_url|BVID|CID)\b/gi,
+      (term) => {
+        switch (term.toLowerCase()) {
+          case 'fallback': return '本地兜底';
+          case 'transcript': return '字幕正文';
+          case 'confidence': return '匹配度';
+          case 'sourcehash': return '来源标识';
+          case 'segmentid':
+          case 'segmentids': return '片段标识';
+          case 'subtitle_url': return '字幕链接';
+          case 'bvid': return '视频编号';
+          case 'cid': return '分 P 信息';
+          default: return '内部字段';
+        }
+      },
+    );
+}
+
+function fullTextQaSourceLine(result: CurrentVideoFullTextQaResult): string {
+  const title = safeFullTextQaVisibleText(result.title || '当前视频');
+  const part = result.partTitle ? ` · ${safeFullTextQaVisibleText(result.partTitle)}` : '';
+  return `依据《${title}》${part} · ${result.sourceLabel}，${formatTextSize(result.textSize)}。`;
 }
 
 function summaryHighlightsStatusLabel(status: CurrentVideoSummaryHighlightsResult['status']): string {

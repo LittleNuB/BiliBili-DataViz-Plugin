@@ -86,6 +86,7 @@
       let returnPointSeconds = null;
       let videoDetectionReady = mockParams.get("deferVideoDetection") !== "1";
       let lastSearchResult = null;
+      let lastFullTextQaResult = null;
       let subtitleSourceHash = mockParams.get("sourceVersion") === "v2" ? "mock-source-hash-hidden-v2" : "mock-source-hash-hidden";
       let subtitleBodyHash = mockParams.get("sourceVersion") === "v2" ? "mock-body-hash-hidden-v2" : "mock-body-hash-hidden";
       let subtitleTimelineHash = mockParams.get("sourceVersion") === "v2" ? "mock-timeline-hash-hidden-v2" : "mock-timeline-hash-hidden";
@@ -1587,6 +1588,121 @@
         return withQa(lastSearchResult);
       }
 
+      function currentVideoFullTextQaResult(params) {
+        const requestId = String(params?.requestId || "mock-qa-request");
+        const turnId = String(params?.turnId || "mock-qa-turn");
+        const question = String(params?.question || "").trim();
+        const base = {
+          requestId,
+          turnId,
+          question,
+          title: mockTitle.trim() || "当前视频",
+          partTitle: mockPage === 1 ? "主视频" : "第二分 P",
+          sourceLabel: subtitleCached ? "B站字幕" : null,
+          textSize: { lineCount: subtitleCached ? 4 : 0, charCount: subtitleCached ? 168 : null, utf8Bytes: subtitleCached ? 336 : 0 },
+          answerEvidenceLineNumbers: [],
+          citations: [],
+          limitations: ["本次只使用当前分 P 的完整主要文本。"],
+          generatedAt: Date.now(),
+          canRetry: true,
+        };
+        const state = currentSummaryState();
+        if (state === "disabled" || state === "unconfigured") {
+          lastFullTextQaResult = {
+            ...base,
+            status: state === "disabled" ? "disabled" : "not_configured",
+            answer: "",
+            message: state === "disabled"
+              ? "当前视频 AI 助手已关闭，问题已保留。开启后可重新提交。"
+              : "AI 服务尚未配置完成，问题已保留。完成设置后可重新提交。",
+            ai: { status: state === "disabled" ? "disabled" : "not_configured", model: currentChatModel(), note: "", errorCode: null },
+          };
+          return lastFullTextQaResult;
+        }
+        if (question.includes("正文过长")) {
+          lastFullTextQaResult = {
+            ...base,
+            status: "context_too_long",
+            answer: "",
+            message: "当前正文过长，所选模型没有接受本次完整请求；系统不会截断或分段发送。问题已保留，可更换模型后重试。",
+            ai: { status: "context_too_long", model: currentChatModel(), note: "", errorCode: "context_too_long" },
+          };
+          return lastFullTextQaResult;
+        }
+
+        const search = searchCurrentVideoSegmentsResult(question);
+        if (search.qa?.status !== "answered" || !subtitleCached) {
+          lastFullTextQaResult = {
+            ...base,
+            status: "unsupported",
+            answer: "当前视频文本没有足够内容回答这个问题。",
+            message: "当前视频文本没有足够内容支持回答。",
+            canRetry: false,
+            ai: { status: "unsupported", model: currentChatModel(), note: "", errorCode: null },
+          };
+          return lastFullTextQaResult;
+        }
+
+        const rawVisibleCopy = question.includes("原始身份泄漏");
+        const candidate = search.candidates.find(item => item.startSeconds !== null);
+        const citation = candidate ? {
+          id: "citation-1",
+          evidenceLineNumbers: [1, 2],
+          evidenceText: rawVisibleCopy
+            ? "fallback transcript confidence sourceHash=page-secret segmentId=segment-secret subtitle_url=https://secret.invalid bvid=BV1RawLeak99 CID=2202 独立 BV1RawLeak99"
+            : candidate.evidenceText,
+          startSeconds: candidate.startSeconds,
+          endSeconds: candidate.endSeconds,
+          timeRangeLabel: candidate.timeRangeLabel,
+          sourceLabel: "B站字幕",
+          binding: { requestId, turnId, citationId: "citation-1" },
+        } : null;
+        lastFullTextQaResult = {
+          ...base,
+          status: "ready",
+          answer: rawVisibleCopy
+            ? "document is not defined; fallback transcript confidence sourceHash=page-secret segmentId=segment-secret subtitle_url=https://secret.invalid bvid=BV1RawLeak99 CID=2202 独立 BV1RawLeak99"
+            : "作者说明子代理会承接拆分后的较小任务，并与主流程协作完成工作。",
+          answerEvidenceLineNumbers: [1, 2],
+          citations: citation ? [citation] : [],
+          message: "回答已基于当前分 P 的完整主要文本生成。",
+          ai: { status: "generated", model: currentChatModel(), note: "", errorCode: null },
+        };
+        return lastFullTextQaResult;
+      }
+
+      function requestCurrentVideoQaCitationJump(params) {
+        const citation = lastFullTextQaResult?.citations?.find(item =>
+          item.binding.requestId === params?.requestId
+          && item.binding.turnId === params?.turnId
+          && item.binding.citationId === params?.citationId
+        );
+        if (params?.confirmed !== true || !citation) {
+          return {
+            ok: false,
+            message: params?.confirmed === true ? "当前引用已过期，请重新提交问题后再跳转。" : "需要先确认跳转。",
+            candidateId: String(params?.citationId || ""),
+            targetSeconds: null,
+            targetTimeLabel: null,
+            returnPointSeconds: null,
+            sourceLabel: null,
+            confidence: null,
+          };
+        }
+        returnPointSeconds = playbackPosition;
+        playbackPosition = citation.startSeconds;
+        return {
+          ok: true,
+          message: `已跳到 ${formatMockTime(citation.startSeconds)}。`,
+          candidateId: citation.id,
+          targetSeconds: citation.startSeconds,
+          targetTimeLabel: formatMockTime(citation.startSeconds),
+          returnPointSeconds,
+          sourceLabel: "引用片段",
+          confidence: 1,
+        };
+      }
+
       function requestCurrentVideoSegmentJump(params) {
         const candidate = lastSearchResult?.candidates?.find(item => item.id === params?.candidateId);
         if (params?.confirmed !== true) {
@@ -1820,10 +1936,28 @@
                 data: searchCurrentVideoSegmentsResult(message.params?.query),
               });
             }
+            if (message.action === "ASK_CURRENT_VIDEO_FULL_TEXT") {
+              if (String(message.params?.question || "").includes("后台失败")) {
+                return Promise.resolve({ success: false, error: "MOCK_QA_BACKEND_FAILURE" });
+              }
+              return maybeDeferProtectedResponse(message.action, {
+                success: true,
+                data: currentVideoFullTextQaResult(message.params),
+              });
+            }
+            if (message.action === "CANCEL_CURRENT_VIDEO_FULL_TEXT_QA") {
+              return Promise.resolve({ success: true, data: { cancelled: true } });
+            }
             if (message.action === "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP") {
               return maybeDeferProtectedResponse(message.action, {
                 success: true,
                 data: requestCurrentVideoSegmentJump(message.params),
+              });
+            }
+            if (message.action === "REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP") {
+              return maybeDeferProtectedResponse(message.action, {
+                success: true,
+                data: requestCurrentVideoQaCitationJump(message.params),
               });
             }
             if (message.action === "REQUEST_CURRENT_VIDEO_SUBTITLE_JUMP") {

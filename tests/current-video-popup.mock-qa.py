@@ -15,6 +15,9 @@ POPUP_URL = "http://popup.mock/popup"
 PROTECTED_ACTIONS = {
     "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS",
     "GET_VIDEO_KNOWLEDGE",
+    "ASK_CURRENT_VIDEO_FULL_TEXT",
+    "CANCEL_CURRENT_VIDEO_FULL_TEXT_QA",
+    "REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP",
     "SEARCH_CURRENT_VIDEO_SEGMENTS",
     "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
     "REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP",
@@ -28,6 +31,7 @@ FORBIDDEN_VISIBLE_TERMS = [
     "BV1PopupMock9",
     "9201",
     "BV1PopupNext7",
+    "BV1RawLeak99",
     "9302",
     "fallback",
     "transcript",
@@ -104,6 +108,26 @@ def assert_clean_page(page):
     assert not overflow, "popup has horizontal overflow"
 
 
+def qa_panel(page):
+    return page.get_by_text("问这个视频", exact=True).locator("..")
+
+
+def submit_qa(page, question):
+    panel = qa_panel(page)
+    panel.locator("textarea").fill(question)
+    panel.get_by_role("button", name="提问", exact=True).click()
+    return panel
+
+
+def prepare_qa_preview(page, question):
+    panel = submit_qa(page, question)
+    expect(panel.get_by_text("回答", exact=True)).to_be_visible()
+    expect(panel.get_by_text("引用片段", exact=True)).to_be_visible()
+    panel.get_by_role("button", name="预览跳转", exact=True).click()
+    expect(panel.get_by_text("确认跳转前预览", exact=True)).to_be_visible()
+    return panel
+
+
 def run_manual_exact_flow(page):
     page.route("**/*", route_popup)
     page.goto(POPUP_URL)
@@ -128,21 +152,23 @@ def run_manual_exact_flow(page):
     expect(page.get_by_text("已返回原位置。").first).to_be_visible()
 
     page.get_by_role("button", name="刷新", exact=True).click()
-    page.locator("input[placeholder='例如：模型架构那段']").fill("授权测试")
-    page.get_by_role("button", name="检索", exact=True).click()
-    expect(page.get_by_role("button", name="预览跳转").first).to_be_visible()
-    page.get_by_role("button", name="预览跳转").last.click()
-    page.get_by_role("button", name="确认跳转").last.click()
-    expect(page.get_by_role("button", name="返回原位置").last).to_be_visible()
-    page.get_by_role("button", name="返回原位置").last.click()
-    expect(page.get_by_text("已返回原位置。").last).to_be_visible()
+    panel = prepare_qa_preview(page, "作者为什么认为这个方法更可靠？")
+    expect(panel.get_by_text("回答：作者为什么认为这个方法更可靠？", exact=False)).to_be_visible()
+    expect(panel.get_by_text("依据《Popup 授权 Mock 视频》 · B站字幕", exact=False)).to_be_visible()
+    answer = panel.get_by_text("回答", exact=True)
+    citations = panel.get_by_text("引用片段", exact=True)
+    assert answer.evaluate("(answer, citations) => Boolean(answer.compareDocumentPosition(citations) & Node.DOCUMENT_POSITION_FOLLOWING)", citations.element_handle())
+    panel.get_by_role("button", name="确认跳转", exact=True).click()
+    expect(panel.get_by_role("button", name="返回原位置", exact=True)).to_be_visible()
+    panel.get_by_role("button", name="返回原位置", exact=True).click()
+    expect(panel.get_by_text("已返回原位置。", exact=True)).to_be_visible()
 
     expected = page.evaluate("window.__popupMockSourceV2")
     for action in {
         "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS",
         "GET_VIDEO_KNOWLEDGE",
-        "SEARCH_CURRENT_VIDEO_SEGMENTS",
-        "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
+        "ASK_CURRENT_VIDEO_FULL_TEXT",
+        "REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP",
         "REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP",
         "RETURN_CURRENT_VIDEO_SEGMENT_JUMP",
     }:
@@ -163,10 +189,9 @@ def run_stale_saved_source_flow(page):
     page.get_by_role("button", name="生成摘要与亮点").click()
     expect(page.get_by_text("此前保存的主要文本来源已不可用，请到视频页助手重新选择当前来源。").first).to_be_visible()
     page.get_by_role("button", name="刷新", exact=True).click()
-    page.locator("input[placeholder='例如：模型架构那段']").fill("失效来源")
-    page.get_by_role("button", name="检索", exact=True).click()
+    submit_qa(page, "失效来源")
     page.wait_for_timeout(50)
-    expect(page.get_by_role("button", name="预览跳转")).to_have_count(0)
+    expect(qa_panel(page).get_by_role("button", name="预览跳转")).to_have_count(0)
     assert_no_protected_actions(page)
     assert_clean_page(page)
 
@@ -175,18 +200,15 @@ def run_raw_unsuccessful_response_flow(page, query, action):
     page.route("**/*", route_popup)
     page.goto(f"{POPUP_URL}?{query}=1")
     expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
-    page.locator("input[placeholder='例如：模型架构那段']").fill("受控失败")
-    page.get_by_role("button", name="检索", exact=True).click()
-    expect(page.get_by_role("button", name="预览跳转")).to_be_visible()
-    page.get_by_role("button", name="预览跳转").click()
-    page.get_by_role("button", name="确认跳转").click()
+    panel = prepare_qa_preview(page, "受控失败")
+    panel.get_by_role("button", name="确认跳转", exact=True).click()
 
     if action == "jump":
-        expect(page.get_by_text("未能完成跳转，请回到当前视频页确认页面和播放器状态后重试。")).to_be_visible()
+        expect(panel.get_by_text("引用结果或页面状态已变化，请重新提交问题后再试。")).to_be_visible()
     else:
-        expect(page.get_by_role("button", name="返回原位置")).to_be_visible()
-        page.get_by_role("button", name="返回原位置").click()
-        expect(page.get_by_text("未能返回原位置，请回到当前视频页确认页面和播放器状态后重试。")).to_be_visible()
+        expect(panel.get_by_role("button", name="返回原位置", exact=True)).to_be_visible()
+        panel.get_by_role("button", name="返回原位置", exact=True).click()
+        expect(panel.get_by_text("未能返回原位置，请回到当前视频页确认页面和播放器状态后重试。")).to_be_visible()
     assert_clean_page(page)
 
 
@@ -199,8 +221,7 @@ def run_blocked_flow(page, query, expected_message):
     page.get_by_role("button", name="生成摘要与亮点").click()
     expect(page.get_by_text(expected_message).first).to_be_visible()
     page.get_by_role("button", name="刷新", exact=True).click()
-    page.locator("input[placeholder='例如：模型架构那段']").fill("不应发送")
-    page.get_by_role("button", name="检索", exact=True).click()
+    submit_qa(page, "不应发送")
     assert_no_protected_actions(page)
     assert_clean_page(page)
 
@@ -211,14 +232,6 @@ def run_missing_title_flow(page):
     expect(page.get_by_text("当前视频", exact=True).first).to_be_visible()
     assert_no_protected_actions(page)
     assert_clean_page(page)
-
-
-def prepare_segment_preview(page, query):
-    page.locator("input[placeholder='例如：模型架构那段']").fill(query)
-    page.get_by_role("button", name="检索", exact=True).click()
-    expect(page.get_by_role("button", name="预览跳转")).to_be_visible()
-    page.get_by_role("button", name="预览跳转").click()
-    expect(page.get_by_role("button", name="确认跳转")).to_be_visible()
 
 
 def run_summary_scope_races(page):
@@ -516,22 +529,21 @@ def run_fail_closed_knowledge_copy(page):
     assert_clean_page(page)
 
 
-def run_search_revision_race(page):
+def run_full_text_qa_revision_race(page):
     page.route("**/*", route_popup)
     page.goto(POPUP_URL)
     expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
-    page.evaluate("window.__popupMockDeferNextResponse('SEARCH_CURRENT_VIDEO_SEGMENTS')")
-    page.locator("input[placeholder='例如：模型架构那段']").fill("旧检索")
-    page.get_by_role("button", name="检索", exact=True).click()
-    page.wait_for_function("window.__popupMockPendingResponseCount('SEARCH_CURRENT_VIDEO_SEGMENTS') === 1")
+    page.evaluate("window.__popupMockDeferNextResponse('ASK_CURRENT_VIDEO_FULL_TEXT')")
+    submit_qa(page, "旧问题")
+    page.wait_for_function("window.__popupMockPendingResponseCount('ASK_CURRENT_VIDEO_FULL_TEXT') === 1")
     page.evaluate("window.__popupMockEmitSelectionChange('same')")
-    page.locator("input[placeholder='例如：模型架构那段']").fill("新检索")
-    page.get_by_role("button", name="检索", exact=True).click()
-    expect(page.get_by_text("新检索 的当前候选").first).to_be_visible()
-    page.evaluate("window.__popupMockResolveResponses('SEARCH_CURRENT_VIDEO_SEGMENTS')")
+    submit_qa(page, "新问题")
+    expect(qa_panel(page).get_by_text("回答：新问题。", exact=False)).to_be_visible()
+    page.evaluate("window.__popupMockResolveResponses('ASK_CURRENT_VIDEO_FULL_TEXT')")
     page.wait_for_timeout(50)
-    expect(page.get_by_text("新检索 的当前候选").first).to_be_visible()
-    expect(page.get_by_text("旧检索 的当前候选")).to_have_count(0)
+    expect(qa_panel(page).get_by_text("回答：新问题。", exact=False)).to_be_visible()
+    expect(qa_panel(page).get_by_text("回答：旧问题。", exact=False)).to_have_count(0)
+    assert len(messages_for(page, "CANCEL_CURRENT_VIDEO_FULL_TEXT_QA")) == 1
     assert_clean_page(page)
 
 
@@ -539,18 +551,17 @@ def run_pre_render_selection_scope_race(page):
     page.route("**/*", route_popup)
     page.goto(POPUP_URL)
     expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
-    page.evaluate("window.__popupMockDeferNextResponse('SEARCH_CURRENT_VIDEO_SEGMENTS')")
-    page.locator("input[placeholder='例如：模型架构那段']").fill("pre-render-old")
-    page.get_by_role("button", name="检索", exact=True).click()
-    page.wait_for_function("window.__popupMockPendingResponseCount('SEARCH_CURRENT_VIDEO_SEGMENTS') === 1")
+    page.evaluate("window.__popupMockDeferNextResponse('ASK_CURRENT_VIDEO_FULL_TEXT')")
+    submit_qa(page, "渲染前旧问题")
+    page.wait_for_function("window.__popupMockPendingResponseCount('ASK_CURRENT_VIDEO_FULL_TEXT') === 1")
     page.evaluate(
         """() => {
-          window.__popupMockResolveResponses('SEARCH_CURRENT_VIDEO_SEGMENTS');
+          window.__popupMockResolveResponses('ASK_CURRENT_VIDEO_FULL_TEXT');
           window.__popupMockEmitSelectionChange('same');
         }"""
     )
     page.wait_for_timeout(50)
-    expect(page.get_by_text("pre-render-old 的当前候选")).to_have_count(0)
+    expect(qa_panel(page).get_by_text("回答：渲染前旧问题。", exact=False)).to_have_count(0)
     assert_clean_page(page)
 
 
@@ -558,47 +569,115 @@ def run_timestamp_races_and_double_click(page):
     page.route("**/*", route_popup)
     page.goto(POPUP_URL)
     expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
-    prepare_segment_preview(page, "第一次跳转")
-    page.evaluate("window.__popupMockDeferNextResponse('REQUEST_CURRENT_VIDEO_SEGMENT_JUMP')")
-    page.get_by_role("button", name="确认跳转").evaluate("button => { button.click(); button.click(); }")
-    page.wait_for_function("window.__popupMockPendingResponseCount('REQUEST_CURRENT_VIDEO_SEGMENT_JUMP') === 1")
-    assert len(messages_for(page, "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP")) == 1
+    panel = prepare_qa_preview(page, "第一次跳转")
+    page.evaluate("window.__popupMockDeferNextResponse('REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP')")
+    panel.get_by_role("button", name="确认跳转", exact=True).evaluate("button => { button.click(); button.click(); }")
+    page.wait_for_function("window.__popupMockPendingResponseCount('REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP') === 1")
+    assert len(messages_for(page, "REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP")) == 1
 
     page.evaluate("window.__popupMockEmitSelectionChange('same')")
-    prepare_segment_preview(page, "较新跳转")
-    page.get_by_role("button", name="确认跳转").click()
-    expect(page.get_by_text("跳转已完成，可返回原位置。")).to_be_visible()
-    page.evaluate("window.__popupMockResolveResponses('REQUEST_CURRENT_VIDEO_SEGMENT_JUMP')")
+    panel = prepare_qa_preview(page, "较新跳转")
+    panel.get_by_role("button", name="确认跳转", exact=True).click()
+    expect(panel.get_by_text("已跳到引用位置，可返回原位置。")).to_be_visible()
+    page.evaluate("window.__popupMockResolveResponses('REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP')")
     page.wait_for_timeout(50)
-    expect(page.get_by_text("跳转已完成，可返回原位置。")).to_be_visible()
+    expect(panel.get_by_text("已跳到引用位置，可返回原位置。")).to_be_visible()
 
     page.evaluate("window.__popupMockDeferNextResponse('RETURN_CURRENT_VIDEO_SEGMENT_JUMP')")
-    page.get_by_role("button", name="返回原位置").evaluate("button => { button.click(); button.click(); }")
+    panel.get_by_role("button", name="返回原位置", exact=True).evaluate("button => { button.click(); button.click(); }")
     page.wait_for_function("window.__popupMockPendingResponseCount('RETURN_CURRENT_VIDEO_SEGMENT_JUMP') === 1")
     assert len(messages_for(page, "RETURN_CURRENT_VIDEO_SEGMENT_JUMP")) == 1
 
     page.evaluate("window.__popupMockEmitSelectionChange('same')")
-    prepare_segment_preview(page, "返回前的新跳转")
-    page.get_by_role("button", name="确认跳转").click()
-    expect(page.get_by_role("button", name="返回原位置")).to_be_visible()
-    page.get_by_role("button", name="返回原位置").click()
-    expect(page.get_by_text("已返回原位置。")).to_be_visible()
+    panel = prepare_qa_preview(page, "返回前的新跳转")
+    panel.get_by_role("button", name="确认跳转", exact=True).click()
+    expect(panel.get_by_role("button", name="返回原位置", exact=True)).to_be_visible()
+    panel.get_by_role("button", name="返回原位置", exact=True).click()
+    expect(panel.get_by_text("已返回原位置。", exact=True)).to_be_visible()
     page.evaluate("window.__popupMockResolveResponses('RETURN_CURRENT_VIDEO_SEGMENT_JUMP')")
     page.wait_for_timeout(50)
-    expect(page.get_by_text("已返回原位置。")).to_be_visible()
+    expect(panel.get_by_text("已返回原位置。", exact=True)).to_be_visible()
     assert len(messages_for(page, "RETURN_CURRENT_VIDEO_SEGMENT_JUMP")) == 2
     assert_clean_page(page)
 
 
 def run_success_raw_response_flow(page):
     page.route("**/*", route_popup)
-    page.goto(f"{POPUP_URL}?rawJumpSuccess=1&rawReturnSuccess=1")
+    page.goto(f"{POPUP_URL}?rawJumpSuccess=1&rawReturnSuccess=1&qaRawVisibleCopy=1")
     expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
-    prepare_segment_preview(page, "成功响应文案")
-    page.get_by_role("button", name="确认跳转").click()
-    expect(page.get_by_text("跳转已完成，可返回原位置。")).to_be_visible()
-    page.get_by_role("button", name="返回原位置").click()
-    expect(page.get_by_text("已返回原位置。")).to_be_visible()
+    panel = prepare_qa_preview(page, "成功响应文案")
+    panel.get_by_role("button", name="确认跳转", exact=True).click()
+    expect(panel.get_by_text("已跳到引用位置，可返回原位置。")).to_be_visible()
+    panel.get_by_role("button", name="返回原位置", exact=True).click()
+    expect(panel.get_by_text("已返回原位置。", exact=True)).to_be_visible()
+    assert_clean_page(page)
+
+
+def run_full_text_qa_terminal_states(page):
+    page.route("**/*", route_popup)
+
+    page.goto(f"{POPUP_URL}?qaUnsupported=1")
+    panel = submit_qa(page, "视频没有讲到的问题")
+    expect(panel.get_by_text("当前视频文本没有足够内容回答这个问题。", exact=True)).to_be_visible()
+    expect(panel.get_by_text("引用片段", exact=True)).to_have_count(0)
+    assert_clean_page(page)
+
+    page.goto(f"{POPUP_URL}?qaContextTooLong=1")
+    panel = submit_qa(page, "请概括完整论证")
+    expect(panel.get_by_text("正文超出所选模型限制", exact=True)).to_be_visible()
+    expect(panel.get_by_text("系统不会截断或分段发送", exact=False)).to_be_visible()
+    expect(panel.locator("textarea")).to_have_value("请概括完整论证")
+    expect(panel.get_by_role("button", name="重新提交", exact=True)).to_be_visible()
+    first_ask = last_message_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT")
+    panel.locator("textarea").fill("这是编辑后的新问题")
+    panel.get_by_role("button", name="重新提交", exact=True).click()
+    expect(panel.get_by_text("正文超出所选模型限制", exact=True)).to_be_visible()
+    retry_ask = last_message_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT")
+    assert retry_ask["params"]["requestId"] != first_ask["params"]["requestId"]
+    assert retry_ask["params"]["turnId"] == first_ask["params"]["turnId"]
+    assert retry_ask["params"]["question"] == "请概括完整论证"
+    expect(panel.locator("textarea")).to_have_value("请概括完整论证")
+    assert_clean_page(page)
+
+    page.goto(f"{POPUP_URL}?qaReject=1")
+    panel = submit_qa(page, "保留这个问题")
+    expect(panel.get_by_text("回答失败，问题已保留", exact=False)).to_be_visible()
+    expect(panel.locator("textarea")).to_have_value("保留这个问题")
+    assert_clean_page(page)
+
+
+def run_full_text_qa_cancel_and_context_change(page):
+    page.route("**/*", route_popup)
+    page.goto(POPUP_URL)
+    expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
+
+    page.evaluate("window.__popupMockDeferNextResponse('ASK_CURRENT_VIDEO_FULL_TEXT')")
+    panel = submit_qa(page, "取消后仍要保留的问题")
+    page.wait_for_function("window.__popupMockPendingResponseCount('ASK_CURRENT_VIDEO_FULL_TEXT') === 1")
+    ask_message = last_message_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT")
+    panel.get_by_role("button", name="取消", exact=True).click()
+    expect(panel.get_by_text("本次回答已取消，问题已保留。", exact=True)).to_be_visible()
+    expect(panel.locator("textarea")).to_have_value("取消后仍要保留的问题")
+    cancel_message = last_message_for(page, "CANCEL_CURRENT_VIDEO_FULL_TEXT_QA")
+    assert cancel_message["params"]["requestId"] == ask_message["params"]["requestId"]
+    assert cancel_message["params"]["turnId"] == ask_message["params"]["turnId"]
+    page.evaluate("window.__popupMockResolveResponses('ASK_CURRENT_VIDEO_FULL_TEXT')")
+    page.wait_for_timeout(50)
+    expect(panel.get_by_text("回答：取消后仍要保留的问题。", exact=False)).to_have_count(0)
+
+    page.evaluate("window.__popupMockDeferNextResponse('ASK_CURRENT_VIDEO_FULL_TEXT')")
+    submit_qa(page, "切换视频前的问题")
+    page.wait_for_function("window.__popupMockPendingResponseCount('ASK_CURRENT_VIDEO_FULL_TEXT') === 1")
+    page.evaluate("window.__popupMockDeferNextResponse('GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE')")
+    page.get_by_role("button", name="重新检测字幕").click()
+    page.wait_for_function("window.__popupMockPendingResponseCount('GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE') === 1")
+    page.evaluate("window.__popupMockSwitchContext()")
+    page.evaluate("window.__popupMockResolveResponses('GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE')")
+    expect(page.get_by_text("切换后的 Popup 视频").first).to_be_visible()
+    page.evaluate("window.__popupMockResolveResponses('ASK_CURRENT_VIDEO_FULL_TEXT')")
+    page.wait_for_timeout(50)
+    expect(page.get_by_text("回答：切换视频前的问题。", exact=False)).to_have_count(0)
+    assert len(messages_for(page, "CANCEL_CURRENT_VIDEO_FULL_TEXT_QA")) >= 2
     assert_clean_page(page)
 
 
@@ -739,7 +818,7 @@ def main():
             knowledge_blocked.close()
 
             search_race, search_race_errors = new_checked_page(browser)
-            run_search_revision_race(search_race)
+            run_full_text_qa_revision_race(search_race)
             assert not search_race_errors, "\n".join(search_race_errors)
             search_race.close()
 
@@ -758,12 +837,22 @@ def main():
             assert not raw_success_errors, "\n".join(raw_success_errors)
             raw_success.close()
 
+            qa_states, qa_states_errors = new_checked_page(browser)
+            run_full_text_qa_terminal_states(qa_states)
+            assert not qa_states_errors, "\n".join(qa_states_errors)
+            qa_states.close()
+
+            qa_cancel, qa_cancel_errors = new_checked_page(browser)
+            run_full_text_qa_cancel_and_context_change(qa_cancel)
+            assert not qa_cancel_errors, "\n".join(qa_cancel_errors)
+            qa_cancel.close()
+
             desktop, desktop_errors = new_checked_page(browser, {"width": 1024, "height": 820})
             run_layout_smoke(desktop)
             assert not desktop_errors, "\n".join(desktop_errors)
             desktop.close()
 
-            print("current-video popup real UI QA passed: combined summary/key-points/highlights, open/reprobe no generation, no-click disabled/unconfigured entry, cache restore and authorization-off/live-disabled prior result, live model-change cancellation and exact-model cache refresh, failed-refresh old-result preservation, exact source-change cancel with late-response rejection, no-text/generating/error/invalid states, 4-8 highlights, preview/confirm/return and replacement rejection, responsive no-overflow/no-console/raw-copy checks")
+            print("current-video popup real UI QA passed: combined summary/key-points/highlights, explicit full-text Q&A with answer-before-citations, unsupported/context-too-long/cancel and late-response rejection, source/video-scope invalidation, preview/confirm/return, responsive no-overflow/no-console/raw-copy checks")
         finally:
             browser.close()
 

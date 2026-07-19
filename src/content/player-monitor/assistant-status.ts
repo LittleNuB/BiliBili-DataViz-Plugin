@@ -24,6 +24,11 @@ import type {
 } from '../../shared/current-video-subtitle-view.ts';
 import type { CurrentVideoRelatedFavoritesResponse } from '../../shared/types/current-video-related-favorites';
 import type {
+  CurrentVideoFullTextQaCitation,
+  CurrentVideoFullTextQaCitationBinding,
+  CurrentVideoFullTextQaResult,
+} from '../../shared/types/current-video-full-text-qa';
+import type {
   SmartFavoriteQaCitedVideo,
   SmartFavoriteQaResponse,
   SmartFavoriteQaSynthesisStatus,
@@ -108,6 +113,8 @@ const PLAYER_ENDPOINT_PATTERN = new RegExp(
   'gi',
 );
 const ENGINEERING_VISIBLE_TERM_PATTERN = /\b(?:fallback|transcript|confidence)\b/gi;
+const RAW_FIELD_VALUE_PATTERN = /\b(?:subtitle_url|sourceHash|segmentIds?|candidateId|nodeId|sourceId|BVID|CID)\s*[:=]\s*[^\s,;，；。！？!?]+/gi;
+const BILIBILI_VIDEO_ID_PATTERN = /\bBV[0-9A-Za-z]{10}\b/gi;
 const PAGE_BODY_TEXT_PATTERN = new RegExp(['正文', '文本'].join(''), 'g');
 
 const CSS = `
@@ -552,6 +559,7 @@ const CSS = `
   color: #f1f5ff;
   font-size: 12px;
   line-height: 1.55;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 #${CARD_ID} .bdc-assistant-citation-title {
@@ -776,6 +784,18 @@ interface AssistantState {
   segmentReturnAvailable: boolean;
   segmentReturnLoading: boolean;
   segmentTimestampRequestId: number;
+  fullTextQaResult: CurrentVideoFullTextQaResult | null;
+  fullTextQaContextKey: string;
+  fullTextQaLoading: boolean;
+  fullTextQaError: string | null;
+  fullTextQaRequestId: number;
+  fullTextQaActiveRequest: InPageFullTextQaRequest | null;
+  fullTextQaPreviewCitationId: string | null;
+  fullTextQaJumpStatus: string | null;
+  fullTextQaJumpLoading: boolean;
+  fullTextQaReturnAvailable: boolean;
+  fullTextQaReturnLoading: boolean;
+  fullTextQaTimestampRequestId: number;
   relatedFavorites: CurrentVideoRelatedFavoritesResponse | null;
   relatedFavoritesContextKey: string;
   relatedFavoritesLoading: boolean;
@@ -814,6 +834,16 @@ interface InPageSummaryHighlightsRequest {
   title: string;
   textSize: CurrentVideoSummaryHighlightsResult['textSize'];
   previousReady: CurrentVideoSummaryHighlightsResult | null;
+}
+
+interface InPageFullTextQaRequest {
+  requestId: string;
+  turnId: string;
+  params: Record<string, unknown>;
+  contextKey: string;
+  selectionRevision: number;
+  selectedSourceIdentityKey: string | null;
+  question: string;
 }
 
 const primaryTextSelections = new Map<string, string>();
@@ -860,6 +890,18 @@ const assistantState: AssistantState = {
   segmentReturnAvailable: false,
   segmentReturnLoading: false,
   segmentTimestampRequestId: 0,
+  fullTextQaResult: null,
+  fullTextQaContextKey: '',
+  fullTextQaLoading: false,
+  fullTextQaError: null,
+  fullTextQaRequestId: 0,
+  fullTextQaActiveRequest: null,
+  fullTextQaPreviewCitationId: null,
+  fullTextQaJumpStatus: null,
+  fullTextQaJumpLoading: false,
+  fullTextQaReturnAvailable: false,
+  fullTextQaReturnLoading: false,
+  fullTextQaTimestampRequestId: 0,
   relatedFavorites: null,
   relatedFavoritesContextKey: '',
   relatedFavoritesLoading: false,
@@ -913,6 +955,10 @@ function updateAssistantContext(context: CurrentVideoContextResult): void {
   const nextSubtitleKey = subtitleContextKeyForContext(context);
   const subtitleKeyChanged = previousSubtitleKey !== nextSubtitleKey;
   if (assistantState.contextKey !== nextKey) {
+    const activeQaRequest = assistantState.fullTextQaActiveRequest;
+    if (activeQaRequest) {
+      void sendRuntimeRequest('CANCEL_CURRENT_VIDEO_FULL_TEXT_QA', activeQaRequest.params).catch(() => undefined);
+    }
     invalidateSegmentTimestampRequests();
     assistantState.summary = null;
     assistantState.summaryContextKey = '';
@@ -936,6 +982,18 @@ function updateAssistantContext(context: CurrentVideoContextResult): void {
     assistantState.segmentJumpLoading = false;
     assistantState.segmentReturnAvailable = false;
     assistantState.segmentReturnLoading = false;
+    assistantState.fullTextQaRequestId += 1;
+    assistantState.fullTextQaActiveRequest = null;
+    assistantState.fullTextQaResult = null;
+    assistantState.fullTextQaContextKey = '';
+    assistantState.fullTextQaLoading = false;
+    assistantState.fullTextQaError = null;
+    assistantState.fullTextQaPreviewCitationId = null;
+    assistantState.fullTextQaJumpStatus = null;
+    assistantState.fullTextQaJumpLoading = false;
+    assistantState.fullTextQaReturnAvailable = false;
+    assistantState.fullTextQaReturnLoading = false;
+    assistantState.fullTextQaTimestampRequestId += 1;
     assistantState.relatedFavorites = null;
     assistantState.relatedFavoritesContextKey = '';
     assistantState.relatedFavoritesError = null;
@@ -1777,7 +1835,7 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
     block,
     'div',
     'bdc-assistant-muted',
-    '问这个视频，或描述想跳到的片段。助手会先回答，再列出引用片段和手动跳转操作。',
+    '提交后会用当前分 P 的完整主要文本回答；先给直接答案，再列出可核对和跳转的引用片段。',
   );
 
   const primaryTextBlockReason = primaryTextSubmissionBlockMessage(buildPrimaryTextStateForContext(context));
@@ -1787,31 +1845,38 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
 
   const input = document.createElement('textarea');
   input.className = 'bdc-assistant-search-input';
-  input.rows = 2;
-  input.maxLength = 120;
-  input.placeholder = '问这个视频，或描述想跳到的片段';
+  input.rows = 3;
+  input.maxLength = 500;
+  input.placeholder = '向当前视频提问';
   input.value = assistantState.segmentQuery;
-  input.disabled = Boolean(primaryTextBlockReason);
-  input.setAttribute('aria-label', '问这个视频，或描述想跳到的片段');
+  input.disabled = Boolean(primaryTextBlockReason) || assistantState.fullTextQaLoading;
+  input.setAttribute('aria-label', '向当前视频提问');
   input.addEventListener('input', () => {
     assistantState.segmentQuery = input.value;
   });
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      void searchCurrentVideoSegmentsFromPage();
+      void askCurrentVideoFullTextFromPage();
     }
   });
   form.appendChild(input);
 
   form.appendChild(button(
-    assistantState.segmentLoading ? '回答中...' : '提问',
+    assistantState.fullTextQaLoading ? '回答中...' : '提问',
     'bdc-assistant-button bdc-assistant-button-primary',
     () => {
-      void searchCurrentVideoSegmentsFromPage();
+      void askCurrentVideoFullTextFromPage();
     },
-    assistantState.segmentLoading || !context.bvid || Boolean(primaryTextBlockReason),
+    assistantState.fullTextQaLoading || !context.bvid || Boolean(primaryTextBlockReason),
   ));
+  if (assistantState.fullTextQaLoading) {
+    form.appendChild(button(
+      '取消',
+      'bdc-assistant-button bdc-assistant-button-quiet',
+      cancelCurrentVideoFullTextQaFromPage,
+    ));
+  }
   block.appendChild(form);
 
   if (primaryTextBlockReason) {
@@ -1821,30 +1886,30 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
       'bdc-assistant-subtitle-detail',
       primaryTextBlockReason,
     );
-  } else if (!context.transcriptEvidence?.active) {
+  } else {
     appendText(
       block,
       'div',
       'bdc-assistant-subtitle-detail',
-      '提示：完整回答通常需要字幕正文；没有当前视频本地证据时，不会猜答案或时间点。',
+      fullTextQaSubmissionNotice(context),
     );
   }
 
-  if (assistantState.segmentError) {
-    const error = appendText(block, 'div', 'bdc-assistant-retrieval-status', assistantState.segmentError);
+  if (assistantState.fullTextQaError) {
+    const error = appendText(block, 'div', 'bdc-assistant-retrieval-status', assistantState.fullTextQaError);
     error.style.color = '#ffcf8a';
   }
 
-  if (assistantState.segmentLoading) {
-    const loading = appendText(block, 'div', 'bdc-assistant-retrieval-status', '正在基于当前视频证据回答...');
+  if (assistantState.fullTextQaLoading) {
+    const loading = appendText(block, 'div', 'bdc-assistant-retrieval-status', '正在核对全片内容...');
     loading.style.color = '#c8e6ff';
   }
 
   if (
-    assistantState.segmentResult
-    && assistantState.segmentContextKey === assistantState.contextKey
+    assistantState.fullTextQaResult
+    && assistantState.fullTextQaContextKey === assistantState.contextKey
   ) {
-    appendSegmentRetrievalResult(block, assistantState.segmentResult, context);
+    appendFullTextQaResult(block, assistantState.fullTextQaResult);
   }
 
   parent.appendChild(block);
@@ -2021,6 +2086,160 @@ function appendRelatedFavoritesSettingsLink(parent: HTMLElement, qa: SmartFavori
   if (needsAiSettingsLink(qa.synthesis?.status ?? '')) {
     parent.appendChild(dashboardLink('前往设置', '#settings'));
   }
+}
+
+function appendFullTextQaResult(
+  parent: HTMLElement,
+  result: CurrentVideoFullTextQaResult,
+): void {
+  const answerCard = document.createElement('div');
+  answerCard.className = 'bdc-assistant-answer-card';
+  answerCard.style.borderColor = fullTextQaStatusColor(result.status);
+
+  const head = document.createElement('div');
+  head.className = 'bdc-assistant-answer-head';
+  head.style.color = fullTextQaStatusColor(result.status);
+  appendText(
+    head,
+    'span',
+    '',
+    `${result.status === 'ready' || result.status === 'unsupported' ? '回答' : '状态'}：${fullTextQaStatusLabel(result.status)}`,
+  );
+  if (result.status === 'ready') {
+    appendText(head, 'span', '', `引用 ${result.citations.length} 条`);
+  }
+  answerCard.appendChild(head);
+
+  appendText(
+    answerCard,
+    'div',
+    'bdc-assistant-answer-text',
+    safeVisibleText(result.answer || result.message),
+  );
+  if (result.sourceLabel) {
+    appendText(
+      answerCard,
+      'div',
+      'bdc-assistant-subtitle-detail',
+      safeVisibleText(fullTextQaSourceLine(result)),
+    );
+  }
+  parent.appendChild(answerCard);
+
+  if (result.citations.length > 0) {
+    appendText(parent, 'div', 'bdc-assistant-citation-title', '引用片段');
+    const list = document.createElement('div');
+    list.className = 'bdc-assistant-candidate-list';
+    for (const [index, citation] of result.citations.slice(0, 3).entries()) {
+      list.appendChild(fullTextQaCitationCard(citation, index));
+    }
+    parent.appendChild(list);
+  }
+
+  if (assistantState.fullTextQaJumpStatus) {
+    appendText(
+      parent,
+      'div',
+      'bdc-assistant-retrieval-status',
+      safeVisibleText(assistantState.fullTextQaJumpStatus),
+    );
+  }
+  if (assistantState.fullTextQaReturnAvailable) {
+    parent.appendChild(button(
+      assistantState.fullTextQaReturnLoading ? '正在返回...' : '返回原位置',
+      'bdc-assistant-button bdc-assistant-button-quiet',
+      () => { void returnCurrentVideoFullTextQaJumpFromPage(); },
+      assistantState.fullTextQaReturnLoading || assistantState.fullTextQaJumpLoading,
+    ));
+  }
+
+  if (result.status !== 'ready' && result.status !== 'unsupported') {
+    if (result.canRetry) {
+      parent.appendChild(button(
+        '重试本题',
+        'bdc-assistant-button bdc-assistant-button-quiet',
+        () => { void askCurrentVideoFullTextFromPage(result.turnId, result.question); },
+        assistantState.fullTextQaLoading,
+      ));
+    }
+    if (result.status === 'disabled' || result.status === 'not_configured') {
+      parent.appendChild(dashboardLink('前往设置', '#settings'));
+    }
+  }
+}
+
+function fullTextQaCitationCard(
+  citation: CurrentVideoFullTextQaCitation,
+  index: number,
+): HTMLElement {
+  const primaryTextBlockReason = assistantState.context?.kind === 'video'
+    ? primaryTextSubmissionBlockMessage(buildPrimaryTextStateForContext(assistantState.context))
+    : '当前没有可用的视频上下文。';
+  const card = document.createElement('article');
+  card.className = 'bdc-assistant-candidate-card';
+
+  const head = document.createElement('div');
+  head.className = 'bdc-assistant-candidate-head';
+  appendText(head, 'div', 'bdc-assistant-candidate-title', `引用 ${index + 1} · ${citation.timeRangeLabel}`);
+  appendText(head, 'div', 'bdc-assistant-candidate-strength', citation.sourceLabel);
+  card.appendChild(head);
+  appendText(card, 'div', 'bdc-assistant-candidate-evidence', safeVisibleText(citation.evidenceText));
+
+  const previewed = assistantState.fullTextQaPreviewCitationId === citation.id;
+  const actions = document.createElement('div');
+  actions.className = 'bdc-assistant-candidate-actions';
+  actions.appendChild(button(
+    previewed ? '已预览' : '预览跳转',
+    'bdc-assistant-button bdc-assistant-button-quiet',
+    () => {
+      assistantState.fullTextQaPreviewCitationId = citation.id;
+      assistantState.fullTextQaJumpStatus = `确认跳转前预览：${citation.timeRangeLabel}；确认后才会改变播放位置。`;
+      renderAssistantShell();
+    },
+    Boolean(primaryTextBlockReason)
+      || previewed
+      || assistantState.fullTextQaJumpLoading
+      || assistantState.fullTextQaReturnLoading,
+  ));
+  if (previewed) {
+    actions.appendChild(button(
+      assistantState.fullTextQaJumpLoading ? '正在跳转...' : '确认跳转',
+      'bdc-assistant-button bdc-assistant-button-primary',
+      () => { void confirmCurrentVideoFullTextQaJumpFromPage(citation.binding); },
+      Boolean(primaryTextBlockReason)
+        || assistantState.fullTextQaJumpLoading
+        || assistantState.fullTextQaReturnLoading,
+    ));
+  }
+  card.appendChild(actions);
+  return card;
+}
+
+function fullTextQaStatusLabel(status: CurrentVideoFullTextQaResult['status']): string {
+  switch (status) {
+    case 'ready': return '有证据';
+    case 'unsupported': return '证据不足';
+    case 'context_too_long': return '正文过长';
+    case 'cancelled': return '已取消';
+    case 'disabled': return '功能未开启';
+    case 'not_configured': return '服务未配置';
+    case 'no_context': return '未识别视频';
+    case 'no_text': return '主要文本不可用';
+    case 'invalid_output': return '结果未通过校验';
+    case 'error':
+    default: return '回答失败';
+  }
+}
+
+function fullTextQaStatusColor(status: CurrentVideoFullTextQaResult['status']): string {
+  if (status === 'ready') return '#9be7b0';
+  if (status === 'unsupported') return '#ffd27a';
+  return '#ffcf8a';
+}
+
+function fullTextQaSourceLine(result: CurrentVideoFullTextQaResult): string {
+  const part = result.partTitle ? ` · ${result.partTitle}` : '';
+  return `来源：《${result.title}》${part} · ${result.sourceLabel}`;
 }
 
 function appendSegmentRetrievalResult(
@@ -3202,6 +3421,208 @@ async function loadCurrentVideoRelatedFavoritesFromPage(force: boolean): Promise
   }
 }
 
+async function askCurrentVideoFullTextFromPage(
+  retryTurnId?: string,
+  retryQuestion?: string,
+): Promise<void> {
+  if (assistantState.fullTextQaLoading) return;
+  const question = (retryQuestion ?? assistantState.segmentQuery).replace(/\s+/g, ' ').trim();
+  if (!question) {
+    assistantState.fullTextQaError = '请输入一个关于当前视频的问题。';
+    renderAssistantShell();
+    return;
+  }
+  if (assistantState.context?.kind !== 'video') {
+    assistantState.fullTextQaError = '当前没有可用视频上下文，请在 B 站视频页内使用。';
+    renderAssistantShell();
+    return;
+  }
+  const primaryTextBlockReason = primaryTextSubmissionBlockMessage(
+    buildPrimaryTextStateForContext(assistantState.context),
+  );
+  if (primaryTextBlockReason) {
+    assistantState.fullTextQaError = primaryTextBlockReason;
+    renderAssistantShell();
+    return;
+  }
+
+  const operationId = assistantState.fullTextQaRequestId + 1;
+  const contextKey = assistantState.contextKey;
+  const requestId = createCurrentVideoFullTextRequestId('cvqa-page');
+  const turnId = retryTurnId?.trim() || createCurrentVideoFullTextRequestId('cvqa-turn');
+  if (retryQuestion !== undefined) assistantState.segmentQuery = question;
+  const params = {
+    ...currentPrimaryTextRequestParams(),
+    requestId,
+    turnId,
+    question,
+  };
+  const activeRequest: InPageFullTextQaRequest = {
+    requestId,
+    turnId,
+    params,
+    contextKey,
+    selectionRevision: primaryTextSelectionsRevision,
+    selectedSourceIdentityKey: selectedSourceIdentityKeyFromParams(params),
+    question,
+  };
+  assistantState.fullTextQaRequestId = operationId;
+  assistantState.fullTextQaActiveRequest = activeRequest;
+  assistantState.fullTextQaLoading = true;
+  assistantState.fullTextQaError = null;
+  assistantState.fullTextQaResult = null;
+  assistantState.fullTextQaContextKey = contextKey;
+  assistantState.fullTextQaPreviewCitationId = null;
+  assistantState.fullTextQaJumpStatus = null;
+  assistantState.fullTextQaJumpLoading = false;
+  assistantState.fullTextQaReturnAvailable = false;
+  assistantState.fullTextQaReturnLoading = false;
+  assistantState.fullTextQaTimestampRequestId += 1;
+  renderAssistantShell();
+
+  try {
+    const result = await sendRuntimeRequest<CurrentVideoFullTextQaResult>(
+      'ASK_CURRENT_VIDEO_FULL_TEXT',
+      params,
+    );
+    if (
+      assistantState.fullTextQaRequestId !== operationId
+      || !fullTextQaActiveRequestStillMatchesCurrent(activeRequest)
+      || result.requestId !== requestId
+      || result.turnId !== turnId
+    ) return;
+    assistantState.fullTextQaResult = result;
+    assistantState.fullTextQaContextKey = contextKey;
+    assistantState.fullTextQaError = null;
+  } catch {
+    if (
+      assistantState.fullTextQaRequestId !== operationId
+      || !fullTextQaActiveRequestStillMatchesCurrent(activeRequest)
+    ) return;
+    assistantState.fullTextQaError = '回答失败，问题已保留。请确认当前视频页和 AI 设置后重试。';
+  } finally {
+    if (assistantState.fullTextQaActiveRequest?.requestId === requestId) {
+      assistantState.fullTextQaActiveRequest = null;
+      assistantState.fullTextQaLoading = false;
+      renderAssistantShell();
+    }
+  }
+}
+
+function cancelCurrentVideoFullTextQaFromPage(): void {
+  const activeRequest = assistantState.fullTextQaActiveRequest;
+  if (!activeRequest) return;
+  assistantState.fullTextQaActiveRequest = null;
+  assistantState.fullTextQaRequestId += 1;
+  assistantState.fullTextQaLoading = false;
+  assistantState.fullTextQaResult = null;
+  assistantState.fullTextQaContextKey = assistantState.contextKey;
+  assistantState.fullTextQaError = '本次回答已取消，问题已保留。';
+  assistantState.fullTextQaPreviewCitationId = null;
+  assistantState.fullTextQaJumpStatus = null;
+  assistantState.fullTextQaReturnAvailable = false;
+  assistantState.fullTextQaTimestampRequestId += 1;
+  renderAssistantShell();
+  void sendRuntimeRequest('CANCEL_CURRENT_VIDEO_FULL_TEXT_QA', activeRequest.params).catch(() => undefined);
+}
+
+async function confirmCurrentVideoFullTextQaJumpFromPage(
+  binding: CurrentVideoFullTextQaCitationBinding,
+): Promise<void> {
+  if (
+    assistantState.fullTextQaJumpLoading
+    || assistantState.fullTextQaReturnLoading
+    || assistantState.context?.kind !== 'video'
+  ) return;
+  const primaryTextBlockReason = primaryTextSubmissionBlockMessage(
+    buildPrimaryTextStateForContext(assistantState.context),
+  );
+  if (primaryTextBlockReason) {
+    assistantState.fullTextQaJumpStatus = primaryTextBlockReason;
+    assistantState.fullTextQaReturnAvailable = false;
+    renderAssistantShell();
+    return;
+  }
+  const result = assistantState.fullTextQaContextKey === assistantState.contextKey
+    ? assistantState.fullTextQaResult
+    : null;
+  const citation = result?.citations.find(item => fullTextQaBindingsEqual(item.binding, binding));
+  if (!citation || assistantState.fullTextQaPreviewCitationId !== citation.id) {
+    assistantState.fullTextQaPreviewCitationId = null;
+    assistantState.fullTextQaJumpStatus = '引用结果已变化，请重新预览后再跳转。';
+    renderAssistantShell();
+    return;
+  }
+
+  const operationId = assistantState.fullTextQaTimestampRequestId + 1;
+  const contextKey = assistantState.contextKey;
+  assistantState.fullTextQaTimestampRequestId = operationId;
+  assistantState.fullTextQaJumpLoading = true;
+  assistantState.fullTextQaReturnLoading = false;
+  assistantState.fullTextQaReturnAvailable = false;
+  assistantState.fullTextQaJumpStatus = '正在确认跳转...';
+  renderAssistantShell();
+
+  try {
+    const response = await sendRuntimeRequest<CurrentVideoTimestampJumpResponse>(
+      'REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP',
+      {
+        ...binding,
+        confirmed: true,
+        ...currentPrimaryTextRequestParams(),
+      },
+    );
+    if (
+      assistantState.fullTextQaTimestampRequestId !== operationId
+      || assistantState.contextKey !== contextKey
+    ) return;
+    assistantState.fullTextQaJumpStatus = response.ok
+      ? '已跳到引用位置，可返回原位置。'
+      : '引用结果或页面状态已变化，请重新提交问题后再试。';
+    assistantState.fullTextQaReturnAvailable = response.ok && response.returnPointSeconds !== null;
+    assistantState.fullTextQaPreviewCitationId = null;
+  } catch {
+    if (assistantState.fullTextQaTimestampRequestId !== operationId) return;
+    assistantState.fullTextQaJumpStatus = '引用跳转失败，请确认当前视频页仍然打开后重试。';
+    assistantState.fullTextQaReturnAvailable = false;
+  } finally {
+    if (assistantState.fullTextQaTimestampRequestId === operationId) {
+      assistantState.fullTextQaJumpLoading = false;
+      renderAssistantShell();
+    }
+  }
+}
+
+async function returnCurrentVideoFullTextQaJumpFromPage(): Promise<void> {
+  if (assistantState.fullTextQaReturnLoading || assistantState.fullTextQaJumpLoading) return;
+  const operationId = assistantState.fullTextQaTimestampRequestId + 1;
+  const contextKey = assistantState.contextKey;
+  assistantState.fullTextQaTimestampRequestId = operationId;
+  assistantState.fullTextQaReturnLoading = true;
+  assistantState.fullTextQaJumpStatus = '正在返回原位置...';
+  renderAssistantShell();
+  try {
+    const response = await sendRuntimeRequest<CurrentVideoTimestampReturnResponse>(
+      'RETURN_CURRENT_VIDEO_SEGMENT_JUMP',
+      currentPrimaryTextRequestParams(),
+    );
+    if (
+      assistantState.fullTextQaTimestampRequestId !== operationId
+      || assistantState.contextKey !== contextKey
+    ) return;
+    assistantState.fullTextQaJumpStatus = timestampReturnStatusText(response);
+    if (response.ok) assistantState.fullTextQaReturnAvailable = false;
+  } catch {
+    if (assistantState.fullTextQaTimestampRequestId !== operationId) return;
+    assistantState.fullTextQaJumpStatus = '返回失败，请确认当前视频页仍然打开后重试。';
+  } finally {
+    if (assistantState.fullTextQaTimestampRequestId === operationId) {
+      assistantState.fullTextQaReturnLoading = false;
+      renderAssistantShell();
+    }
+  }
+}
+
 async function searchCurrentVideoSegmentsFromPage(): Promise<void> {
   if (assistantState.segmentLoading) return;
 
@@ -3989,6 +4410,7 @@ function ensurePrimaryTextSelectionStorageListener(): void {
 
     if (configChanged) {
       invalidateSummaryHighlightsForLiveConfigChange(changes[USER_CONFIG_STORAGE_KEY]?.newValue);
+      invalidateFullTextQaForLiveConfigChange(changes[USER_CONFIG_STORAGE_KEY]?.newValue);
       if (assistantState.context) {
         renderAssistantShell();
         if (assistantState.expanded) void restoreCurrentVideoSummaryHighlightsFromPage();
@@ -4006,6 +4428,10 @@ function replacePrimaryTextSelections(selections: Record<string, string>): void 
 }
 
 function invalidatePrimaryTextDependentAssistantState(): void {
+  const activeQaRequest = assistantState.fullTextQaActiveRequest;
+  if (activeQaRequest) {
+    void sendRuntimeRequest('CANCEL_CURRENT_VIDEO_FULL_TEXT_QA', activeQaRequest.params).catch(() => undefined);
+  }
   assistantState.summaryRequestId += 1;
   if (!assistantState.summaryActiveRequest) {
     assistantState.summaryLoading = false;
@@ -4038,6 +4464,19 @@ function invalidatePrimaryTextDependentAssistantState(): void {
   assistantState.segmentJumpLoading = false;
   assistantState.segmentReturnAvailable = false;
   assistantState.segmentReturnLoading = false;
+
+  assistantState.fullTextQaRequestId += 1;
+  assistantState.fullTextQaActiveRequest = null;
+  assistantState.fullTextQaResult = null;
+  assistantState.fullTextQaContextKey = '';
+  assistantState.fullTextQaLoading = false;
+  assistantState.fullTextQaError = null;
+  assistantState.fullTextQaPreviewCitationId = null;
+  assistantState.fullTextQaJumpStatus = null;
+  assistantState.fullTextQaJumpLoading = false;
+  assistantState.fullTextQaReturnAvailable = false;
+  assistantState.fullTextQaReturnLoading = false;
+  assistantState.fullTextQaTimestampRequestId += 1;
 
   assistantState.subtitleRequestId += 1;
   assistantState.subtitleRefreshing = false;
@@ -4214,6 +4653,55 @@ function summaryActiveRequestStillMatchesCurrent(
     );
 }
 
+function invalidateFullTextQaForLiveConfigChange(userConfig: unknown): void {
+  const activeRequest = assistantState.fullTextQaActiveRequest;
+  if (!activeRequest) return;
+  assistantState.fullTextQaActiveRequest = null;
+  assistantState.fullTextQaRequestId += 1;
+  assistantState.fullTextQaLoading = false;
+  assistantState.fullTextQaResult = null;
+  assistantState.fullTextQaContextKey = assistantState.contextKey;
+  assistantState.fullTextQaPreviewCitationId = null;
+  assistantState.fullTextQaJumpStatus = null;
+  assistantState.fullTextQaReturnAvailable = false;
+  assistantState.fullTextQaTimestampRequestId += 1;
+  const gate = currentVideoSummaryGenerationGate(userConfig);
+  assistantState.fullTextQaError = gate.enabled && gate.configured
+    ? 'AI 设置已变化，本次回答已取消，问题已保留。'
+    : '当前视频 AI 助手已关闭或配置不完整，本次回答已取消，问题已保留。';
+  void sendRuntimeRequest('CANCEL_CURRENT_VIDEO_FULL_TEXT_QA', activeRequest.params).catch(() => undefined);
+}
+
+function fullTextQaActiveRequestStillMatchesCurrent(
+  activeRequest: InPageFullTextQaRequest,
+): boolean {
+  return activeRequest.contextKey === assistantState.contextKey
+    && activeRequest.selectionRevision === primaryTextSelectionsRevision
+    && activeRequest.selectedSourceIdentityKey === selectedSourceIdentityKeyFromParams(
+      currentPrimaryTextRequestParams(),
+    );
+}
+
+function fullTextQaBindingsEqual(
+  left: CurrentVideoFullTextQaCitationBinding,
+  right: CurrentVideoFullTextQaCitationBinding,
+): boolean {
+  return left.requestId === right.requestId
+    && left.turnId === right.turnId
+    && left.citationId === right.citationId;
+}
+
+function fullTextQaSubmissionNotice(context: CurrentVideoContext): string {
+  const lineCount = context.transcriptEvidence?.segmentCount ?? 0;
+  const bytes = context.transcriptEvidence?.serializedBytes ?? 0;
+  const size = bytes > 0 ? `${Math.max(1, Math.ceil(bytes / 1024))} KB` : '大小待读取';
+  return [
+    `本次提交会发送当前分 P 的完整主要文本（约 ${lineCount} 行，${size}）。`,
+    '等待时间和费用由你配置的 AI 服务决定。',
+    '提交即开始；系统不会静默截断或改为片段检索。',
+  ].join(' ');
+}
+
 function selectedSourceIdentityKeyFromParams(params: Record<string, unknown>): string | null {
   const value = params.selectedSourceIdentityKey;
   return typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -4355,6 +4843,9 @@ function timestampReturnStatusText(response: CurrentVideoTimestampReturnResponse
 
 function safeVisibleText(value: string): string {
   return value
+    .replace(/document is not defined/gi, '运行状态不可用')
+    .replace(RAW_FIELD_VALUE_PATTERN, '内部信息已隐藏')
+    .replace(BILIBILI_VIDEO_ID_PATTERN, '视频编号已隐藏')
     .replace(CANDIDATE_ID_PATTERN, '候选片段')
     .replace(TRANSCRIPT_ID_PATTERN, '字幕片段')
     .replace(NODE_ID_PATTERN, '知识节点')
