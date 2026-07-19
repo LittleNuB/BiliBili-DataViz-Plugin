@@ -582,6 +582,7 @@ interface AssistantState {
   segmentJumpLoading: boolean;
   segmentReturnAvailable: boolean;
   segmentReturnLoading: boolean;
+  segmentTimestampRequestId: number;
   relatedFavorites: CurrentVideoRelatedFavoritesResponse | null;
   relatedFavoritesContextKey: string;
   relatedFavoritesLoading: boolean;
@@ -629,6 +630,7 @@ const assistantState: AssistantState = {
   segmentJumpLoading: false,
   segmentReturnAvailable: false,
   segmentReturnLoading: false,
+  segmentTimestampRequestId: 0,
   relatedFavorites: null,
   relatedFavoritesContextKey: '',
   relatedFavoritesLoading: false,
@@ -653,6 +655,7 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
 function updateAssistantContext(context: CurrentVideoContextResult): void {
   const nextKey = contextStateKey(context);
   if (assistantState.contextKey !== nextKey) {
+    invalidateSegmentTimestampRequests();
     assistantState.summary = null;
     assistantState.summaryContextKey = '';
     assistantState.summaryError = null;
@@ -787,7 +790,7 @@ function renderExpandedPanel(root: HTMLElement): void {
 
 function appendVideoIdentity(parent: HTMLElement, context: CurrentVideoContext): void {
   const block = section('视频与文字来源', 'bdc-assistant-section-auxiliary');
-  appendText(block, 'div', 'bdc-assistant-video-title', context.title ?? context.bvid);
+  appendText(block, 'div', 'bdc-assistant-video-title', context.title?.trim() || '当前视频');
 
   const pills = document.createElement('div');
   pills.className = 'bdc-assistant-pills';
@@ -1546,6 +1549,7 @@ function appendSegmentJumpControls(
       : 'bdc-assistant-button bdc-assistant-button-quiet',
     () => {
       if (!preview.canJump) return;
+      invalidateSegmentTimestampRequests();
       assistantState.segmentPreviewCandidateId = selected ? null : candidate.id;
       assistantState.segmentJumpStatus = selected ? assistantState.segmentJumpStatus : null;
       renderAssistantShell();
@@ -1619,6 +1623,7 @@ function segmentJumpPreviewPanel(
     '取消',
     'bdc-assistant-button bdc-assistant-button-quiet',
     () => {
+      invalidateSegmentTimestampRequests();
       assistantState.segmentPreviewCandidateId = null;
       renderAssistantShell();
     },
@@ -1922,6 +1927,7 @@ async function searchCurrentVideoSegmentsFromPage(): Promise<void> {
   const contextKey = assistantState.contextKey;
   const returnAvailable = assistantState.segmentReturnAvailable;
   const returnStatus = returnAvailable ? assistantState.segmentJumpStatus : null;
+  invalidateSegmentTimestampRequests();
   assistantState.segmentRequestId = requestId;
   assistantState.segmentLoading = true;
   assistantState.segmentError = null;
@@ -1957,10 +1963,9 @@ async function confirmCurrentVideoSegmentJumpFromPage(
   candidate: CurrentVideoSegmentRetrievalCandidate,
   result: CurrentVideoSegmentRetrievalResult,
 ): Promise<void> {
-  if (assistantState.segmentJumpLoading) return;
-
   const preview = candidate.jumpPreview;
   if (!preview.canJump) {
+    invalidateSegmentTimestampRequests();
     assistantState.segmentJumpStatus = safeVisibleText(preview.message);
     assistantState.segmentReturnAvailable = false;
     renderAssistantShell();
@@ -1971,6 +1976,7 @@ async function confirmCurrentVideoSegmentJumpFromPage(
       buildPrimaryTextStateForContext(assistantState.context),
     );
     if (primaryTextBlockReason) {
+      invalidateSegmentTimestampRequests();
       assistantState.segmentJumpStatus = primaryTextBlockReason;
       assistantState.segmentReturnAvailable = false;
       renderAssistantShell();
@@ -1978,7 +1984,9 @@ async function confirmCurrentVideoSegmentJumpFromPage(
     }
   }
 
+  const operation = beginSegmentTimestampOperation();
   assistantState.segmentJumpLoading = true;
+  assistantState.segmentReturnLoading = false;
   assistantState.segmentJumpStatus = '正在确认跳转...';
   assistantState.segmentReturnAvailable = false;
   renderAssistantShell();
@@ -1993,24 +2001,28 @@ async function confirmCurrentVideoSegmentJumpFromPage(
         ...currentPrimaryTextRequestParams(),
       },
     );
+    if (!segmentTimestampOperationIsCurrent(operation)) return;
     assistantState.segmentJumpStatus = timestampJumpStatusText(response);
     assistantState.segmentReturnAvailable = response.ok && response.returnPointSeconds !== null;
     if (response.ok) {
       assistantState.segmentPreviewCandidateId = null;
     }
   } catch {
+    if (!segmentTimestampOperationIsCurrent(operation)) return;
     assistantState.segmentJumpStatus = '跳转失败：请确认当前 B 站视频页仍然打开，并稍后重试。';
     assistantState.segmentReturnAvailable = false;
   } finally {
-    assistantState.segmentJumpLoading = false;
-    renderAssistantShell();
+    if (segmentTimestampOperationIsCurrent(operation)) {
+      assistantState.segmentJumpLoading = false;
+      renderAssistantShell();
+    }
   }
 }
 
 async function returnCurrentVideoSegmentJumpFromPage(): Promise<void> {
-  if (assistantState.segmentReturnLoading) return;
-
+  const operation = beginSegmentTimestampOperation();
   assistantState.segmentReturnLoading = true;
+  assistantState.segmentJumpLoading = false;
   assistantState.segmentJumpStatus = '正在返回原位置...';
   renderAssistantShell();
 
@@ -2018,15 +2030,19 @@ async function returnCurrentVideoSegmentJumpFromPage(): Promise<void> {
     const response = await sendRuntimeRequest<CurrentVideoTimestampReturnResponse>(
       'RETURN_CURRENT_VIDEO_SEGMENT_JUMP',
     );
+    if (!segmentTimestampOperationIsCurrent(operation)) return;
     assistantState.segmentJumpStatus = timestampReturnStatusText(response);
     if (response.ok) {
       assistantState.segmentReturnAvailable = false;
     }
   } catch {
+    if (!segmentTimestampOperationIsCurrent(operation)) return;
     assistantState.segmentJumpStatus = '返回失败：请确认当前 B 站视频页仍然打开，并稍后重试。';
   } finally {
-    assistantState.segmentReturnLoading = false;
-    renderAssistantShell();
+    if (segmentTimestampOperationIsCurrent(operation)) {
+      assistantState.segmentReturnLoading = false;
+      renderAssistantShell();
+    }
   }
 }
 
@@ -2474,6 +2490,7 @@ function invalidatePrimaryTextDependentAssistantState(): void {
   assistantState.knowledgeError = null;
 
   assistantState.segmentRequestId += 1;
+  invalidateSegmentTimestampRequests();
   assistantState.segmentResult = null;
   assistantState.segmentContextKey = '';
   assistantState.segmentLoading = false;
@@ -2488,6 +2505,34 @@ function invalidatePrimaryTextDependentAssistantState(): void {
   assistantState.subtitleRefreshing = false;
   assistantState.subtitleStatus = null;
   assistantState.primaryTextStatus = null;
+}
+
+interface SegmentTimestampOperationSnapshot {
+  requestId: number;
+  contextKey: string;
+  selectionRevision: number;
+}
+
+function beginSegmentTimestampOperation(): SegmentTimestampOperationSnapshot {
+  const requestId = assistantState.segmentTimestampRequestId + 1;
+  assistantState.segmentTimestampRequestId = requestId;
+  return {
+    requestId,
+    contextKey: assistantState.contextKey,
+    selectionRevision: primaryTextSelectionsRevision,
+  };
+}
+
+function invalidateSegmentTimestampRequests(): void {
+  assistantState.segmentTimestampRequestId += 1;
+}
+
+function segmentTimestampOperationIsCurrent(
+  operation: SegmentTimestampOperationSnapshot,
+): boolean {
+  return assistantState.segmentTimestampRequestId === operation.requestId
+    && assistantState.contextKey === operation.contextKey
+    && primaryTextSelectionsRevision === operation.selectionRevision;
 }
 
 function selectedPrimaryTextSourceIdentityKey(context: CurrentVideoContext): string | null {

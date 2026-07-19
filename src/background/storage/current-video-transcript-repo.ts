@@ -234,7 +234,7 @@ export async function getCurrentVideoActiveTranscriptSourceIdentityKeys(
       .map(source => (source.sourceIdentityKey ?? source.identityKey).trim())
       .filter(Boolean),
   ));
-  return sourceIdentityKeys.length === 1 ? sourceIdentityKeys : [];
+  return sourceIdentityKeys;
 }
 
 export async function getCurrentVideoTranscriptSegments(

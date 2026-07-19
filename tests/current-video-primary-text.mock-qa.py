@@ -125,11 +125,8 @@ def assert_clean_visible_text(page):
     text = page.locator("body").inner_text()
     for term in FORBIDDEN_VISIBLE_TERMS:
         assert term not in text, f"visible raw term leaked: {term}"
-    assistant = page.locator("#bdc-current-video-assistant")
-    if assistant.count() > 0:
-        assistant_text = assistant.inner_text()
-        for term in FORBIDDEN_ASSISTANT_IDENTITY_TERMS:
-            assert term not in assistant_text, f"assistant leaked current-video identity: {term}"
+    for term in FORBIDDEN_ASSISTANT_IDENTITY_TERMS:
+        assert term not in text, f"visible current-video identity leaked: {term}"
 
 
 def assert_no_horizontal_overflow(page):
@@ -566,6 +563,209 @@ def run_navigation_epoch_flow(page, mode):
     assert_no_horizontal_overflow(page)
 
 
+def prepare_timestamp_controls(page):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&savedSource=current")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+    page.get_by_text("展开助手").click()
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    expect(page.locator("textarea")).to_be_enabled()
+    page.locator("textarea").fill("延迟操作")
+    page.get_by_role("button", name="提问").click()
+    expect(page.get_by_text("回答：有证据")).to_be_visible()
+    page.get_by_role("button", name="预览跳转").first.click()
+    expect(page.get_by_text("确认跳转前预览")).to_be_visible()
+
+
+def start_newer_timestamp_jump(page):
+    assistant = page.locator("#bdc-current-video-assistant")
+    page.evaluate("window.__assistantMockSetPlaybackPosition(30)")
+    page.locator("textarea").fill("较新的操作")
+    page.get_by_role("button", name="提问").click()
+    expect(page.get_by_text("回答：有证据")).to_be_visible()
+    page.get_by_role("button", name="预览跳转").first.click()
+    page.get_by_role("button", name="确认跳转").click()
+    expect(assistant.get_by_text("可返回 0:30")).to_be_visible()
+    expect(assistant.get_by_role("button", name="返回原位置")).to_be_visible()
+
+
+def run_late_assistant_timestamp_flow(page, operation, invalidation, newer=False):
+    prepare_timestamp_controls(page)
+    assistant = page.locator("#bdc-current-video-assistant")
+    if operation == "return":
+        page.get_by_role("button", name="确认跳转").click()
+        expect(assistant.get_by_role("button", name="返回原位置")).to_be_visible()
+        page.evaluate("window.__assistantMockDeferNextProtectedAction('RETURN_CURRENT_VIDEO_SEGMENT_JUMP')")
+        page.get_by_role("button", name="返回原位置").click()
+        expect(page.get_by_text("正在返回原位置...")).to_be_visible()
+    else:
+        page.evaluate("window.__assistantMockDeferNextProtectedAction('REQUEST_CURRENT_VIDEO_SEGMENT_JUMP')")
+        page.get_by_role("button", name="确认跳转").click()
+        expect(page.get_by_text("正在确认跳转...")).to_be_visible()
+
+    if invalidation == "part":
+        page.evaluate("window.__assistantMockSwitchToPart(2)")
+        expect(page.get_by_text("第 2 / 2 P", exact=True)).to_be_visible()
+    elif invalidation == "video":
+        page.evaluate("window.__assistantMockSwitchToVideo()")
+        expect(page.get_by_text("延迟保存后切换的新视频", exact=True).first).to_be_visible()
+    elif invalidation == "localSettings":
+        page.evaluate("window.__assistantMockClearPrimaryTextSelectionsForLocalSettings()")
+    else:
+        page.evaluate("window.__assistantMockClearPrimaryTextSelectionsForClearAll()")
+
+    if newer:
+        start_newer_timestamp_jump(page)
+    else:
+        expect(assistant.get_by_role("button", name="返回原位置")).to_have_count(0)
+
+    page.evaluate("window.__assistantMockResolveProtectedResponses()")
+    page.wait_for_timeout(50)
+    expect(page.get_by_text("正在确认跳转...")).to_have_count(0)
+    expect(page.get_by_text("正在返回原位置...")).to_have_count(0)
+    if newer:
+        expect(assistant.get_by_text("可返回 0:30")).to_be_visible()
+        expect(assistant.get_by_role("button", name="返回原位置")).to_be_visible()
+        expect(assistant.get_by_text("已返回 0:12")).to_have_count(0)
+    else:
+        expect(assistant.get_by_role("button", name="返回原位置")).to_have_count(0)
+        expect(assistant.get_by_text("已返回 0:12")).to_have_count(0)
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def wait_for_content_timestamp_result(page, slot):
+    page.wait_for_function(
+        "(slot) => window.__assistantMockContentTimestampResult(slot) !== null",
+        arg=slot,
+    )
+    return page.evaluate("(slot) => window.__assistantMockContentTimestampResult(slot)", slot)
+
+
+def run_content_timestamp_operation_epoch_flow(page):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&savedSource=current")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+
+    page.evaluate("window.__assistantMockDeferNextTimestampSeek()")
+    page.evaluate("window.__assistantMockStartContentTimestampJump('selection-old', 'selection-old', 4)")
+    page.wait_for_function("window.__assistantMockPendingTimestampSeekCount() === 1")
+    page.evaluate("window.__assistantMockClearPrimaryTextSelectionsForLocalSettings()")
+    page.evaluate("window.__assistantMockResolveTimestampSeeks()")
+    selection_response = wait_for_content_timestamp_result(page, "selection-old")
+    assert selection_response["ok"] is False
+    assert "当前视频" in selection_response["message"]
+    expect(page.locator("#bdc-current-video-return")).to_have_count(0)
+
+    page.evaluate("window.__assistantMockDeferNextTimestampSeek()")
+    page.evaluate("window.__assistantMockStartContentTimestampJump('older', 'older', 4)")
+    page.wait_for_function("window.__assistantMockPendingTimestampSeekCount() === 1")
+    page.evaluate("window.__assistantMockStartContentTimestampJump('newer', 'newer', 8)")
+    newer_response = wait_for_content_timestamp_result(page, "newer")
+    assert newer_response["ok"] is True
+    expect(page.locator("#bdc-current-video-return")).to_contain_text("0:04")
+    page.evaluate("window.__assistantMockResolveTimestampSeeks()")
+    older_response = wait_for_content_timestamp_result(page, "older")
+    assert older_response["ok"] is False
+    expect(page.locator("#bdc-current-video-return")).to_contain_text("0:04")
+    assert_clean_visible_text(page)
+
+
+def run_content_timestamp_return_epoch_flow(page):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&savedSource=current")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+
+    page.evaluate("window.__assistantMockDeferNextTimestampSeek()")
+    page.evaluate("window.__assistantMockStartContentTimestampJump('seed-return', 'seed-return', 8)")
+    page.wait_for_function("window.__assistantMockPendingTimestampSeekCount() === 1")
+    page.evaluate("window.__assistantMockResolveTimestampSeeks()")
+    seed_response = wait_for_content_timestamp_result(page, "seed-return")
+    assert seed_response["ok"] is True
+
+    page.evaluate("window.__assistantMockDeferNextTimestampSeek()")
+    page.evaluate("window.__assistantMockStartContentTimestampReturn('older-return')")
+    page.wait_for_function("window.__assistantMockPendingTimestampSeekCount() === 1")
+    page.evaluate("window.__assistantMockStartContentTimestampJump('newer-jump', 'newer-jump', 20)")
+    newer_jump = wait_for_content_timestamp_result(page, "newer-jump")
+    assert newer_jump["ok"] is True
+    page.evaluate("window.__assistantMockResolveTimestampSeeks()")
+    older_return = wait_for_content_timestamp_result(page, "older-return")
+    assert older_return["ok"] is False
+
+    page.evaluate("window.__assistantMockStartContentTimestampReturn('newer-return')")
+    newer_return = wait_for_content_timestamp_result(page, "newer-return")
+    assert newer_return["ok"] is True, "late old return cleared the newer jump return point"
+    assert_clean_visible_text(page)
+
+
+def run_content_timestamp_navigation_epoch_flow(page, target):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&savedSource=current")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+
+    page.evaluate("window.__assistantMockDeferNextTimestampSeek()")
+    page.evaluate("window.__assistantMockStartContentTimestampJump('nav-old', 'nav-old', 4)")
+    page.wait_for_function("window.__assistantMockPendingTimestampSeekCount() === 1")
+    if target == "part":
+        page.evaluate("window.__assistantMockNavigateToPartWithoutCollect(2)")
+    else:
+        page.evaluate("window.__assistantMockSwitchToVideo()")
+    page.evaluate("window.__assistantMockResolveTimestampSeeks()")
+    response = wait_for_content_timestamp_result(page, "nav-old")
+    assert response["ok"] is False
+    assert "当前视频" in response["message"]
+    expect(page.locator("#bdc-current-video-return")).to_have_count(0)
+    assert_clean_visible_text(page)
+
+
+def run_delayed_video_rebind_flow(page, reuse_same_element=False):
+    page.route("**/*", route_mock)
+    page.goto(MOCK_URL)
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+    page.evaluate("window.__assistantMockClearMessages()")
+    if reuse_same_element:
+        page.evaluate("window.__assistantMockNavigateToPartWithoutCollect(2)")
+        page.wait_for_timeout(1400)
+        page.evaluate("window.__assistantMockDispatchVideoEvent('current', 'play')")
+    else:
+        page.evaluate("window.__assistantMockNavigateWithDelayedVideoReplacement(2, 1100)")
+        page.wait_for_function("window.__assistantMockVideoReplacementDone()")
+        page.wait_for_timeout(900)
+        page.evaluate("window.__assistantMockClearMessages()")
+        page.evaluate("window.__assistantMockDispatchVideoEvent('old', 'play')")
+        page.evaluate("window.__assistantMockDispatchVideoEvent('new', 'play')")
+    page.wait_for_timeout(50)
+    actions = page.evaluate(
+        """() => (window.__assistantMockMessages || [])
+            .filter((message) => message.action === "PLAYER_ACTION")
+            .map((message) => message.payload)"""
+    )
+    assert len(actions) == 1, f"expected one listener on the current video element, got {actions}"
+    assert actions[0].get("cid") == 3303, f"player event kept the old part identity: {actions}"
+    if not reuse_same_element:
+        page.evaluate("window.__assistantMockClearMessages()")
+        page.wait_for_timeout(5200)
+        heartbeats = page.evaluate(
+            """() => (window.__assistantMockMessages || [])
+                .filter((message) => message.action === "PLAYER_HEARTBEAT")
+                .map((message) => message.payload)"""
+        )
+        assert len(heartbeats) == 1, f"expected one current heartbeat after rebind, got {heartbeats}"
+        assert heartbeats[0].get("cid") == 3303, f"heartbeat kept the old part identity: {heartbeats}"
+    assert_clean_visible_text(page)
+
+
+def run_missing_title_flow(page):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?missingTitle=1")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+    page.get_by_text("展开助手").click()
+    expect(page.get_by_text("当前视频", exact=True).first).to_be_visible()
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
 def run_content_listener_controlled_error_flow(page):
     page.route("**/*", route_mock)
     page.goto(MOCK_URL)
@@ -810,6 +1010,61 @@ def main():
             assert not deferred_detect_errors, "\n".join(deferred_detect_errors)
             deferred_detect.close()
 
+            late_jump_part, late_jump_part_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_late_assistant_timestamp_flow(late_jump_part, "jump", "part")
+            assert not late_jump_part_errors, "\n".join(late_jump_part_errors)
+            late_jump_part.close()
+
+            late_return_video, late_return_video_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_late_assistant_timestamp_flow(late_return_video, "return", "video")
+            assert not late_return_video_errors, "\n".join(late_return_video_errors)
+            late_return_video.close()
+
+            late_jump_local, late_jump_local_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_late_assistant_timestamp_flow(late_jump_local, "jump", "localSettings", newer=True)
+            assert not late_jump_local_errors, "\n".join(late_jump_local_errors)
+            late_jump_local.close()
+
+            late_return_clear_all, late_return_clear_all_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_late_assistant_timestamp_flow(late_return_clear_all, "return", "clearAll", newer=True)
+            assert not late_return_clear_all_errors, "\n".join(late_return_clear_all_errors)
+            late_return_clear_all.close()
+
+            content_timestamp, content_timestamp_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_content_timestamp_operation_epoch_flow(content_timestamp)
+            assert not content_timestamp_errors, "\n".join(content_timestamp_errors)
+            content_timestamp.close()
+
+            content_return, content_return_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_content_timestamp_return_epoch_flow(content_return)
+            assert not content_return_errors, "\n".join(content_return_errors)
+            content_return.close()
+
+            content_jump_part, content_jump_part_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_content_timestamp_navigation_epoch_flow(content_jump_part, "part")
+            assert not content_jump_part_errors, "\n".join(content_jump_part_errors)
+            content_jump_part.close()
+
+            content_jump_video, content_jump_video_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_content_timestamp_navigation_epoch_flow(content_jump_video, "video")
+            assert not content_jump_video_errors, "\n".join(content_jump_video_errors)
+            content_jump_video.close()
+
+            delayed_video_rebind, delayed_video_rebind_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_delayed_video_rebind_flow(delayed_video_rebind)
+            assert not delayed_video_rebind_errors, "\n".join(delayed_video_rebind_errors)
+            delayed_video_rebind.close()
+
+            reused_video, reused_video_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_delayed_video_rebind_flow(reused_video, reuse_same_element=True)
+            assert not reused_video_errors, "\n".join(reused_video_errors)
+            reused_video.close()
+
+            missing_title, missing_title_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_missing_title_flow(missing_title)
+            assert not missing_title_errors, "\n".join(missing_title_errors)
+            missing_title.close()
+
             listener_errors, listener_errors_console = new_checked_page(browser, viewport={"width": 1280, "height": 820})
             run_content_listener_controlled_error_flow(listener_errors)
             assert not listener_errors_console, "\n".join(listener_errors_console)
@@ -870,7 +1125,7 @@ def main():
             assert not mobile_errors, "\n".join(mobile_errors)
             mobile.close()
 
-            print("current-video primary-text real UI QA passed: deferred and rejected storage readiness, live local-settings/clear-all selection invalidation with late-response rejection, collect/detect navigation epoch isolation, controlled jump/return failures, serialized save/readback rollback, save-pending operation gates, save-time part/video context switch isolation, missing saved source, single-source fallback, desktop/mobile source selection, no automatic full-text request, search no-candidate/backend-failure states, search/jump/return, no raw visible leak, no overflow, no console errors")
+            print("current-video primary-text real UI QA passed: missing-title identity shielding, late jump/return invalidation across part/video/selection/newer operations, delayed player replacement rebind and same-element reuse, deferred and rejected storage readiness, live local-settings/clear-all selection invalidation with late-response rejection, collect/detect navigation epoch isolation, controlled jump/return failures, serialized save/readback rollback, save-pending operation gates, save-time part/video context switch isolation, missing saved source, single-source fallback, desktop/mobile source selection, no automatic full-text request, search no-candidate/backend-failure states, search/jump/return, no raw visible leak, no overflow, no console errors")
         finally:
             browser.close()
 

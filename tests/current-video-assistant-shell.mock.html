@@ -62,6 +62,10 @@
       let mockBvid = "BV1ShellMock9";
       let mockTitle = "页内助手 Shell Mock 视频";
       const mockParams = new URLSearchParams(location.search);
+      if (mockParams.get("missingTitle") === "1") {
+        mockTitle = "   ";
+        document.title = "   ";
+      }
       const primaryTextSelectionStorageKey = "currentVideoPrimaryTextSelections";
       const baseMockCid = 2202;
       let mockPrimaryCid = baseMockCid;
@@ -94,6 +98,11 @@
       const pendingPrimaryTextSelectionSaves = [];
       const pendingProtectedResponses = [];
       let deferNextProtectedAction = null;
+      let deferNextTimestampSeek = false;
+      const pendingTimestampSeeks = [];
+      const contentTimestampResults = {};
+      let replacedOldVideoElement = null;
+      let replacedNewVideoElement = null;
       const initialPrimaryTextSelections = {};
       if (mockParams.get("savedSource") === "v1") {
         initialPrimaryTextSelections[`${mockBvid}:${baseMockCid}:1`] = `primary-text:bilibili_subtitle:${mockBvid}:${baseMockCid}:1:zh-cn:mock-source-hash-hidden-v1`;
@@ -167,6 +176,18 @@
           playbackPosition = Number.isFinite(next) ? Math.max(0, next) : playbackPosition;
         },
       });
+      Object.defineProperty(HTMLMediaElement.prototype, "paused", {
+        configurable: true,
+        get() {
+          return !deferNextTimestampSeek;
+        },
+      });
+      HTMLMediaElement.prototype.pause = function () {};
+      HTMLMediaElement.prototype.play = function () {
+        if (!deferNextTimestampSeek) return Promise.resolve();
+        deferNextTimestampSeek = false;
+        return new Promise((resolve) => pendingTimestampSeeks.push(resolve));
+      };
 
       function transcriptEvidence() {
         return {
@@ -606,6 +627,10 @@
       }
 
       window.__assistantMockPlaybackPosition = () => playbackPosition;
+      window.__assistantMockSetPlaybackPosition = (seconds) => {
+        const next = Number(seconds);
+        if (Number.isFinite(next)) playbackPosition = Math.max(0, next);
+      };
       window.__assistantMockMessages = runtimeMessages;
       window.__contentRuntimeListenersForQa = contentRuntimeListeners;
       window.__assistantMockStorage = extensionStorage;
@@ -667,6 +692,64 @@
         const pending = pendingProtectedResponses.splice(0);
         for (const resolve of pending) resolve();
       };
+      window.__assistantMockDeferNextTimestampSeek = () => {
+        deferNextTimestampSeek = true;
+      };
+      window.__assistantMockPendingTimestampSeekCount = () => pendingTimestampSeeks.length;
+      window.__assistantMockResolveTimestampSeeks = () => {
+        const pending = pendingTimestampSeeks.splice(0);
+        for (const resolve of pending) resolve();
+      };
+      window.__assistantMockStartContentTimestampJump = (slot, candidateId, targetSeconds) => {
+        const context = [...runtimeMessages]
+          .reverse()
+          .find((message) => message.action === "CURRENT_VIDEO_CONTEXT_UPDATE")?.payload;
+        contentTimestampResults[slot] = undefined;
+        invokeContentRuntimeMessage({
+          action: "CURRENT_VIDEO_TIMESTAMP_JUMP",
+          payload: {
+            candidateId,
+            confirmed: true,
+            contextBvid: context?.bvid,
+            contextCid: context?.cid,
+            contextPage: context?.currentPart?.page,
+            contextUrl: context?.url,
+            contextCollectedAt: context?.collectedAt,
+            targetSeconds,
+            targetTimeLabel: formatMockTime(targetSeconds),
+            sourceLabel: "字幕证据",
+            confidence: 0.8,
+            confidenceLabel: "高",
+            evidencePreview: "延迟跳转测试",
+          },
+        }).then((response) => { contentTimestampResults[slot] = response; });
+      };
+      window.__assistantMockStartContentTimestampReturn = (slot) => {
+        contentTimestampResults[slot] = undefined;
+        invokeContentRuntimeMessage({ action: "CURRENT_VIDEO_TIMESTAMP_RETURN", payload: {} })
+          .then((response) => { contentTimestampResults[slot] = response; });
+      };
+      window.__assistantMockContentTimestampResult = (slot) => contentTimestampResults[slot] ?? null;
+      window.__assistantMockNavigateWithDelayedVideoReplacement = (page, delayMs = 1100) => {
+        const oldVideo = document.querySelector("video");
+        replacedOldVideoElement = oldVideo;
+        replacedNewVideoElement = null;
+        window.__assistantMockNavigateToPartWithoutCollect(page);
+        window.setTimeout(() => {
+          const newVideo = document.createElement("video");
+          oldVideo?.replaceWith(newVideo);
+          replacedNewVideoElement = newVideo;
+        }, delayMs);
+      };
+      window.__assistantMockVideoReplacementDone = () => Boolean(replacedNewVideoElement);
+      window.__assistantMockDispatchVideoEvent = (target, eventName) => {
+        const video = target === "old"
+          ? replacedOldVideoElement
+          : target === "new"
+            ? replacedNewVideoElement
+            : document.querySelector("video");
+        video?.dispatchEvent(new Event(eventName));
+      };
       const clearPrimaryTextSelectionsForQa = () => {
         const oldValue = extensionStorage[primaryTextSelectionStorageKey];
         delete extensionStorage[primaryTextSelectionStorageKey];
@@ -722,6 +805,21 @@
               {},
               resolve,
             );
+            if (keepOpen !== true) reject(new Error("mock content runtime listener did not keep the channel open"));
+          } catch (error) {
+            reject(error);
+          }
+        });
+      }
+      function invokeContentRuntimeMessage(message) {
+        return new Promise((resolve, reject) => {
+          const listener = contentRuntimeListeners[0];
+          if (!listener) {
+            reject(new Error("mock content runtime listener is unavailable"));
+            return;
+          }
+          try {
+            const keepOpen = listener(message, {}, resolve);
             if (keepOpen !== true) reject(new Error("mock content runtime listener did not keep the channel open"));
           } catch (error) {
             reject(error);
@@ -1156,13 +1254,13 @@
               });
             }
             if (message.action === "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP") {
-              return Promise.resolve({
+              return maybeDeferProtectedResponse(message.action, {
                 success: true,
                 data: requestCurrentVideoSegmentJump(message.params),
               });
             }
             if (message.action === "RETURN_CURRENT_VIDEO_SEGMENT_JUMP") {
-              return Promise.resolve({
+              return maybeDeferProtectedResponse(message.action, {
                 success: true,
                 data: returnCurrentVideoSegmentJump(),
               });
@@ -1232,7 +1330,7 @@
           <span>Mock B 站播放器</span>
         </div>
         <h1>页内助手 Shell Mock 视频</h1>
-        <p>这个页面通过 localhost 路由成 /video/BV1ShellMock9，用实际 content bundle 验证页内助手行为。</p>
+        <p>这个页面通过 localhost 视频路由，用实际 content bundle 验证页内助手行为。</p>
         <div class="runtime-log" data-testid="runtime-log">摘要尚未刷新；字幕缓存=否</div>
       </div>
     </main>

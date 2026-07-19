@@ -789,7 +789,7 @@ test('protected handlers re-read persisted primary text authorization before tou
     assert.ok(storageReadCount(CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY) >= 1);
   });
 
-  await t.test('an old language key is blocked when persistent metadata cannot prove one current source', async () => {
+  await t.test('a saved exact key remains authorized among multiple active persistent sources', async () => {
     resetChromeHarness();
     await resetTranscriptDb();
     const tabId = 18_613;
@@ -800,7 +800,7 @@ test('protected handlers re-read persisted primary text authorization before tou
       '中文旧来源不能在当前来源不明确时继续授权',
       'zh-CN',
     );
-    await seedHandlerTranscript(
+    const english = await seedHandlerTranscript(
       context,
       'fresh-selection-e-en',
       'an alternate language source is also active in persistent metadata',
@@ -819,9 +819,96 @@ test('protected handlers re-read persisted primary text authorization before tou
       '中文旧来源',
     );
 
+    assert.equal(response.data?.status, 'ready');
+    assert.ok((response.data?.candidates.length ?? 0) > 0);
+    assert.ok(storageReadCount(CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY) >= 1);
+
+    await db.currentVideoTranscriptSources
+      .where('identityKey')
+      .equals(english.sourceRecord.identityKey)
+      .modify({ lastAccessedAt: 2_000 });
+    const mismatch = await searchWithExactSource(
+      tabId,
+      context,
+      english.sourceRecord.sourceIdentityKey,
+      'alternate language source',
+    );
+    assert.equal(mismatch.data?.status, 'no_evidence');
+    assert.equal(mismatch.data?.candidates.length, 0);
+    assert.equal((await transcriptSource(english.sourceRecord.identityKey))?.lastAccessedAt, 2_000);
+  });
+
+  await t.test('multiple active persistent sources without a saved choice stay blocked without LRU touches', async () => {
+    resetChromeHarness();
+    await resetTranscriptDb();
+    const tabId = 18_614;
+    const context = handlerVideoContext('BV1FreshSelectionF', 4906);
+    const chinese = await seedHandlerTranscript(
+      context,
+      'fresh-selection-f-zh',
+      '无保存选择时多来源必须保持阻断',
+      'zh-CN',
+    );
+    const english = await seedHandlerTranscript(
+      context,
+      'fresh-selection-f-en',
+      'multiple active sources need an explicit saved choice',
+      'en-US',
+    );
+    await db.currentVideoTranscriptSources
+      .where('identityKey')
+      .equals(chinese.sourceRecord.identityKey)
+      .modify({ lastAccessedAt: 1_000 });
+    await db.currentVideoTranscriptSources
+      .where('identityKey')
+      .equals(english.sourceRecord.identityKey)
+      .modify({ lastAccessedAt: 2_000 });
+    setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_500 }]);
+    await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+
+    const response = await searchWithExactSource(
+      tabId,
+      context,
+      chinese.sourceRecord.sourceIdentityKey,
+      '无保存选择时多来源',
+    );
+
     assert.equal(response.data?.status, 'no_evidence');
     assert.equal(response.data?.candidates.length, 0);
-    assert.ok(storageReadCount(CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY) >= 1);
+    assert.equal((await transcriptSource(chinese.sourceRecord.identityKey))?.lastAccessedAt, 1_000);
+    assert.equal((await transcriptSource(english.sourceRecord.identityKey))?.lastAccessedAt, 2_000);
+  });
+
+  await t.test('a saved stale exact source stays blocked without an LRU touch', async () => {
+    resetChromeHarness();
+    await resetTranscriptDb();
+    const tabId = 18_615;
+    const context = handlerVideoContext('BV1FreshSelectionG', 4907);
+    const stale = await seedHandlerTranscript(
+      context,
+      'fresh-selection-g-stale',
+      'stale exact source must remain unavailable',
+    );
+    await db.currentVideoTranscriptSources
+      .where('identityKey')
+      .equals(stale.sourceRecord.identityKey)
+      .modify({ stale: true, lastAccessedAt: 1_000 });
+    storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+      [`${context.bvid}:${context.cid}:1`]: stale.sourceRecord.sourceIdentityKey,
+    };
+    setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_600 }]);
+    await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+
+    const response = await searchWithExactSource(
+      tabId,
+      context,
+      stale.sourceRecord.sourceIdentityKey,
+      'stale exact source',
+    );
+
+    assert.equal(response.data?.status, 'no_evidence');
+    assert.equal(response.data?.candidates.length, 0);
+    assert.equal((await transcriptSource(stale.sourceRecord.identityKey))?.lastAccessedAt, 1_000);
   });
 });
 
