@@ -721,12 +721,24 @@
             confidence: 0.8,
             confidenceLabel: "高",
             evidencePreview: "延迟跳转测试",
+            sourceIdentityKey: subtitleSourceIdentityKey(),
           },
         }).then((response) => { contentTimestampResults[slot] = response; });
       };
       window.__assistantMockStartContentTimestampReturn = (slot) => {
+        const context = [...runtimeMessages]
+          .reverse()
+          .find((message) => message.action === "CURRENT_VIDEO_CONTEXT_UPDATE")?.payload;
         contentTimestampResults[slot] = undefined;
-        invokeContentRuntimeMessage({ action: "CURRENT_VIDEO_TIMESTAMP_RETURN", payload: {} })
+        invokeContentRuntimeMessage({
+          action: "CURRENT_VIDEO_TIMESTAMP_RETURN",
+          payload: {
+            contextBvid: context?.bvid,
+            contextCid: context?.cid,
+            contextPage: context?.currentPart?.page,
+            sourceIdentityKey: subtitleSourceIdentityKey(),
+          },
+        })
           .then((response) => { contentTimestampResults[slot] = response; });
       };
       window.__assistantMockContentTimestampResult = (slot) => contentTimestampResults[slot] ?? null;
@@ -740,6 +752,26 @@
           oldVideo?.replaceWith(newVideo);
           replacedNewVideoElement = newVideo;
         }, delayMs);
+      };
+      window.__assistantMockRemoveVideoWithoutReplacement = (page = 2) => {
+        const oldVideo = document.querySelector("video");
+        replacedOldVideoElement = oldVideo;
+        replacedNewVideoElement = null;
+        videoDetectionReady = false;
+        window.__assistantMockNavigateToPartWithoutCollect(page);
+        oldVideo?.remove();
+        document.body.appendChild(document.createElement("i"));
+      };
+      window.__assistantMockInsertZeroDurationVideo = () => {
+        videoDetectionReady = false;
+        const newVideo = document.createElement("video");
+        document.querySelector(".video-box")?.prepend(newVideo);
+        replacedNewVideoElement = newVideo;
+        document.body.appendChild(document.createElement("i"));
+      };
+      window.__assistantMockMakeInsertedVideoReady = () => {
+        videoDetectionReady = true;
+        document.body.appendChild(document.createElement("i"));
       };
       window.__assistantMockVideoReplacementDone = () => Boolean(replacedNewVideoElement);
       window.__assistantMockDispatchVideoEvent = (target, eventName) => {

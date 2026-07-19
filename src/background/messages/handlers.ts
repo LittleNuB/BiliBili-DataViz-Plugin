@@ -117,7 +117,15 @@ import {
 } from '../current-video-temporary-transcript-cache.ts';
 import { retainTemporaryTranscriptOwnerForContextSnapshot } from '../current-video-transcript-owner.ts';
 import { testAiConnection } from '../ai/openai-compatible';
-import { saveCurrentVideoPrimaryTextSelection } from '../storage/current-video-primary-text-selection-store.ts';
+import {
+  canUseCurrentVideoPrimaryTextSelectionGeneration,
+  getCurrentVideoPrimaryTextSelectionMutationState,
+  saveCurrentVideoPrimaryTextSelection,
+} from '../storage/current-video-primary-text-selection-store.ts';
+import {
+  canUseCurrentVideoTranscriptClearGeneration,
+  getCurrentVideoTranscriptClearState,
+} from '../current-video-transcript-clear-epoch.ts';
 import {
   readCurrentVideoPrimaryTextSelections,
   resolveCurrentVideoPrimaryTextAuthorization,
@@ -153,12 +161,36 @@ interface CurrentVideoContextLookupResult {
   context: CurrentVideoContextResult;
   temporaryOwner?: CurrentVideoTemporaryTranscriptOwner;
   primaryTextAuthorized?: boolean;
+  primaryTextGuard?: CurrentVideoPrimaryTextAuthorizationGuard;
 }
 
 interface BilibiliVideoUrlIdentity {
   bvid: string;
   page: number;
 }
+
+interface CurrentVideoPrimaryTextAuthorizationGuard {
+  bvid: string;
+  cid: number;
+  page: number;
+  sourceIdentityKey: string;
+  selectionGeneration: number;
+  transcriptClearGeneration: number;
+}
+
+interface CurrentVideoPrimaryTextAuthorizationEpochs {
+  selectionGeneration: number;
+  selectionMutating: boolean;
+  transcriptClearGeneration: number;
+  transcriptClearing: boolean;
+}
+
+type CurrentVideoPrimaryTextGuardTestPhase =
+  | 'before_active_source_check'
+  | 'before_evidence_bind'
+  | 'before_segment_body_read'
+  | 'after_segment_body_read'
+  | 'before_timestamp_message';
 
 export function setupMessageHandlers(): void {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -479,7 +511,10 @@ async function handleRequest<T>(
       if (!lookup.primaryTextAuthorized) {
         return { success: true, data: primaryTextSelectionNotReadySummary() as T };
       }
-      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(lookup.context, lookup.temporaryOwner);
+      const transcriptSegments = await getAuthorizedCurrentVideoTranscriptSegments(lookup);
+      if (!transcriptSegments) {
+        return { success: true, data: primaryTextSelectionNotReadySummary() as T };
+      }
       return { success: true, data: await generateCurrentVideoSummary(lookup.context, { transcriptSegments }) as T };
     }
     case 'GET_VIDEO_KNOWLEDGE': {
@@ -490,7 +525,10 @@ async function handleRequest<T>(
       if (!lookup.primaryTextAuthorized) {
         return { success: true, data: primaryTextSelectionNotReadyKnowledge() as T };
       }
-      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(lookup.context, lookup.temporaryOwner);
+      const transcriptSegments = await getAuthorizedCurrentVideoTranscriptSegments(lookup);
+      if (!transcriptSegments) {
+        return { success: true, data: primaryTextSelectionNotReadyKnowledge() as T };
+      }
       return { success: true, data: buildVideoKnowledgeResult(lookup.context, { transcriptSegments }) as T };
     }
     case 'SEARCH_CURRENT_VIDEO_SEGMENTS': {
@@ -502,7 +540,10 @@ async function handleRequest<T>(
       if (!lookup.primaryTextAuthorized) {
         return { success: true, data: primaryTextSelectionNotReadySegmentResult(query) as T };
       }
-      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(lookup.context, lookup.temporaryOwner);
+      const transcriptSegments = await getAuthorizedCurrentVideoTranscriptSegments(lookup);
+      if (!transcriptSegments) {
+        return { success: true, data: primaryTextSelectionNotReadySegmentResult(query) as T };
+      }
       const videoKnowledge = buildVideoKnowledgeResult(lookup.context, { transcriptSegments });
       return {
         success: true,
@@ -523,7 +564,7 @@ async function handleRequest<T>(
     case 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP':
       return { success: true, data: await requestCurrentVideoSegmentJump(request.params, requestTabId) as T };
     case 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP':
-      return { success: true, data: await returnCurrentVideoSegmentJump(requestTabId) as T };
+      return { success: true, data: await returnCurrentVideoSegmentJump(request.params, requestTabId) as T };
     case 'GET_SMART_FAVORITES':
       return { success: true, data: await getSmartFavoriteOverview() as T };
     case 'GET_SMART_FAVORITES_BY_PATH': {
@@ -706,7 +747,14 @@ async function requestCurrentVideoSegmentJump(
     );
   }
 
-  const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context, lookup.temporaryOwner);
+  const transcriptSegments = await getAuthorizedCurrentVideoTranscriptSegments(lookup);
+  if (!transcriptSegments) {
+    return blockedTimestampJumpResponse(
+      candidateId,
+      'no_context',
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    );
+  }
   const videoKnowledge = buildVideoKnowledgeResult(context, { transcriptSegments });
   const result = searchCurrentVideoSegments(context, {
     query,
@@ -733,6 +781,15 @@ async function requestCurrentVideoSegmentJump(
     return blockedTimestampJumpResponse(candidateId, reason, preview.message);
   }
 
+  await currentVideoPrimaryTextGuardTestHook('before_timestamp_message');
+  if (!await currentVideoPrimaryTextGuardStillAuthorized(lookup)) {
+    return blockedTimestampJumpResponse(
+      candidateId,
+      'no_context',
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    );
+  }
+
   try {
     const response = await chrome.tabs.sendMessage(tabId, {
       action: 'CURRENT_VIDEO_TIMESTAMP_JUMP',
@@ -750,6 +807,7 @@ async function requestCurrentVideoSegmentJump(
         confidence: preview.confidence,
         confidenceLabel: preview.confidenceLabel,
         evidencePreview: preview.evidencePreview,
+        sourceIdentityKey: lookup.primaryTextGuard?.sourceIdentityKey ?? '',
       },
     });
     return response as CurrentVideoTimestampJumpResponse;
@@ -763,18 +821,37 @@ async function requestCurrentVideoSegmentJump(
 }
 
 async function returnCurrentVideoSegmentJump(
+  params: Record<string, unknown> | undefined,
   requestTabId: number | null,
 ): Promise<CurrentVideoTimestampReturnResponse> {
-  const target = await resolveCurrentVideoLookupState(requestTabId);
-  const tabId = target.tab?.id ?? 0;
-  if (!target.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(target.tab.url)) {
+  if (!primaryTextSelectionsReady(params)) {
+    return blockedTimestampReturnResponse(PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE);
+  }
+  const lookup = await getCurrentVideoContextLookupWithSelection(params, requestTabId);
+  if (!lookup.primaryTextAuthorized || !lookup.primaryTextGuard) {
+    return blockedTimestampReturnResponse(PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE);
+  }
+
+  const tabId = lookup.tab?.id ?? 0;
+  if (!lookup.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(lookup.tab.url)) {
     return blockedTimestampReturnResponse(formatTimestampJumpFailureReason('no_context'));
+  }
+  if (lookup.context.kind !== 'video') {
+    return blockedTimestampReturnResponse(formatTimestampJumpFailureReason('no_context'));
+  }
+  if (!await currentVideoPrimaryTextGuardStillAuthorized(lookup)) {
+    return blockedTimestampReturnResponse(PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE);
   }
 
   try {
     const response = await chrome.tabs.sendMessage(tabId, {
       action: 'CURRENT_VIDEO_TIMESTAMP_RETURN',
-      payload: {},
+      payload: {
+        contextBvid: lookup.context.bvid,
+        contextCid: lookup.context.cid,
+        contextPage: lookup.context.currentPart.page,
+        sourceIdentityKey: lookup.primaryTextGuard.sourceIdentityKey,
+      },
     });
     return response as CurrentVideoTimestampReturnResponse;
   } catch {
@@ -809,6 +886,17 @@ async function getCurrentVideoContextLookupWithSelection(
 ): Promise<CurrentVideoContextLookupResult> {
   const options = currentVideoLookupOptions(params);
   const requestedSourceIdentityKey = selectedSourceIdentityKey(params);
+  const epochs = currentVideoPrimaryTextAuthorizationEpochs();
+  if (!currentVideoPrimaryTextAuthorizationEpochsReady(epochs)) {
+    const lookup = await getRawCurrentVideoContextLookup(options, requestTabId);
+    return {
+      ...lookup,
+      context: lookup.context.kind === 'video'
+        ? withoutSelectedCurrentVideoTranscriptEvidence(lookup.context)
+        : lookup.context,
+      primaryTextAuthorized: false,
+    };
+  }
   const lookup = await getRawCurrentVideoContextLookup(options, requestTabId);
   if (lookup.context.kind !== 'video') {
     return {
@@ -816,9 +904,7 @@ async function getCurrentVideoContextLookupWithSelection(
       primaryTextAuthorized: false,
     };
   }
-
-  const readResult = await readCurrentVideoPrimaryTextSelections(chrome.storage.local);
-  if (readResult.status !== 'ready') {
+  if (!currentVideoPrimaryTextAuthorizationEpochsCurrent(epochs)) {
     return {
       ...lookup,
       context: withoutSelectedCurrentVideoTranscriptEvidence(lookup.context),
@@ -826,6 +912,16 @@ async function getCurrentVideoContextLookupWithSelection(
     };
   }
 
+  const readResult = await readCurrentVideoPrimaryTextSelections(chrome.storage.local);
+  if (readResult.status !== 'ready' || !currentVideoPrimaryTextAuthorizationEpochsCurrent(epochs)) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(lookup.context),
+      primaryTextAuthorized: false,
+    };
+  }
+
+  await currentVideoPrimaryTextGuardTestHook('before_active_source_check');
   const availableSourceIdentityKeys = lookup.context.cid
     ? await getCurrentVideoActiveTranscriptSourceIdentityKeys({
         bvid: lookup.context.bvid,
@@ -833,6 +929,13 @@ async function getCurrentVideoContextLookupWithSelection(
         page: lookup.context.currentPart.page,
       }, lookup.temporaryOwner)
     : [];
+  if (!currentVideoPrimaryTextAuthorizationEpochsCurrent(epochs)) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(lookup.context),
+      primaryTextAuthorized: false,
+    };
+  }
   const authorization = resolveCurrentVideoPrimaryTextAuthorization({
     readStatus: 'ready',
     identity: {
@@ -855,14 +958,58 @@ async function getCurrentVideoContextLookupWithSelection(
     };
   }
 
+  const guard: CurrentVideoPrimaryTextAuthorizationGuard = {
+    bvid: lookup.context.bvid,
+    cid: lookup.context.cid as number,
+    page: lookup.context.currentPart.page,
+    sourceIdentityKey: requestedSourceIdentityKey,
+    selectionGeneration: epochs.selectionGeneration,
+    transcriptClearGeneration: epochs.transcriptClearGeneration,
+  };
+  if (!currentVideoPrimaryTextGuardEpochsCurrent(guard)) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(lookup.context),
+      primaryTextAuthorized: false,
+    };
+  }
   const withSubtitle = await enrichCurrentVideoContextWithSubtitleProbe(lookup.context, options);
-  return {
+  if (!currentVideoPrimaryTextGuardEpochsCurrent(guard)) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(withSubtitle),
+      primaryTextAuthorized: false,
+    };
+  }
+  await currentVideoPrimaryTextGuardTestHook('before_evidence_bind');
+  if (!currentVideoPrimaryTextGuardEpochsCurrent(guard)) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(withSubtitle),
+      primaryTextAuthorized: false,
+    };
+  }
+  const withEvidence = await bindSelectedCurrentVideoTranscriptEvidence(
+    withSubtitle,
+    requestedSourceIdentityKey,
+    lookup.temporaryOwner,
+    guard,
+  );
+  const authorizedLookup = {
     ...lookup,
-    context: await bindSelectedCurrentVideoTranscriptEvidence(
-      withSubtitle,
-      requestedSourceIdentityKey,
-      lookup.temporaryOwner,
-    ),
+    context: withEvidence,
+    primaryTextAuthorized: true,
+    primaryTextGuard: guard,
+  };
+  if (!await currentVideoPrimaryTextGuardStillAuthorized(authorizedLookup)) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(withSubtitle),
+      primaryTextAuthorized: false,
+    };
+  }
+  return {
+    ...authorizedLookup,
     primaryTextAuthorized: true,
   };
 }
@@ -965,6 +1112,7 @@ async function bindSelectedCurrentVideoTranscriptEvidence(
   context: CurrentVideoContextResult,
   sourceIdentityKey: string | null,
   temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
+  guard?: CurrentVideoPrimaryTextAuthorizationGuard,
 ): Promise<CurrentVideoContextResult> {
   if (context.kind !== 'video' || !sourceIdentityKey || !context.cid) return context;
   const transcriptEvidence = await getCurrentVideoTranscriptEvidenceState({
@@ -972,7 +1120,9 @@ async function bindSelectedCurrentVideoTranscriptEvidence(
     cid: context.cid,
     page: context.currentPart.page,
     sourceIdentityKey,
-  }, Date.now(), temporaryOwner);
+  }, Date.now(), temporaryOwner, {
+    canUseEvidence: guard ? () => currentVideoPrimaryTextGuardEpochsCurrent(guard) : undefined,
+  });
   return withTranscriptEvidenceState(context, transcriptEvidence);
 }
 
@@ -1037,26 +1187,46 @@ async function enrichCurrentVideoContextWithTranscriptEvidence(
   return withTranscriptEvidenceState(context, state);
 }
 
-async function getActiveCurrentVideoTranscriptSegments(
-  context: CurrentVideoContextResult,
-  temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
+async function getAuthorizedCurrentVideoTranscriptSegments(
+  lookup: CurrentVideoContextLookupResult,
 ) {
+  const context = lookup.context;
+  const guard = lookup.primaryTextGuard;
   if (
-    context.kind !== 'video'
+    !guard
+    || context.kind !== 'video'
     || !context.cid
     || context.transcriptEvidence?.active !== true
+    || context.transcriptEvidence.sourceIdentityKey !== guard.sourceIdentityKey
   ) {
-    return [];
+    return null;
+  }
+  if (!await currentVideoPrimaryTextGuardStillAuthorized(lookup)) {
+    return null;
   }
 
-  return await getCurrentVideoTranscriptSegments({
+  await currentVideoPrimaryTextGuardTestHook('before_segment_body_read');
+  if (!currentVideoPrimaryTextGuardEpochsCurrent(guard)) {
+    return null;
+  }
+  const segments = await getCurrentVideoTranscriptSegments({
     bvid: context.bvid,
     cid: context.cid,
     page: context.currentPart.page,
     language: context.transcriptEvidence.language,
     sourceIdentityKey: context.transcriptEvidence.sourceIdentityKey,
     sourceHash: context.transcriptEvidence.sourceHash,
-  }, temporaryOwner);
+  }, lookup.temporaryOwner, {
+    canUseEvidence: () => currentVideoPrimaryTextGuardEpochsCurrent(guard),
+  });
+  await currentVideoPrimaryTextGuardTestHook('after_segment_body_read');
+  if (segments.length <= 0 || !currentVideoPrimaryTextGuardEpochsCurrent(guard)) {
+    return null;
+  }
+  if (!await currentVideoPrimaryTextGuardStillAuthorized(lookup)) {
+    return null;
+  }
+  return segments;
 }
 
 function subtitleProbeCacheKey(context: CurrentVideoContext): string {
@@ -1241,6 +1411,101 @@ function selectedSourceIdentityKey(params: Record<string, unknown> | undefined):
   return typeof value === 'string' && value.trim()
     ? value.trim()
     : null;
+}
+
+function currentVideoPrimaryTextAuthorizationEpochs(): CurrentVideoPrimaryTextAuthorizationEpochs {
+  const selection = getCurrentVideoPrimaryTextSelectionMutationState();
+  const transcriptClear = getCurrentVideoTranscriptClearState();
+  return {
+    selectionGeneration: selection.generation,
+    selectionMutating: selection.mutating,
+    transcriptClearGeneration: transcriptClear.generation,
+    transcriptClearing: transcriptClear.clearing,
+  };
+}
+
+function currentVideoPrimaryTextAuthorizationEpochsReady(
+  epochs: CurrentVideoPrimaryTextAuthorizationEpochs,
+): boolean {
+  return !epochs.selectionMutating
+    && !epochs.transcriptClearing;
+}
+
+function currentVideoPrimaryTextAuthorizationEpochsCurrent(
+  epochs: CurrentVideoPrimaryTextAuthorizationEpochs,
+): boolean {
+  return canUseCurrentVideoPrimaryTextSelectionGeneration(epochs.selectionGeneration)
+    && canUseCurrentVideoTranscriptClearGeneration(epochs.transcriptClearGeneration);
+}
+
+function currentVideoPrimaryTextGuardEpochsCurrent(
+  guard: CurrentVideoPrimaryTextAuthorizationGuard,
+): boolean {
+  return canUseCurrentVideoPrimaryTextSelectionGeneration(guard.selectionGeneration)
+    && canUseCurrentVideoTranscriptClearGeneration(guard.transcriptClearGeneration);
+}
+
+function currentVideoPrimaryTextGuardMatchesContext(
+  context: CurrentVideoContextResult,
+  guard: CurrentVideoPrimaryTextAuthorizationGuard,
+): boolean {
+  return context.kind === 'video'
+    && context.bvid === guard.bvid
+    && context.cid === guard.cid
+    && context.currentPart.page === guard.page;
+}
+
+async function currentVideoPrimaryTextGuardStillAuthorized(
+  lookup: Pick<CurrentVideoContextLookupResult, 'context' | 'temporaryOwner' | 'primaryTextGuard'>,
+): Promise<boolean> {
+  const guard = lookup.primaryTextGuard;
+  const context = lookup.context;
+  if (!guard || !currentVideoPrimaryTextGuardMatchesContext(context, guard)) return false;
+  if (!currentVideoPrimaryTextGuardEpochsCurrent(guard)) return false;
+  if (
+    context.kind !== 'video'
+    || !context.transcriptEvidence?.active
+    || context.transcriptEvidence.sourceIdentityKey !== guard.sourceIdentityKey
+  ) {
+    return false;
+  }
+
+  const readResult = await readCurrentVideoPrimaryTextSelections(chrome.storage.local);
+  if (readResult.status !== 'ready' || !currentVideoPrimaryTextGuardEpochsCurrent(guard)) return false;
+
+  const availableSourceIdentityKeys = await getCurrentVideoActiveTranscriptSourceIdentityKeys({
+    bvid: guard.bvid,
+    cid: guard.cid,
+    page: guard.page,
+  }, lookup.temporaryOwner);
+  if (!currentVideoPrimaryTextGuardEpochsCurrent(guard)) return false;
+  if (!availableSourceIdentityKeys.includes(guard.sourceIdentityKey)) return false;
+
+  const authorization = resolveCurrentVideoPrimaryTextAuthorization({
+    readStatus: 'ready',
+    identity: {
+      bvid: guard.bvid,
+      cid: guard.cid,
+      page: guard.page,
+    },
+    selections: readResult.selections,
+    availableSourceIdentityKeys,
+  });
+  return authorization.ready
+    && authorization.selectedSourceIdentityKey === guard.sourceIdentityKey;
+}
+
+async function currentVideoPrimaryTextGuardTestHook(
+  phase: CurrentVideoPrimaryTextGuardTestPhase,
+): Promise<void> {
+  const hook = (globalThis as typeof globalThis & {
+    __biliBillCurrentVideoPrimaryTextGuardTestHook__?: (
+      phase: CurrentVideoPrimaryTextGuardTestPhase,
+    ) => Promise<void> | void;
+  }).__biliBillCurrentVideoPrimaryTextGuardTestHook__;
+  if (typeof hook === 'function') {
+    await hook(phase);
+  }
 }
 
 async function resolveCurrentVideoLookupState(

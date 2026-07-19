@@ -20,6 +20,27 @@ export interface SaveCurrentVideoPrimaryTextSelectionInput {
 
 let selectionMutationTail: Promise<void> = Promise.resolve();
 let selectionClearDepth = 0;
+let selectionMutationGeneration = 0;
+let selectionMutationDepth = 0;
+
+export interface CurrentVideoPrimaryTextSelectionMutationState {
+  generation: number;
+  mutating: boolean;
+}
+
+export function getCurrentVideoPrimaryTextSelectionMutationState(): CurrentVideoPrimaryTextSelectionMutationState {
+  return {
+    generation: selectionMutationGeneration,
+    mutating: selectionMutationDepth > 0,
+  };
+}
+
+export function canUseCurrentVideoPrimaryTextSelectionGeneration(
+  generation: number | null | undefined,
+): boolean {
+  return generation === selectionMutationGeneration
+    && selectionMutationDepth === 0;
+}
 
 export function saveCurrentVideoPrimaryTextSelection(
   input: SaveCurrentVideoPrimaryTextSelectionInput,
@@ -28,16 +49,20 @@ export function saveCurrentVideoPrimaryTextSelection(
   if (selectionClearDepth > 0) {
     return Promise.reject(new Error('PRIMARY_TEXT_SELECTION_CLEAR_IN_PROGRESS'));
   }
-  return enqueueSelectionMutation(() => persistCurrentVideoPrimaryTextSelection(input, storage));
+  beginSelectionMutation();
+  return enqueueSelectionMutation(() => persistCurrentVideoPrimaryTextSelection(input, storage))
+    .finally(endSelectionMutation);
 }
 
 export function coordinateCurrentVideoPrimaryTextSelectionClear<T>(
   clear: () => Promise<T>,
 ): Promise<T> {
+  beginSelectionMutation();
   selectionClearDepth += 1;
   const operation = enqueueSelectionMutation(clear);
   return operation.finally(() => {
     selectionClearDepth = Math.max(0, selectionClearDepth - 1);
+    endSelectionMutation();
   });
 }
 
@@ -101,4 +126,14 @@ function enqueueSelectionMutation<T>(mutation: () => Promise<T>): Promise<T> {
   const operation = selectionMutationTail.then(mutation, mutation);
   selectionMutationTail = operation.then(() => undefined, () => undefined);
   return operation;
+}
+
+function beginSelectionMutation(): void {
+  selectionMutationDepth += 1;
+  selectionMutationGeneration += 1;
+}
+
+function endSelectionMutation(): void {
+  selectionMutationDepth = Math.max(0, selectionMutationDepth - 1);
+  selectionMutationGeneration += 1;
 }

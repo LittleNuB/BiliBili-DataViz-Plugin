@@ -267,6 +267,25 @@ def run_search_revision_race(page):
     assert_clean_page(page)
 
 
+def run_pre_render_selection_scope_race(page):
+    page.route("**/*", route_popup)
+    page.goto(POPUP_URL)
+    expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
+    page.evaluate("window.__popupMockDeferNextResponse('SEARCH_CURRENT_VIDEO_SEGMENTS')")
+    page.locator("input[placeholder='例如：模型架构那段']").fill("pre-render-old")
+    page.get_by_role("button", name="检索", exact=True).click()
+    page.wait_for_function("window.__popupMockPendingResponseCount('SEARCH_CURRENT_VIDEO_SEGMENTS') === 1")
+    page.evaluate(
+        """() => {
+          window.__popupMockResolveResponses('SEARCH_CURRENT_VIDEO_SEGMENTS');
+          window.__popupMockEmitSelectionChange('same');
+        }"""
+    )
+    page.wait_for_timeout(50)
+    expect(page.get_by_text("pre-render-old 的当前候选")).to_have_count(0)
+    assert_clean_page(page)
+
+
 def run_timestamp_races_and_double_click(page):
     page.route("**/*", route_popup)
     page.goto(POPUP_URL)
@@ -385,6 +404,11 @@ def main():
             run_search_revision_race(search_race)
             assert not search_race_errors, "\n".join(search_race_errors)
             search_race.close()
+
+            pre_render_race, pre_render_race_errors = new_checked_page(browser)
+            run_pre_render_selection_scope_race(pre_render_race)
+            assert not pre_render_race_errors, "\n".join(pre_render_race_errors)
+            pre_render_race.close()
 
             timestamp_races, timestamp_races_errors = new_checked_page(browser)
             run_timestamp_races_and_double_click(timestamp_races)

@@ -17,6 +17,7 @@ import type { BiliVizRequest, BiliVizResponse } from '../src/shared/types/messag
 import type {
   CurrentVideoSegmentRetrievalResult,
   CurrentVideoTimestampJumpResponse,
+  CurrentVideoTimestampReturnResponse,
 } from '../src/shared/types/current-video-segment-retrieval.ts';
 import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary.ts';
 import type { VideoKnowledgeResult } from '../src/shared/types/video-knowledge.ts';
@@ -912,6 +913,188 @@ test('protected handlers re-read persisted primary text authorization before tou
   });
 });
 
+test('protected handlers drop in-flight work when the exact source changes before evidence binding', async () => {
+  const actions = ['summary', 'knowledge', 'search', 'jump'] as const;
+  for (const [index, action] of actions.entries()) {
+    resetChromeHarness();
+    await resetTranscriptDb();
+    const tabId = 18_620 + index;
+    const context = handlerVideoContext(`BV1GuardEvidence${index}`, 5001 + index);
+    const evidence = await seedHandlerTranscript(
+      context,
+      `guard-evidence-${index}`,
+      `guard evidence ${action} body must not be consumed after source replacement`,
+    );
+    await db.currentVideoTranscriptSources
+      .where('identityKey')
+      .equals(evidence.sourceRecord.identityKey)
+      .modify({ lastAccessedAt: 1_000 });
+    const sourceBefore = await transcriptSource(evidence.sourceRecord.identityKey);
+    storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+      [handlerPartKey(context)]: evidence.sourceRecord.sourceIdentityKey,
+    };
+    setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 10_000 + index }]);
+    await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+
+    const seekMessages: unknown[] = [];
+    setTabMessageHandler(tabId, (message) => {
+      seekMessages.push(message);
+      return {
+        ok: true,
+        message: 'mock seek should not run',
+        candidateId: 'guard-candidate',
+        targetSeconds: 2,
+        targetTimeLabel: '0:02',
+        returnPointSeconds: 1,
+        sourceLabel: 'mock',
+        confidence: 0.8,
+      };
+    });
+    installGuardTestHook('before_evidence_bind', async () => {
+      await sendRequest<SaveCurrentVideoPrimaryTextSelectionResult>({
+        action: 'SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION',
+        params: {
+          bvid: context.bvid,
+          cid: context.cid,
+          page: context.currentPart.page,
+          selectedSourceIdentityKey: `${evidence.sourceRecord.sourceIdentityKey}:replacement`,
+        },
+      }, tabId, context.url);
+    });
+
+    const response = await invokeProtectedHandlerAction(action, tabId, context, evidence.sourceRecord.sourceIdentityKey);
+
+    assertProtectedActionBlocked(action, response);
+    assert.equal(seekMessages.length, 0);
+    const sourceAfter = await transcriptSource(evidence.sourceRecord.identityKey);
+    assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
+  }
+});
+
+test('protected search fails closed when source changes during active-source and segment stages', async () => {
+  for (const phase of ['before_active_source_check', 'before_segment_body_read'] as const) {
+    resetChromeHarness();
+    await resetTranscriptDb();
+    const tabId = phase === 'before_active_source_check' ? 18_630 : 18_631;
+    const context = handlerVideoContext(`BV1GuardPhase${tabId}`, 5100 + tabId);
+    const evidence = await seedHandlerTranscript(
+      context,
+      `guard-phase-${phase}`,
+      `guard phase ${phase} body must not produce a candidate`,
+    );
+    storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+      [handlerPartKey(context)]: evidence.sourceRecord.sourceIdentityKey,
+    };
+    setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 11_000 }]);
+    await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+    installGuardTestHook(phase, async () => {
+      await sendRequest<SaveCurrentVideoPrimaryTextSelectionResult>({
+        action: 'SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION',
+        params: {
+          bvid: context.bvid,
+          cid: context.cid,
+          page: context.currentPart.page,
+          selectedSourceIdentityKey: `${evidence.sourceRecord.sourceIdentityKey}:replacement`,
+        },
+      }, tabId, context.url);
+    });
+
+    const search = await searchWithExactSource(
+      tabId,
+      context,
+      evidence.sourceRecord.sourceIdentityKey,
+      `guard phase ${phase}`,
+    );
+
+    assert.equal(search.success, true);
+    assert.equal(search.data?.status, 'no_evidence');
+    assert.equal(search.data?.candidates.length, 0);
+    assert.equal(search.data?.evidenceState.transcriptSegmentCount, 0);
+    assert.equal(search.data?.aiRerank.status, 'not_requested');
+    assert.equal(search.data?.qa.aiState.status, 'not_requested');
+  }
+});
+
+test('protected handlers block after transcript cache is cleared between binding and segment read', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_632;
+  const context = handlerVideoContext('BV1GuardClear', 5201);
+  const evidence = await seedHandlerTranscript(
+    context,
+    'guard-clear',
+    'guard clear body must not fall back to description summary',
+  );
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: evidence.sourceRecord.sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 12_000 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  installGuardTestHook('before_segment_body_read', async () => {
+    await sendRequest({
+      action: 'CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE',
+      params: {},
+    }, tabId, context.url);
+  });
+
+  const summary = await sendRequest<CurrentVideoSummaryResult>({
+    action: 'GET_CURRENT_VIDEO_SUMMARY',
+    params: {
+      primaryTextSelectionsReady: true,
+      selectedSourceIdentityKey: evidence.sourceRecord.sourceIdentityKey,
+    },
+  }, tabId, context.url);
+
+  assert.equal(summary.success, true);
+  assert.equal(summary.data?.status, 'cancelled');
+  assert.equal(summary.data?.sourceTier, null);
+  assert.equal(summary.data?.evidence.some(item => item.source === 'transcript'), false);
+  assert.equal(await db.currentVideoTranscriptSegments.count(), 0);
+});
+
+test('return request with stale exact source does not send a content seek message', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_633;
+  const context = handlerVideoContext('BV1GuardReturn', 5301);
+  const evidence = await seedHandlerTranscript(
+    context,
+    'guard-return',
+    'guard return source binding',
+  );
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: evidence.sourceRecord.sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 13_000 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: `${evidence.sourceRecord.sourceIdentityKey}:new`,
+  };
+  const contentMessages: unknown[] = [];
+  setTabMessageHandler(tabId, (message) => {
+    contentMessages.push(message);
+    return {
+      ok: true,
+      message: 'mock return should not run',
+      candidateId: null,
+      returnPointSeconds: 1,
+      targetSeconds: 2,
+    };
+  });
+
+  const response = await sendRequest<CurrentVideoTimestampReturnResponse>({
+    action: 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP',
+    params: {
+      primaryTextSelectionsReady: true,
+      selectedSourceIdentityKey: evidence.sourceRecord.sourceIdentityKey,
+    },
+  }, tabId, context.url);
+
+  assert.equal(response.success, true);
+  assert.equal(response.data?.ok, false);
+  assert.equal(contentMessages.length, 0);
+});
+
 function handlerVideoContext(bvid: string, cid: number, page = 1): CurrentVideoContext {
   return {
     kind: 'video',
@@ -1006,6 +1189,108 @@ async function searchWithExactSource(
   }, tabId, context.url);
 }
 
+type ProtectedHandlerAction = 'summary' | 'knowledge' | 'search' | 'jump';
+type GuardTestPhase =
+  | 'before_active_source_check'
+  | 'before_evidence_bind'
+  | 'before_segment_body_read'
+  | 'after_segment_body_read'
+  | 'before_timestamp_message';
+
+async function invokeProtectedHandlerAction(
+  action: ProtectedHandlerAction,
+  tabId: number,
+  context: CurrentVideoContext,
+  sourceIdentityKey: string | undefined,
+): Promise<BiliVizResponse<unknown>> {
+  assert.ok(sourceIdentityKey);
+  const params = {
+    primaryTextSelectionsReady: true,
+    selectedSourceIdentityKey: sourceIdentityKey,
+  };
+  if (action === 'summary') {
+    return await sendRequest<CurrentVideoSummaryResult>({
+      action: 'GET_CURRENT_VIDEO_SUMMARY',
+      params,
+    }, tabId, context.url);
+  }
+  if (action === 'knowledge') {
+    return await sendRequest<VideoKnowledgeResult>({
+      action: 'GET_VIDEO_KNOWLEDGE',
+      params,
+    }, tabId, context.url);
+  }
+  if (action === 'search') {
+    return await sendRequest<CurrentVideoSegmentRetrievalResult>({
+      action: 'SEARCH_CURRENT_VIDEO_SEGMENTS',
+      params: {
+        ...params,
+        query: 'guard evidence body',
+      },
+    }, tabId, context.url);
+  }
+  return await sendRequest<CurrentVideoTimestampJumpResponse>({
+    action: 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP',
+    params: {
+      ...params,
+      candidateId: 'guard-candidate',
+      query: 'guard evidence body',
+      confirmed: true,
+    },
+  }, tabId, context.url);
+}
+
+function assertProtectedActionBlocked(
+  action: ProtectedHandlerAction,
+  response: BiliVizResponse<unknown>,
+): void {
+  assert.equal(response.success, true);
+  if (action === 'summary') {
+    const data = response.data as CurrentVideoSummaryResult;
+    assert.equal(data.status, 'cancelled');
+    assert.equal(data.sourceTier, null);
+    assert.equal(data.evidence.some(item => item.source === 'transcript'), false);
+    return;
+  }
+  if (action === 'knowledge') {
+    const data = response.data as VideoKnowledgeResult;
+    assert.equal(data.nodes.length, 0);
+    assert.equal(data.sourceState.transcriptEvidence, false);
+    return;
+  }
+  if (action === 'search') {
+    const data = response.data as CurrentVideoSegmentRetrievalResult;
+    assert.equal(data.status, 'no_evidence');
+    assert.equal(data.candidates.length, 0);
+    assert.equal(data.evidenceState.transcriptSegmentCount, 0);
+    assert.equal(data.aiRerank.status, 'not_requested');
+    assert.equal(data.qa.aiState.status, 'not_requested');
+    return;
+  }
+  const data = response.data as CurrentVideoTimestampJumpResponse;
+  assert.equal(data.ok, false);
+  assert.equal(data.targetSeconds, null);
+}
+
+function handlerPartKey(context: CurrentVideoContext): string {
+  assert.ok(context.cid);
+  return `${context.bvid}:${context.cid}:${context.currentPart.page}`;
+}
+
+function installGuardTestHook(
+  expectedPhase: GuardTestPhase,
+  callback: () => Promise<void>,
+): void {
+  let used = false;
+  (globalThis as typeof globalThis & {
+    __biliBillCurrentVideoPrimaryTextGuardTestHook__?: (phase: GuardTestPhase) => Promise<void>;
+  }).__biliBillCurrentVideoPrimaryTextGuardTestHook__ = async (phase) => {
+    if (used || phase !== expectedPhase) return;
+    used = true;
+    await callback();
+  };
+}
+
 function installChromeFake(): void {
   (globalThis as typeof globalThis & { chrome: unknown }).chrome = {
     runtime: {
@@ -1080,6 +1365,9 @@ function installChromeFake(): void {
 function resetChromeHarness(): void {
   tabs.length = 0;
   tabMessageHandlers.clear();
+  delete (globalThis as typeof globalThis & {
+    __biliBillCurrentVideoPrimaryTextGuardTestHook__?: unknown;
+  }).__biliBillCurrentVideoPrimaryTextGuardTestHook__;
   for (const key of Object.keys(storageValues)) {
     delete storageValues[key];
   }

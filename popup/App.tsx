@@ -556,6 +556,7 @@ export function App() {
         onReprobeSubtitle={reprobeCurrentVideoSubtitle}
         onRefreshKnowledge={fetchVideoKnowledge}
         onOpenSettings={openSettings}
+        getCurrentVideoActionScope={currentVideoScopeSnapshot}
         operationScopeKey={popupCurrentVideoContextKey(currentVideoContext)}
         primaryTextSelectionRevision={primaryTextSelectionRevision}
         currentVideoOperationRevision={currentVideoOperationRevision}
@@ -742,6 +743,7 @@ function CurrentVideoAssistantStatus({
   onReprobeSubtitle,
   onRefreshKnowledge,
   onOpenSettings,
+  getCurrentVideoActionScope,
   operationScopeKey,
   primaryTextSelectionRevision,
   currentVideoOperationRevision,
@@ -759,6 +761,7 @@ function CurrentVideoAssistantStatus({
   onReprobeSubtitle: () => void;
   onRefreshKnowledge: () => void;
   onOpenSettings: () => void;
+  getCurrentVideoActionScope: () => PopupCurrentVideoScopeSnapshot;
   operationScopeKey: string;
   primaryTextSelectionRevision: number;
   currentVideoOperationRevision: number;
@@ -777,16 +780,6 @@ function CurrentVideoAssistantStatus({
   const timestampRequestRef = useRef(0);
   const segmentSearchBusyRef = useRef(false);
   const timestampBusyRef = useRef(false);
-  const renderedScopeRef = useRef<PopupCurrentVideoScopeSnapshot>({
-    contextKey: operationScopeKey,
-    selectionRevision: primaryTextSelectionRevision,
-    operationRevision: currentVideoOperationRevision,
-  });
-  renderedScopeRef.current = {
-    contextKey: operationScopeKey,
-    selectionRevision: primaryTextSelectionRevision,
-    operationRevision: currentVideoOperationRevision,
-  };
   const subtitleDiagnostics = buildCurrentVideoSubtitleDiagnostics(context, {
     refreshing: subtitleProbeLoading,
   });
@@ -945,18 +938,22 @@ function CurrentVideoAssistantStatus({
   function beginScopedAction(requestRef: { current: number }): PopupCurrentVideoActionSnapshot {
     const requestId = requestRef.current + 1;
     requestRef.current = requestId;
-    return { ...renderedScopeRef.current, requestId };
+    return { ...liveScopeSnapshot(), requestId };
   }
 
   function scopedActionIsCurrent(
     action: PopupCurrentVideoActionSnapshot,
     requestRef: { current: number },
   ): boolean {
-    const scope = renderedScopeRef.current;
+    const scope = liveScopeSnapshot();
     return requestRef.current === action.requestId
       && scope.contextKey === action.contextKey
       && scope.selectionRevision === action.selectionRevision
       && scope.operationRevision === action.operationRevision;
+  }
+
+  function liveScopeSnapshot(): PopupCurrentVideoScopeSnapshot {
+    return getCurrentVideoActionScope();
   }
 
   return (

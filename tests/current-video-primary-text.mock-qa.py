@@ -766,6 +766,56 @@ def run_delayed_video_rebind_flow(page, reuse_same_element=False):
     assert_clean_visible_text(page)
 
 
+def run_video_removed_without_replacement_flow(page):
+    page.route("**/*", route_mock)
+    page.goto(MOCK_URL)
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+    page.evaluate("window.__assistantMockClearMessages()")
+    page.evaluate("window.__assistantMockRemoveVideoWithoutReplacement(2)")
+    page.wait_for_timeout(6200)
+    page.evaluate("window.__assistantMockDispatchVideoEvent('old', 'play')")
+    page.wait_for_timeout(50)
+    old_messages = page.evaluate(
+        """() => (window.__assistantMockMessages || [])
+            .filter((message) => message.action === "PLAYER_ACTION" || message.action === "PLAYER_HEARTBEAT")
+            .map((message) => message.payload)"""
+    )
+    assert old_messages == [], f"detached video kept listener or heartbeat while no replacement existed: {old_messages}"
+
+    page.evaluate("window.__assistantMockClearMessages()")
+    page.evaluate("window.__assistantMockInsertZeroDurationVideo()")
+    page.wait_for_timeout(2200)
+    zero_duration_messages = page.evaluate(
+        """() => (window.__assistantMockMessages || [])
+            .filter((message) => message.action === "PLAYER_ACTION" || message.action === "PLAYER_HEARTBEAT")
+            .map((message) => message.payload)"""
+    )
+    assert zero_duration_messages == [], f"zero-duration replacement should not bind: {zero_duration_messages}"
+
+    page.evaluate("window.__assistantMockMakeInsertedVideoReady()")
+    page.wait_for_timeout(1600)
+    page.evaluate("window.__assistantMockClearMessages()")
+    page.evaluate("window.__assistantMockDispatchVideoEvent('new', 'play')")
+    page.wait_for_timeout(50)
+    actions = page.evaluate(
+        """() => (window.__assistantMockMessages || [])
+            .filter((message) => message.action === "PLAYER_ACTION")
+            .map((message) => message.payload)"""
+    )
+    assert len(actions) == 1, f"expected one listener after valid replacement appears, got {actions}"
+    assert actions[0].get("cid") == 3303, f"valid replacement rebound to the wrong part identity: {actions}"
+    page.evaluate("window.__assistantMockClearMessages()")
+    page.wait_for_timeout(5200)
+    heartbeats = page.evaluate(
+        """() => (window.__assistantMockMessages || [])
+            .filter((message) => message.action === "PLAYER_HEARTBEAT")
+            .map((message) => message.payload)"""
+    )
+    assert len(heartbeats) == 1, f"expected exactly one heartbeat after recovery, got {heartbeats}"
+    assert heartbeats[0].get("cid") == 3303, f"heartbeat recovered with the wrong part identity: {heartbeats}"
+    assert_clean_visible_text(page)
+
+
 def run_missing_title_flow(page):
     page.route("**/*", route_mock)
     page.goto(f"{MOCK_URL}?missingTitle=1")
@@ -815,6 +865,7 @@ def run_content_listener_controlled_error_flow(page):
               confidence: 0.8,
               confidenceLabel: "高",
               evidencePreview: "受控错误测试",
+              sourceIdentityKey: context.transcriptEvidence?.sourceIdentityKey || window.__assistantMockCurrentSourceIdentityKey(),
             },
           }, {}, (response) => {
             document.createElement = originalCreateElement;
@@ -1070,6 +1121,11 @@ def main():
             assert not reused_video_errors, "\n".join(reused_video_errors)
             reused_video.close()
 
+            removed_video, removed_video_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_video_removed_without_replacement_flow(removed_video)
+            assert not removed_video_errors, "\n".join(removed_video_errors)
+            removed_video.close()
+
             missing_title, missing_title_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
             run_missing_title_flow(missing_title)
             assert not missing_title_errors, "\n".join(missing_title_errors)
@@ -1135,7 +1191,7 @@ def main():
             assert not mobile_errors, "\n".join(mobile_errors)
             mobile.close()
 
-            print("current-video primary-text real UI QA passed: missing-title identity shielding, late jump/return invalidation across part/video/selection/newer operations, delayed player replacement rebind and same-element reuse, deferred and rejected storage readiness, live local-settings/clear-all selection invalidation with late-response rejection, collect/detect navigation epoch isolation, controlled jump/return failures, serialized save/readback rollback, save-pending operation gates, save-time part/video context switch isolation, missing saved source, single-source fallback, desktop/mobile source selection, no automatic full-text request, search no-candidate/backend-failure states, search/jump/return, no raw visible leak, no overflow, no console errors")
+            print("current-video primary-text real UI QA passed: missing-title identity shielding, late jump/return invalidation across part/video/selection/newer operations, delayed player replacement rebind, same-element reuse, removed/zero-duration replacement recovery, deferred and rejected storage readiness, live local-settings/clear-all selection invalidation with late-response rejection, collect/detect navigation epoch isolation, controlled jump/return failures, serialized save/readback rollback, save-pending operation gates, save-time part/video context switch isolation, missing saved source, single-source fallback, desktop/mobile source selection, no automatic full-text request, search no-candidate/backend-failure states, search/jump/return, no raw visible leak, no overflow, no console errors")
         finally:
             browser.close()
 

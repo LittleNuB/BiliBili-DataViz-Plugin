@@ -34,6 +34,10 @@ export interface UpsertCurrentVideoTranscriptEvidenceOptions {
   expectedClearGeneration?: number;
 }
 
+export interface CurrentVideoTranscriptReadGuard {
+  canUseEvidence?: () => boolean;
+}
+
 export async function upsertCurrentVideoTranscriptEvidence(
   evidence: CurrentVideoTranscriptEvidenceWrite,
   options: UpsertCurrentVideoTranscriptEvidenceOptions = {},
@@ -135,8 +139,11 @@ export async function getCurrentVideoTranscriptEvidenceState(
   identity: CurrentVideoTranscriptIdentity,
   now = Date.now(),
   temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
+  guard: CurrentVideoTranscriptReadGuard = {},
 ): Promise<CurrentVideoTranscriptEvidenceState> {
-  const ownerStillValid = () => !temporaryOwnerInvalidForIdentity(temporaryOwner, identity);
+  const ownerStillValid = () =>
+    !temporaryOwnerInvalidForIdentity(temporaryOwner, identity)
+    && guard.canUseEvidence?.() !== false;
   if (!ownerStillValid()) {
     return buildTemporaryCurrentVideoTranscriptUnavailableState(identity, now);
   }
@@ -240,8 +247,12 @@ export async function getCurrentVideoActiveTranscriptSourceIdentityKeys(
 export async function getCurrentVideoTranscriptSegments(
   identity: CurrentVideoTranscriptIdentity & { sourceHash?: string | null },
   temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
+  guard: CurrentVideoTranscriptReadGuard = {},
 ): Promise<CurrentVideoTranscriptSegment[]> {
-  if (temporaryOwnerInvalidForIdentity(temporaryOwner, identity)) {
+  const canUseEvidence = () =>
+    !temporaryOwnerInvalidForIdentity(temporaryOwner, identity)
+    && guard.canUseEvidence?.() !== false;
+  if (!canUseEvidence()) {
     return [];
   }
 
@@ -250,7 +261,7 @@ export async function getCurrentVideoTranscriptSegments(
     .equals([identity.bvid, identity.cid, identity.page])
     .toArray();
 
-  if (temporaryOwnerInvalidForIdentity(temporaryOwner, identity)) {
+  if (!canUseEvidence()) {
     return [];
   }
 

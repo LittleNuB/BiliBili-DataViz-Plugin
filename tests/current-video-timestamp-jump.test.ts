@@ -25,6 +25,7 @@ test('confirmed timestamp jump seeks the player and records a bound return point
   assert.equal(result.returnPoint?.seconds, 12);
   assert.equal(result.returnPoint?.bvid, 'BV1Jump000');
   assert.equal(result.returnPoint?.page, 1);
+  assert.equal(result.returnPoint?.sourceIdentityKey, sourceIdentityKey());
 });
 
 test('unconfirmed timestamp jump does not seek automatically', async () => {
@@ -52,11 +53,13 @@ test('return action seeks back to the original position and clears the return po
     url: 'https://www.bilibili.com/video/BV1Jump000',
     seconds: 12,
     targetSeconds: 42,
+    sourceIdentityKey: sourceIdentityKey(),
     savedAt: 5000,
     wasPaused: false,
   };
 
   const result = await performTimestampReturn({
+    payload: returnPayload(),
     returnPoint,
     latestContext: videoContext(),
     video,
@@ -107,6 +110,22 @@ test('cid mismatch blocks jump even when bvid still matches', async () => {
   assert.ok(result.response.message.includes('当前视频已经变化'));
 });
 
+test('missing exact source in jump payload is rejected without seeking', async () => {
+  const video = mockVideo({ currentTime: 12, duration: 180, paused: true });
+  const payload = { ...jumpPayload() } as Partial<CurrentVideoTimestampJumpContentPayload>;
+  delete payload.sourceIdentityKey;
+  const result = await performConfirmedTimestampJump({
+    payload: payload as CurrentVideoTimestampJumpContentPayload,
+    latestContext: videoContext(),
+    video,
+  });
+
+  assert.equal(result.response.ok, false);
+  assert.equal(video.currentTime, 12);
+  assert.equal(result.returnPoint, null);
+  assert.ok(result.response.message.includes('当前视频已经变化'));
+});
+
 test('invalid timestamp and live player are blocked before seek', async () => {
   const video = mockVideo({ currentTime: 12, duration: 40, paused: true });
   const invalid = await performConfirmedTimestampJump({
@@ -130,6 +149,7 @@ test('invalid timestamp and live player are blocked before seek', async () => {
 test('stale return point is not reused across old playback context', async () => {
   const video = mockVideo({ currentTime: 42, duration: 180, paused: true });
   const result = await performTimestampReturn({
+    payload: returnPayload(),
     returnPoint: {
       candidateId: 'candidate:segment:safe',
       bvid: 'BV1Jump000',
@@ -138,6 +158,7 @@ test('stale return point is not reused across old playback context', async () =>
       url: 'https://www.bilibili.com/video/BV1Jump000',
       seconds: 12,
       targetSeconds: 42,
+      sourceIdentityKey: sourceIdentityKey(),
       savedAt: 0,
       wasPaused: true,
     },
@@ -150,6 +171,33 @@ test('stale return point is not reused across old playback context', async () =>
   assert.equal(result.clearReturnPoint, true);
   assert.equal(video.currentTime, 42);
   assert.ok(result.response.message.includes('已过期'));
+});
+
+test('return action rejects a changed exact source before seeking', async () => {
+  const video = mockVideo({ currentTime: 42, duration: 180, paused: true });
+  const result = await performTimestampReturn({
+    payload: { ...returnPayload(), sourceIdentityKey: `${sourceIdentityKey()}:new` },
+    returnPoint: {
+      candidateId: 'candidate:segment:safe',
+      bvid: 'BV1Jump000',
+      cid: 101,
+      page: 1,
+      url: 'https://www.bilibili.com/video/BV1Jump000',
+      seconds: 12,
+      targetSeconds: 42,
+      sourceIdentityKey: sourceIdentityKey(),
+      savedAt: 5000,
+      wasPaused: true,
+    },
+    latestContext: videoContext(),
+    video,
+    now: 6000,
+  });
+
+  assert.equal(result.response.ok, false);
+  assert.equal(result.clearReturnPoint, true);
+  assert.equal(video.currentTime, 42);
+  assert.equal(video.pauseCalls, 0);
 });
 
 function jumpPayload(): CurrentVideoTimestampJumpContentPayload {
@@ -167,7 +215,21 @@ function jumpPayload(): CurrentVideoTimestampJumpContentPayload {
     confidence: 0.86,
     confidenceLabel: '高',
     evidencePreview: '讲到模型架构的字幕片段。',
+    sourceIdentityKey: sourceIdentityKey(),
   };
+}
+
+function returnPayload() {
+  return {
+    contextBvid: 'BV1Jump000',
+    contextCid: 101,
+    contextPage: 1,
+    sourceIdentityKey: sourceIdentityKey(),
+  };
+}
+
+function sourceIdentityKey(): string {
+  return 'primary-text:bilibili_subtitle:BV1Jump000:101:1:zh-cn:jump-source';
 }
 
 function videoContext(): CurrentVideoContext {

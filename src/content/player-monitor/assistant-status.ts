@@ -2036,6 +2036,7 @@ async function returnCurrentVideoSegmentJumpFromPage(): Promise<void> {
   try {
     const response = await sendRuntimeRequest<CurrentVideoTimestampReturnResponse>(
       'RETURN_CURRENT_VIDEO_SEGMENT_JUMP',
+      currentPrimaryTextRequestParams(),
     );
     if (!segmentTimestampOperationIsCurrent(operation)) return;
     assistantState.segmentJumpStatus = timestampReturnStatusText(response);

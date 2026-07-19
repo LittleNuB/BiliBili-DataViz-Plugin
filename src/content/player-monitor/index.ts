@@ -11,6 +11,7 @@ import { detectVideo } from './video-detector';
 import type { BiliVizContentMessage } from '../../shared/types/messages';
 import type {
   CurrentVideoTimestampJumpContentPayload,
+  CurrentVideoTimestampReturnContentPayload,
   CurrentVideoTimestampJumpResponse,
   CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
@@ -91,8 +92,14 @@ async function initializeMonitorForSnapshot(snapshot: NavigationSnapshot): Promi
   }
 
   const contextKey = `${context.bvid}:${context.cid || `p${context.currentPart.page}`}`;
-  const currentVideo = currentUsableVideoElement();
+  const currentVideo = currentReadyVideoElement();
   if (contextKey === lastContextKey && currentVideo === monitoredVideoElement) return;
+  if (!currentVideo) {
+    cleanupMonitor();
+    lastContextKey = '';
+    scheduleVideoRebindCheck(snapshot, contextKey);
+    return;
+  }
 
   try {
     const video = await detectVideo();
@@ -135,12 +142,11 @@ async function initializeMonitorForSnapshot(snapshot: NavigationSnapshot): Promi
     };
     monitoredVideoElement = video;
     scheduleVideoRebindCheck(snapshot, contextKey);
-  } catch (e) {
+  } catch {
     if (!navigationSnapshotIsCurrent(snapshot)) return;
-    console.error('[BiliViz] Failed to initialize player monitor:', e);
-    if (!monitoredVideoElement) {
-      scheduleInitialize(VIDEO_REBIND_CHECK_INTERVAL_MS, snapshot);
-    }
+    cleanupMonitor();
+    lastContextKey = '';
+    scheduleVideoRebindCheck(snapshot, contextKey);
   }
 }
 
@@ -162,7 +168,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.action === 'CURRENT_VIDEO_TIMESTAMP_RETURN') {
-    handleCurrentVideoTimestampReturn().then(sendResponse).catch(() => {
+    handleCurrentVideoTimestampReturn(message.payload).then(sendResponse).catch(() => {
       sendResponse({
         ok: false,
         message: '返回失败，请确认当前视频页和播放器仍然可用后重试。',
@@ -218,15 +224,18 @@ async function handleCurrentVideoTimestampJump(
   }
   if (result.returnPoint) {
     currentVideoTimestampReturnPoint = result.returnPoint;
-    showReturnToast(result.response.returnPointSeconds, handleCurrentVideoTimestampReturn);
+    showReturnToast(result.response.returnPointSeconds, requestCurrentVideoTimestampReturnFromBackground);
   }
   return result.response;
 }
 
-async function handleCurrentVideoTimestampReturn(): Promise<CurrentVideoTimestampReturnResponse> {
+async function handleCurrentVideoTimestampReturn(
+  payload: CurrentVideoTimestampReturnContentPayload | null = null,
+): Promise<CurrentVideoTimestampReturnResponse> {
   const operation = beginTimestampOperation(false);
   const returnPoint = currentVideoTimestampReturnPoint;
   const result = await performTimestampReturn({
+    payload,
     returnPoint,
     latestContext,
     video: currentUsableVideoElement(),
@@ -239,6 +248,40 @@ async function handleCurrentVideoTimestampReturn(): Promise<CurrentVideoTimestam
     document.getElementById(RETURN_TOAST_ID)?.remove();
   }
   return result.response;
+}
+
+async function requestCurrentVideoTimestampReturnFromBackground(): Promise<CurrentVideoTimestampReturnResponse> {
+  const returnPoint = currentVideoTimestampReturnPoint;
+  if (!returnPoint?.sourceIdentityKey) {
+    return {
+      ok: false,
+      message: '当前视频状态已变化，请重新预览并确认跳转后再返回。',
+      candidateId: returnPoint?.candidateId ?? null,
+      returnPointSeconds: null,
+      targetSeconds: null,
+    };
+  }
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      action: 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP',
+      params: {
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: returnPoint.sourceIdentityKey,
+      },
+    }) as { success?: boolean; data?: CurrentVideoTimestampReturnResponse };
+    if (response?.success && response.data) return response.data;
+  } catch {
+    // Fall through to the controlled response below.
+  }
+
+  return {
+    ok: false,
+    message: '返回失败，请确认当前 B 站视频页仍然打开后重试。',
+    candidateId: returnPoint.candidateId,
+    returnPointSeconds: null,
+    targetSeconds: null,
+  };
 }
 
 function beginTimestampOperation(clearExistingReturnPoint: boolean): TimestampOperationSnapshot {
@@ -299,6 +342,13 @@ function currentVideoElement(): HTMLVideoElement | null {
 function currentUsableVideoElement(): HTMLVideoElement | null {
   const video = currentVideoElement();
   if (!video) return null;
+  return video;
+}
+
+function currentReadyVideoElement(): HTMLVideoElement | null {
+  const video = currentVideoElement();
+  if (!video || !document.documentElement.contains(video)) return null;
+  if (!Number.isFinite(video.duration) || video.duration <= 0) return null;
   return video;
 }
 
@@ -389,10 +439,16 @@ function scheduleVideoRebindCheck(
   clearVideoRebindTimer();
   videoRebindTimer = window.setTimeout(() => {
     videoRebindTimer = null;
-    if (!navigationSnapshotIsCurrent(snapshot) || lastContextKey !== contextKey) return;
-    const currentVideo = currentUsableVideoElement();
+    if (!navigationSnapshotIsCurrent(snapshot)) return;
+    const currentVideo = currentReadyVideoElement();
     if (currentVideo !== monitoredVideoElement) {
+      if (monitoredVideoElement) {
+        cleanupMonitor();
+        lastContextKey = '';
+      }
       void initializeMonitor(snapshot);
+      scheduleVideoRebindCheck(snapshot, contextKey);
+      return;
     }
     scheduleVideoRebindCheck(snapshot, contextKey);
   }, VIDEO_REBIND_CHECK_INTERVAL_MS);
