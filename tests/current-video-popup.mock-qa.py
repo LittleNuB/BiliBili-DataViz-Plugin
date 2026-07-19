@@ -13,10 +13,11 @@ POPUP_BUNDLE = ROOT / "dist" / "popup.js"
 MOCK_SCRIPT = ROOT / "tests" / "current-video-popup.mock.js"
 POPUP_URL = "http://popup.mock/popup"
 PROTECTED_ACTIONS = {
-    "GET_CURRENT_VIDEO_SUMMARY",
+    "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS",
     "GET_VIDEO_KNOWLEDGE",
     "SEARCH_CURRENT_VIDEO_SEGMENTS",
     "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
+    "REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP",
     "RETURN_CURRENT_VIDEO_SEGMENT_JUMP",
 }
 FORBIDDEN_VISIBLE_TERMS = [
@@ -113,20 +114,35 @@ def run_manual_exact_flow(page):
     )
     assert_no_protected_actions(page)
 
-    page.get_by_role("button", name="刷新摘要").click()
-    expect(page.get_by_text("手动摘要已使用精确的当前正文来源。")).to_be_visible()
+    page.get_by_role("button", name="生成摘要与亮点").click()
+    expect(page.get_by_text("手动生成已使用精确的当前正文来源。")).to_be_visible()
+    expect(page.get_by_text("视频亮点")).to_be_visible()
+    assert page.get_by_text("亮点 ").count() >= 4
+    page.get_by_role("button", name="预览跳转").first.click()
+    page.get_by_role("button", name="确认跳转").first.click()
+    expect(page.get_by_text("已跳到亮点位置，可返回原位置。")).to_be_visible()
+    page.get_by_role("button", name="返回原位置").first.click()
+    expect(page.get_by_text("已返回原位置。").first).to_be_visible()
+
     page.get_by_role("button", name="刷新", exact=True).click()
     page.locator("input[placeholder='例如：模型架构那段']").fill("授权测试")
     page.get_by_role("button", name="检索", exact=True).click()
-    expect(page.get_by_role("button", name="预览跳转")).to_be_visible()
-    page.get_by_role("button", name="预览跳转").click()
-    page.get_by_role("button", name="确认跳转").click()
-    expect(page.get_by_role("button", name="返回原位置")).to_be_visible()
-    page.get_by_role("button", name="返回原位置").click()
-    expect(page.get_by_text("已返回原位置。")).to_be_visible()
+    expect(page.get_by_role("button", name="预览跳转").first).to_be_visible()
+    page.get_by_role("button", name="预览跳转").last.click()
+    page.get_by_role("button", name="确认跳转").last.click()
+    expect(page.get_by_role("button", name="返回原位置").last).to_be_visible()
+    page.get_by_role("button", name="返回原位置").last.click()
+    expect(page.get_by_text("已返回原位置。").last).to_be_visible()
 
     expected = page.evaluate("window.__popupMockSourceV2")
-    for action in PROTECTED_ACTIONS:
+    for action in {
+        "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS",
+        "GET_VIDEO_KNOWLEDGE",
+        "SEARCH_CURRENT_VIDEO_SEGMENTS",
+        "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
+        "REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP",
+        "RETURN_CURRENT_VIDEO_SEGMENT_JUMP",
+    }:
         message = last_message_for(page, action)
         assert message, f"manual popup flow did not send {action}"
         assert message["params"].get("primaryTextSelectionsReady") is True
@@ -141,7 +157,7 @@ def run_stale_saved_source_flow(page):
     expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
     assert_no_protected_actions(page)
 
-    page.get_by_role("button", name="刷新摘要").click()
+    page.get_by_role("button", name="生成摘要与亮点").click()
     expect(page.get_by_text("此前保存的主要文本来源已不可用，请到视频页助手重新选择当前来源。").first).to_be_visible()
     page.get_by_role("button", name="刷新", exact=True).click()
     page.locator("input[placeholder='例如：模型架构那段']").fill("失效来源")
@@ -177,7 +193,7 @@ def run_blocked_flow(page, query, expected_message):
     expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
     assert_no_protected_actions(page)
 
-    page.get_by_role("button", name="刷新摘要").click()
+    page.get_by_role("button", name="生成摘要与亮点").click()
     expect(page.get_by_text(expected_message).first).to_be_visible()
     page.get_by_role("button", name="刷新", exact=True).click()
     page.locator("input[placeholder='例如：模型架构那段']").fill("不应发送")
@@ -207,17 +223,17 @@ def run_summary_scope_races(page):
     page.goto(POPUP_URL)
     expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
 
-    page.evaluate("window.__popupMockDeferNextResponse('GET_CURRENT_VIDEO_SUMMARY')")
-    page.get_by_role("button", name="刷新摘要").click()
-    page.wait_for_function("window.__popupMockPendingResponseCount('GET_CURRENT_VIDEO_SUMMARY') === 1")
+    page.evaluate("window.__popupMockDeferNextResponse('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    page.get_by_role("button", name="生成摘要与亮点").click()
+    page.wait_for_function("window.__popupMockPendingResponseCount('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS') === 1")
     page.evaluate("window.__popupMockEmitSelectionChange('clear')")
-    page.evaluate("window.__popupMockResolveResponses('GET_CURRENT_VIDEO_SUMMARY')")
+    page.evaluate("window.__popupMockResolveResponses('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
     page.wait_for_timeout(50)
-    expect(page.get_by_text("手动摘要已使用精确的当前正文来源。")).to_have_count(0)
+    expect(page.get_by_text("手动生成已使用精确的当前正文来源。")).to_have_count(0)
 
-    page.evaluate("window.__popupMockDeferNextResponse('GET_CURRENT_VIDEO_SUMMARY')")
-    page.get_by_role("button", name="刷新摘要").click()
-    page.wait_for_function("window.__popupMockPendingResponseCount('GET_CURRENT_VIDEO_SUMMARY') === 1")
+    page.evaluate("window.__popupMockDeferNextResponse('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    page.get_by_role("button", name="生成摘要与亮点").click()
+    page.wait_for_function("window.__popupMockPendingResponseCount('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS') === 1")
     page.evaluate("window.__popupMockDeferNextResponse('GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE')")
     page.get_by_role("button", name="重新检测字幕").click()
     page.wait_for_function("window.__popupMockPendingResponseCount('GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE') === 1")
@@ -225,9 +241,77 @@ def run_summary_scope_races(page):
     page.evaluate("window.__popupMockResolveResponses('GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE')")
     expect(page.get_by_text("切换后的 Popup 视频").first).to_be_visible()
     expect(page.get_by_text("检测期间当前视频已变化，请在新页面重新操作。")).to_be_visible()
-    page.evaluate("window.__popupMockResolveResponses('GET_CURRENT_VIDEO_SUMMARY')")
+    page.evaluate("window.__popupMockResolveResponses('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
     page.wait_for_timeout(50)
-    expect(page.get_by_text("较新的手动摘要 2")).to_have_count(0)
+    expect(page.get_by_text("较新的手动生成结果 2")).to_have_count(0)
+    assert_clean_page(page)
+
+
+def run_summary_failure_states(page):
+    page.route("**/*", route_popup)
+    page.goto(f"{POPUP_URL}?summaryNoText=1")
+    expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
+    page.get_by_role("button", name="生成摘要与亮点").click()
+    expect(page.get_by_text("当前没有可用的主要正文，无法生成摘要与亮点。")).to_be_visible()
+    assert_clean_page(page)
+
+    page.goto(f"{POPUP_URL}?summaryDisabled=1")
+    page.get_by_role("button", name="生成摘要与亮点").click()
+    expect(page.get_by_text("当前视频 AI 助手未开启，本次没有发送正文。")).to_be_visible()
+    expect(page.get_by_role("button", name="前往设置")).to_be_visible()
+    assert_clean_page(page)
+
+    page.goto(f"{POPUP_URL}?summaryUnconfigured=1")
+    page.get_by_role("button", name="生成摘要与亮点").click()
+    expect(page.get_by_text("AI 服务尚未配置完整，本次没有发送正文。")).to_be_visible()
+    expect(page.get_by_role("button", name="前往设置")).to_be_visible()
+    assert_clean_page(page)
+
+    page.goto(f"{POPUP_URL}?summaryInvalid=1")
+    page.get_by_role("button", name="生成摘要与亮点").click()
+    expect(page.get_by_text("模型返回的摘要与亮点没有通过校验，旧结果不会被替换。")).to_be_visible()
+    assert_clean_page(page)
+
+    page.goto(f"{POPUP_URL}?summaryError=1")
+    page.get_by_role("button", name="生成摘要与亮点").click()
+    expect(page.get_by_text("摘要与亮点生成失败，旧结果不会被替换。")).to_be_visible()
+    assert_clean_page(page)
+
+
+def run_generating_cancel_flow(page):
+    page.route("**/*", route_popup)
+    page.goto(POPUP_URL)
+    expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
+    page.evaluate("window.__popupMockDeferNextResponse('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    page.get_by_role("button", name="生成摘要与亮点").click()
+    page.wait_for_function("window.__popupMockPendingResponseCount('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS') === 1")
+    expect(page.get_by_role("button", name="取消")).to_be_visible()
+    page.get_by_role("button", name="取消").click()
+    page.wait_for_function("(window.__popupMockMessages || []).some(message => message.action === 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    page.evaluate("window.__popupMockResolveResponses('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    page.wait_for_timeout(50)
+    expect(page.get_by_text("手动生成已使用精确的当前正文来源。")).to_have_count(0)
+    assert_clean_page(page)
+
+
+def run_cache_restore_and_refresh(page):
+    page.route("**/*", route_popup)
+    page.goto(f"{POPUP_URL}?cachedSummary=1")
+    expect(page.get_by_text("已读取本地缓存的摘要与亮点。")).to_be_visible()
+    assert len(messages_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")) == 0
+    page.get_by_role("button", name="重新生成摘要与亮点").click()
+    expect(page.get_by_text("手动生成已使用精确的当前正文来源。")).to_be_visible()
+    assert len(messages_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")) == 1
+    assert_clean_page(page)
+
+
+def run_eight_highlight_layout(page):
+    page.route("**/*", route_popup)
+    page.goto(f"{POPUP_URL}?highlightCount=8")
+    expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
+    page.get_by_role("button", name="生成摘要与亮点").click()
+    expect(page.get_by_text("已生成 3 条摘要、3 个要点和 8 个亮点。")).to_be_visible()
+    assert page.get_by_text("亮点 ").count() >= 8
     assert_clean_page(page)
 
 
@@ -407,6 +491,26 @@ def main():
             assert not summary_races_errors, "\n".join(summary_races_errors)
             summary_races.close()
 
+            summary_states, summary_states_errors = new_checked_page(browser)
+            run_summary_failure_states(summary_states)
+            assert not summary_states_errors, "\n".join(summary_states_errors)
+            summary_states.close()
+
+            summary_cancel, summary_cancel_errors = new_checked_page(browser)
+            run_generating_cancel_flow(summary_cancel)
+            assert not summary_cancel_errors, "\n".join(summary_cancel_errors)
+            summary_cancel.close()
+
+            cached_summary, cached_summary_errors = new_checked_page(browser)
+            run_cache_restore_and_refresh(cached_summary)
+            assert not cached_summary_errors, "\n".join(cached_summary_errors)
+            cached_summary.close()
+
+            eight_highlights, eight_highlights_errors = new_checked_page(browser)
+            run_eight_highlight_layout(eight_highlights)
+            assert not eight_highlights_errors, "\n".join(eight_highlights_errors)
+            eight_highlights.close()
+
             knowledge_race, knowledge_race_errors = new_checked_page(browser)
             run_knowledge_newer_wins(knowledge_race)
             assert not knowledge_race_errors, "\n".join(knowledge_race_errors)
@@ -442,7 +546,7 @@ def main():
             assert not desktop_errors, "\n".join(desktop_errors)
             desktop.close()
 
-            print("current-video popup real UI QA passed: open/reprobe no generation, unified summary/knowledge/search/jump/return scope races, source and context invalidation, timestamp double-click suppression, manual exact authorization, stale saved source blocked, success/failure messages controlled, desktop/mobile no raw visible leak, no overflow, no console errors")
+            print("current-video popup real UI QA passed: open/reprobe no generation, cache restore no generation, summary/highlight success, no-text, AI disabled, AI unconfigured, generating cancel, request error, invalid rejection, 4-8 highlights, highlight preview/confirm/return, knowledge/search/jump/return scope races, stale source blocked, responsive no raw visible leak, no overflow, no console errors")
         finally:
             browser.close()
 

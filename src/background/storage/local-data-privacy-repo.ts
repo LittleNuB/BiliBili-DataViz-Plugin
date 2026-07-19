@@ -8,6 +8,7 @@ import type {
 import { ensureDynamicBill013Migration } from '../dynamic-bill/migration.ts';
 import { clearTemporaryCurrentVideoTranscriptCache } from '../current-video-temporary-transcript-cache.ts';
 import { runCurrentVideoTranscriptClearCoordinator } from '../current-video-transcript-clear-epoch.ts';
+import { runCurrentVideoSummaryHighlightsClearCoordinator } from '../current-video-summary-highlights-clear-epoch.ts';
 import { getDynamicBillActiveCreatorPauseViews, getDynamicSyncState } from './dynamic-bill-repo.ts';
 import { db } from './db.ts';
 import { getRegisteredLocalDataCategories } from './local-data-category-registry.ts';
@@ -21,6 +22,10 @@ import {
   getBlindBoxRecentDrawnBvids,
 } from './blind-box-draw-history-repo.ts';
 import { coordinateCurrentVideoPrimaryTextSelectionClear } from './current-video-primary-text-selection-store.ts';
+import {
+  clearCurrentVideoSummaryHighlightsCache,
+  collectCurrentVideoSummaryHighlightsCacheUsage,
+} from './current-video-summary-highlights-repo.ts';
 
 export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySummary> {
   await ensureDynamicBill013Migration();
@@ -28,11 +33,13 @@ export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySumm
     history,
     favorites,
     currentVideoSubtitles,
+    currentVideoSummaryHighlights,
     dynamicBill,
   ] = await Promise.all([
     summarizeHistory(),
     summarizeFavorites(),
     summarizeCurrentVideoSubtitles(),
+    summarizeCurrentVideoSummaryHighlights(),
     summarizeDynamicBill(),
   ]);
 
@@ -41,6 +48,7 @@ export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySumm
     history,
     favorites,
     currentVideoSubtitles,
+    currentVideoSummaryHighlights,
     dynamicBill,
   };
 }
@@ -74,6 +82,14 @@ export async function clearCurrentVideoSubtitleCache(): Promise<LocalDataOperati
   });
 }
 
+export async function clearCurrentVideoSummaryHighlightCache(): Promise<LocalDataOperationResult> {
+  return {
+    operation: 'clear_current_video_summary_highlight_cache',
+    completedAt: Date.now(),
+    cleared: await clearCurrentVideoSummaryHighlightsCache(),
+  };
+}
+
 export async function clearDynamicBillLocalData(): Promise<LocalDataOperationResult> {
   await ensureDynamicBill013Migration();
   const category = getRegisteredLocalDataCategories()
@@ -101,25 +117,26 @@ export async function clearAllLocalData(confirmation: unknown): Promise<LocalDat
   }
   return await coordinateCurrentVideoPrimaryTextSelectionClear(async () =>
     runCurrentVideoTranscriptClearCoordinator(async () =>
-      coordinateBlindBoxDrawHistoryClear(async recentDrawnBvids => {
-        const counts = await collectClearCounts(recentDrawnBvids.length);
-        await db.transaction('rw', db.tables, async () => {
-          for (const table of db.tables) {
-            await table.clear();
-          }
-        });
-        await chrome.storage.local.clear();
-        clearTemporaryCurrentVideoTranscriptCache();
+      runCurrentVideoSummaryHighlightsClearCoordinator(async () =>
+        coordinateBlindBoxDrawHistoryClear(async recentDrawnBvids => {
+          const counts = await collectClearCounts(recentDrawnBvids.length);
+          await db.transaction('rw', db.tables, async () => {
+            for (const table of db.tables) {
+              await table.clear();
+            }
+          });
+          await chrome.storage.local.clear();
+          clearTemporaryCurrentVideoTranscriptCache();
 
-        return {
-          operation: 'clear_all_local_data',
-          completedAt: Date.now(),
-          cleared: {
-            ...counts,
-            localSettings: true,
-          },
-        };
-      })));
+          return {
+            operation: 'clear_all_local_data',
+            completedAt: Date.now(),
+            cleared: {
+              ...counts,
+              localSettings: true,
+            },
+          };
+        }))));
 }
 
 async function summarizeHistory(): Promise<LocalDataPrivacySummary['history']> {
@@ -212,6 +229,15 @@ async function summarizeCurrentVideoSubtitles(): Promise<LocalDataPrivacySummary
   };
 }
 
+async function summarizeCurrentVideoSummaryHighlights(): Promise<LocalDataPrivacySummary['currentVideoSummaryHighlights']> {
+  const usage = await collectCurrentVideoSummaryHighlightsCacheUsage();
+  return {
+    cachedPartCount: usage.count,
+    usageBytes: usage.usageBytes,
+    latestGeneratedAt: usage.latestGeneratedAt,
+  };
+}
+
 async function summarizeDynamicBill(): Promise<LocalDataPrivacySummary['dynamicBill']> {
   await ensureDynamicBill013Migration();
   const activeCreatorPauses = await getDynamicBillActiveCreatorPauseViews();
@@ -284,6 +310,8 @@ async function collectClearCounts(
     dynamicBillRotationRecords,
     currentVideoSubtitleSources,
     currentVideoSubtitleSegments,
+    currentVideoSummaryHighlightParts,
+    currentVideoSummaryHighlightBytes,
     blindBoxDrawHistory,
   ] = await Promise.all([
     db.watchHistory.count(),
@@ -303,6 +331,8 @@ async function collectClearCounts(
     db.dynamicBillRotationRecords.count(),
     db.currentVideoTranscriptSources.count(),
     db.currentVideoTranscriptSegments.count(),
+    db.currentVideoSummaryHighlights.count(),
+    db.currentVideoSummaryHighlights.toArray().then(rows => serializedRowsSize(rows)),
     coordinatedBlindBoxDrawHistoryCount ?? getBlindBoxRecentDrawnBvids().then(bvids => bvids.length),
   ]);
 
@@ -324,6 +354,8 @@ async function collectClearCounts(
     dynamicBillRotationRecords,
     currentVideoSubtitleSources,
     currentVideoSubtitleSegments,
+    currentVideoSummaryHighlightParts,
+    currentVideoSummaryHighlightBytes,
     blindBoxDrawHistory,
   };
 }

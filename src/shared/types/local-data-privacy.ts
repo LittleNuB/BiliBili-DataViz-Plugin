@@ -32,6 +32,11 @@ export interface LocalDataPrivacySummary {
     usageBytes: number;
     lastUpdatedAt: number | null;
   };
+  currentVideoSummaryHighlights: {
+    cachedPartCount: number;
+    usageBytes: number;
+    latestGeneratedAt: number | null;
+  };
   dynamicBill: {
     activeFollowedCreatorCount: number;
     followedVideoUpdateCount: number;
@@ -55,6 +60,7 @@ export interface LocalDataPrivacySummary {
 
 export type LocalDataOperationKind =
   | 'clear_current_video_subtitle_cache'
+  | 'clear_current_video_summary_highlight_cache'
   | 'clear_dynamic_bill_data'
   | 'clear_all_local_data';
 

@@ -15,7 +15,7 @@ import type {
   CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
 import type { CurrentVideoRelatedFavoritesResponse } from '../../shared/types/current-video-related-favorites';
-import type { CurrentVideoSummaryResult } from '../../shared/types/current-video-summary';
+import type { CurrentVideoSummaryHighlightsResult, CurrentVideoSummaryResult } from '../../shared/types/current-video-summary';
 import type { VideoKnowledgeResult } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import type { SmartIndexResult } from '../../shared/types/favorite';
@@ -36,6 +36,19 @@ import {
 import { db } from '../storage/db';
 import type { UserConfig } from '../../shared/types/config';
 import { generateCurrentVideoSummary } from '../current-video-summary';
+import {
+  approximateSizeFromContext,
+  cancelCurrentVideoSummaryHighlightsForSource,
+  cancelCurrentVideoSummaryHighlightsRequest,
+  currentVideoSummaryHighlightsTitle,
+  generateCurrentVideoSummaryHighlights,
+  readCachedCurrentVideoSummaryHighlights,
+} from '../current-video-summary-highlights';
+import {
+  disabledCurrentVideoSummaryHighlights,
+  noTextCurrentVideoSummaryHighlights,
+  notConfiguredCurrentVideoSummaryHighlights,
+} from '../../shared/current-video-summary-highlights.ts';
 import {
   probeCurrentVideoSubtitleSource,
   withSubtitleSourceState,
@@ -95,6 +108,7 @@ import {
 } from '../storage/favorite-repo';
 import {
   clearAllLocalData,
+  clearCurrentVideoSummaryHighlightCache,
   clearCurrentVideoSubtitleCache,
   getLocalDataPrivacySummary,
 } from '../storage/local-data-privacy-repo';
@@ -140,6 +154,10 @@ import {
   readCurrentVideoPrimaryTextSelections,
   resolveCurrentVideoPrimaryTextAuthorization,
 } from '../../shared/current-video-primary-text-selection.ts';
+import {
+  getCurrentVideoSummaryHighlightsCache,
+  buildCurrentVideoSummaryHighlightsCacheKey,
+} from '../storage/current-video-summary-highlights-repo.ts';
 import {
   clearCurrentVideoTimestampOperationLeasesForTab,
   consumeCurrentVideoTimestampOperationLease,
@@ -502,6 +520,8 @@ export async function handleRequest<T>(
       return { success: true, data: await getLocalDataPrivacySummary() as T };
     case 'CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE':
       return { success: true, data: await clearCurrentVideoSubtitleCache() as T };
+    case 'CLEAR_CURRENT_VIDEO_SUMMARY_HIGHLIGHT_CACHE':
+      return { success: true, data: await clearCurrentVideoSummaryHighlightCache() as T };
     case 'REBUILD_SMART_FAVORITE_INDEX':
       return { success: true, data: await rebuildSmartFavoriteIndex(request.params) as T };
     case 'CLEAR_ALL_LOCAL_DATA':
@@ -541,6 +561,60 @@ export async function handleRequest<T>(
         return { success: true, data: primaryTextSelectionNotReadySummary() as T };
       }
       return { success: true, data: await generateCurrentVideoSummary(lookup.context, { transcriptSegments }) as T };
+    }
+    case 'GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE': {
+      if (!primaryTextSelectionsReady(request.params)) {
+        return { success: true, data: primaryTextSelectionNotReadySummaryHighlights() as T };
+      }
+      const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
+      if (!lookup.primaryTextAuthorized) {
+        return { success: true, data: primaryTextSelectionNotReadySummaryHighlights() as T };
+      }
+      return {
+        success: true,
+        data: await readCachedCurrentVideoSummaryHighlights(lookup.context) as T,
+      };
+    }
+    case 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS': {
+      if (!primaryTextSelectionsReady(request.params)) {
+        return { success: true, data: primaryTextSelectionNotReadySummaryHighlights() as T };
+      }
+      const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
+      if (!lookup.primaryTextAuthorized) {
+        return { success: true, data: primaryTextSelectionNotReadySummaryHighlights() as T };
+      }
+      const config = await loadConfig();
+      const title = currentVideoSummaryHighlightsTitle(lookup.context);
+      const textSize = approximateSizeFromContext(lookup.context);
+      if (!config.assistant.currentVideoAiAssistantEnabled) {
+        return { success: true, data: disabledCurrentVideoSummaryHighlights(title, config.ai.chatModel.trim() || null, textSize) as T };
+      }
+      if (!config.ai.baseURL.trim() || !config.ai.chatModel.trim() || !config.ai.apiKey.trim()) {
+        return { success: true, data: notConfiguredCurrentVideoSummaryHighlights(title, config.ai.chatModel.trim() || null, textSize) as T };
+      }
+      const transcriptSegments = await getAuthorizedCurrentVideoTranscriptSegments(lookup);
+      if (!transcriptSegments) {
+        return { success: true, data: noTextCurrentVideoSummaryHighlights(title, config.ai.chatModel.trim() || null, textSize) as T };
+      }
+      return {
+        success: true,
+        data: await generateCurrentVideoSummaryHighlights(lookup.context, {
+          config,
+          transcriptSegments,
+          resolveCurrentIdentity: () => resolveCurrentVideoSummaryHighlightCommitIdentity(request.params, requestTabId),
+        }) as T,
+      };
+    }
+    case 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS': {
+      const requestId = optionalStringParam(request.params?.requestId);
+      if (requestId) {
+        cancelCurrentVideoSummaryHighlightsRequest(requestId);
+      }
+      const sourceIdentityKey = selectedSourceIdentityKey(request.params);
+      if (sourceIdentityKey) {
+        cancelCurrentVideoSummaryHighlightsForSource(sourceIdentityKey);
+      }
+      return { success: true, data: { cancelled: true } as T };
     }
     case 'GET_VIDEO_KNOWLEDGE': {
       if (!primaryTextSelectionsReady(request.params)) {
@@ -588,6 +662,8 @@ export async function handleRequest<T>(
     }
     case 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP':
       return { success: true, data: await requestCurrentVideoSegmentJump(request.params, requestTabId) as T };
+    case 'REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP':
+      return { success: true, data: await requestCurrentVideoHighlightJump(request.params, requestTabId) as T };
     case 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP':
       return { success: true, data: await returnCurrentVideoSegmentJump(request.params, requestTabId) as T };
     case 'CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE':
@@ -905,6 +981,131 @@ async function requestCurrentVideoSegmentJump(
   } catch {
     return blockedTimestampJumpResponse(
       candidateId,
+      'player_unavailable',
+      formatTimestampJumpFailureReason('player_unavailable'),
+    );
+  } finally {
+    retireCurrentVideoTimestampOperationLease(operationLeaseId);
+  }
+}
+
+async function requestCurrentVideoHighlightJump(
+  params: Record<string, unknown> | undefined,
+  requestTabId: number | null,
+): Promise<CurrentVideoTimestampJumpResponse> {
+  const highlightId = requireStringParam(params?.highlightId ?? params?.candidateId, 'highlightId');
+  const model = requireStringParam(params?.model, 'model');
+  const confirmed = params?.confirmed === true;
+  if (!confirmed) {
+    return blockedTimestampJumpResponse(
+      highlightId,
+      'confirmation_required',
+      formatTimestampJumpFailureReason('confirmation_required'),
+    );
+  }
+  if (!primaryTextSelectionsReady(params)) {
+    return blockedTimestampJumpResponse(
+      highlightId,
+      'no_context',
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    );
+  }
+
+  const lookup = await getCurrentVideoContextLookupWithSelection(params, requestTabId);
+  if (!lookup.primaryTextAuthorized || !lookup.primaryTextGuard) {
+    return blockedTimestampJumpResponse(
+      highlightId,
+      'no_context',
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    );
+  }
+  const tabId = lookup.tab?.id ?? 0;
+  if (!lookup.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(lookup.tab.url)) {
+    return blockedTimestampJumpResponse(
+      highlightId,
+      'no_context',
+      formatTimestampJumpFailureReason('no_context'),
+    );
+  }
+  const context = lookup.context;
+  if (context.kind !== 'video') {
+    return blockedTimestampJumpResponse(
+      highlightId,
+      'no_context',
+      formatTimestampJumpFailureReason('no_context'),
+    );
+  }
+
+  const operationGuard = lookup.primaryTextGuard;
+  const expectedCacheKey = buildCurrentVideoSummaryHighlightsCacheKey({
+    identity: { sourceIdentityKey: operationGuard.sourceIdentityKey },
+    model,
+  });
+  const record = await getCurrentVideoSummaryHighlightsCache({
+    identity: { sourceIdentityKey: operationGuard.sourceIdentityKey },
+    model,
+  });
+  if (!record || record.cacheKey !== expectedCacheKey) {
+    return blockedTimestampJumpResponse(
+      highlightId,
+      'candidate_not_found',
+      '当前亮点结果已过期，请重新生成后再跳转。',
+    );
+  }
+  const highlight = record.result.highlights.find(item => item.id === highlightId);
+  if (!highlight) {
+    return blockedTimestampJumpResponse(
+      highlightId,
+      'candidate_not_found',
+      '当前亮点结果已过期，请重新生成后再跳转。',
+    );
+  }
+
+  await currentVideoPrimaryTextGuardTestHook('before_timestamp_message');
+  if (!await currentVideoPrimaryTextGuardStillAuthorized(lookup)) {
+    return blockedTimestampJumpResponse(
+      highlightId,
+      'no_context',
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    );
+  }
+
+  const operationLeaseId = issueCurrentVideoTimestampOperationLease({
+    tabId,
+    operationKind: 'jump',
+    bvid: operationGuard.bvid,
+    cid: operationGuard.cid,
+    page: operationGuard.page,
+    sourceIdentityKey: operationGuard.sourceIdentityKey,
+    selectionGeneration: operationGuard.selectionGeneration,
+    transcriptClearGeneration: operationGuard.transcriptClearGeneration,
+  });
+
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, {
+      action: 'CURRENT_VIDEO_TIMESTAMP_JUMP',
+      payload: {
+        candidateId: highlightId,
+        confirmed: true,
+        contextBvid: context.bvid,
+        contextCid: context.cid,
+        contextPage: context.currentPart.page,
+        contextUrl: context.url,
+        contextCollectedAt: context.collectedAt,
+        targetSeconds: highlight.startSeconds,
+        targetTimeLabel: formatTimestampLabel(highlight.startSeconds),
+        sourceLabel: '视频亮点',
+        confidence: 1,
+        confidenceLabel: '高',
+        evidencePreview: highlight.description,
+        sourceIdentityKey: operationGuard.sourceIdentityKey,
+        operationLeaseId,
+      },
+    });
+    return response as CurrentVideoTimestampJumpResponse;
+  } catch {
+    return blockedTimestampJumpResponse(
+      highlightId,
       'player_unavailable',
       formatTimestampJumpFailureReason('player_unavailable'),
     );
@@ -1349,7 +1550,7 @@ async function enrichCurrentVideoContextWithTranscriptEvidence(
       },
       now: Date.now(),
       reason: 'missing_cid',
-      message: '当前视频缺少 CID，无法读取本地字幕正文证据状态。',
+      message: '当前视频分 P 身份信息不完整，无法读取本地字幕正文证据状态。',
       warnings: ['cid_unknown'],
     }));
   }
@@ -1473,6 +1674,32 @@ function primaryTextSelectionNotReadySummary(now = Date.now()): CurrentVideoSumm
   };
 }
 
+function primaryTextSelectionNotReadySummaryHighlights(now = Date.now()): CurrentVideoSummaryHighlightsResult {
+  return {
+    status: 'cancelled',
+    title: '主要文本来源尚未就绪',
+    message: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    sourceLabel: null,
+    textSize: { lineCount: 0, charCount: null, utf8Bytes: 0 },
+    summarySentences: [],
+    keyPoints: [],
+    highlights: [],
+    limitations: ['读取完成前不会读取当前正文，也不会请求 AI。'],
+    ai: {
+      status: 'not_requested',
+      model: null,
+      error: null,
+      note: '主要文本来源选择尚未读取完成，因此没有请求 AI。',
+    },
+    generatedAt: now,
+    model: null,
+    cacheKey: null,
+    cacheHit: false,
+    current: true,
+    requestId: null,
+  };
+}
+
 function primaryTextSelectionNotReadyKnowledge(now = Date.now()): VideoKnowledgeResult {
   return {
     status: 'ready',
@@ -1495,6 +1722,27 @@ function primaryTextSelectionNotReadyKnowledge(now = Date.now()): VideoKnowledge
       '读取完成前不会把当前可见字幕正文当作主要文本来源。',
     ],
   };
+}
+
+async function resolveCurrentVideoSummaryHighlightCommitIdentity(
+  params: Record<string, unknown> | undefined,
+  requestTabId: number | null,
+): Promise<{ sourceIdentityKey: string }> {
+  const lookup = await getCurrentVideoContextLookupWithSelection(params, requestTabId);
+  if (lookup.primaryTextAuthorized && lookup.primaryTextGuard) {
+    return { sourceIdentityKey: lookup.primaryTextGuard.sourceIdentityKey };
+  }
+  if (lookup.context.kind === 'video' && lookup.context.transcriptEvidence?.sourceIdentityKey) {
+    return { sourceIdentityKey: lookup.context.transcriptEvidence.sourceIdentityKey };
+  }
+  return { sourceIdentityKey: 'not-current-video-summary-highlights' };
+}
+
+function formatTimestampLabel(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safe / 60);
+  const rest = safe % 60;
+  return `${minutes}:${String(rest).padStart(2, '0')}`;
 }
 
 function primaryTextSelectionNotReadySegmentResult(

@@ -128,26 +128,147 @@
     };
   }
 
-  function summaryResult(authorized, sequence) {
+  function summaryResult(authorized, sequence, options = {}) {
+    const highlightCount = Math.max(4, Math.min(8, Number(params.get('highlightCount') || options.highlightCount || 4)));
+    const highlights = Array.from({ length: highlightCount }, (_, index) => {
+      const startSeconds = index * 8;
+      const endSeconds = startSeconds + 6;
+      return {
+        id: `highlight-${index + 1}`,
+        title: `亮点 ${index + 1}`,
+        description: `这是第 ${index + 1} 个经过校验的亮点说明。`,
+        startSeconds,
+        endSeconds,
+        timeRangeLabel: `0:${String(startSeconds).padStart(2, '0')}-0:${String(endSeconds).padStart(2, '0')}`,
+        evidenceLineNumbers: [index + 1],
+      };
+    });
+    const textSize = { lineCount: 12, charCount: 360, utf8Bytes: 720 };
+    if (!authorized || options.status === 'no_text') {
+      return {
+        status: 'no_text',
+        title: 'Popup 授权 Mock 视频',
+        message: authorized ? '当前没有可用的主要正文，无法生成摘要与亮点。' : '此前保存的主要文本来源已经不可用。',
+        sourceLabel: null,
+        textSize: authorized ? { lineCount: 0, charCount: null, utf8Bytes: 0 } : textSize,
+        summarySentences: [],
+        keyPoints: [],
+        highlights: [],
+        limitations: [authorized ? '请先检测并选择主要文本来源。' : '请重新选择主要文本来源。'],
+        ai: { status: 'not_requested', model: null, error: null, note: '本次没有请求 AI。' },
+        generatedAt: Date.now(),
+        model: null,
+        cacheKey: null,
+        cacheHit: false,
+        current: true,
+        requestId: null,
+      };
+    }
+    if (options.status === 'disabled' || params.get('summaryDisabled') === '1') {
+      return {
+        status: 'error',
+        title: 'Popup 授权 Mock 视频',
+        message: '当前视频 AI 助手未开启，本次没有发送正文。',
+        sourceLabel: null,
+        textSize,
+        summarySentences: [],
+        keyPoints: [],
+        highlights: [],
+        limitations: ['开启开关本身不会发送正文，仍需再次点击生成。'],
+        ai: { status: 'disabled', model: 'mock-model', error: null, note: '请在设置中开启“当前视频 AI 助手”后，再手动生成。' },
+        generatedAt: Date.now(),
+        model: 'mock-model',
+        cacheKey: null,
+        cacheHit: false,
+        current: true,
+        requestId: null,
+      };
+    }
+    if (options.status === 'unconfigured' || params.get('summaryUnconfigured') === '1') {
+      return {
+        status: 'error',
+        title: 'Popup 授权 Mock 视频',
+        message: 'AI 服务尚未配置完整，本次没有发送正文。',
+        sourceLabel: null,
+        textSize,
+        summarySentences: [],
+        keyPoints: [],
+        highlights: [],
+        limitations: ['配置完成后需要再次点击生成；不会自动补发。'],
+        ai: { status: 'not_configured', model: 'mock-model', error: null, note: '请先配置服务地址、模型和 API Key。' },
+        generatedAt: Date.now(),
+        model: 'mock-model',
+        cacheKey: null,
+        cacheHit: false,
+        current: true,
+        requestId: null,
+      };
+    }
+    if (options.status === 'invalid' || params.get('summaryInvalid') === '1') {
+      return {
+        status: 'invalid_output',
+        title: 'Popup 授权 Mock 视频',
+        message: '模型返回的摘要与亮点没有通过校验，旧结果不会被替换。',
+        sourceLabel: null,
+        textSize,
+        summarySentences: [],
+        keyPoints: [],
+        highlights: [],
+        limitations: ['请稍后重试。'],
+        ai: { status: 'invalid_output', model: 'mock-model', error: 'invalid', note: '已拒绝本次结果。' },
+        generatedAt: Date.now(),
+        model: 'mock-model',
+        cacheKey: null,
+        cacheHit: false,
+        current: true,
+        requestId: null,
+      };
+    }
+    if (options.status === 'error' || params.get('summaryError') === '1') {
+      return {
+        status: 'error',
+        title: 'Popup 授权 Mock 视频',
+        message: '摘要与亮点生成失败，旧结果不会被替换。',
+        sourceLabel: null,
+        textSize,
+        summarySentences: [],
+        keyPoints: [],
+        highlights: [],
+        limitations: ['本次失败不会写入缓存，也不会生成推测时间戳。'],
+        ai: { status: 'failed', model: 'mock-model', error: 'mock-error', note: '请确认 AI 设置可用后再重试。' },
+        generatedAt: Date.now(),
+        model: 'mock-model',
+        cacheKey: null,
+        cacheHit: false,
+        current: true,
+        requestId: null,
+      };
+    }
     return {
-      status: authorized ? 'ready' : 'cancelled',
-      sourceTier: authorized ? 'transcript_summary' : null,
-      sourceTierLabel: authorized ? '字幕正文摘要' : null,
-      confidence: authorized ? 'medium' : 'low',
-      generationMode: 'local_fallback',
+      status: 'ready',
       title: 'Popup 授权 Mock 视频',
-      summary: authorized
-        ? (sequence === 1 ? '手动摘要已使用精确的当前正文来源。' : `较新的手动摘要 ${sequence}`)
-        : '此前保存的主要文本来源已经不可用。',
-      bullets: authorized ? ['手动触发后才读取。'] : [],
-      evidence: [],
-      timestampRanges: [],
-      missingSources: [],
-      warnings: authorized ? [] : ['selected_source_missing'],
-      limitations: [authorized ? '仅用于 popup 授权测试。' : '请重新选择主要文本来源。'],
-      nextQuestions: [],
-      ai: { status: 'not_requested', model: null, error: null, note: '本次未请求外部模型。' },
+      message: options.cacheHit ? '已读取本地缓存的摘要与亮点。' : `已生成 3 条摘要、3 个要点和 ${highlightCount} 个亮点。`,
+      sourceLabel: 'B站字幕',
+      textSize,
+      summarySentences: [
+        { id: 'summary-1', text: sequence === 1 ? '手动生成已使用精确的当前正文来源。' : `较新的手动生成结果 ${sequence} 已采用当前正文。`, evidenceLineNumbers: [1, 2] },
+        { id: 'summary-2', text: '摘要内容保持中文，不展示正文摘录。', evidenceLineNumbers: [3, 4] },
+        { id: 'summary-3', text: '亮点时间来自已校验的正文行。', evidenceLineNumbers: [5, 6] },
+      ],
+      keyPoints: [
+        { id: 'key-point-1', text: '先确认当前主要文本来源。', evidenceLineNumbers: [1] },
+        { id: 'key-point-2', text: '再生成摘要和亮点。', evidenceLineNumbers: [2] },
+        { id: 'key-point-3', text: '最后通过预览确认跳转。', evidenceLineNumbers: [3] },
+      ],
+      highlights,
+      limitations: ['摘要区不展示正文摘录；亮点时间只来自已校验的当前正文行。'],
+      ai: { status: 'generated', model: 'mock-model', error: null, note: options.cacheHit ? '已从本地缓存读取。' : '已完成模型生成并通过本地校验。' },
       generatedAt: Date.now(),
+      model: 'mock-model',
+      cacheKey: 'mock-summary-highlight-cache',
+      cacheHit: options.cacheHit === true,
+      current: true,
+      requestId: `mock-request-${sequence}`,
     };
   }
 
@@ -331,11 +452,41 @@
             return maybeDeferResponse(message.action, { success: true, data: currentContext() });
           case 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE':
             return maybeDeferResponse(message.action, { success: true, data: transcriptEvidence() });
-          case 'GET_CURRENT_VIDEO_SUMMARY':
+          case 'GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE':
             return maybeDeferResponse(message.action, {
               success: true,
-              data: summaryResult(authorized, nextActionSequence(message.action)),
+              data: params.get('cachedSummary') === '1'
+                ? summaryResult(authorized, nextActionSequence(message.action), { cacheHit: true })
+                : {
+                  status: 'not_requested',
+                  title: 'Popup 授权 Mock 视频',
+                  message: '可在这里手动生成摘要与亮点；打开面板不会自动发送正文。',
+                  sourceLabel: null,
+                  textSize: { lineCount: 0, charCount: null, utf8Bytes: 0 },
+                  summarySentences: [],
+                  keyPoints: [],
+                  highlights: [],
+                  limitations: [],
+                  ai: { status: 'not_requested', model: null, error: null, note: '尚未请求生成。' },
+                  generatedAt: Date.now(),
+                  model: null,
+                  cacheKey: null,
+                  cacheHit: false,
+                  current: true,
+                  requestId: null,
+                },
             });
+          case 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS':
+            return maybeDeferResponse(message.action, {
+              success: true,
+              data: summaryResult(
+                params.get('summaryNoText') === '1' ? true : authorized,
+                nextActionSequence(message.action),
+                { status: params.get('summaryNoText') === '1' ? 'no_text' : undefined },
+              ),
+            });
+          case 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS':
+            return maybeDeferResponse(message.action, { success: true, data: { cancelled: true } });
           case 'GET_VIDEO_KNOWLEDGE':
             return maybeDeferResponse(message.action, {
               success: true,
@@ -374,6 +525,18 @@
               returnPointSeconds: authorized ? 12 : null,
               sourceLabel: authorized ? '可定位字幕证据' : null,
               confidence: authorized ? 0.88 : null,
+            } });
+          case 'REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP':
+            returnAvailable = authorized;
+            return maybeDeferResponse(message.action, { success: true, data: {
+              ok: authorized,
+              message: authorized ? '已跳到 0:00，可返回 0:12。' : '主要文本来源不可用，未跳转。',
+              candidateId: String(message.params?.highlightId || ''),
+              targetSeconds: authorized ? 0 : null,
+              targetTimeLabel: authorized ? '0:00' : null,
+              returnPointSeconds: authorized ? 12 : null,
+              sourceLabel: authorized ? '视频亮点' : null,
+              confidence: authorized ? 1 : null,
             } });
           case 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP':
             if (params.get('rawReturnFailure') === '1') {

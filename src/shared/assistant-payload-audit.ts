@@ -110,6 +110,37 @@ export const currentVideoSummaryPayloadContract: AssistantPayloadAuditContract =
   ],
 };
 
+export const currentVideoSummaryHighlightsPayloadContract: AssistantPayloadAuditContract = {
+  name: 'current-video-summary-highlights-v1',
+  allowedPaths: [
+    '$',
+    '$.intent',
+    '$.request',
+    '$.request.requestId',
+    '$.request.operation',
+    '$.request.submittedAt',
+    '$.request.model',
+    '$.request.lineCount',
+    '$.request.charCount',
+    '$.request.utf8Bytes',
+    '$.video',
+    '$.video.title',
+    '$.video.partTitle',
+    '$.video.durationSeconds',
+    '$.source',
+    '$.source.label',
+    '$.source.language',
+    '$.textLines',
+    '$.textLines[]',
+    '$.textLines[].lineNo',
+    '$.textLines[].startSeconds',
+    '$.textLines[].endSeconds',
+    '$.textLines[].text',
+    '$.outputRules',
+    '$.outputRules[]',
+  ],
+};
+
 export const smartFavoriteQaPayloadContract: AssistantPayloadAuditContract = {
   name: 'smart-favorites-qa-synthesis-v1',
   allowedPaths: [

@@ -13,7 +13,7 @@ import type {
   CurrentVideoTimestampOperationLeaseConsumeResult,
   CurrentVideoTimestampReturnResponse,
 } from '../src/shared/types/current-video-segment-retrieval.ts';
-import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary.ts';
+import type { CurrentVideoSummaryHighlightsResult, CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary.ts';
 import type { VideoKnowledgeResult } from '../src/shared/types/video-knowledge.ts';
 import {
   CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
@@ -381,6 +381,10 @@ test('background full-text handlers fail closed while primary text selection rea
     action: 'GET_CURRENT_VIDEO_SUMMARY',
     params: readinessParams,
   }, tabId, context.url);
+  const summaryHighlights = await sendRequest<CurrentVideoSummaryHighlightsResult>({
+    action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+    params: readinessParams,
+  }, tabId, context.url);
   const knowledge = await sendRequest<VideoKnowledgeResult>({
     action: 'GET_VIDEO_KNOWLEDGE',
     params: readinessParams,
@@ -406,6 +410,10 @@ test('background full-text handlers fail closed while primary text selection rea
   assert.equal(summary.data?.status, 'cancelled');
   assert.match(summary.data?.summary ?? '', /主要文本来源/);
   assert.equal(summary.data?.sourceTier, null);
+  assert.equal(summaryHighlights.success, true);
+  assert.equal(summaryHighlights.data?.status, 'cancelled');
+  assert.match(summaryHighlights.data?.message ?? '', /主要文本来源/);
+  assert.equal(summaryHighlights.data?.highlights.length, 0);
 
   assert.equal(knowledge.success, true);
   assert.equal(knowledge.data?.nodes.length, 0);
@@ -462,6 +470,10 @@ test('background full-text handlers fail closed when the readiness marker is mis
     action: 'GET_CURRENT_VIDEO_SUMMARY',
     params: {},
   }, tabId, context.url);
+  const summaryHighlights = await sendRequest<CurrentVideoSummaryHighlightsResult>({
+    action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+    params: {},
+  }, tabId, context.url);
   const knowledge = await sendRequest<VideoKnowledgeResult>({
     action: 'GET_VIDEO_KNOWLEDGE',
     params: {},
@@ -485,6 +497,8 @@ test('background full-text handlers fail closed when the readiness marker is mis
 
   assert.equal(summary.data?.status, 'cancelled');
   assert.equal(summary.data?.sourceTier, null);
+  assert.equal(summaryHighlights.data?.status, 'cancelled');
+  assert.equal(summaryHighlights.data?.highlights.length, 0);
   assert.equal(knowledge.data?.nodes.length, 0);
   assert.equal(knowledge.data?.sourceState.transcriptEvidence, false);
   assert.equal(search.data?.status, 'no_evidence');
