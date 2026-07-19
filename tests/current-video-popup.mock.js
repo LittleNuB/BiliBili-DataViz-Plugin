@@ -19,6 +19,7 @@
   const actionSequence = new Map();
   const cancelledSummaryRequestIds = new Set();
   const cancelledFullTextQaRequestIds = new Set();
+  const qaSessions = [];
   let summaryCacheResult = null;
   let summaryCacheSourceIdentityKey = null;
   let summaryReplacementSequence = 100;
@@ -56,7 +57,7 @@
       return Promise.resolve(typeof response === 'function' ? response() : response);
     }
     deferredActionCounts.set(action, remaining - 1);
-    return new Promise((resolve) => pendingResponses.push({ action, response, resolve }));
+    return new Promise((resolve, reject) => pendingResponses.push({ action, response, resolve, reject }));
   }
 
   function emitStorageChange(key, oldValue, newValue) {
@@ -495,11 +496,13 @@
   }
 
   function fullTextQaResult(request, authorized) {
+    const sessionId = String(request?.sessionId || 'popup-qa-session');
     const requestId = String(request?.requestId || 'popup-qa-request');
     const turnId = String(request?.turnId || 'popup-qa-turn');
     const question = String(request?.question || '').trim();
     const sourceLabel = authorized ? 'B站字幕' : null;
     const common = {
+      sessionId,
       requestId,
       turnId,
       question,
@@ -512,6 +515,19 @@
       limitations: [],
       generatedAt: Date.now(),
       canRetry: true,
+      sourceReference: authorized ? {
+        title: title || '当前视频',
+        partTitle: page > 1 ? `第 ${page} P` : null,
+        page,
+        bvid,
+        cid,
+        url: 'https://www.bilibili.com/video/BV1PopupMock9/',
+        sourceLabel: 'B站字幕',
+        language: 'zh-cn',
+        sourceIdentityKey: currentSourceIdentityKey(),
+        textSize: { lineCount: 2, charCount: 34, utf8Bytes: 96 },
+        capturedAt: Date.now(),
+      } : null,
     };
     if (cancelledFullTextQaRequestIds.has(requestId)) {
       return {
@@ -589,12 +605,82 @@
         endSeconds: 8,
         timeRangeLabel: '0:04-0:08',
         sourceLabel: 'B站字幕',
-        binding: { requestId, turnId, citationId },
+        binding: { sessionId, requestId, turnId, citationId },
       }],
       message: '回答已基于当前分 P 的完整主要文本生成。',
       limitations: ['回答和引用只基于当前分 P 本次提交的完整主要文本。'],
       ai: { status: 'generated', model: currentChatModel(), note: '回答已生成。', errorCode: null },
+      rollingContext: `围绕“${question || '当前问题'}”的简短脉络。`,
       canRetry: false,
+    };
+  }
+
+  function recordQaSessionTurn(result) {
+    const now = Date.now();
+    const sessionId = String(result.sessionId || 'popup-qa-session');
+    let session = qaSessions.find(item => item.sessionId === sessionId);
+    if (!session) {
+      session = {
+        sessionId,
+        title: `${String(result.question || '新问答会话').slice(0, 18) || '新问答会话'} · 2026/07/20`,
+        customTitle: null,
+        createdAt: now,
+        updatedAt: now,
+        lastAccessedAt: now,
+        turns: [],
+      };
+      qaSessions.unshift(session);
+    }
+    const turn = {
+      turnId: result.turnId,
+      requestId: result.requestId,
+      question: result.question,
+      status: result.status,
+      answer: result.answer,
+      message: result.message,
+      citations: result.citations,
+      canRetry: result.canRetry,
+      ai: result.ai,
+      source: result.sourceReference,
+      rollingContext: result.rollingContext || null,
+      createdAt: now,
+      updatedAt: now,
+      submittedAt: now,
+      generatedAt: result.generatedAt || now,
+    };
+    const index = session.turns.findIndex(item => item.turnId === turn.turnId);
+    if (index >= 0) session.turns[index] = turn;
+    else session.turns.push(turn);
+    session.updatedAt = now;
+    session.lastAccessedAt = now;
+    qaSessions.sort((a, b) => b.lastAccessedAt - a.lastAccessedAt);
+  }
+
+  function qaSessionsView(activeSessionId) {
+    const requested = String(activeSessionId || '').trim();
+    const active = requested
+      ? qaSessions.find(item => item.sessionId === requested) || null
+      : qaSessions[0] || null;
+    return {
+      sessions: qaSessions.map(session => ({
+        sessionId: session.sessionId,
+        title: session.title,
+        turnCount: session.turns.length,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        lastAccessedAt: session.lastAccessedAt,
+      })),
+      activeSession: active,
+      activeSessionId: active?.sessionId || null,
+      usage: {
+        count: qaSessions.length,
+        usageBytes: JSON.stringify(qaSessions).length,
+        latestUsedAt: qaSessions[0]?.lastAccessedAt || null,
+      },
+      limits: {
+        maxSessions: 200,
+        maxBytes: 25 * 1024 * 1024,
+      },
     };
   }
 
@@ -627,6 +713,14 @@
       const index = pendingResponses.indexOf(item);
       if (index >= 0) pendingResponses.splice(index, 1);
       item.resolve(typeof item.response === 'function' ? item.response() : item.response);
+    }
+  };
+  window.__popupMockRejectResponses = (action) => {
+    const selected = pendingResponses.filter((item) => !action || item.action === action);
+    for (const item of selected) {
+      const index = pendingResponses.indexOf(item);
+      if (index >= 0) pendingResponses.splice(index, 1);
+      item.reject(new Error('MOCK_DEFERRED_RESPONSE_FAILURE'));
     }
   };
   window.__popupMockSummaryCache = () => summaryCacheResult;
@@ -807,13 +901,40 @@
                 nextActionSequence(message.action),
               ),
             });
+          case 'GET_CURRENT_VIDEO_QA_SESSIONS':
+            return maybeDeferResponse(message.action, {
+              success: true,
+              data: qaSessionsView(message.params?.sessionId || null),
+            });
+          case 'RENAME_CURRENT_VIDEO_QA_SESSION': {
+            const session = qaSessions.find(item => item.sessionId === message.params?.sessionId);
+            if (session) {
+              session.title = String(message.params?.title || session.title).slice(0, 60);
+              session.customTitle = session.title;
+              session.updatedAt = Date.now();
+              session.lastAccessedAt = Date.now();
+            }
+            return Promise.resolve({ success: true, data: qaSessionsView(message.params?.sessionId || null) });
+          }
+          case 'DELETE_CURRENT_VIDEO_QA_SESSION': {
+            const index = qaSessions.findIndex(item => item.sessionId === message.params?.sessionId);
+            if (index >= 0) qaSessions.splice(index, 1);
+            return Promise.resolve({ success: true, data: qaSessionsView(null) });
+          }
+          case 'CLEAR_CURRENT_VIDEO_QA_SESSIONS':
+            qaSessions.splice(0, qaSessions.length);
+            return Promise.resolve({ success: true, data: qaSessionsView(null) });
           case 'ASK_CURRENT_VIDEO_FULL_TEXT':
             if (params.get('qaReject') === '1') {
               return Promise.reject(new Error('MOCK_POPUP_QA_NETWORK_FAILURE'));
             }
             return maybeDeferResponse(message.action, () => ({
               success: true,
-              data: fullTextQaResult(message.params, authorized),
+              data: (() => {
+                const result = fullTextQaResult(message.params, authorized);
+                recordQaSessionTurn(result);
+                return result;
+              })(),
             }));
           case 'CANCEL_CURRENT_VIDEO_FULL_TEXT_QA': {
             const requestId = String(message.params?.requestId || '');

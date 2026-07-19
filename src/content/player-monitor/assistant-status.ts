@@ -29,6 +29,12 @@ import type {
   CurrentVideoFullTextQaResult,
 } from '../../shared/types/current-video-full-text-qa';
 import type {
+  CurrentVideoQaSessionRecord,
+  CurrentVideoQaSessionsView,
+  CurrentVideoQaSessionTurn,
+  CurrentVideoQaSourceSnapshot,
+} from '../../shared/types/current-video-qa-session';
+import type {
   SmartFavoriteQaCitedVideo,
   SmartFavoriteQaResponse,
   SmartFavoriteQaSynthesisStatus,
@@ -699,6 +705,46 @@ const CSS = `
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+#${CARD_ID} .bdc-assistant-session-list {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px 0 6px;
+}
+#${CARD_ID} .bdc-assistant-session-button {
+  flex: 0 0 auto;
+  max-width: 170px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #dbe2ef;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.25;
+  padding: 7px 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#${CARD_ID} .bdc-assistant-session-button-active {
+  border-color: rgba(251, 114, 153, 0.62);
+  background: rgba(251, 114, 153, 0.18);
+  color: #fff5f8;
+}
+#${CARD_ID} .bdc-assistant-question-card {
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 9px;
+  margin-top: 10px;
+}
+#${CARD_ID} .bdc-assistant-question-text {
+  color: #f4f7fb;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
 @media (max-width: 560px) {
   #${CARD_ID} {
     right: 18px;
@@ -784,12 +830,13 @@ interface AssistantState {
   segmentReturnAvailable: boolean;
   segmentReturnLoading: boolean;
   segmentTimestampRequestId: number;
-  fullTextQaResult: CurrentVideoFullTextQaResult | null;
-  fullTextQaContextKey: string;
-  fullTextQaLoading: boolean;
-  fullTextQaError: string | null;
-  fullTextQaRequestId: number;
-  fullTextQaActiveRequest: InPageFullTextQaRequest | null;
+  fullTextQaActiveRequests: Map<string, InPageFullTextQaRequest>;
+  fullTextQaErrors: Map<string, string>;
+  fullTextQaSessions: CurrentVideoQaSessionsView | null;
+  fullTextQaSessionsLoading: boolean;
+  fullTextQaSessionsError: string | null;
+  fullTextQaSessionsRequestId: number;
+  fullTextQaActiveSessionId: string | null;
   fullTextQaPreviewCitationId: string | null;
   fullTextQaJumpStatus: string | null;
   fullTextQaJumpLoading: boolean;
@@ -837,6 +884,7 @@ interface InPageSummaryHighlightsRequest {
 }
 
 interface InPageFullTextQaRequest {
+  sessionId: string;
   requestId: string;
   turnId: string;
   params: Record<string, unknown>;
@@ -846,6 +894,7 @@ interface InPageFullTextQaRequest {
   question: string;
 }
 
+const CURRENT_VIDEO_QA_DRAFT_SESSION_STATE_KEY = '__current-video-qa-draft__';
 const primaryTextSelections = new Map<string, string>();
 const primaryTextSelectionSaveFailedPartKeys = new Set<string>();
 let primaryTextSelectionsLoaded = false;
@@ -890,12 +939,13 @@ const assistantState: AssistantState = {
   segmentReturnAvailable: false,
   segmentReturnLoading: false,
   segmentTimestampRequestId: 0,
-  fullTextQaResult: null,
-  fullTextQaContextKey: '',
-  fullTextQaLoading: false,
-  fullTextQaError: null,
-  fullTextQaRequestId: 0,
-  fullTextQaActiveRequest: null,
+  fullTextQaActiveRequests: new Map(),
+  fullTextQaErrors: new Map(),
+  fullTextQaSessions: null,
+  fullTextQaSessionsLoading: false,
+  fullTextQaSessionsError: null,
+  fullTextQaSessionsRequestId: 0,
+  fullTextQaActiveSessionId: null,
   fullTextQaPreviewCitationId: null,
   fullTextQaJumpStatus: null,
   fullTextQaJumpLoading: false,
@@ -955,10 +1005,6 @@ function updateAssistantContext(context: CurrentVideoContextResult): void {
   const nextSubtitleKey = subtitleContextKeyForContext(context);
   const subtitleKeyChanged = previousSubtitleKey !== nextSubtitleKey;
   if (assistantState.contextKey !== nextKey) {
-    const activeQaRequest = assistantState.fullTextQaActiveRequest;
-    if (activeQaRequest) {
-      void sendRuntimeRequest('CANCEL_CURRENT_VIDEO_FULL_TEXT_QA', activeQaRequest.params).catch(() => undefined);
-    }
     invalidateSegmentTimestampRequests();
     assistantState.summary = null;
     assistantState.summaryContextKey = '';
@@ -982,12 +1028,7 @@ function updateAssistantContext(context: CurrentVideoContextResult): void {
     assistantState.segmentJumpLoading = false;
     assistantState.segmentReturnAvailable = false;
     assistantState.segmentReturnLoading = false;
-    assistantState.fullTextQaRequestId += 1;
-    assistantState.fullTextQaActiveRequest = null;
-    assistantState.fullTextQaResult = null;
-    assistantState.fullTextQaContextKey = '';
-    assistantState.fullTextQaLoading = false;
-    assistantState.fullTextQaError = null;
+    assistantState.fullTextQaErrors.clear();
     assistantState.fullTextQaPreviewCitationId = null;
     assistantState.fullTextQaJumpStatus = null;
     assistantState.fullTextQaJumpLoading = false;
@@ -1177,6 +1218,7 @@ function appendAssistantTabs(parent: HTMLElement): void {
         assistantState.activeTab = tab.key;
         renderAssistantShell();
         if (tab.key === 'subtitles') void ensureSubtitleViewLoaded(false);
+        if (tab.key === 'qa') void loadCurrentVideoQaSessionsFromPage();
       },
     );
     element.id = assistantTabId(tab.key);
@@ -1192,6 +1234,7 @@ function appendAssistantTabs(parent: HTMLElement): void {
         renderAssistantShell();
         document.getElementById(assistantTabId(next.key))?.focus();
         if (next.key === 'subtitles') void ensureSubtitleViewLoaded(false);
+        if (next.key === 'qa') void loadCurrentVideoQaSessionsFromPage();
       };
       if (event.key === 'ArrowRight') {
         event.preventDefault();
@@ -1830,13 +1873,20 @@ function appendSubtitleExportControls(
 function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext): void {
   const block = section('问这个视频', 'bdc-assistant-section-primary');
   markAssistantTabPanel(block, 'qa');
-  appendText(block, 'div', 'bdc-assistant-video-title', context.title ?? '当前视频');
+  if (!assistantState.fullTextQaSessions && !assistantState.fullTextQaSessionsLoading) {
+    void loadCurrentVideoQaSessionsFromPage();
+  }
+  const activeSessionId = currentVideoQaActiveSessionId();
+  const activeSession = currentVideoQaActiveSession();
+  const activeRequest = currentVideoQaActiveRequest(activeSessionId);
+  appendText(block, 'div', 'bdc-assistant-video-title', `本次参考：${context.title ?? '当前视频'}`);
   appendText(
     block,
     'div',
     'bdc-assistant-muted',
-    '提交后会用当前分 P 的完整主要文本回答；先给直接答案，再列出可核对和跳转的引用片段。',
+    '提交后会用当前分 P 的完整主要文本回答；切换视频只更新本次参考，不会自动发问或插入消息。',
   );
+  appendCurrentVideoQaSessionControls(block, activeSessionId, activeSession);
 
   const primaryTextBlockReason = primaryTextSubmissionBlockMessage(buildPrimaryTextStateForContext(context));
 
@@ -1849,7 +1899,7 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
   input.maxLength = 500;
   input.placeholder = '向当前视频提问';
   input.value = assistantState.segmentQuery;
-  input.disabled = Boolean(primaryTextBlockReason) || assistantState.fullTextQaLoading;
+  input.disabled = Boolean(primaryTextBlockReason) || Boolean(activeRequest);
   input.setAttribute('aria-label', '向当前视频提问');
   input.addEventListener('input', () => {
     assistantState.segmentQuery = input.value;
@@ -1863,14 +1913,14 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
   form.appendChild(input);
 
   form.appendChild(button(
-    assistantState.fullTextQaLoading ? '回答中...' : '提问',
+    activeRequest ? '回答中...' : '提问',
     'bdc-assistant-button bdc-assistant-button-primary',
     () => {
       void askCurrentVideoFullTextFromPage();
     },
-    assistantState.fullTextQaLoading || !context.bvid || Boolean(primaryTextBlockReason),
+    Boolean(activeRequest) || !context.bvid || Boolean(primaryTextBlockReason),
   ));
-  if (assistantState.fullTextQaLoading) {
+  if (activeRequest) {
     form.appendChild(button(
       '取消',
       'bdc-assistant-button bdc-assistant-button-quiet',
@@ -1895,24 +1945,195 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
     );
   }
 
-  if (assistantState.fullTextQaError) {
-    const error = appendText(block, 'div', 'bdc-assistant-retrieval-status', assistantState.fullTextQaError);
+  const activeError = currentVideoQaError(activeSessionId);
+  if (activeError) {
+    const error = appendText(block, 'div', 'bdc-assistant-retrieval-status', activeError);
     error.style.color = '#ffcf8a';
   }
 
-  if (assistantState.fullTextQaLoading) {
+  if (activeRequest) {
     const loading = appendText(block, 'div', 'bdc-assistant-retrieval-status', '正在核对全片内容...');
     loading.style.color = '#c8e6ff';
   }
-
-  if (
-    assistantState.fullTextQaResult
-    && assistantState.fullTextQaContextKey === assistantState.contextKey
-  ) {
-    appendFullTextQaResult(block, assistantState.fullTextQaResult);
+  if (assistantState.fullTextQaSessionsLoading) {
+    appendText(block, 'div', 'bdc-assistant-status', '正在读取本地问答会话...');
+  } else if (assistantState.fullTextQaSessionsError) {
+    const error = appendText(block, 'div', 'bdc-assistant-retrieval-status', assistantState.fullTextQaSessionsError);
+    error.style.color = '#ffcf8a';
+  } else if (activeSession) {
+    appendCurrentVideoQaSessionTimeline(block, activeSession);
+  } else {
+    appendText(block, 'div', 'bdc-assistant-subtitle-detail', '提交第一个问题后会创建本地会话。');
   }
 
   parent.appendChild(block);
+}
+
+function appendCurrentVideoQaSessionControls(
+  parent: HTMLElement,
+  activeSessionId: string | null,
+  activeSession: CurrentVideoQaSessionRecord | null,
+): void {
+  const list = document.createElement('div');
+  list.className = 'bdc-assistant-session-list';
+  const sessions = assistantState.fullTextQaSessions?.sessions ?? [];
+  for (const session of sessions) {
+    const active = session.sessionId === activeSessionId;
+    list.appendChild(button(
+      `${session.title}（${session.turnCount}）`,
+      active
+        ? 'bdc-assistant-session-button bdc-assistant-session-button-active'
+        : 'bdc-assistant-session-button',
+      () => {
+        assistantState.fullTextQaActiveSessionId = session.sessionId;
+        assistantState.fullTextQaPreviewCitationId = null;
+        assistantState.fullTextQaJumpStatus = null;
+        renderAssistantShell();
+        void loadCurrentVideoQaSessionsFromPage(session.sessionId);
+      },
+    ));
+  }
+  if (sessions.length === 0 && !assistantState.fullTextQaSessionsLoading) {
+    appendText(list, 'div', 'bdc-assistant-muted', '还没有本地问答会话。');
+  }
+  parent.appendChild(list);
+
+  const actions = document.createElement('div');
+  actions.className = 'bdc-assistant-inline-actions';
+  actions.appendChild(button(
+    '新建会话',
+    'bdc-assistant-button bdc-assistant-button-quiet',
+    () => {
+      assistantState.fullTextQaActiveSessionId = createCurrentVideoFullTextRequestId('cvqa-session');
+      assistantState.fullTextQaPreviewCitationId = null;
+      assistantState.fullTextQaJumpStatus = null;
+      renderAssistantShell();
+    },
+  ));
+  actions.appendChild(button(
+    '重命名',
+    'bdc-assistant-button bdc-assistant-button-quiet',
+    () => { void renameCurrentVideoQaSessionFromPage(activeSession); },
+    !activeSession,
+  ));
+  actions.appendChild(button(
+    '删除',
+    'bdc-assistant-button bdc-assistant-button-quiet',
+    () => { void deleteCurrentVideoQaSessionFromPage(activeSession); },
+    !activeSession,
+  ));
+  parent.appendChild(actions);
+}
+
+function appendCurrentVideoQaSessionTimeline(
+  parent: HTMLElement,
+  session: CurrentVideoQaSessionRecord,
+): void {
+  appendText(parent, 'div', 'bdc-assistant-citation-title', safeVisibleText(session.title));
+  if (session.turns.length === 0) {
+    appendText(parent, 'div', 'bdc-assistant-subtitle-detail', '这个会话还没有问题。');
+    return;
+  }
+  for (const turn of session.turns) {
+    appendCurrentVideoQaTurn(parent, session.sessionId, turn);
+  }
+}
+
+function appendCurrentVideoQaTurn(
+  parent: HTMLElement,
+  sessionId: string,
+  turn: CurrentVideoQaSessionTurn,
+): void {
+  const question = document.createElement('article');
+  question.className = 'bdc-assistant-question-card';
+  appendText(question, 'div', 'bdc-assistant-question-text', safeVisibleText(turn.question));
+  const actions = document.createElement('div');
+  actions.className = 'bdc-assistant-inline-actions';
+  actions.appendChild(button(
+    '在当前视频再问',
+    'bdc-assistant-button bdc-assistant-button-quiet',
+    () => {
+      assistantState.segmentQuery = turn.question;
+      renderAssistantShell();
+    },
+  ));
+  question.appendChild(actions);
+  parent.appendChild(question);
+
+  if (turn.status === 'pending') {
+    const card = document.createElement('div');
+    card.className = 'bdc-assistant-answer-card';
+    card.style.borderColor = '#c8e6ff';
+    appendText(card, 'div', 'bdc-assistant-answer-text', safeVisibleText(turn.message || '正在核对全片内容...'));
+    parent.appendChild(card);
+    return;
+  }
+
+  appendFullTextQaResult(
+    parent,
+    currentVideoQaTurnToResult(sessionId, turn),
+    {
+      source: turn.source,
+      sourceCurrent: currentVideoQaSourceMatchesCurrent(turn.source),
+    },
+  );
+}
+
+function currentVideoQaTurnToResult(
+  sessionId: string,
+  turn: CurrentVideoQaSessionTurn,
+): CurrentVideoFullTextQaResult {
+  return {
+    sessionId,
+    status: turn.status as CurrentVideoFullTextQaResult['status'],
+    requestId: turn.requestId,
+    turnId: turn.turnId,
+    question: turn.question,
+    title: turn.source?.title ?? '当前视频',
+    partTitle: turn.source?.partTitle ?? null,
+    sourceLabel: turn.source?.sourceLabel ?? null,
+    textSize: turn.source?.textSize ?? { lineCount: 0, charCount: null, utf8Bytes: 0 },
+    answer: turn.answer,
+    answerEvidenceLineNumbers: [],
+    citations: turn.citations,
+    message: turn.message,
+    limitations: [],
+    ai: turn.ai,
+    sourceReference: sourceReferenceFromQaSource(turn.source),
+    rollingContext: turn.rollingContext,
+    generatedAt: turn.generatedAt ?? turn.updatedAt,
+    canRetry: turn.canRetry,
+  };
+}
+
+function sourceReferenceFromQaSource(
+  source: CurrentVideoQaSourceSnapshot | null,
+): CurrentVideoFullTextQaResult['sourceReference'] {
+  if (!source) return null;
+  return {
+    title: source.title,
+    partTitle: source.partTitle,
+    page: source.page,
+    bvid: source.bvid,
+    cid: source.cid,
+    url: source.url,
+    sourceLabel: source.sourceLabel,
+    language: source.language,
+    sourceIdentityKey: source.sourceIdentityKey,
+    textSize: source.textSize,
+    capturedAt: source.capturedAt,
+  };
+}
+
+function currentVideoQaSourceMatchesCurrent(source: CurrentVideoQaSourceSnapshot | null): boolean {
+  const context = assistantState.context;
+  if (!source || context?.kind !== 'video') return false;
+  const selected = selectedSourceIdentityKeyFromParams(currentPrimaryTextRequestParams());
+  return source.bvid === context.bvid
+    && source.cid === context.cid
+    && source.page === context.currentPart.page
+    && Boolean(source.sourceIdentityKey)
+    && source.sourceIdentityKey === selected;
 }
 
 function appendRelatedFavorites(parent: HTMLElement, context: CurrentVideoContext): void {
@@ -2091,6 +2312,10 @@ function appendRelatedFavoritesSettingsLink(parent: HTMLElement, qa: SmartFavori
 function appendFullTextQaResult(
   parent: HTMLElement,
   result: CurrentVideoFullTextQaResult,
+  options: {
+    source?: CurrentVideoQaSourceSnapshot | null;
+    sourceCurrent?: boolean;
+  } = {},
 ): void {
   const answerCard = document.createElement('div');
   answerCard.className = 'bdc-assistant-answer-card';
@@ -2116,13 +2341,25 @@ function appendFullTextQaResult(
     'bdc-assistant-answer-text',
     safeVisibleText(result.answer || result.message),
   );
-  if (result.sourceLabel) {
+  if (result.sourceLabel || options.source) {
     appendText(
       answerCard,
       'div',
       'bdc-assistant-subtitle-detail',
-      safeVisibleText(fullTextQaSourceLine(result)),
+      safeVisibleText(fullTextQaSourceLine(result, options.sourceCurrent ?? true)),
     );
+    if (options.source?.url) {
+      const actions = document.createElement('div');
+      actions.className = 'bdc-assistant-inline-actions';
+      actions.appendChild(button(
+        '打开来源视频',
+        'bdc-assistant-button bdc-assistant-button-quiet',
+        () => {
+          window.open(options.source?.url ?? result.sourceReference?.url ?? '', '_blank', 'noopener,noreferrer');
+        },
+      ));
+      answerCard.appendChild(actions);
+    }
   }
   parent.appendChild(answerCard);
 
@@ -2131,7 +2368,7 @@ function appendFullTextQaResult(
     const list = document.createElement('div');
     list.className = 'bdc-assistant-candidate-list';
     for (const [index, citation] of result.citations.slice(0, 3).entries()) {
-      list.appendChild(fullTextQaCitationCard(citation, index));
+      list.appendChild(fullTextQaCitationCard(citation, index, options.sourceCurrent ?? true));
     }
     parent.appendChild(list);
   }
@@ -2156,10 +2393,17 @@ function appendFullTextQaResult(
   if (result.status !== 'ready' && result.status !== 'unsupported') {
     if (result.canRetry) {
       parent.appendChild(button(
-        '重试本题',
+        options.sourceCurrent === false ? '在当前视频再问' : '重试本题',
         'bdc-assistant-button bdc-assistant-button-quiet',
-        () => { void askCurrentVideoFullTextFromPage(result.turnId, result.question); },
-        assistantState.fullTextQaLoading,
+        () => {
+          if (options.sourceCurrent === false) {
+            assistantState.segmentQuery = result.question;
+            renderAssistantShell();
+          } else {
+            void askCurrentVideoFullTextFromPage(result.turnId, result.question);
+          }
+        },
+        Boolean(result.sessionId && assistantState.fullTextQaActiveRequests.has(result.sessionId)),
       ));
     }
     if (result.status === 'disabled' || result.status === 'not_configured') {
@@ -2171,6 +2415,7 @@ function appendFullTextQaResult(
 function fullTextQaCitationCard(
   citation: CurrentVideoFullTextQaCitation,
   index: number,
+  sourceCurrent = true,
 ): HTMLElement {
   const primaryTextBlockReason = assistantState.context?.kind === 'video'
     ? primaryTextSubmissionBlockMessage(buildPrimaryTextStateForContext(assistantState.context))
@@ -2185,18 +2430,20 @@ function fullTextQaCitationCard(
   card.appendChild(head);
   appendText(card, 'div', 'bdc-assistant-candidate-evidence', safeVisibleText(citation.evidenceText));
 
-  const previewed = assistantState.fullTextQaPreviewCitationId === citation.id;
+  const previewKey = fullTextQaPreviewKey(citation.binding);
+  const previewed = assistantState.fullTextQaPreviewCitationId === previewKey;
   const actions = document.createElement('div');
   actions.className = 'bdc-assistant-candidate-actions';
   actions.appendChild(button(
     previewed ? '已预览' : '预览跳转',
     'bdc-assistant-button bdc-assistant-button-quiet',
     () => {
-      assistantState.fullTextQaPreviewCitationId = citation.id;
+      assistantState.fullTextQaPreviewCitationId = previewKey;
       assistantState.fullTextQaJumpStatus = `确认跳转前预览：${citation.timeRangeLabel}；确认后才会改变播放位置。`;
       renderAssistantShell();
     },
-    Boolean(primaryTextBlockReason)
+    !sourceCurrent
+      || Boolean(primaryTextBlockReason)
       || previewed
       || assistantState.fullTextQaJumpLoading
       || assistantState.fullTextQaReturnLoading,
@@ -2206,12 +2453,16 @@ function fullTextQaCitationCard(
       assistantState.fullTextQaJumpLoading ? '正在跳转...' : '确认跳转',
       'bdc-assistant-button bdc-assistant-button-primary',
       () => { void confirmCurrentVideoFullTextQaJumpFromPage(citation.binding); },
-      Boolean(primaryTextBlockReason)
+      !sourceCurrent
+        || Boolean(primaryTextBlockReason)
         || assistantState.fullTextQaJumpLoading
         || assistantState.fullTextQaReturnLoading,
     ));
   }
   card.appendChild(actions);
+  if (!sourceCurrent) {
+    appendText(card, 'div', 'bdc-assistant-subtitle-detail', '请先打开对应视频和分 P，再预览或确认跳转。');
+  }
   return card;
 }
 
@@ -2237,9 +2488,135 @@ function fullTextQaStatusColor(status: CurrentVideoFullTextQaResult['status']): 
   return '#ffcf8a';
 }
 
-function fullTextQaSourceLine(result: CurrentVideoFullTextQaResult): string {
-  const part = result.partTitle ? ` · ${result.partTitle}` : '';
-  return `来源：《${result.title}》${part} · ${result.sourceLabel}`;
+function fullTextQaSourceLine(result: CurrentVideoFullTextQaResult, sourceCurrent = true): string {
+  const page = result.sourceReference?.page;
+  const partTitle = result.partTitle?.trim() || null;
+  const part = Number.isInteger(page) && Number(page) > 0
+    ? ` · P${page}${partTitle ? `（${partTitle}）` : ''}`
+    : partTitle
+      ? ` · ${partTitle}`
+      : '';
+  const stale = sourceCurrent ? '' : '（基于此前视频文本）';
+  return `来源：《${result.title}》${part} · ${result.sourceLabel ?? '主要文本'}${stale}`;
+}
+
+function currentVideoQaActiveSessionId(): string | null {
+  return assistantState.fullTextQaActiveSessionId
+    ?? assistantState.fullTextQaSessions?.activeSessionId
+    ?? null;
+}
+
+function currentVideoQaActiveSession(): CurrentVideoQaSessionRecord | null {
+  const activeSessionId = currentVideoQaActiveSessionId();
+  const view = assistantState.fullTextQaSessions;
+  if (!activeSessionId || !view?.activeSession) return null;
+  return view.activeSession.sessionId === activeSessionId ? view.activeSession : null;
+}
+
+function currentVideoQaActiveRequest(
+  sessionId: string | null = currentVideoQaActiveSessionId(),
+): InPageFullTextQaRequest | null {
+  if (!sessionId) return null;
+  return assistantState.fullTextQaActiveRequests.get(sessionId) ?? null;
+}
+
+function currentVideoQaError(sessionId: string | null): string | null {
+  return assistantState.fullTextQaErrors.get(fullTextQaSessionStateKey(sessionId)) ?? null;
+}
+
+function setCurrentVideoQaError(sessionId: string | null, message: string | null): void {
+  const key = fullTextQaSessionStateKey(sessionId);
+  if (message) assistantState.fullTextQaErrors.set(key, message);
+  else assistantState.fullTextQaErrors.delete(key);
+}
+
+function fullTextQaSessionStateKey(sessionId: string | null): string {
+  return sessionId?.trim() || CURRENT_VIDEO_QA_DRAFT_SESSION_STATE_KEY;
+}
+
+async function loadCurrentVideoQaSessionsFromPage(
+  sessionId?: string | null,
+  options: { activate?: boolean } = {},
+): Promise<void> {
+  const requestId = assistantState.fullTextQaSessionsRequestId + 1;
+  assistantState.fullTextQaSessionsRequestId = requestId;
+  assistantState.fullTextQaSessionsLoading = true;
+  assistantState.fullTextQaSessionsError = null;
+  renderAssistantShell();
+  try {
+    const targetSessionId = sessionId ?? currentVideoQaActiveSessionId();
+    const view = await sendRuntimeRequest<CurrentVideoQaSessionsView>('GET_CURRENT_VIDEO_QA_SESSIONS', {
+      sessionId: targetSessionId,
+    });
+    if (assistantState.fullTextQaSessionsRequestId !== requestId) return;
+    assistantState.fullTextQaSessions = view;
+    if (options.activate !== false) {
+      assistantState.fullTextQaActiveSessionId = view.activeSessionId ?? targetSessionId ?? null;
+    }
+  } catch {
+    if (assistantState.fullTextQaSessionsRequestId !== requestId) return;
+    assistantState.fullTextQaSessionsError = '本地问答会话读取失败，请稍后重试。';
+  } finally {
+    if (assistantState.fullTextQaSessionsRequestId === requestId) {
+      assistantState.fullTextQaSessionsLoading = false;
+      renderAssistantShell();
+    }
+  }
+}
+
+async function renameCurrentVideoQaSessionFromPage(
+  session: CurrentVideoQaSessionRecord | null,
+): Promise<void> {
+  if (!session) return;
+  const title = window.prompt('输入新的会话标题', session.title)?.replace(/\s+/g, ' ').trim();
+  if (!title) return;
+  assistantState.fullTextQaSessionsError = null;
+  try {
+    const view = await sendRuntimeRequest<CurrentVideoQaSessionsView>('RENAME_CURRENT_VIDEO_QA_SESSION', {
+      sessionId: session.sessionId,
+      title,
+    });
+    assistantState.fullTextQaSessions = view;
+    assistantState.fullTextQaActiveSessionId = session.sessionId;
+  } catch {
+    assistantState.fullTextQaSessionsError = '会话重命名失败，请稍后重试。';
+  }
+  renderAssistantShell();
+}
+
+async function deleteCurrentVideoQaSessionFromPage(
+  session: CurrentVideoQaSessionRecord | null,
+): Promise<void> {
+  if (!session) return;
+  if (!window.confirm('删除这个本地问答会话？')) return;
+  assistantState.fullTextQaSessionsError = null;
+  try {
+    const view = await sendRuntimeRequest<CurrentVideoQaSessionsView>('DELETE_CURRENT_VIDEO_QA_SESSION', {
+      sessionId: session.sessionId,
+    });
+    assistantState.fullTextQaSessions = view;
+    assistantState.fullTextQaActiveSessionId = view.activeSessionId;
+    assistantState.fullTextQaActiveRequests.delete(session.sessionId);
+    assistantState.fullTextQaErrors.delete(fullTextQaSessionStateKey(session.sessionId));
+  } catch {
+    assistantState.fullTextQaSessionsError = '会话删除失败，请稍后重试。';
+  }
+  renderAssistantShell();
+}
+
+function fullTextQaPreviewKey(binding: CurrentVideoFullTextQaCitationBinding): string {
+  return `${binding.sessionId ?? ''}:${binding.requestId}:${binding.turnId}:${binding.citationId}`;
+}
+
+function findCurrentVideoQaCitation(
+  binding: CurrentVideoFullTextQaCitationBinding,
+): CurrentVideoFullTextQaCitation | null {
+  const session = currentVideoQaActiveSession();
+  const turn = session?.turns.find(item =>
+    item.requestId === binding.requestId
+    && item.turnId === binding.turnId
+  );
+  return turn?.citations.find(citation => fullTextQaBindingsEqual(citation.binding, binding)) ?? null;
 }
 
 function appendSegmentRetrievalResult(
@@ -3425,15 +3802,16 @@ async function askCurrentVideoFullTextFromPage(
   retryTurnId?: string,
   retryQuestion?: string,
 ): Promise<void> {
-  if (assistantState.fullTextQaLoading) return;
+  const existingSessionId = currentVideoQaActiveSessionId();
+  if (currentVideoQaActiveRequest(existingSessionId)) return;
   const question = (retryQuestion ?? assistantState.segmentQuery).replace(/\s+/g, ' ').trim();
   if (!question) {
-    assistantState.fullTextQaError = '请输入一个关于当前视频的问题。';
+    setCurrentVideoQaError(existingSessionId, '请输入一个关于当前视频的问题。');
     renderAssistantShell();
     return;
   }
   if (assistantState.context?.kind !== 'video') {
-    assistantState.fullTextQaError = '当前没有可用视频上下文，请在 B 站视频页内使用。';
+    setCurrentVideoQaError(existingSessionId, '当前没有可用视频上下文，请在 B 站视频页内使用。');
     renderAssistantShell();
     return;
   }
@@ -3441,23 +3819,27 @@ async function askCurrentVideoFullTextFromPage(
     buildPrimaryTextStateForContext(assistantState.context),
   );
   if (primaryTextBlockReason) {
-    assistantState.fullTextQaError = primaryTextBlockReason;
+    setCurrentVideoQaError(existingSessionId, primaryTextBlockReason);
     renderAssistantShell();
     return;
   }
 
-  const operationId = assistantState.fullTextQaRequestId + 1;
   const contextKey = assistantState.contextKey;
+  const sessionId = existingSessionId ?? createCurrentVideoFullTextRequestId('cvqa-session');
+  if (assistantState.fullTextQaActiveRequests.has(sessionId)) return;
+  assistantState.fullTextQaActiveSessionId = sessionId;
   const requestId = createCurrentVideoFullTextRequestId('cvqa-page');
   const turnId = retryTurnId?.trim() || createCurrentVideoFullTextRequestId('cvqa-turn');
   if (retryQuestion !== undefined) assistantState.segmentQuery = question;
   const params = {
     ...currentPrimaryTextRequestParams(),
+    sessionId,
     requestId,
     turnId,
     question,
   };
   const activeRequest: InPageFullTextQaRequest = {
+    sessionId,
     requestId,
     turnId,
     params,
@@ -3466,12 +3848,8 @@ async function askCurrentVideoFullTextFromPage(
     selectedSourceIdentityKey: selectedSourceIdentityKeyFromParams(params),
     question,
   };
-  assistantState.fullTextQaRequestId = operationId;
-  assistantState.fullTextQaActiveRequest = activeRequest;
-  assistantState.fullTextQaLoading = true;
-  assistantState.fullTextQaError = null;
-  assistantState.fullTextQaResult = null;
-  assistantState.fullTextQaContextKey = contextKey;
+  assistantState.fullTextQaActiveRequests.set(sessionId, activeRequest);
+  setCurrentVideoQaError(sessionId, null);
   assistantState.fullTextQaPreviewCitationId = null;
   assistantState.fullTextQaJumpStatus = null;
   assistantState.fullTextQaJumpLoading = false;
@@ -3486,38 +3864,38 @@ async function askCurrentVideoFullTextFromPage(
       params,
     );
     if (
-      assistantState.fullTextQaRequestId !== operationId
-      || !fullTextQaActiveRequestStillMatchesCurrent(activeRequest)
+      !fullTextQaActiveRequestStillMatchesCurrent(activeRequest)
+      || result.sessionId !== sessionId
       || result.requestId !== requestId
       || result.turnId !== turnId
     ) return;
-    assistantState.fullTextQaResult = result;
-    assistantState.fullTextQaContextKey = contextKey;
-    assistantState.fullTextQaError = null;
+    await loadCurrentVideoQaSessionsFromPage(
+      currentVideoQaActiveSessionId() ?? sessionId,
+      { activate: false },
+    );
+    if (!fullTextQaActiveRequestStillMatchesCurrent(activeRequest)) return;
+    setCurrentVideoQaError(sessionId, null);
   } catch {
-    if (
-      assistantState.fullTextQaRequestId !== operationId
-      || !fullTextQaActiveRequestStillMatchesCurrent(activeRequest)
-    ) return;
-    assistantState.fullTextQaError = '回答失败，问题已保留。请确认当前视频页和 AI 设置后重试。';
+    if (!fullTextQaActiveRequestStillMatchesCurrent(activeRequest)) return;
+    setCurrentVideoQaError(sessionId, '回答失败，问题已保留。请确认当前视频页和 AI 设置后重试。');
   } finally {
-    if (assistantState.fullTextQaActiveRequest?.requestId === requestId) {
-      assistantState.fullTextQaActiveRequest = null;
-      assistantState.fullTextQaLoading = false;
+    if (fullTextQaActiveRequestStillMatchesCurrent(activeRequest)) {
+      assistantState.fullTextQaActiveRequests.delete(sessionId);
       renderAssistantShell();
     }
+    void loadCurrentVideoQaSessionsFromPage(
+      currentVideoQaActiveSessionId() ?? sessionId,
+      { activate: false },
+    );
   }
 }
 
 function cancelCurrentVideoFullTextQaFromPage(): void {
-  const activeRequest = assistantState.fullTextQaActiveRequest;
+  const sessionId = currentVideoQaActiveSessionId();
+  const activeRequest = currentVideoQaActiveRequest(sessionId);
   if (!activeRequest) return;
-  assistantState.fullTextQaActiveRequest = null;
-  assistantState.fullTextQaRequestId += 1;
-  assistantState.fullTextQaLoading = false;
-  assistantState.fullTextQaResult = null;
-  assistantState.fullTextQaContextKey = assistantState.contextKey;
-  assistantState.fullTextQaError = '本次回答已取消，问题已保留。';
+  assistantState.fullTextQaActiveRequests.delete(activeRequest.sessionId);
+  setCurrentVideoQaError(activeRequest.sessionId, '本次回答已取消，问题已保留。');
   assistantState.fullTextQaPreviewCitationId = null;
   assistantState.fullTextQaJumpStatus = null;
   assistantState.fullTextQaReturnAvailable = false;
@@ -3543,11 +3921,8 @@ async function confirmCurrentVideoFullTextQaJumpFromPage(
     renderAssistantShell();
     return;
   }
-  const result = assistantState.fullTextQaContextKey === assistantState.contextKey
-    ? assistantState.fullTextQaResult
-    : null;
-  const citation = result?.citations.find(item => fullTextQaBindingsEqual(item.binding, binding));
-  if (!citation || assistantState.fullTextQaPreviewCitationId !== citation.id) {
+  const citation = findCurrentVideoQaCitation(binding);
+  if (!citation || assistantState.fullTextQaPreviewCitationId !== fullTextQaPreviewKey(binding)) {
     assistantState.fullTextQaPreviewCitationId = null;
     assistantState.fullTextQaJumpStatus = '引用结果已变化，请重新预览后再跳转。';
     renderAssistantShell();
@@ -4428,10 +4803,6 @@ function replacePrimaryTextSelections(selections: Record<string, string>): void 
 }
 
 function invalidatePrimaryTextDependentAssistantState(): void {
-  const activeQaRequest = assistantState.fullTextQaActiveRequest;
-  if (activeQaRequest) {
-    void sendRuntimeRequest('CANCEL_CURRENT_VIDEO_FULL_TEXT_QA', activeQaRequest.params).catch(() => undefined);
-  }
   assistantState.summaryRequestId += 1;
   if (!assistantState.summaryActiveRequest) {
     assistantState.summaryLoading = false;
@@ -4465,12 +4836,6 @@ function invalidatePrimaryTextDependentAssistantState(): void {
   assistantState.segmentReturnAvailable = false;
   assistantState.segmentReturnLoading = false;
 
-  assistantState.fullTextQaRequestId += 1;
-  assistantState.fullTextQaActiveRequest = null;
-  assistantState.fullTextQaResult = null;
-  assistantState.fullTextQaContextKey = '';
-  assistantState.fullTextQaLoading = false;
-  assistantState.fullTextQaError = null;
   assistantState.fullTextQaPreviewCitationId = null;
   assistantState.fullTextQaJumpStatus = null;
   assistantState.fullTextQaJumpLoading = false;
@@ -4654,32 +5019,29 @@ function summaryActiveRequestStillMatchesCurrent(
 }
 
 function invalidateFullTextQaForLiveConfigChange(userConfig: unknown): void {
-  const activeRequest = assistantState.fullTextQaActiveRequest;
-  if (!activeRequest) return;
-  assistantState.fullTextQaActiveRequest = null;
-  assistantState.fullTextQaRequestId += 1;
-  assistantState.fullTextQaLoading = false;
-  assistantState.fullTextQaResult = null;
-  assistantState.fullTextQaContextKey = assistantState.contextKey;
+  const activeRequests = [...assistantState.fullTextQaActiveRequests.values()];
+  if (activeRequests.length === 0) return;
+  assistantState.fullTextQaActiveRequests.clear();
   assistantState.fullTextQaPreviewCitationId = null;
   assistantState.fullTextQaJumpStatus = null;
   assistantState.fullTextQaReturnAvailable = false;
   assistantState.fullTextQaTimestampRequestId += 1;
   const gate = currentVideoSummaryGenerationGate(userConfig);
-  assistantState.fullTextQaError = gate.enabled && gate.configured
+  const message = gate.enabled && gate.configured
     ? 'AI 设置已变化，本次回答已取消，问题已保留。'
     : '当前视频 AI 助手已关闭或配置不完整，本次回答已取消，问题已保留。';
-  void sendRuntimeRequest('CANCEL_CURRENT_VIDEO_FULL_TEXT_QA', activeRequest.params).catch(() => undefined);
+  for (const activeRequest of activeRequests) {
+    setCurrentVideoQaError(activeRequest.sessionId, message);
+    void sendRuntimeRequest('CANCEL_CURRENT_VIDEO_FULL_TEXT_QA', activeRequest.params).catch(() => undefined);
+  }
 }
 
 function fullTextQaActiveRequestStillMatchesCurrent(
   activeRequest: InPageFullTextQaRequest,
 ): boolean {
-  return activeRequest.contextKey === assistantState.contextKey
-    && activeRequest.selectionRevision === primaryTextSelectionsRevision
-    && activeRequest.selectedSourceIdentityKey === selectedSourceIdentityKeyFromParams(
-      currentPrimaryTextRequestParams(),
-    );
+  const current = assistantState.fullTextQaActiveRequests.get(activeRequest.sessionId);
+  return current?.requestId === activeRequest.requestId
+    && current.turnId === activeRequest.turnId;
 }
 
 function fullTextQaBindingsEqual(
@@ -4687,6 +5049,7 @@ function fullTextQaBindingsEqual(
   right: CurrentVideoFullTextQaCitationBinding,
 ): boolean {
   return left.requestId === right.requestId
+    && (left.sessionId ?? '') === (right.sessionId ?? '')
     && left.turnId === right.turnId
     && left.citationId === right.citationId;
 }

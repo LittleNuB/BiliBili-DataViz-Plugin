@@ -21,6 +21,10 @@ import {
 import {
   coordinateCurrentVideoPrimaryTextSelectionClear,
 } from './current-video-primary-text-selection-store.ts';
+import {
+  invalidateCurrentVideoFullTextQaSources,
+} from '../current-video-full-text-qa.ts';
+import { runCurrentVideoQaSessionClearCoordinator } from './current-video-qa-session-repo.ts';
 
 type AnyTable = Table<any, any, any>;
 
@@ -55,6 +59,7 @@ export type LocalDataCategoryTableName =
   | 'currentVideoTranscriptSources'
   | 'currentVideoTranscriptSegments'
   | 'currentVideoSummaryHighlights'
+  | 'currentVideoQaSessions'
   | 'followedCreators'
   | 'followedVideoUpdates'
   | 'dynamicBillItems'
@@ -84,6 +89,7 @@ export interface LocalDataCategoryRegistryDependencies {
     tables: LocalDataCategoryTable[],
     operation: () => Promise<void>,
   ) => Promise<void>;
+  onCurrentVideoQaSessionsClear?: () => void;
 }
 
 interface CategoryTableGroup {
@@ -104,6 +110,7 @@ export function getRegisteredLocalDataCategories(): LocalDataCategoryRegistratio
       currentVideoTranscriptSources: db.currentVideoTranscriptSources,
       currentVideoTranscriptSegments: db.currentVideoTranscriptSegments,
       currentVideoSummaryHighlights: db.currentVideoSummaryHighlights,
+      currentVideoQaSessions: db.currentVideoQaSessions,
       followedCreators: db.followedCreators,
       followedVideoUpdates: db.followedVideoUpdates,
       dynamicBillItems: db.dynamicBillItems,
@@ -122,6 +129,7 @@ export function getRegisteredLocalDataCategories(): LocalDataCategoryRegistratio
     transaction: async (tables, operation) => {
       await db.transaction('rw', tables as unknown as AnyTable[], operation);
     },
+    onCurrentVideoQaSessionsClear: invalidateCurrentVideoFullTextQaSources,
   });
 }
 
@@ -147,6 +155,7 @@ export function createRegisteredLocalDataCategories(
     })),
     currentVideoSubtitleCategory(dependencies),
     currentVideoSummaryHighlightCategory(dependencies),
+    currentVideoQaSessionsCategory(dependencies),
     tableCategory(dependencies, 'dynamicBill', '动态账单', {
       tables: [
         tables.followedCreators,
@@ -181,6 +190,50 @@ export function createRegisteredLocalDataCategories(
       coordinateCurrentVideoPrimaryTextSelectionClear,
     ),
   ];
+}
+
+function currentVideoQaSessionsCategory(
+  dependencies: LocalDataCategoryRegistryDependencies,
+): LocalDataCategoryRegistration {
+  const table = dependencies.tables.currentVideoQaSessions;
+  const collectUsage = async () => {
+    const rows = await table.toArray();
+    const usageBytes = rows.length > 0 ? serializedRowsSize(rows) : 0;
+    return {
+      count: rows.length,
+      usageBytes,
+      details: {
+        currentVideoQaSessions: rows.length,
+        currentVideoQaSessionBytes: usageBytes,
+      },
+    };
+  };
+  return {
+    id: 'currentVideoQaSessions',
+    label: '当前视频问答会话',
+    includeInClearAll: true,
+    collectUsage,
+    clear: async () => runCurrentVideoQaSessionClearCoordinator(async () => {
+      dependencies.onCurrentVideoQaSessionsClear?.();
+      const usage = await collectUsage();
+      await dependencies.transaction([table], async () => {
+        await table.clear();
+      });
+      return {
+        cleared: {
+          currentVideoQaSessions: usage.count,
+          currentVideoQaSessionBytes: usage.usageBytes,
+        },
+      };
+    }),
+    readAfterClear: async () => {
+      const usage = await collectUsage();
+      return {
+        ...usage,
+        empty: usage.count === 0 && usage.usageBytes === 0,
+      };
+    },
+  };
 }
 
 function currentVideoSummaryHighlightCategory(

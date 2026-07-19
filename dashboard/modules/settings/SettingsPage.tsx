@@ -21,6 +21,7 @@ import type {
   LocalDataPrivacySummary,
   SmartFavoriteIndexRebuildResult,
 } from '../../../src/shared/types/local-data-privacy';
+import type { CurrentVideoQaSessionsView } from '../../../src/shared/types/current-video-qa-session';
 import type {
   DynamicBillCreatorPauseView,
   DynamicBillRestoreCreatorReminderResult,
@@ -38,6 +39,7 @@ type BusyState =
   | 'local-refresh'
   | 'subtitle-clear'
   | 'summary-highlight-clear'
+  | 'qa-session-clear'
   | 'index-rebuild'
   | 'pause-restore'
   | 'clear-all';
@@ -233,6 +235,21 @@ export function SettingsPage() {
     try {
       const result = await requestSW<LocalDataOperationResult>('CLEAR_CURRENT_VIDEO_SUMMARY_HIGHLIGHT_CACHE');
       setNotice(buildLocalDataOperationMessage(result));
+      await refreshLocalData();
+    } catch (err) {
+      setLocalDataError(formatLocalDataError(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function clearQaSessions() {
+    setBusy('qa-session-clear');
+    setNotice('');
+    setError('');
+    try {
+      await requestSW<CurrentVideoQaSessionsView>('CLEAR_CURRENT_VIDEO_QA_SESSIONS');
+      setNotice('已清理当前视频问答会话。');
       await refreshLocalData();
     } catch (err) {
       setLocalDataError(formatLocalDataError(err));
@@ -475,6 +492,7 @@ export function SettingsPage() {
             <DataStat label="索引失败" value={localData.favorites.failedIndexItems} />
             <DataStat label="过期字幕片段" value={localData.currentVideoSubtitles.staleSegmentCount} />
             <DataStat label="摘要亮点缓存" value={localData.currentVideoSummaryHighlights.cachedPartCount} />
+            <DataStat label="问答会话" value={localData.currentVideoQaSessions.sessionCount} />
           </div>
         )}
 
@@ -505,6 +523,14 @@ export function SettingsPage() {
             disabled={!!busy || !localData || localData.currentVideoSummaryHighlights.cachedPartCount === 0}
           >
             {busy === 'summary-highlight-clear' ? '清理中...' : '清理摘要亮点缓存'}
+          </button>
+          <button
+            type="button"
+            className="settings-action"
+            onClick={clearQaSessions}
+            disabled={!!busy || !localData || localData.currentVideoQaSessions.sessionCount === 0}
+          >
+            {busy === 'qa-session-clear' ? '清理中...' : '清理问答会话'}
           </button>
           <button
             type="button"

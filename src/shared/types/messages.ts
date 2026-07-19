@@ -44,6 +44,7 @@ import type { CurrentVideoSubtitleViewSourcesResult } from '../current-video-sub
 import type { CurrentVideoRelatedFavoritesResponse } from './current-video-related-favorites';
 import type { CurrentVideoSummaryHighlightsResult } from './current-video-summary';
 import type { CurrentVideoFullTextQaResult } from './current-video-full-text-qa';
+import type { CurrentVideoQaSessionsView } from './current-video-qa-session';
 import type { VideoKnowledgeResult } from './video-knowledge';
 import type { HistoryTailProbeReport } from './history-tail-probe';
 import type { HistorySyncCursorSnapshot, HistorySyncMode } from './history-sync';
@@ -84,6 +85,10 @@ export type RequestAction =
   | 'GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE'
   | 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS'
   | 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS'
+  | 'GET_CURRENT_VIDEO_QA_SESSIONS'
+  | 'RENAME_CURRENT_VIDEO_QA_SESSION'
+  | 'DELETE_CURRENT_VIDEO_QA_SESSION'
+  | 'CLEAR_CURRENT_VIDEO_QA_SESSIONS'
   | 'ASK_CURRENT_VIDEO_FULL_TEXT'
   | 'CANCEL_CURRENT_VIDEO_FULL_TEXT_QA'
   | 'GET_VIDEO_KNOWLEDGE'
@@ -224,6 +229,7 @@ export type CurrentVideoSubtitleSourceResponse = BiliVizResponse<CurrentVideoSub
 export type CurrentVideoTranscriptEvidenceResponse = BiliVizResponse<CurrentVideoTranscriptEvidenceState>;
 export type CurrentVideoSummaryHighlightsResponse = BiliVizResponse<CurrentVideoSummaryHighlightsResult>;
 export type CurrentVideoFullTextQaResponse = BiliVizResponse<CurrentVideoFullTextQaResult>;
+export type CurrentVideoQaSessionsResponse = BiliVizResponse<CurrentVideoQaSessionsView>;
 export type VideoKnowledgeResponse = BiliVizResponse<VideoKnowledgeResult>;
 export type CurrentVideoSegmentRetrievalResponse = BiliVizResponse<CurrentVideoSegmentRetrievalResult>;
 export type CurrentVideoSubtitleViewSourcesResponse = BiliVizResponse<CurrentVideoSubtitleViewSourcesResult>;
