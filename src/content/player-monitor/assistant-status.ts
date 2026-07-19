@@ -972,6 +972,13 @@ function updateAssistantContext(context: CurrentVideoContextResult): void {
 
 function renderAssistantShell(): void {
   const existing = document.getElementById(CARD_ID);
+  const focusedElement = document.activeElement;
+  const restoreActiveTabFocus = Boolean(
+    existing
+    && focusedElement instanceof HTMLElement
+    && existing.contains(focusedElement)
+    && focusedElement.getAttribute('role') === 'tab',
+  );
   const root = existing ?? document.createElement('aside');
   root.id = CARD_ID;
   root.className = assistantState.expanded
@@ -988,6 +995,9 @@ function renderAssistantShell(): void {
 
   if (!existing) {
     document.body.appendChild(root);
+  }
+  if (restoreActiveTabFocus && assistantState.expanded) {
+    document.getElementById(assistantTabId(assistantState.activeTab))?.focus({ preventScroll: true });
   }
   syncSubtitleFollowTimer();
 }
