@@ -731,11 +731,19 @@ def run_delayed_video_rebind_flow(page, reuse_same_element=False):
         page.wait_for_timeout(1400)
         page.evaluate("window.__assistantMockDispatchVideoEvent('current', 'play')")
     else:
-        page.evaluate("window.__assistantMockNavigateWithDelayedVideoReplacement(2, 1100)")
+        page.evaluate("window.__assistantMockNavigateWithDelayedVideoReplacement(2, 6500)")
         page.wait_for_function("window.__assistantMockVideoReplacementDone()")
-        page.wait_for_timeout(900)
+        page.wait_for_timeout(1300)
         page.evaluate("window.__assistantMockClearMessages()")
         page.evaluate("window.__assistantMockDispatchVideoEvent('old', 'play')")
+        page.wait_for_timeout(50)
+        old_actions = page.evaluate(
+            """() => (window.__assistantMockMessages || [])
+                .filter((message) => message.action === "PLAYER_ACTION")
+                .map((message) => message.payload)"""
+        )
+        assert old_actions == [], f"detached video kept an active listener after rebind: {old_actions}"
+        page.evaluate("window.__assistantMockClearMessages()")
         page.evaluate("window.__assistantMockDispatchVideoEvent('new', 'play')")
     page.wait_for_timeout(50)
     actions = page.evaluate(

@@ -24,6 +24,7 @@ import {
   type CurrentVideoSubtitleDiagnostics,
 } from '../src/shared/current-video-subtitle-diagnostics';
 import {
+  CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
   readCurrentVideoPrimaryTextSelections,
   resolveCurrentVideoPrimaryTextAuthorization,
   type CurrentVideoPrimaryTextAuthorization,
@@ -32,24 +33,97 @@ import { ProgressRing } from './components/ProgressRing';
 import { QuickStats as QuickStatsPanel } from './components/QuickStats';
 import { OpenDashboard } from './components/OpenDashboard';
 
+interface PopupCurrentVideoScopeSnapshot {
+  contextKey: string;
+  selectionRevision: number;
+  operationRevision: number;
+}
+
+interface PopupCurrentVideoActionSnapshot extends PopupCurrentVideoScopeSnapshot {
+  requestId: number;
+}
+
+function popupCurrentVideoContextKey(context: CurrentVideoContextResult | null): string {
+  if (!context) return 'no_context:pending';
+  if (context.kind !== 'video') return `no_context:${context.pageType}:${context.reason}`;
+  return `video:${context.bvid}:${context.cid ?? 'missing'}:${context.currentPart.page}`;
+}
+
+function popupCurrentVideoExactIdentityMatches(
+  left: CurrentVideoContextResult | null,
+  right: CurrentVideoContextResult | null,
+): boolean {
+  return left?.kind === 'video'
+    && right?.kind === 'video'
+    && left.bvid === right.bvid
+    && left.cid !== null
+    && left.cid === right.cid
+    && left.currentPart.page === right.currentPart.page;
+}
+
+function popupTranscriptEvidenceMatchesContext(
+  evidence: CurrentVideoTranscriptEvidenceState,
+  context: CurrentVideoContextResult,
+): boolean {
+  return context.kind === 'video'
+    && context.cid !== null
+    && evidence.bvid === context.bvid
+    && evidence.cid === context.cid
+    && evidence.page === context.currentPart.page;
+}
+
 export function App() {
   const [currentVideoContext, setCurrentVideoContext] = useState<CurrentVideoContextResult | null>(null);
   const [currentVideoSummary, setCurrentVideoSummary] = useState<CurrentVideoSummaryResult | null>(null);
   const [videoKnowledge, setVideoKnowledge] = useState<VideoKnowledgeResult | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
   const [subtitleProbeLoading, setSubtitleProbeLoading] = useState(false);
   const [subtitleProbeStatus, setSubtitleProbeStatus] = useState<string | null>(null);
   const [currentVideoActionError, setCurrentVideoActionError] = useState<string | null>(null);
+  const [primaryTextSelectionRevision, setPrimaryTextSelectionRevision] = useState(0);
+  const [currentVideoOperationRevision, setCurrentVideoOperationRevision] = useState(0);
   const [tailProbeReport, setTailProbeReport] = useState<HistoryTailProbeReport | null>(null);
   const [tailProbeLoading, setTailProbeLoading] = useState(false);
   const [tailProbeError, setTailProbeError] = useState<string | null>(null);
+  const currentVideoContextRef = useRef<CurrentVideoContextResult | null>(null);
+  const currentVideoContextKeyRef = useRef(popupCurrentVideoContextKey(null));
+  const primaryTextSelectionRevisionRef = useRef(0);
+  const currentVideoOperationRevisionRef = useRef(0);
+  const currentVideoContextRequestRef = useRef(0);
+  const subtitleReprobeRequestRef = useRef(0);
   const summaryRequestRef = useRef(0);
+  const knowledgeRequestRef = useRef(0);
+  const subtitleReprobeActiveRef = useRef(false);
+
+  currentVideoContextRef.current = currentVideoContext;
+  currentVideoContextKeyRef.current = popupCurrentVideoContextKey(currentVideoContext);
 
   useEffect(() => {
     fetchStats(false);
     fetchCurrentVideoContext();
     const timer = window.setInterval(refreshSyncStatus, 1500);
-    return () => window.clearInterval(timer);
+    const storageChanges = chrome.storage?.onChanged;
+    const handleStorageChange = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string,
+    ) => {
+      if (
+        areaName !== 'local'
+        || !Object.prototype.hasOwnProperty.call(
+          changes,
+          CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
+        )
+      ) {
+        return;
+      }
+      invalidateCurrentVideoOperations({ selectionChanged: true });
+    };
+    storageChanges?.addListener?.(handleStorageChange);
+    return () => {
+      window.clearInterval(timer);
+      storageChanges?.removeListener?.(handleStorageChange);
+    };
   }, []);
 
   async function refreshSyncStatus() {
@@ -68,63 +142,92 @@ export function App() {
   }
 
   async function fetchCurrentVideoContext() {
+    const requestId = currentVideoContextRequestRef.current + 1;
+    currentVideoContextRequestRef.current = requestId;
     try {
       const context = await requestSW<CurrentVideoContextResult>('GET_CURRENT_VIDEO_CONTEXT');
-      setCurrentVideoContext(context);
+      if (currentVideoContextRequestRef.current !== requestId) return;
+      commitCurrentVideoContext(context);
     } catch {
-      setCurrentVideoContext(null);
+      if (currentVideoContextRequestRef.current !== requestId) return;
+      commitCurrentVideoContext(null);
     }
   }
 
   async function fetchCurrentVideoSummary() {
-    const context = currentVideoContext;
-    const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
-    if (!authorization.ready) {
-      setCurrentVideoActionError(authorization.message);
+    if (subtitleReprobeActiveRef.current) {
+      setCurrentVideoActionError('正在重新检测字幕，请等待检测完成后再试。');
       return;
     }
-    const requestId = summaryRequestRef.current + 1;
-    summaryRequestRef.current = requestId;
+    const action = beginCurrentVideoAction(summaryRequestRef);
+    const context = currentVideoContextRef.current;
     setCurrentVideoActionError(null);
     setSummaryLoading(true);
     setCurrentVideoSummary(loadingCurrentVideoSummary());
     try {
+      const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
+      if (!currentVideoActionIsCurrent(action, summaryRequestRef)) return;
+      if (!authorization.ready) {
+        setCurrentVideoSummary(null);
+        setCurrentVideoActionError(authorization.message);
+        return;
+      }
+      if (!currentVideoActionIsCurrent(action, summaryRequestRef)) return;
       const summary = await requestSW<CurrentVideoSummaryResult>(
         'GET_CURRENT_VIDEO_SUMMARY',
         authorization.params,
       );
-      if (summaryRequestRef.current !== requestId) return;
+      if (!currentVideoActionIsCurrent(action, summaryRequestRef)) return;
       setCurrentVideoSummary(summary);
     } catch {
-      if (summaryRequestRef.current !== requestId) return;
+      if (!currentVideoActionIsCurrent(action, summaryRequestRef)) return;
       setCurrentVideoSummary(null);
       setCurrentVideoActionError('摘要读取失败，请确认当前 B 站视频页仍然打开后重试。');
     } finally {
-      if (summaryRequestRef.current === requestId) setSummaryLoading(false);
+      if (currentVideoActionIsCurrent(action, summaryRequestRef)) setSummaryLoading(false);
     }
   }
 
   async function fetchVideoKnowledge() {
-    const context = currentVideoContext;
-    const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
-    if (!authorization.ready) {
-      setCurrentVideoActionError(authorization.message);
+    if (subtitleReprobeActiveRef.current) {
+      setCurrentVideoActionError('正在重新检测字幕，请等待检测完成后再试。');
       return;
     }
+    const action = beginCurrentVideoAction(knowledgeRequestRef);
+    const context = currentVideoContextRef.current;
     setCurrentVideoActionError(null);
+    setKnowledgeLoading(true);
     try {
+      const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
+      if (!currentVideoActionIsCurrent(action, knowledgeRequestRef)) return;
+      if (!authorization.ready) {
+        setVideoKnowledge(null);
+        setCurrentVideoActionError(authorization.message);
+        return;
+      }
+      if (!currentVideoActionIsCurrent(action, knowledgeRequestRef)) return;
       const result = await requestSW<VideoKnowledgeResult>(
         'GET_VIDEO_KNOWLEDGE',
         authorization.params,
       );
+      if (!currentVideoActionIsCurrent(action, knowledgeRequestRef)) return;
       setVideoKnowledge(result);
     } catch {
+      if (!currentVideoActionIsCurrent(action, knowledgeRequestRef)) return;
       setVideoKnowledge(null);
       setCurrentVideoActionError('知识节点读取失败，请确认当前 B 站视频页仍然打开后重试。');
+    } finally {
+      if (currentVideoActionIsCurrent(action, knowledgeRequestRef)) setKnowledgeLoading(false);
     }
   }
 
   async function reprobeCurrentVideoSubtitle() {
+    invalidateCurrentVideoOperations();
+    currentVideoContextRequestRef.current += 1;
+    const requestId = subtitleReprobeRequestRef.current + 1;
+    subtitleReprobeRequestRef.current = requestId;
+    const operationRevision = currentVideoOperationRevisionRef.current;
+    subtitleReprobeActiveRef.current = true;
     setSubtitleProbeLoading(true);
     setSubtitleProbeStatus(null);
     setCurrentVideoActionError(null);
@@ -133,32 +236,116 @@ export function App() {
         forceContextRefresh: true,
         forceSubtitleProbe: true,
       });
-      setCurrentVideoContext(firstContext);
+      if (!subtitleReprobeIsCurrent(requestId, operationRevision)) return;
+      commitCurrentVideoContext(firstContext, true);
+      if (firstContext.kind !== 'video' || firstContext.cid === null) {
+        const diagnostics = buildCurrentVideoSubtitleDiagnostics(firstContext);
+        setSubtitleProbeStatus(`${diagnostics.title}：${diagnostics.message}`);
+        return;
+      }
 
       const transcriptEvidence = await requestSW<CurrentVideoTranscriptEvidenceState>('GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE', {
         forceContextRefresh: true,
         forceSubtitleProbe: true,
       });
+      if (!subtitleReprobeIsCurrent(requestId, operationRevision)) return;
       const refreshedContext = await requestSW<CurrentVideoContextResult>('GET_CURRENT_VIDEO_CONTEXT');
-      const contextWithEvidence = refreshedContext.kind === 'video'
-        ? { ...refreshedContext, transcriptEvidence }
-        : refreshedContext;
-      setCurrentVideoContext(contextWithEvidence);
-      setCurrentVideoSummary(null);
-      setVideoKnowledge(null);
+      if (!subtitleReprobeIsCurrent(requestId, operationRevision)) return;
+      if (!popupCurrentVideoExactIdentityMatches(firstContext, refreshedContext)) {
+        commitCurrentVideoContext(refreshedContext, true);
+        setSubtitleProbeStatus('检测期间当前视频已变化，请在新页面重新操作。');
+        return;
+      }
+      if (!popupTranscriptEvidenceMatchesContext(transcriptEvidence, firstContext)) {
+        commitCurrentVideoContext(refreshedContext, true);
+        setSubtitleProbeStatus('字幕检测结果与当前页面不一致，请重新检测。');
+        return;
+      }
+      const contextWithEvidence = { ...refreshedContext, transcriptEvidence };
+      commitCurrentVideoContext(contextWithEvidence, true);
       const diagnostics = buildCurrentVideoSubtitleDiagnostics(contextWithEvidence);
       setSubtitleProbeStatus(`${diagnostics.title}：${diagnostics.message}`);
     } catch {
+      if (!subtitleReprobeIsCurrent(requestId, operationRevision)) return;
       setSubtitleProbeStatus('重新检测失败：请确认当前 B 站视频页仍然打开，并在播放器里开启中文 AI 字幕后重试。');
     } finally {
-      setSubtitleProbeLoading(false);
+      if (subtitleReprobeIsCurrent(requestId, operationRevision)) {
+        subtitleReprobeActiveRef.current = false;
+        setSubtitleProbeLoading(false);
+      }
     }
   }
 
   function cancelCurrentVideoSummary() {
     summaryRequestRef.current += 1;
     setSummaryLoading(false);
-    setCurrentVideoSummary(cancelledCurrentVideoSummary(currentVideoContext));
+    setCurrentVideoSummary(cancelledCurrentVideoSummary(currentVideoContextRef.current));
+  }
+
+  function currentVideoScopeSnapshot(): PopupCurrentVideoScopeSnapshot {
+    return {
+      contextKey: currentVideoContextKeyRef.current,
+      selectionRevision: primaryTextSelectionRevisionRef.current,
+      operationRevision: currentVideoOperationRevisionRef.current,
+    };
+  }
+
+  function beginCurrentVideoAction(requestRef: { current: number }): PopupCurrentVideoActionSnapshot {
+    const requestId = requestRef.current + 1;
+    requestRef.current = requestId;
+    return { ...currentVideoScopeSnapshot(), requestId };
+  }
+
+  function currentVideoActionIsCurrent(
+    action: PopupCurrentVideoActionSnapshot,
+    requestRef: { current: number },
+  ): boolean {
+    const scope = currentVideoScopeSnapshot();
+    return requestRef.current === action.requestId
+      && scope.contextKey === action.contextKey
+      && scope.selectionRevision === action.selectionRevision
+      && scope.operationRevision === action.operationRevision;
+  }
+
+  function subtitleReprobeIsCurrent(requestId: number, operationRevision: number): boolean {
+    return subtitleReprobeActiveRef.current
+      && subtitleReprobeRequestRef.current === requestId
+      && currentVideoOperationRevisionRef.current === operationRevision;
+  }
+
+  function invalidateCurrentVideoOperations({
+    selectionChanged = false,
+  }: { selectionChanged?: boolean } = {}): void {
+    if (selectionChanged) {
+      primaryTextSelectionRevisionRef.current += 1;
+      setPrimaryTextSelectionRevision(primaryTextSelectionRevisionRef.current);
+    }
+    currentVideoOperationRevisionRef.current += 1;
+    setCurrentVideoOperationRevision(currentVideoOperationRevisionRef.current);
+    summaryRequestRef.current += 1;
+    knowledgeRequestRef.current += 1;
+    subtitleReprobeRequestRef.current += 1;
+    subtitleReprobeActiveRef.current = false;
+    setSummaryLoading(false);
+    setKnowledgeLoading(false);
+    setSubtitleProbeLoading(false);
+    setCurrentVideoSummary(null);
+    setVideoKnowledge(null);
+    setSubtitleProbeStatus(null);
+    setCurrentVideoActionError(null);
+  }
+
+  function commitCurrentVideoContext(
+    context: CurrentVideoContextResult | null,
+    scopeAlreadyInvalidated = false,
+  ): void {
+    const nextContextKey = popupCurrentVideoContextKey(context);
+    if (!scopeAlreadyInvalidated && nextContextKey !== currentVideoContextKeyRef.current) {
+      invalidateCurrentVideoOperations();
+    }
+    currentVideoContextRef.current = context;
+    currentVideoContextKeyRef.current = nextContextKey;
+    setCurrentVideoContext(context);
   }
 
   function openSettings() {
@@ -360,6 +547,7 @@ export function App() {
         summary={currentVideoSummary}
         knowledge={videoKnowledge}
         loading={summaryLoading}
+        knowledgeLoading={knowledgeLoading}
         subtitleProbeLoading={subtitleProbeLoading}
         subtitleProbeStatus={subtitleProbeStatus}
         currentVideoActionError={currentVideoActionError}
@@ -368,6 +556,9 @@ export function App() {
         onReprobeSubtitle={reprobeCurrentVideoSubtitle}
         onRefreshKnowledge={fetchVideoKnowledge}
         onOpenSettings={openSettings}
+        operationScopeKey={popupCurrentVideoContextKey(currentVideoContext)}
+        primaryTextSelectionRevision={primaryTextSelectionRevision}
+        currentVideoOperationRevision={currentVideoOperationRevision}
       />
 
       {loading.value && (
@@ -542,6 +733,7 @@ function CurrentVideoAssistantStatus({
   summary,
   knowledge,
   loading,
+  knowledgeLoading,
   subtitleProbeLoading,
   subtitleProbeStatus,
   currentVideoActionError,
@@ -550,11 +742,15 @@ function CurrentVideoAssistantStatus({
   onReprobeSubtitle,
   onRefreshKnowledge,
   onOpenSettings,
+  operationScopeKey,
+  primaryTextSelectionRevision,
+  currentVideoOperationRevision,
 }: {
   context: CurrentVideoContextResult | null;
   summary: CurrentVideoSummaryResult | null;
   knowledge: VideoKnowledgeResult | null;
   loading: boolean;
+  knowledgeLoading: boolean;
   subtitleProbeLoading: boolean;
   subtitleProbeStatus: string | null;
   currentVideoActionError: string | null;
@@ -563,6 +759,9 @@ function CurrentVideoAssistantStatus({
   onReprobeSubtitle: () => void;
   onRefreshKnowledge: () => void;
   onOpenSettings: () => void;
+  operationScopeKey: string;
+  primaryTextSelectionRevision: number;
+  currentVideoOperationRevision: number;
 }) {
   const isVideo = context?.kind === 'video';
   const [segmentQuery, setSegmentQuery] = useState('');
@@ -572,9 +771,40 @@ function CurrentVideoAssistantStatus({
   const [segmentPreviewCandidateId, setSegmentPreviewCandidateId] = useState<string | null>(null);
   const [segmentJumpStatus, setSegmentJumpStatus] = useState<string | null>(null);
   const [segmentReturnAvailable, setSegmentReturnAvailable] = useState(false);
+  const [segmentJumpLoading, setSegmentJumpLoading] = useState(false);
+  const [segmentReturnLoading, setSegmentReturnLoading] = useState(false);
+  const segmentSearchRequestRef = useRef(0);
+  const timestampRequestRef = useRef(0);
+  const segmentSearchBusyRef = useRef(false);
+  const timestampBusyRef = useRef(false);
+  const renderedScopeRef = useRef<PopupCurrentVideoScopeSnapshot>({
+    contextKey: operationScopeKey,
+    selectionRevision: primaryTextSelectionRevision,
+    operationRevision: currentVideoOperationRevision,
+  });
+  renderedScopeRef.current = {
+    contextKey: operationScopeKey,
+    selectionRevision: primaryTextSelectionRevision,
+    operationRevision: currentVideoOperationRevision,
+  };
   const subtitleDiagnostics = buildCurrentVideoSubtitleDiagnostics(context, {
     refreshing: subtitleProbeLoading,
   });
+
+  useEffect(() => {
+    segmentSearchRequestRef.current += 1;
+    timestampRequestRef.current += 1;
+    segmentSearchBusyRef.current = false;
+    timestampBusyRef.current = false;
+    setSegmentLoading(false);
+    setSegmentJumpLoading(false);
+    setSegmentReturnLoading(false);
+    setSegmentResult(null);
+    setSegmentError(null);
+    setSegmentPreviewCandidateId(null);
+    setSegmentJumpStatus(null);
+    setSegmentReturnAvailable(false);
+  }, [operationScopeKey, primaryTextSelectionRevision, currentVideoOperationRevision]);
 
   async function searchCurrentVideoSegments() {
     const query = segmentQuery.trim();
@@ -586,77 +816,147 @@ function CurrentVideoAssistantStatus({
       setSegmentReturnAvailable(false);
       return;
     }
-    const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
-    if (!authorization.ready) {
-      setSegmentError(authorization.message);
-      setSegmentResult(null);
-      setSegmentPreviewCandidateId(null);
-      setSegmentJumpStatus(null);
-      setSegmentReturnAvailable(false);
+    if (subtitleProbeLoading || segmentSearchBusyRef.current || timestampBusyRef.current) {
       return;
     }
-
+    const action = beginScopedAction(segmentSearchRequestRef);
+    segmentSearchBusyRef.current = true;
     setSegmentLoading(true);
     setSegmentError(null);
+    setSegmentResult(null);
     setSegmentPreviewCandidateId(null);
     setSegmentJumpStatus(null);
     setSegmentReturnAvailable(false);
     try {
+      const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
+      if (!scopedActionIsCurrent(action, segmentSearchRequestRef)) return;
+      if (!authorization.ready) {
+        setSegmentError(authorization.message);
+        return;
+      }
+      if (!scopedActionIsCurrent(action, segmentSearchRequestRef)) return;
       const result = await requestSW<CurrentVideoSegmentRetrievalResult>('SEARCH_CURRENT_VIDEO_SEGMENTS', {
         query,
         ...authorization.params,
       });
+      if (!scopedActionIsCurrent(action, segmentSearchRequestRef)) return;
       setSegmentResult(result);
     } catch {
+      if (!scopedActionIsCurrent(action, segmentSearchRequestRef)) return;
       setSegmentError('片段检索失败，请确认当前 B 站视频页仍然打开后重试。');
       setSegmentResult(null);
     } finally {
-      setSegmentLoading(false);
+      if (scopedActionIsCurrent(action, segmentSearchRequestRef)) {
+        segmentSearchBusyRef.current = false;
+        setSegmentLoading(false);
+      }
     }
   }
 
   async function confirmSegmentJump(candidate: CurrentVideoSegmentRetrievalCandidate) {
-    if (!segmentResult) return;
+    if (
+      !segmentResult
+      || subtitleProbeLoading
+      || segmentSearchBusyRef.current
+      || timestampBusyRef.current
+    ) return;
     if (!candidate.jumpPreview.canJump) {
-      setSegmentJumpStatus(candidate.jumpPreview.message);
+      setSegmentJumpStatus('当前候选暂不可跳转，请重新检索后再试。');
       return;
     }
-    const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
-    if (!authorization.ready) {
-      setSegmentJumpStatus(authorization.message);
-      setSegmentReturnAvailable(false);
-      return;
-    }
-
+    const action = beginScopedAction(timestampRequestRef);
+    timestampBusyRef.current = true;
+    setSegmentJumpLoading(true);
+    setSegmentReturnLoading(false);
     setSegmentJumpStatus('正在确认跳转...');
+    setSegmentReturnAvailable(false);
     try {
+      const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
+      if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
+      if (!authorization.ready) {
+        setSegmentJumpStatus(authorization.message);
+        return;
+      }
+      if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
       const result = await requestSW<CurrentVideoTimestampJumpResponse>('REQUEST_CURRENT_VIDEO_SEGMENT_JUMP', {
         query: segmentResult.query,
         candidateId: candidate.id,
         confirmed: true,
         ...authorization.params,
       });
+      if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
       setSegmentJumpStatus(result.ok
-        ? result.message
+        ? '跳转已完成，可返回原位置。'
         : '未能完成跳转，请回到当前视频页确认页面和播放器状态后重试。');
       setSegmentReturnAvailable(result.ok && result.returnPointSeconds !== null);
     } catch {
+      if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
       setSegmentJumpStatus('跳转确认失败，请确认当前 B 站视频页仍然打开后重试。');
       setSegmentReturnAvailable(false);
+    } finally {
+      if (scopedActionIsCurrent(action, timestampRequestRef)) {
+        timestampBusyRef.current = false;
+        setSegmentJumpLoading(false);
+      }
     }
   }
 
   async function returnSegmentJump() {
+    if (
+      !segmentReturnAvailable
+      || subtitleProbeLoading
+      || segmentSearchBusyRef.current
+      || timestampBusyRef.current
+    ) return;
+    const action = beginScopedAction(timestampRequestRef);
+    timestampBusyRef.current = true;
+    setSegmentJumpLoading(false);
+    setSegmentReturnLoading(true);
     setSegmentJumpStatus('正在返回原位置...');
     try {
-      const result = await requestSW<CurrentVideoTimestampReturnResponse>('RETURN_CURRENT_VIDEO_SEGMENT_JUMP');
+      const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
+      if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
+      if (!authorization.ready) {
+        setSegmentJumpStatus(authorization.message);
+        setSegmentReturnAvailable(false);
+        return;
+      }
+      if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
+      const result = await requestSW<CurrentVideoTimestampReturnResponse>(
+        'RETURN_CURRENT_VIDEO_SEGMENT_JUMP',
+        authorization.params,
+      );
+      if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
       setSegmentJumpStatus(result.ok
-        ? result.message
+        ? '已返回原位置。'
         : '未能返回原位置，请回到当前视频页确认页面和播放器状态后重试。');
       if (result.ok) setSegmentReturnAvailable(false);
     } catch {
+      if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
       setSegmentJumpStatus('返回原位置失败，请确认当前 B 站视频页仍然打开后重试。');
+    } finally {
+      if (scopedActionIsCurrent(action, timestampRequestRef)) {
+        timestampBusyRef.current = false;
+        setSegmentReturnLoading(false);
+      }
     }
+  }
+
+  function beginScopedAction(requestRef: { current: number }): PopupCurrentVideoActionSnapshot {
+    const requestId = requestRef.current + 1;
+    requestRef.current = requestId;
+    return { ...renderedScopeRef.current, requestId };
+  }
+
+  function scopedActionIsCurrent(
+    action: PopupCurrentVideoActionSnapshot,
+    requestRef: { current: number },
+  ): boolean {
+    const scope = renderedScopeRef.current;
+    return requestRef.current === action.requestId
+      && scope.contextKey === action.contextKey
+      && scope.selectionRevision === action.selectionRevision
+      && scope.operationRevision === action.operationRevision;
   }
 
   return (
@@ -822,6 +1122,7 @@ function CurrentVideoAssistantStatus({
           </div>
           <VideoKnowledgePanel
             knowledge={knowledge}
+            loading={knowledgeLoading || subtitleProbeLoading}
             onRefresh={onRefreshKnowledge}
           />
           <CurrentVideoSegmentRetrievalPanel
@@ -833,6 +1134,9 @@ function CurrentVideoAssistantStatus({
             previewCandidateId={segmentPreviewCandidateId}
             jumpStatus={segmentJumpStatus}
             returnAvailable={segmentReturnAvailable}
+            jumpLoading={segmentJumpLoading}
+            returnLoading={segmentReturnLoading}
+            operationBlocked={subtitleProbeLoading}
             onQueryChange={setSegmentQuery}
             onSearch={searchCurrentVideoSegments}
             onPreviewCandidate={setSegmentPreviewCandidateId}
@@ -843,17 +1147,17 @@ function CurrentVideoAssistantStatus({
           <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
             <button
               onClick={onRefresh}
-              disabled={loading}
+              disabled={loading || subtitleProbeLoading}
               style={{
                 flex: 1,
                 background: '#FB7299',
                 color: '#fff',
                 border: 'none',
                 borderRadius: '6px',
-                cursor: loading ? 'default' : 'pointer',
+                cursor: loading || subtitleProbeLoading ? 'default' : 'pointer',
                 fontSize: '11px',
                 padding: '6px 8px',
-                opacity: loading ? 0.7 : 1,
+                opacity: loading || subtitleProbeLoading ? 0.7 : 1,
               }}
             >
               {loading ? '加载中...' : '刷新摘要'}
@@ -881,6 +1185,7 @@ function CurrentVideoAssistantStatus({
           没有当前视频上下文。请打开 B 站视频页后再查看元数据和来源可用性。
           <VideoKnowledgePanel
             knowledge={knowledge}
+            loading={knowledgeLoading || subtitleProbeLoading}
             onRefresh={onRefreshKnowledge}
           />
         </div>
@@ -898,6 +1203,9 @@ function CurrentVideoSegmentRetrievalPanel({
   previewCandidateId,
   jumpStatus,
   returnAvailable,
+  jumpLoading,
+  returnLoading,
+  operationBlocked,
   onQueryChange,
   onSearch,
   onPreviewCandidate,
@@ -913,6 +1221,9 @@ function CurrentVideoSegmentRetrievalPanel({
   previewCandidateId: string | null;
   jumpStatus: string | null;
   returnAvailable: boolean;
+  jumpLoading: boolean;
+  returnLoading: boolean;
+  operationBlocked: boolean;
   onQueryChange: (query: string) => void;
   onSearch: () => void;
   onPreviewCandidate: (candidateId: string | null) => void;
@@ -926,6 +1237,8 @@ function CurrentVideoSegmentRetrievalPanel({
   );
   const searchGate = subtitleDiagnostics.featureGates.find(item => item.label === '片段检索');
   const jumpGate = subtitleDiagnostics.featureGates.find(item => item.label === '手动跳转');
+  const timestampLoading = jumpLoading || returnLoading;
+  const controlsDisabled = loading || timestampLoading || operationBlocked;
   return (
     <div style={{
       marginTop: '8px',
@@ -962,14 +1275,14 @@ function CurrentVideoSegmentRetrievalPanel({
         />
         <button
           type="submit"
-          disabled={loading}
+          disabled={controlsDisabled}
           style={{
             width: '54px',
-            background: loading ? 'rgba(0, 161, 214, 0.12)' : 'rgba(0, 161, 214, 0.28)',
+            background: controlsDisabled ? 'rgba(0, 161, 214, 0.12)' : 'rgba(0, 161, 214, 0.28)',
             color: '#C8E6FF',
             border: '1px solid rgba(127, 219, 255, 0.32)',
             borderRadius: '6px',
-            cursor: loading ? 'default' : 'pointer',
+            cursor: controlsDisabled ? 'default' : 'pointer',
             fontSize: '10px',
             padding: '6px 8px',
           }}
@@ -1014,6 +1327,7 @@ function CurrentVideoSegmentRetrievalPanel({
                 selected={candidate.id === previewCandidateId}
                 aiExplanation={aiExplanations.get(candidate.id) ?? null}
                 onPreview={onPreviewCandidate}
+                disabled={controlsDisabled}
               />
             ))
           )}
@@ -1022,6 +1336,8 @@ function CurrentVideoSegmentRetrievalPanel({
               candidate={previewCandidate}
               onConfirm={onConfirmJump}
               onCancel={() => onPreviewCandidate(null)}
+              disabled={controlsDisabled}
+              loading={jumpLoading}
             />
           )}
           {jumpStatus && (
@@ -1033,6 +1349,7 @@ function CurrentVideoSegmentRetrievalPanel({
             <button
               type="button"
               onClick={onReturn}
+              disabled={controlsDisabled}
               style={{
                 marginTop: '6px',
                 width: '100%',
@@ -1040,13 +1357,13 @@ function CurrentVideoSegmentRetrievalPanel({
                 color: '#FFCF8A',
                 border: '1px solid rgba(255, 179, 71, 0.34)',
                 borderRadius: '6px',
-                cursor: 'pointer',
+                cursor: controlsDisabled ? 'default' : 'pointer',
                 fontSize: '10px',
                 fontWeight: 700,
                 padding: '5px 7px',
               }}
             >
-              返回原位置
+              {returnLoading ? '返回中...' : '返回原位置'}
             </button>
           )}
         </div>
@@ -1061,12 +1378,14 @@ function SegmentCandidateCard({
   selected,
   aiExplanation,
   onPreview,
+  disabled,
 }: {
   candidate: CurrentVideoSegmentRetrievalCandidate;
   index: number;
   selected: boolean;
   aiExplanation: CurrentVideoSegmentRerankExplanation | null;
   onPreview: (candidateId: string | null) => void;
+  disabled: boolean;
 }) {
   const canJump = candidate.jumpPreview.canJump;
   return (
@@ -1114,7 +1433,7 @@ function SegmentCandidateCard({
       </div>
       <button
         type="button"
-        disabled={!canJump}
+        disabled={!canJump || disabled}
         onClick={() => onPreview(selected ? null : candidate.id)}
         style={{
           marginTop: '5px',
@@ -1122,10 +1441,10 @@ function SegmentCandidateCard({
           color: canJump ? '#C8E6FF' : '#9090A0',
           border: canJump ? '1px solid rgba(127, 219, 255, 0.32)' : '1px solid rgba(255,255,255,0.10)',
           borderRadius: '6px',
-          cursor: canJump ? 'pointer' : 'default',
+          cursor: canJump && !disabled ? 'pointer' : 'default',
           fontSize: '10px',
           padding: '4px 7px',
-          opacity: canJump ? 1 : 0.75,
+          opacity: canJump && !disabled ? 1 : 0.75,
         }}
       >
         {canJump ? (selected ? '收起预览' : '预览跳转') : '不可跳转'}
@@ -1138,10 +1457,14 @@ function SegmentJumpPreview({
   candidate,
   onConfirm,
   onCancel,
+  disabled,
+  loading,
 }: {
   candidate: CurrentVideoSegmentRetrievalCandidate;
   onConfirm: (candidate: CurrentVideoSegmentRetrievalCandidate) => void;
   onCancel: () => void;
+  disabled: boolean;
+  loading: boolean;
 }) {
   const preview = candidate.jumpPreview;
   return (
@@ -1170,7 +1493,7 @@ function SegmentJumpPreview({
       <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
         <button
           type="button"
-          disabled={!preview.canJump}
+          disabled={!preview.canJump || disabled}
           onClick={() => onConfirm(candidate)}
           style={{
             flex: 1,
@@ -1178,23 +1501,24 @@ function SegmentJumpPreview({
             color: preview.canJump ? '#1A1A2E' : '#9090A0',
             border: 'none',
             borderRadius: '6px',
-            cursor: preview.canJump ? 'pointer' : 'default',
+            cursor: preview.canJump && !disabled ? 'pointer' : 'default',
             fontSize: '10px',
             fontWeight: 700,
             padding: '5px 7px',
           }}
         >
-          确认跳转
+          {loading ? '确认中...' : '确认跳转'}
         </button>
         <button
           type="button"
           onClick={onCancel}
+          disabled={disabled}
           style={{
             background: 'transparent',
             color: '#C8C8D8',
             border: '1px solid rgba(255,255,255,0.14)',
             borderRadius: '6px',
-            cursor: 'pointer',
+            cursor: disabled ? 'default' : 'pointer',
             fontSize: '10px',
             padding: '5px 7px',
           }}
@@ -1208,9 +1532,11 @@ function SegmentJumpPreview({
 
 function VideoKnowledgePanel({
   knowledge,
+  loading,
   onRefresh,
 }: {
   knowledge: VideoKnowledgeResult | null;
+  loading: boolean;
   onRefresh: () => void;
 }) {
   const nodes = knowledge?.nodes ?? [];
@@ -1229,17 +1555,18 @@ function VideoKnowledgePanel({
         </span>
         <button
           onClick={onRefresh}
+          disabled={loading}
           style={{
             background: 'transparent',
             color: '#A0A0B0',
             border: '1px solid rgba(255,255,255,0.14)',
             borderRadius: '6px',
-            cursor: 'pointer',
+            cursor: loading ? 'default' : 'pointer',
             fontSize: '10px',
             padding: '3px 6px',
           }}
         >
-          刷新
+          {loading ? '读取中...' : '刷新'}
         </button>
       </div>
       <div style={{ color: '#FFCF8A', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>

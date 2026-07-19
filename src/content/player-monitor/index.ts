@@ -27,11 +27,11 @@ let currentVideoTimestampReturnPoint: CurrentVideoTimestampReturnPoint | null = 
 let lastUrl = location.href;
 let navigationEpoch = 0;
 let timestampOperationEpoch = 0;
+const monitorInitializationKeys = new Set<string>();
 
 const RETURN_TOAST_ID = 'bdc-current-video-return';
 const NAVIGATION_STABLE_DELAY_MS = 800;
-const VIDEO_REBIND_CHECK_INTERVAL_MS = 350;
-const VIDEO_REBIND_MAX_CHECKS = 8;
+const VIDEO_REBIND_CHECK_INTERVAL_MS = 1000;
 
 interface NavigationSnapshot {
   epoch: number;
@@ -62,6 +62,18 @@ function scheduleInitialize(
 async function initializeMonitor(
   snapshot: NavigationSnapshot = currentNavigationSnapshot(),
 ): Promise<void> {
+  if (!navigationSnapshotIsCurrent(snapshot)) return;
+  const initializationKey = `${snapshot.epoch}:${snapshot.href}`;
+  if (monitorInitializationKeys.has(initializationKey)) return;
+  monitorInitializationKeys.add(initializationKey);
+  try {
+    await initializeMonitorForSnapshot(snapshot);
+  } finally {
+    monitorInitializationKeys.delete(initializationKey);
+  }
+}
+
+async function initializeMonitorForSnapshot(snapshot: NavigationSnapshot): Promise<void> {
   if (!navigationSnapshotIsCurrent(snapshot)) return;
   const context = await collectAndPublishCurrentVideoContext(snapshot);
   if (!navigationSnapshotIsCurrent(snapshot)) return;
@@ -126,6 +138,9 @@ async function initializeMonitor(
   } catch (e) {
     if (!navigationSnapshotIsCurrent(snapshot)) return;
     console.error('[BiliViz] Failed to initialize player monitor:', e);
+    if (!monitoredVideoElement) {
+      scheduleInitialize(VIDEO_REBIND_CHECK_INTERVAL_MS, snapshot);
+    }
   }
 }
 
@@ -359,6 +374,7 @@ function formatDuration(seconds: number): string {
 }
 
 function cleanupMonitor(): void {
+  clearVideoRebindTimer();
   if (cleanup) {
     cleanup();
     cleanup = null;
@@ -369,19 +385,16 @@ function cleanupMonitor(): void {
 function scheduleVideoRebindCheck(
   snapshot: NavigationSnapshot,
   contextKey: string,
-  remainingChecks = VIDEO_REBIND_MAX_CHECKS,
 ): void {
   clearVideoRebindTimer();
-  if (remainingChecks <= 0) return;
   videoRebindTimer = window.setTimeout(() => {
     videoRebindTimer = null;
     if (!navigationSnapshotIsCurrent(snapshot) || lastContextKey !== contextKey) return;
     const currentVideo = currentUsableVideoElement();
-    if (currentVideo && currentVideo !== monitoredVideoElement) {
+    if (currentVideo !== monitoredVideoElement) {
       void initializeMonitor(snapshot);
-      return;
     }
-    scheduleVideoRebindCheck(snapshot, contextKey, remainingChecks - 1);
+    scheduleVideoRebindCheck(snapshot, contextKey);
   }, VIDEO_REBIND_CHECK_INTERVAL_MS);
 }
 

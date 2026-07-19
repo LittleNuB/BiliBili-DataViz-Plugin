@@ -17,6 +17,7 @@ PROTECTED_ACTIONS = {
     "GET_VIDEO_KNOWLEDGE",
     "SEARCH_CURRENT_VIDEO_SEGMENTS",
     "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
+    "RETURN_CURRENT_VIDEO_SEGMENT_JUMP",
 }
 FORBIDDEN_VISIBLE_TERMS = [
     "未消费",
@@ -25,12 +26,15 @@ FORBIDDEN_VISIBLE_TERMS = [
     "CID",
     "BV1PopupMock9",
     "9201",
+    "BV1PopupNext7",
+    "9302",
     "fallback",
     "transcript",
     "confidence",
     "sourceHash",
     "segmentId",
     "subtitle_url",
+    "document is not defined",
     "MOCK_POPUP_PRIMARY_TEXT_STORAGE_READ_FAILED",
     "PRIMARY_TEXT",
 ]
@@ -118,6 +122,8 @@ def run_manual_exact_flow(page):
     page.get_by_role("button", name="预览跳转").click()
     page.get_by_role("button", name="确认跳转").click()
     expect(page.get_by_role("button", name="返回原位置")).to_be_visible()
+    page.get_by_role("button", name="返回原位置").click()
+    expect(page.get_by_text("已返回原位置。")).to_be_visible()
 
     expected = page.evaluate("window.__popupMockSourceV2")
     for action in PROTECTED_ACTIONS:
@@ -126,8 +132,6 @@ def run_manual_exact_flow(page):
         assert message["params"].get("primaryTextSelectionsReady") is True
         assert message["params"].get("selectedSourceIdentityKey") == expected
 
-    page.get_by_role("button", name="返回原位置").click()
-    expect(page.get_by_text("已返回 0:12。")).to_be_visible()
     assert_clean_page(page)
 
 
@@ -190,8 +194,137 @@ def run_missing_title_flow(page):
     assert_clean_page(page)
 
 
-def new_checked_page(browser):
-    page = browser.new_page(viewport={"width": 390, "height": 760})
+def prepare_segment_preview(page, query):
+    page.locator("input[placeholder='例如：模型架构那段']").fill(query)
+    page.get_by_role("button", name="检索", exact=True).click()
+    expect(page.get_by_role("button", name="预览跳转")).to_be_visible()
+    page.get_by_role("button", name="预览跳转").click()
+    expect(page.get_by_role("button", name="确认跳转")).to_be_visible()
+
+
+def run_summary_scope_races(page):
+    page.route("**/*", route_popup)
+    page.goto(POPUP_URL)
+    expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
+
+    page.evaluate("window.__popupMockDeferNextResponse('GET_CURRENT_VIDEO_SUMMARY')")
+    page.get_by_role("button", name="刷新摘要").click()
+    page.wait_for_function("window.__popupMockPendingResponseCount('GET_CURRENT_VIDEO_SUMMARY') === 1")
+    page.evaluate("window.__popupMockEmitSelectionChange('clear')")
+    page.evaluate("window.__popupMockResolveResponses('GET_CURRENT_VIDEO_SUMMARY')")
+    page.wait_for_timeout(50)
+    expect(page.get_by_text("手动摘要已使用精确的当前正文来源。")).to_have_count(0)
+
+    page.evaluate("window.__popupMockDeferNextResponse('GET_CURRENT_VIDEO_SUMMARY')")
+    page.get_by_role("button", name="刷新摘要").click()
+    page.wait_for_function("window.__popupMockPendingResponseCount('GET_CURRENT_VIDEO_SUMMARY') === 1")
+    page.evaluate("window.__popupMockDeferNextResponse('GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE')")
+    page.get_by_role("button", name="重新检测字幕").click()
+    page.wait_for_function("window.__popupMockPendingResponseCount('GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE') === 1")
+    page.evaluate("window.__popupMockSwitchContext()")
+    page.evaluate("window.__popupMockResolveResponses('GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE')")
+    expect(page.get_by_text("切换后的 Popup 视频").first).to_be_visible()
+    expect(page.get_by_text("检测期间当前视频已变化，请在新页面重新操作。")).to_be_visible()
+    page.evaluate("window.__popupMockResolveResponses('GET_CURRENT_VIDEO_SUMMARY')")
+    page.wait_for_timeout(50)
+    expect(page.get_by_text("较新的手动摘要 2")).to_have_count(0)
+    assert_clean_page(page)
+
+
+def run_knowledge_newer_wins(page):
+    page.route("**/*", route_popup)
+    page.goto(POPUP_URL)
+    expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
+    page.evaluate("window.__popupMockDeferNextResponse('GET_VIDEO_KNOWLEDGE')")
+    page.get_by_role("button", name="刷新", exact=True).click()
+    page.wait_for_function("window.__popupMockPendingResponseCount('GET_VIDEO_KNOWLEDGE') === 1")
+    page.evaluate("window.__popupMockEmitSelectionChange('same')")
+    page.get_by_role("button", name="刷新", exact=True).click()
+    expect(page.get_by_text("知识节点响应 2")).to_be_visible()
+    page.evaluate("window.__popupMockResolveResponses('GET_VIDEO_KNOWLEDGE')")
+    page.wait_for_timeout(50)
+    expect(page.get_by_text("知识节点响应 2")).to_be_visible()
+    expect(page.get_by_text("知识节点响应 1")).to_have_count(0)
+    assert_clean_page(page)
+
+
+def run_search_revision_race(page):
+    page.route("**/*", route_popup)
+    page.goto(POPUP_URL)
+    expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
+    page.evaluate("window.__popupMockDeferNextResponse('SEARCH_CURRENT_VIDEO_SEGMENTS')")
+    page.locator("input[placeholder='例如：模型架构那段']").fill("旧检索")
+    page.get_by_role("button", name="检索", exact=True).click()
+    page.wait_for_function("window.__popupMockPendingResponseCount('SEARCH_CURRENT_VIDEO_SEGMENTS') === 1")
+    page.evaluate("window.__popupMockEmitSelectionChange('same')")
+    page.locator("input[placeholder='例如：模型架构那段']").fill("新检索")
+    page.get_by_role("button", name="检索", exact=True).click()
+    expect(page.get_by_text("新检索 的当前候选").first).to_be_visible()
+    page.evaluate("window.__popupMockResolveResponses('SEARCH_CURRENT_VIDEO_SEGMENTS')")
+    page.wait_for_timeout(50)
+    expect(page.get_by_text("新检索 的当前候选").first).to_be_visible()
+    expect(page.get_by_text("旧检索 的当前候选")).to_have_count(0)
+    assert_clean_page(page)
+
+
+def run_timestamp_races_and_double_click(page):
+    page.route("**/*", route_popup)
+    page.goto(POPUP_URL)
+    expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
+    prepare_segment_preview(page, "第一次跳转")
+    page.evaluate("window.__popupMockDeferNextResponse('REQUEST_CURRENT_VIDEO_SEGMENT_JUMP')")
+    page.get_by_role("button", name="确认跳转").evaluate("button => { button.click(); button.click(); }")
+    page.wait_for_function("window.__popupMockPendingResponseCount('REQUEST_CURRENT_VIDEO_SEGMENT_JUMP') === 1")
+    assert len(messages_for(page, "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP")) == 1
+
+    page.evaluate("window.__popupMockEmitSelectionChange('same')")
+    prepare_segment_preview(page, "较新跳转")
+    page.get_by_role("button", name="确认跳转").click()
+    expect(page.get_by_text("跳转已完成，可返回原位置。")).to_be_visible()
+    page.evaluate("window.__popupMockResolveResponses('REQUEST_CURRENT_VIDEO_SEGMENT_JUMP')")
+    page.wait_for_timeout(50)
+    expect(page.get_by_text("跳转已完成，可返回原位置。")).to_be_visible()
+
+    page.evaluate("window.__popupMockDeferNextResponse('RETURN_CURRENT_VIDEO_SEGMENT_JUMP')")
+    page.get_by_role("button", name="返回原位置").evaluate("button => { button.click(); button.click(); }")
+    page.wait_for_function("window.__popupMockPendingResponseCount('RETURN_CURRENT_VIDEO_SEGMENT_JUMP') === 1")
+    assert len(messages_for(page, "RETURN_CURRENT_VIDEO_SEGMENT_JUMP")) == 1
+
+    page.evaluate("window.__popupMockEmitSelectionChange('same')")
+    prepare_segment_preview(page, "返回前的新跳转")
+    page.get_by_role("button", name="确认跳转").click()
+    expect(page.get_by_role("button", name="返回原位置")).to_be_visible()
+    page.get_by_role("button", name="返回原位置").click()
+    expect(page.get_by_text("已返回原位置。")).to_be_visible()
+    page.evaluate("window.__popupMockResolveResponses('RETURN_CURRENT_VIDEO_SEGMENT_JUMP')")
+    page.wait_for_timeout(50)
+    expect(page.get_by_text("已返回原位置。")).to_be_visible()
+    assert len(messages_for(page, "RETURN_CURRENT_VIDEO_SEGMENT_JUMP")) == 2
+    assert_clean_page(page)
+
+
+def run_success_raw_response_flow(page):
+    page.route("**/*", route_popup)
+    page.goto(f"{POPUP_URL}?rawJumpSuccess=1&rawReturnSuccess=1")
+    expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
+    prepare_segment_preview(page, "成功响应文案")
+    page.get_by_role("button", name="确认跳转").click()
+    expect(page.get_by_text("跳转已完成，可返回原位置。")).to_be_visible()
+    page.get_by_role("button", name="返回原位置").click()
+    expect(page.get_by_text("已返回原位置。")).to_be_visible()
+    assert_clean_page(page)
+
+
+def run_layout_smoke(page):
+    page.route("**/*", route_popup)
+    page.goto(POPUP_URL)
+    expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
+    assert_no_protected_actions(page)
+    assert_clean_page(page)
+
+
+def new_checked_page(browser, viewport=None):
+    page = browser.new_page(viewport=viewport or {"width": 390, "height": 760})
     errors = []
     page.on("console", lambda message: errors.append(f"console {message.type}: {message.text}") if message.type == "error" else None)
     page.on("pageerror", lambda error: errors.append(f"pageerror: {error}"))
@@ -238,7 +371,37 @@ def main():
             assert not missing_title_errors, "\n".join(missing_title_errors)
             missing_title.close()
 
-            print("current-video popup real UI QA passed: open/reprobe no generation, manual exact summary/knowledge/search/jump/return, stale saved source blocked before submit, unsuccessful jump/return messages controlled, storage and identity failures blocked, no raw visible leak, no overflow, no console errors")
+            summary_races, summary_races_errors = new_checked_page(browser)
+            run_summary_scope_races(summary_races)
+            assert not summary_races_errors, "\n".join(summary_races_errors)
+            summary_races.close()
+
+            knowledge_race, knowledge_race_errors = new_checked_page(browser)
+            run_knowledge_newer_wins(knowledge_race)
+            assert not knowledge_race_errors, "\n".join(knowledge_race_errors)
+            knowledge_race.close()
+
+            search_race, search_race_errors = new_checked_page(browser)
+            run_search_revision_race(search_race)
+            assert not search_race_errors, "\n".join(search_race_errors)
+            search_race.close()
+
+            timestamp_races, timestamp_races_errors = new_checked_page(browser)
+            run_timestamp_races_and_double_click(timestamp_races)
+            assert not timestamp_races_errors, "\n".join(timestamp_races_errors)
+            timestamp_races.close()
+
+            raw_success, raw_success_errors = new_checked_page(browser)
+            run_success_raw_response_flow(raw_success)
+            assert not raw_success_errors, "\n".join(raw_success_errors)
+            raw_success.close()
+
+            desktop, desktop_errors = new_checked_page(browser, {"width": 1024, "height": 820})
+            run_layout_smoke(desktop)
+            assert not desktop_errors, "\n".join(desktop_errors)
+            desktop.close()
+
+            print("current-video popup real UI QA passed: open/reprobe no generation, unified summary/knowledge/search/jump/return scope races, source and context invalidation, timestamp double-click suppression, manual exact authorization, stale saved source blocked, success/failure messages controlled, desktop/mobile no raw visible leak, no overflow, no console errors")
         finally:
             browser.close()
 
