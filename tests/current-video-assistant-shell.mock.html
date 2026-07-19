@@ -100,6 +100,8 @@
       let deferNextProtectedAction = null;
       let deferNextTimestampSeek = false;
       const pendingTimestampSeeks = [];
+      let rejectNextTimestampOperationLease = false;
+      let timestampOperationLeaseSequence = 0;
       const contentTimestampResults = {};
       let replacedOldVideoElement = null;
       let replacedNewVideoElement = null;
@@ -695,6 +697,9 @@
       window.__assistantMockDeferNextTimestampSeek = () => {
         deferNextTimestampSeek = true;
       };
+      window.__assistantMockRejectNextTimestampOperationLease = () => {
+        rejectNextTimestampOperationLease = true;
+      };
       window.__assistantMockPendingTimestampSeekCount = () => pendingTimestampSeeks.length;
       window.__assistantMockResolveTimestampSeeks = () => {
         const pending = pendingTimestampSeeks.splice(0);
@@ -722,6 +727,7 @@
             confidenceLabel: "高",
             evidencePreview: "延迟跳转测试",
             sourceIdentityKey: subtitleSourceIdentityKey(),
+            operationLeaseId: `mock-jump-lease-${++timestampOperationLeaseSequence}`,
           },
         }).then((response) => { contentTimestampResults[slot] = response; });
       };
@@ -737,6 +743,7 @@
             contextCid: context?.cid,
             contextPage: context?.currentPart?.page,
             sourceIdentityKey: subtitleSourceIdentityKey(),
+            operationLeaseId: `mock-return-lease-${++timestampOperationLeaseSequence}`,
           },
         })
           .then((response) => { contentTimestampResults[slot] = response; });
@@ -1296,6 +1303,11 @@
                 success: true,
                 data: returnCurrentVideoSegmentJump(),
               });
+            }
+            if (message.action === "CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE") {
+              const authorized = !rejectNextTimestampOperationLease;
+              rejectNextTimestampOperationLease = false;
+              return Promise.resolve({ success: true, data: { authorized } });
             }
             return Promise.resolve({ success: true, data: null });
           },

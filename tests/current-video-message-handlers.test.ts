@@ -5,24 +5,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { normalizeBilibiliTranscriptEvidence } from '../src/shared/current-video-transcript-cache.ts';
-import {
-  clearTemporaryCurrentVideoTranscriptCache,
-  getTemporaryCurrentVideoTranscriptSegments,
-  putTemporaryCurrentVideoTranscriptEvidence,
-} from '../src/background/current-video-temporary-transcript-cache.ts';
-import { retainTemporaryTranscriptOwnerForContextSnapshot } from '../src/background/current-video-transcript-owner.ts';
 import type { CurrentVideoContext } from '../src/shared/types/current-video-context.ts';
 import type { BiliVizRequest, BiliVizResponse } from '../src/shared/types/messages.ts';
 import type {
   CurrentVideoSegmentRetrievalResult,
   CurrentVideoTimestampJumpResponse,
+  CurrentVideoTimestampOperationLeaseConsumeResult,
   CurrentVideoTimestampReturnResponse,
 } from '../src/shared/types/current-video-segment-retrieval.ts';
 import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary.ts';
 import type { VideoKnowledgeResult } from '../src/shared/types/video-knowledge.ts';
-import { db } from '../src/background/storage/db.ts';
-import { upsertCurrentVideoTranscriptEvidence } from '../src/background/storage/current-video-transcript-repo.ts';
 import {
   CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
   type SaveCurrentVideoPrimaryTextSelectionResult,
@@ -45,9 +37,20 @@ const tabMessageHandlers = new Map<number, (message: unknown) => Promise<unknown
 const storageValues: Record<string, unknown> = {};
 const storageGetCounts = new Map<string, number>();
 let rejectPrimaryTextSelectionStorageReads = false;
+let primaryTextSelectionStorageGetGate: Promise<void> | null = null;
 
 installChromeFake();
-const { setupMessageHandlers } = await importBundledMessageHandlers();
+const {
+  clearTemporaryCurrentVideoTranscriptCache,
+  db,
+  getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys,
+  getTemporaryCurrentVideoTranscriptSegments,
+  normalizeBilibiliTranscriptEvidence,
+  putTemporaryCurrentVideoTranscriptEvidence,
+  retainTemporaryTranscriptOwnerForContextSnapshot,
+  setupMessageHandlers,
+  upsertCurrentVideoTranscriptEvidence,
+} = await importBundledMessageHandlers();
 setupMessageHandlers();
 
 test('background selection action serializes interleaved tab saves without replacing other parts', async () => {
@@ -57,9 +60,12 @@ test('background selection action serializes interleaved tab saves without repla
     'BV1SavedA:1001:1': 'source-a',
     'BV1SavedB:1002:2': 'source-b',
   };
+  let releaseFirstRead!: () => void;
+  primaryTextSelectionStorageGetGate = new Promise<void>((resolve) => {
+    releaseFirstRead = resolve;
+  });
 
-  const [tabOne, tabTwo] = await Promise.all([
-    sendRequest<SaveCurrentVideoPrimaryTextSelectionResult>({
+  const tabOnePromise = sendRequest<SaveCurrentVideoPrimaryTextSelectionResult>({
       action: 'SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION' as BiliVizRequest['action'],
       params: {
         bvid: 'BV1SavedC',
@@ -67,8 +73,8 @@ test('background selection action serializes interleaved tab saves without repla
         page: 3,
         selectedSourceIdentityKey: 'source-c',
       },
-    }, 19_001, 'https://www.bilibili.com/video/BV1SavedC?p=3'),
-    sendRequest<SaveCurrentVideoPrimaryTextSelectionResult>({
+    }, 19_001, 'https://www.bilibili.com/video/BV1SavedC?p=3');
+  const tabTwoPromise = sendRequest<SaveCurrentVideoPrimaryTextSelectionResult>({
       action: 'SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION' as BiliVizRequest['action'],
       params: {
         bvid: 'BV1SavedD',
@@ -76,8 +82,12 @@ test('background selection action serializes interleaved tab saves without repla
         page: 4,
         selectedSourceIdentityKey: 'source-d',
       },
-    }, 19_002, 'https://www.bilibili.com/video/BV1SavedD?p=4'),
-  ]);
+    }, 19_002, 'https://www.bilibili.com/video/BV1SavedD?p=4');
+
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(storageReadCount(storageKey), 1, 'the second handler save must wait before reading');
+  releaseFirstRead();
+  const [tabOne, tabTwo] = await Promise.all([tabOnePromise, tabTwoPromise]);
 
   assert.equal(tabOne.success, true);
   assert.equal(tabTwo.success, true);
@@ -644,27 +654,29 @@ test('background does not authorize active V2 when readiness is true without an 
   assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
 });
 
-test('protected handlers re-read persisted primary text authorization before touching exact transcript body', async (t) => {
-  await t.test('a saved replacement blocks the key that the UI read earlier', async () => {
+test('protected handlers re-read persisted primary text authorization before touching exact transcript body', async () => {
+  await runHandlerCase('saved replacement', async () => {
     resetChromeHarness();
     await resetTranscriptDb();
     const tabId = 18_609;
     const context = handlerVideoContext('BV1FreshSelectionA', 4901);
     const evidence = await seedHandlerTranscript(
       context,
+      tabId,
       'fresh-selection-a',
       'fresh selection replacement must block this exact body',
     );
-    await db.currentVideoTranscriptSources
-      .where('identityKey')
-      .equals(evidence.sourceRecord.identityKey)
-      .modify({ lastAccessedAt: 1_000 });
-    const sourceBefore = await transcriptSource(evidence.sourceRecord.identityKey);
     storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
       [`${context.bvid}:${context.cid}:1`]: 'replacement-source-key',
     };
     setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_000 }]);
     await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+    await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+    await db.currentVideoTranscriptSources
+      .where('identityKey')
+      .equals(evidence.sourceRecord.identityKey)
+      .modify({ lastAccessedAt: 1_000 });
+    const sourceBefore = await transcriptSource(evidence.sourceRecord.identityKey);
 
     const response = await searchWithExactSource(
       tabId,
@@ -707,24 +719,26 @@ test('protected handlers re-read persisted primary text authorization before tou
     assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
   });
 
-  await t.test('selection storage read rejection fails closed', async () => {
+  await runHandlerCase('selection storage read rejection', async () => {
     resetChromeHarness();
     await resetTranscriptDb();
     const tabId = 18_610;
     const context = handlerVideoContext('BV1FreshSelectionB', 4902);
     const evidence = await seedHandlerTranscript(
       context,
+      tabId,
       'fresh-selection-b',
       'rejected selection storage must not expose this body',
     );
+    rejectPrimaryTextSelectionStorageReads = true;
+    setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_100 }]);
+    await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+    await confirmHandlerTranscriptCurrent(context, tabId, evidence);
     await db.currentVideoTranscriptSources
       .where('identityKey')
       .equals(evidence.sourceRecord.identityKey)
       .modify({ lastAccessedAt: 1_000 });
     const sourceBefore = await transcriptSource(evidence.sourceRecord.identityKey);
-    rejectPrimaryTextSelectionStorageReads = true;
-    setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_100 }]);
-    await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
 
     const response = await searchWithExactSource(
       tabId,
@@ -740,18 +754,33 @@ test('protected handlers re-read persisted primary text authorization before tou
     assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
   });
 
-  await t.test('no saved choice keeps the unique current exact source available', async () => {
+  await runHandlerCase('unique current source', async () => {
     resetChromeHarness();
     await resetTranscriptDb();
     const tabId = 18_611;
     const context = handlerVideoContext('BV1FreshSelectionC', 4903);
     const evidence = await seedHandlerTranscript(
       context,
+      tabId,
       'fresh-selection-c',
       'unique current exact source remains available without a saved choice',
     );
     setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_200 }]);
     await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+    await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+    const currentOwner = retainTemporaryTranscriptOwnerForContextSnapshot(context, tabId);
+    assert.ok(currentOwner);
+    assert.deepEqual(getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys({
+      bvid: context.bvid,
+      cid: context.cid as number,
+      page: context.currentPart.page,
+    }, currentOwner), [evidence.sourceRecord.sourceIdentityKey]);
+    const observedPhases: GuardTestPhase[] = [];
+    (globalThis as typeof globalThis & {
+      __biliBillCurrentVideoPrimaryTextGuardTestHook__?: (phase: GuardTestPhase) => Promise<void>;
+    }).__biliBillCurrentVideoPrimaryTextGuardTestHook__ = async (phase) => {
+      observedPhases.push(phase);
+    };
 
     const response = await searchWithExactSource(
       tabId,
@@ -760,23 +789,31 @@ test('protected handlers re-read persisted primary text authorization before tou
       'unique current exact source',
     );
 
+    assert.deepEqual(observedPhases, [
+      'before_active_source_check',
+      'before_evidence_bind',
+      'before_segment_body_read',
+      'after_segment_body_read',
+    ]);
     assert.equal(response.data?.status, 'ready');
     assert.ok((response.data?.candidates.length ?? 0) > 0);
     assert.ok(storageReadCount(CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY) >= 1);
   });
 
-  await t.test('an old exact key is blocked when the current source is different', async () => {
+  await runHandlerCase('old source key', async () => {
     resetChromeHarness();
     await resetTranscriptDb();
     const tabId = 18_612;
     const context = handlerVideoContext('BV1FreshSelectionD', 4904);
     const evidence = await seedHandlerTranscript(
       context,
+      tabId,
       'fresh-selection-d',
       'only the current exact source is eligible without a saved choice',
     );
     setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_300 }]);
     await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+    await confirmHandlerTranscriptCurrent(context, tabId, evidence);
 
     const response = await searchWithExactSource(
       tabId,
@@ -790,28 +827,34 @@ test('protected handlers re-read persisted primary text authorization before tou
     assert.ok(storageReadCount(CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY) >= 1);
   });
 
-  await t.test('a saved exact key remains authorized among multiple active persistent sources', async () => {
+  await runHandlerCase('saved current source among cached sources', async () => {
     resetChromeHarness();
     await resetTranscriptDb();
     const tabId = 18_613;
     const context = handlerVideoContext('BV1FreshSelectionE', 4905);
     const chinese = await seedHandlerTranscript(
       context,
+      tabId,
       'fresh-selection-e-zh',
       '中文旧来源不能在当前来源不明确时继续授权',
       'zh-CN',
     );
     const english = await seedHandlerTranscript(
       context,
+      tabId,
       'fresh-selection-e-en',
       'an alternate language source is also active in persistent metadata',
       'en-US',
     );
+    const currentOwner = retainTemporaryTranscriptOwnerForContextSnapshot(context, tabId);
+    assert.ok(currentOwner);
+    await upsertCurrentVideoTranscriptEvidence(chinese, { temporaryOwner: currentOwner });
     storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
       [`${context.bvid}:${context.cid}:1`]: chinese.sourceRecord.sourceIdentityKey,
     };
     setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_400 }]);
     await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+    await confirmHandlerTranscriptCurrent(context, tabId, chinese);
 
     const response = await searchWithExactSource(
       tabId,
@@ -839,23 +882,28 @@ test('protected handlers re-read persisted primary text authorization before tou
     assert.equal((await transcriptSource(english.sourceRecord.identityKey))?.lastAccessedAt, 2_000);
   });
 
-  await t.test('multiple active persistent sources without a saved choice stay blocked without LRU touches', async () => {
+  await runHandlerCase('non-current cached source', async () => {
     resetChromeHarness();
     await resetTranscriptDb();
     const tabId = 18_614;
     const context = handlerVideoContext('BV1FreshSelectionF', 4906);
     const chinese = await seedHandlerTranscript(
       context,
+      tabId,
       'fresh-selection-f-zh',
       '无保存选择时多来源必须保持阻断',
       'zh-CN',
     );
     const english = await seedHandlerTranscript(
       context,
+      tabId,
       'fresh-selection-f-en',
       'multiple active sources need an explicit saved choice',
       'en-US',
     );
+    setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_500 }]);
+    await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+    await confirmHandlerTranscriptCurrent(context, tabId, english);
     await db.currentVideoTranscriptSources
       .where('identityKey')
       .equals(chinese.sourceRecord.identityKey)
@@ -864,8 +912,6 @@ test('protected handlers re-read persisted primary text authorization before tou
       .where('identityKey')
       .equals(english.sourceRecord.identityKey)
       .modify({ lastAccessedAt: 2_000 });
-    setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_500 }]);
-    await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
 
     const response = await searchWithExactSource(
       tabId,
@@ -880,25 +926,27 @@ test('protected handlers re-read persisted primary text authorization before tou
     assert.equal((await transcriptSource(english.sourceRecord.identityKey))?.lastAccessedAt, 2_000);
   });
 
-  await t.test('a saved stale exact source stays blocked without an LRU touch', async () => {
+  await runHandlerCase('saved stale source', async () => {
     resetChromeHarness();
     await resetTranscriptDb();
     const tabId = 18_615;
     const context = handlerVideoContext('BV1FreshSelectionG', 4907);
     const stale = await seedHandlerTranscript(
       context,
+      tabId,
       'fresh-selection-g-stale',
       'stale exact source must remain unavailable',
     );
-    await db.currentVideoTranscriptSources
-      .where('identityKey')
-      .equals(stale.sourceRecord.identityKey)
-      .modify({ stale: true, lastAccessedAt: 1_000 });
     storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
       [`${context.bvid}:${context.cid}:1`]: stale.sourceRecord.sourceIdentityKey,
     };
     setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_600 }]);
     await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+    await confirmHandlerTranscriptCurrent(context, tabId, stale);
+    await db.currentVideoTranscriptSources
+      .where('identityKey')
+      .equals(stale.sourceRecord.identityKey)
+      .modify({ stale: true, lastAccessedAt: 1_000 });
 
     const response = await searchWithExactSource(
       tabId,
@@ -913,6 +961,68 @@ test('protected handlers re-read persisted primary text authorization before tou
   });
 });
 
+test('protected actions require current-source confirmation after service-worker owner state resets', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_619;
+  const context = handlerVideoContext('BV1WorkerRestart', 4999);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'worker-restart-source',
+    'persisted old text must not become current again after service worker restart',
+  );
+  const sourceIdentityKey = evidence.sourceRecord.sourceIdentityKey;
+  assert.ok(sourceIdentityKey);
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 9_900 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+
+  const beforeRestart = await searchWithExactSource(
+    tabId,
+    context,
+    sourceIdentityKey,
+    'persisted old text',
+  );
+  assert.equal(beforeRestart.data?.status, 'ready');
+
+  clearTemporaryCurrentVideoTranscriptCache();
+  const contentMessages: unknown[] = [];
+  setTabMessageHandler(tabId, (message) => {
+    contentMessages.push(message);
+    return { ok: true };
+  });
+
+  for (const action of ['summary', 'knowledge', 'search', 'jump'] as const) {
+    const response = await invokeProtectedHandlerAction(action, tabId, context, sourceIdentityKey);
+    assertProtectedActionBlocked(action, response);
+  }
+  const returned = await sendRequest<CurrentVideoTimestampReturnResponse>({
+    action: 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP',
+    params: {
+      primaryTextSelectionsReady: true,
+      selectedSourceIdentityKey: sourceIdentityKey,
+    },
+  }, tabId, context.url);
+  assert.equal(returned.success, true);
+  assert.equal(returned.data?.ok, false);
+  assert.equal(contentMessages.length, 0);
+
+  const currentOwner = retainTemporaryTranscriptOwnerForContextSnapshot(context, tabId);
+  assert.ok(currentOwner);
+  await upsertCurrentVideoTranscriptEvidence(evidence, { temporaryOwner: currentOwner });
+  const afterRedetection = await searchWithExactSource(
+    tabId,
+    context,
+    sourceIdentityKey,
+    'persisted old text',
+  );
+  assert.equal(afterRedetection.data?.status, 'ready');
+});
+
 test('protected handlers drop in-flight work when the exact source changes before evidence binding', async () => {
   const actions = ['summary', 'knowledge', 'search', 'jump'] as const;
   for (const [index, action] of actions.entries()) {
@@ -922,19 +1032,21 @@ test('protected handlers drop in-flight work when the exact source changes befor
     const context = handlerVideoContext(`BV1GuardEvidence${index}`, 5001 + index);
     const evidence = await seedHandlerTranscript(
       context,
+      tabId,
       `guard-evidence-${index}`,
       `guard evidence ${action} body must not be consumed after source replacement`,
     );
-    await db.currentVideoTranscriptSources
-      .where('identityKey')
-      .equals(evidence.sourceRecord.identityKey)
-      .modify({ lastAccessedAt: 1_000 });
-    const sourceBefore = await transcriptSource(evidence.sourceRecord.identityKey);
     storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
       [handlerPartKey(context)]: evidence.sourceRecord.sourceIdentityKey,
     };
     setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 10_000 + index }]);
     await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+    await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+    await db.currentVideoTranscriptSources
+      .where('identityKey')
+      .equals(evidence.sourceRecord.identityKey)
+      .modify({ lastAccessedAt: 1_000 });
+    const sourceBefore = await transcriptSource(evidence.sourceRecord.identityKey);
 
     const seekMessages: unknown[] = [];
     setTabMessageHandler(tabId, (message) => {
@@ -979,6 +1091,7 @@ test('protected search fails closed when source changes during active-source and
     const context = handlerVideoContext(`BV1GuardPhase${tabId}`, 5100 + tabId);
     const evidence = await seedHandlerTranscript(
       context,
+      tabId,
       `guard-phase-${phase}`,
       `guard phase ${phase} body must not produce a candidate`,
     );
@@ -987,6 +1100,7 @@ test('protected search fails closed when source changes during active-source and
     };
     setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 11_000 }]);
     await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+    await confirmHandlerTranscriptCurrent(context, tabId, evidence);
     installGuardTestHook(phase, async () => {
       await sendRequest<SaveCurrentVideoPrimaryTextSelectionResult>({
         action: 'SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION',
@@ -1022,6 +1136,7 @@ test('protected handlers block after transcript cache is cleared between binding
   const context = handlerVideoContext('BV1GuardClear', 5201);
   const evidence = await seedHandlerTranscript(
     context,
+    tabId,
     'guard-clear',
     'guard clear body must not fall back to description summary',
   );
@@ -1030,6 +1145,7 @@ test('protected handlers block after transcript cache is cleared between binding
   };
   setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 12_000 }]);
   await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
   installGuardTestHook('before_segment_body_read', async () => {
     await sendRequest({
       action: 'CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE',
@@ -1059,6 +1175,7 @@ test('return request with stale exact source does not send a content seek messag
   const context = handlerVideoContext('BV1GuardReturn', 5301);
   const evidence = await seedHandlerTranscript(
     context,
+    tabId,
     'guard-return',
     'guard return source binding',
   );
@@ -1067,6 +1184,7 @@ test('return request with stale exact source does not send a content seek messag
   };
   setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 13_000 }]);
   await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
   storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
     [handlerPartKey(context)]: `${evidence.sourceRecord.sourceIdentityKey}:new`,
   };
@@ -1093,6 +1211,125 @@ test('return request with stale exact source does not send a content seek messag
   assert.equal(response.success, true);
   assert.equal(response.data?.ok, false);
   assert.equal(contentMessages.length, 0);
+});
+
+test('jump operation lease is denied when selection changes before content consumes delivery', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_634;
+  const context = handlerVideoContext('BV1LeaseJump', 5401);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'lease-jump',
+    'lease jump evidence must not seek after the source selection changes',
+  );
+  const sourceIdentityKey = evidence.sourceRecord.sourceIdentityKey;
+  assert.ok(sourceIdentityKey);
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 13_100 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+  const search = await searchWithExactSource(
+    tabId,
+    context,
+    sourceIdentityKey,
+    'lease jump evidence',
+  );
+  const candidateId = search.data?.candidates[0]?.id;
+  assert.ok(candidateId);
+
+  let leaseAuthorized: boolean | null = null;
+  let seekCount = 0;
+  setTabMessageHandler(tabId, async (message) => {
+    const payload = contentTimestampPayload(message, 'CURRENT_VIDEO_TIMESTAMP_JUMP');
+    await sendRequest<SaveCurrentVideoPrimaryTextSelectionResult>({
+      action: 'SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION',
+      params: {
+        bvid: context.bvid,
+        cid: context.cid,
+        page: context.currentPart.page,
+        selectedSourceIdentityKey: `${sourceIdentityKey}:replacement`,
+      },
+    }, tabId, context.url);
+    const consumed = await sendRequest<CurrentVideoTimestampOperationLeaseConsumeResult>({
+      action: 'CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE',
+      params: timestampLeaseConsumeParams(payload, 'jump'),
+    }, tabId, context.url);
+    leaseAuthorized = consumed.data?.authorized ?? false;
+    if (leaseAuthorized) seekCount += 1;
+    return blockedTimestampJumpMock(candidateId);
+  });
+
+  const jump = await sendRequest<CurrentVideoTimestampJumpResponse>({
+    action: 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP',
+    params: {
+      primaryTextSelectionsReady: true,
+      selectedSourceIdentityKey: sourceIdentityKey,
+      candidateId,
+      query: 'lease jump evidence',
+      confirmed: true,
+    },
+  }, tabId, context.url);
+
+  assert.equal(jump.success, true);
+  assert.equal(leaseAuthorized, false);
+  assert.equal(seekCount, 0);
+});
+
+test('return operation lease is denied when transcript cache clears before content consumes delivery', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_635;
+  const context = handlerVideoContext('BV1LeaseReturn', 5402);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'lease-return',
+    'lease return evidence must not seek after the subtitle cache is cleared',
+  );
+  const sourceIdentityKey = evidence.sourceRecord.sourceIdentityKey;
+  assert.ok(sourceIdentityKey);
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 13_200 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+
+  let leaseAuthorized: boolean | null = null;
+  let seekCount = 0;
+  setTabMessageHandler(tabId, async (message) => {
+    const payload = contentTimestampPayload(message, 'CURRENT_VIDEO_TIMESTAMP_RETURN');
+    await sendRequest({ action: 'CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE', params: {} }, tabId, context.url);
+    const consumed = await sendRequest<CurrentVideoTimestampOperationLeaseConsumeResult>({
+      action: 'CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE',
+      params: timestampLeaseConsumeParams(payload, 'return'),
+    }, tabId, context.url);
+    leaseAuthorized = consumed.data?.authorized ?? false;
+    if (leaseAuthorized) seekCount += 1;
+    return {
+      ok: false,
+      message: '当前视频状态已变化，请重新预览并确认跳转。',
+      candidateId: null,
+      returnPointSeconds: null,
+      targetSeconds: null,
+    };
+  });
+
+  const returned = await sendRequest<CurrentVideoTimestampReturnResponse>({
+    action: 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP',
+    params: {
+      primaryTextSelectionsReady: true,
+      selectedSourceIdentityKey: sourceIdentityKey,
+    },
+  }, tabId, context.url);
+
+  assert.equal(returned.success, true);
+  assert.equal(leaseAuthorized, false);
+  assert.equal(seekCount, 0);
 });
 
 function handlerVideoContext(bvid: string, cid: number, page = 1): CurrentVideoContext {
@@ -1151,6 +1388,7 @@ function handlerVideoContext(bvid: string, cid: number, page = 1): CurrentVideoC
 
 async function seedHandlerTranscript(
   context: CurrentVideoContext,
+  tabId: number,
   trackId: string,
   content: string,
   language = 'zh-CN',
@@ -1168,8 +1406,32 @@ async function seedHandlerTranscript(
       fetchedAt: 12_000,
     },
   );
-  await upsertCurrentVideoTranscriptEvidence(evidence);
+  const owner = retainTemporaryTranscriptOwnerForContextSnapshot(context, tabId);
+  assert.ok(owner);
+  await upsertCurrentVideoTranscriptEvidence(evidence, { temporaryOwner: owner });
   return evidence;
+}
+
+async function confirmHandlerTranscriptCurrent(
+  context: CurrentVideoContext,
+  tabId: number,
+  evidence: Awaited<ReturnType<typeof seedHandlerTranscript>>,
+): Promise<void> {
+  const owner = retainTemporaryTranscriptOwnerForContextSnapshot(context, tabId);
+  assert.ok(owner);
+  const state = await upsertCurrentVideoTranscriptEvidence(evidence, { temporaryOwner: owner });
+  assert.equal(state.active, true);
+}
+
+async function runHandlerCase(name: string, callback: () => Promise<void>): Promise<void> {
+  try {
+    await callback();
+  } catch (error) {
+    if (error instanceof Error) {
+      error.message = `[${name}] ${error.message}`;
+    }
+    throw error;
+  }
 }
 
 async function searchWithExactSource(
@@ -1277,6 +1539,41 @@ function handlerPartKey(context: CurrentVideoContext): string {
   return `${context.bvid}:${context.cid}:${context.currentPart.page}`;
 }
 
+function contentTimestampPayload(message: unknown, expectedAction: string): Record<string, unknown> {
+  assert.ok(message && typeof message === 'object');
+  const record = message as Record<string, unknown>;
+  assert.equal(record.action, expectedAction);
+  assert.ok(record.payload && typeof record.payload === 'object');
+  return record.payload as Record<string, unknown>;
+}
+
+function timestampLeaseConsumeParams(
+  payload: Record<string, unknown>,
+  operationKind: 'jump' | 'return',
+): Record<string, unknown> {
+  return {
+    operationLeaseId: payload.operationLeaseId,
+    operationKind,
+    contextBvid: payload.contextBvid,
+    contextCid: payload.contextCid,
+    contextPage: payload.contextPage,
+    sourceIdentityKey: payload.sourceIdentityKey,
+  };
+}
+
+function blockedTimestampJumpMock(candidateId: string): CurrentVideoTimestampJumpResponse {
+  return {
+    ok: false,
+    message: '当前视频状态已变化，请重新预览并确认跳转。',
+    candidateId,
+    targetSeconds: null,
+    targetTimeLabel: null,
+    returnPointSeconds: null,
+    sourceLabel: '可定位字幕证据',
+    confidence: 0,
+  };
+}
+
 function installGuardTestHook(
   expectedPhase: GuardTestPhase,
   callback: () => Promise<void>,
@@ -1334,18 +1631,23 @@ function installChromeFake(): void {
           )) {
             return Promise.reject(new Error('PRIMARY_TEXT_SELECTION_STORAGE_READ_FAILED'));
           }
+          let result: Record<string, unknown>;
           if (typeof keys === 'string') {
-            return Promise.resolve({ [keys]: storageValues[keys] });
-          }
-          if (Array.isArray(keys)) {
-            return Promise.resolve(Object.fromEntries(keys.map(key => [key, storageValues[key]])));
-          }
-          if (keys && typeof keys === 'object') {
-            return Promise.resolve(Object.fromEntries(
+            result = { [keys]: storageValues[keys] };
+          } else if (Array.isArray(keys)) {
+            result = Object.fromEntries(keys.map(key => [key, storageValues[key]]));
+          } else if (keys && typeof keys === 'object') {
+            result = Object.fromEntries(
               Object.entries(keys).map(([key, fallback]) => [key, storageValues[key] ?? fallback]),
-            ));
+            );
+          } else {
+            result = { ...storageValues };
           }
-          return Promise.resolve({ ...storageValues });
+          const gate = primaryTextSelectionStorageGetGate;
+          if (gate && readsStorageKey(keys, CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY)) {
+            return gate.then(() => result);
+          }
+          return Promise.resolve(result);
         },
         set(values: Record<string, unknown>) {
           Object.assign(storageValues, values);
@@ -1373,6 +1675,7 @@ function resetChromeHarness(): void {
   }
   storageGetCounts.clear();
   rejectPrimaryTextSelectionStorageReads = false;
+  primaryTextSelectionStorageGetGate = null;
 }
 
 function setTabs(nextTabs: FakeTab[]): void {
@@ -1472,12 +1775,32 @@ function readsStorageKey(
 
 async function importBundledMessageHandlers(): Promise<{
   setupMessageHandlers: () => void;
+  clearTemporaryCurrentVideoTranscriptCache: typeof import('../src/background/current-video-temporary-transcript-cache.ts').clearTemporaryCurrentVideoTranscriptCache;
+  db: typeof import('../src/background/storage/db.ts').db;
+  getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys: typeof import('../src/background/storage/current-video-transcript-repo.ts').getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys;
+  getTemporaryCurrentVideoTranscriptSegments: typeof import('../src/background/current-video-temporary-transcript-cache.ts').getTemporaryCurrentVideoTranscriptSegments;
+  normalizeBilibiliTranscriptEvidence: typeof import('../src/shared/current-video-transcript-cache.ts').normalizeBilibiliTranscriptEvidence;
+  putTemporaryCurrentVideoTranscriptEvidence: typeof import('../src/background/current-video-temporary-transcript-cache.ts').putTemporaryCurrentVideoTranscriptEvidence;
+  retainTemporaryTranscriptOwnerForContextSnapshot: typeof import('../src/background/current-video-transcript-owner.ts').retainTemporaryTranscriptOwnerForContextSnapshot;
+  upsertCurrentVideoTranscriptEvidence: typeof import('../src/background/storage/current-video-transcript-repo.ts').upsertCurrentVideoTranscriptEvidence;
 }> {
   const { build } = await import('esbuild');
   const outdir = await mkdtemp(join(tmpdir(), 'bili-bill-handlers-'));
   const outfile = join(outdir, 'handlers.mjs');
   await build({
-    entryPoints: [fileURLToPath(new URL('../src/background/messages/handlers.ts', import.meta.url))],
+    stdin: {
+      contents: [
+        "export { setupMessageHandlers } from './src/background/messages/handlers.ts';",
+        "export { clearTemporaryCurrentVideoTranscriptCache, getTemporaryCurrentVideoTranscriptSegments, putTemporaryCurrentVideoTranscriptEvidence } from './src/background/current-video-temporary-transcript-cache.ts';",
+        "export { retainTemporaryTranscriptOwnerForContextSnapshot } from './src/background/current-video-transcript-owner.ts';",
+        "export { db } from './src/background/storage/db.ts';",
+        "export { getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys, upsertCurrentVideoTranscriptEvidence } from './src/background/storage/current-video-transcript-repo.ts';",
+        "export { normalizeBilibiliTranscriptEvidence } from './src/shared/current-video-transcript-cache.ts';",
+      ].join('\n'),
+      loader: 'ts',
+      resolveDir: fileURLToPath(new URL('..', import.meta.url)),
+      sourcefile: 'current-video-message-handlers-test-entry.ts',
+    },
     bundle: true,
     format: 'esm',
     platform: 'node',
@@ -1485,5 +1808,5 @@ async function importBundledMessageHandlers(): Promise<{
     outfile,
     logLevel: 'silent',
   });
-  return await import(pathToFileURL(outfile).href) as { setupMessageHandlers: () => void };
+  return await import(pathToFileURL(outfile).href);
 }

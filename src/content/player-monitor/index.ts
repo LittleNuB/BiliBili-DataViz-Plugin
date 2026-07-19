@@ -11,6 +11,8 @@ import { detectVideo } from './video-detector';
 import type { BiliVizContentMessage } from '../../shared/types/messages';
 import type {
   CurrentVideoTimestampJumpContentPayload,
+  CurrentVideoTimestampOperationKind,
+  CurrentVideoTimestampOperationLeaseConsumeResult,
   CurrentVideoTimestampReturnContentPayload,
   CurrentVideoTimestampJumpResponse,
   CurrentVideoTimestampReturnResponse,
@@ -214,10 +216,15 @@ async function handleCurrentVideoTimestampJump(
   payload: CurrentVideoTimestampJumpContentPayload,
 ): Promise<CurrentVideoTimestampJumpResponse> {
   const operation = beginTimestampOperation(true);
+  const operationLeaseAuthorized = await consumeCurrentVideoTimestampOperationLease('jump', payload);
+  if (!timestampOperationIsCurrent(operation)) {
+    return invalidatedTimestampJumpResponse(payload);
+  }
   const result = await performConfirmedTimestampJump({
     payload,
     latestContext,
     video: currentUsableVideoElement(),
+    operationLeaseAuthorized,
   });
   if (!timestampOperationIsCurrent(operation)) {
     return invalidatedTimestampJumpResponse(payload);
@@ -234,11 +241,18 @@ async function handleCurrentVideoTimestampReturn(
 ): Promise<CurrentVideoTimestampReturnResponse> {
   const operation = beginTimestampOperation(false);
   const returnPoint = currentVideoTimestampReturnPoint;
+  const operationLeaseAuthorized = payload
+    ? await consumeCurrentVideoTimestampOperationLease('return', payload)
+    : false;
+  if (!timestampOperationIsCurrent(operation)) {
+    return invalidatedTimestampReturnResponse(returnPoint);
+  }
   const result = await performTimestampReturn({
     payload,
     returnPoint,
     latestContext,
     video: currentUsableVideoElement(),
+    operationLeaseAuthorized,
   });
   if (!timestampOperationIsCurrent(operation)) {
     return invalidatedTimestampReturnResponse(returnPoint);
@@ -248,6 +262,32 @@ async function handleCurrentVideoTimestampReturn(
     document.getElementById(RETURN_TOAST_ID)?.remove();
   }
   return result.response;
+}
+
+async function consumeCurrentVideoTimestampOperationLease(
+  operationKind: CurrentVideoTimestampOperationKind,
+  payload: CurrentVideoTimestampJumpContentPayload | CurrentVideoTimestampReturnContentPayload,
+): Promise<boolean> {
+  if (!payload.operationLeaseId || !payload.sourceIdentityKey) return false;
+  try {
+    const response = await chrome.runtime.sendMessage({
+      action: 'CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE',
+      params: {
+        operationLeaseId: payload.operationLeaseId,
+        operationKind,
+        contextBvid: payload.contextBvid,
+        contextCid: payload.contextCid,
+        contextPage: payload.contextPage,
+        sourceIdentityKey: payload.sourceIdentityKey,
+      },
+    }) as {
+      success?: boolean;
+      data?: CurrentVideoTimestampOperationLeaseConsumeResult;
+    };
+    return response?.success === true && response.data?.authorized === true;
+  } catch {
+    return false;
+  }
 }
 
 async function requestCurrentVideoTimestampReturnFromBackground(): Promise<CurrentVideoTimestampReturnResponse> {

@@ -244,6 +244,24 @@ export async function getCurrentVideoActiveTranscriptSourceIdentityKeys(
   return sourceIdentityKeys;
 }
 
+export function getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys(
+  identity: Pick<CurrentVideoTranscriptIdentity, 'bvid' | 'cid' | 'page'>,
+  temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
+): string[] {
+  if (!temporaryOwner || temporaryOwnerInvalidForIdentity(temporaryOwner, identity)) return [];
+
+  const temporaryIdentity = getTemporaryCurrentVideoTranscriptCurrentSourceIdentity(temporaryOwner);
+  if (
+    temporaryIdentity?.sourceIdentityKey
+    && temporaryIdentity.bvid === identity.bvid
+    && temporaryIdentity.cid === identity.cid
+    && temporaryIdentity.page === identity.page
+  ) {
+    return [temporaryIdentity.sourceIdentityKey];
+  }
+  return [];
+}
+
 export async function getCurrentVideoTranscriptSegments(
   identity: CurrentVideoTranscriptIdentity & { sourceHash?: string | null },
   temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,

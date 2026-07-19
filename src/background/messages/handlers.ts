@@ -10,6 +10,8 @@ import type { CurrentVideoTranscriptEvidenceState } from '../../shared/types/cur
 import type {
   CurrentVideoSegmentRetrievalResult,
   CurrentVideoTimestampJumpResponse,
+  CurrentVideoTimestampOperationKind,
+  CurrentVideoTimestampOperationLeaseConsumeResult,
   CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
 import type { CurrentVideoRelatedFavoritesResponse } from '../../shared/types/current-video-related-favorites';
@@ -106,7 +108,7 @@ import {
   setDynamicBillFilterPreference,
 } from '../storage/dynamic-bill-repo';
 import {
-  getCurrentVideoActiveTranscriptSourceIdentityKeys,
+  getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys,
   getCurrentVideoTranscriptEvidenceState,
   getCurrentVideoTranscriptSegments,
 } from '../storage/current-video-transcript-repo';
@@ -130,6 +132,12 @@ import {
   readCurrentVideoPrimaryTextSelections,
   resolveCurrentVideoPrimaryTextAuthorization,
 } from '../../shared/current-video-primary-text-selection.ts';
+import {
+  clearCurrentVideoTimestampOperationLeasesForTab,
+  consumeCurrentVideoTimestampOperationLease,
+  issueCurrentVideoTimestampOperationLease,
+  retireCurrentVideoTimestampOperationLease,
+} from '../current-video-timestamp-operation-lease.ts';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
 const SUBTITLE_PROBE_CACHE_MS = 5 * 60 * 1000;
@@ -220,6 +228,7 @@ export function setupMessageHandlers(): void {
   chrome.tabs.onRemoved.addListener((tabId) => {
     currentVideoContexts.delete(tabId);
     clearTemporaryCurrentVideoTranscriptCacheForTab(tabId);
+    clearCurrentVideoTimestampOperationLeasesForTab(tabId);
   });
 
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -227,6 +236,7 @@ export function setupMessageHandlers(): void {
     if (!nextUrl) return;
     currentVideoContexts.delete(tabId);
     clearTemporaryCurrentVideoTranscriptCacheForTab(tabId);
+    clearCurrentVideoTimestampOperationLeasesForTab(tabId);
   });
 }
 
@@ -565,6 +575,11 @@ async function handleRequest<T>(
       return { success: true, data: await requestCurrentVideoSegmentJump(request.params, requestTabId) as T };
     case 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP':
       return { success: true, data: await returnCurrentVideoSegmentJump(request.params, requestTabId) as T };
+    case 'CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE':
+      return {
+        success: true,
+        data: await consumeCurrentVideoTimestampLease(request.params, requestTabId) as T,
+      };
     case 'GET_SMART_FAVORITES':
       return { success: true, data: await getSmartFavoriteOverview() as T };
     case 'GET_SMART_FAVORITES_BY_PATH': {
@@ -789,6 +804,24 @@ async function requestCurrentVideoSegmentJump(
       PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
     );
   }
+  const operationGuard = lookup.primaryTextGuard;
+  if (!operationGuard) {
+    return blockedTimestampJumpResponse(
+      candidateId,
+      'no_context',
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    );
+  }
+  const operationLeaseId = issueCurrentVideoTimestampOperationLease({
+    tabId,
+    operationKind: 'jump',
+    bvid: operationGuard.bvid,
+    cid: operationGuard.cid,
+    page: operationGuard.page,
+    sourceIdentityKey: operationGuard.sourceIdentityKey,
+    selectionGeneration: operationGuard.selectionGeneration,
+    transcriptClearGeneration: operationGuard.transcriptClearGeneration,
+  });
 
   try {
     const response = await chrome.tabs.sendMessage(tabId, {
@@ -807,7 +840,8 @@ async function requestCurrentVideoSegmentJump(
         confidence: preview.confidence,
         confidenceLabel: preview.confidenceLabel,
         evidencePreview: preview.evidencePreview,
-        sourceIdentityKey: lookup.primaryTextGuard?.sourceIdentityKey ?? '',
+        sourceIdentityKey: operationGuard.sourceIdentityKey,
+        operationLeaseId,
       },
     });
     return response as CurrentVideoTimestampJumpResponse;
@@ -817,6 +851,8 @@ async function requestCurrentVideoSegmentJump(
       'player_unavailable',
       formatTimestampJumpFailureReason('player_unavailable'),
     );
+  } finally {
+    retireCurrentVideoTimestampOperationLease(operationLeaseId);
   }
 }
 
@@ -842,6 +878,17 @@ async function returnCurrentVideoSegmentJump(
   if (!await currentVideoPrimaryTextGuardStillAuthorized(lookup)) {
     return blockedTimestampReturnResponse(PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE);
   }
+  const operationGuard = lookup.primaryTextGuard;
+  const operationLeaseId = issueCurrentVideoTimestampOperationLease({
+    tabId,
+    operationKind: 'return',
+    bvid: operationGuard.bvid,
+    cid: operationGuard.cid,
+    page: operationGuard.page,
+    sourceIdentityKey: operationGuard.sourceIdentityKey,
+    selectionGeneration: operationGuard.selectionGeneration,
+    transcriptClearGeneration: operationGuard.transcriptClearGeneration,
+  });
 
   try {
     const response = await chrome.tabs.sendMessage(tabId, {
@@ -850,13 +897,85 @@ async function returnCurrentVideoSegmentJump(
         contextBvid: lookup.context.bvid,
         contextCid: lookup.context.cid,
         contextPage: lookup.context.currentPart.page,
-        sourceIdentityKey: lookup.primaryTextGuard.sourceIdentityKey,
+        sourceIdentityKey: operationGuard.sourceIdentityKey,
+        operationLeaseId,
       },
     });
     return response as CurrentVideoTimestampReturnResponse;
   } catch {
     return blockedTimestampReturnResponse(formatTimestampJumpFailureReason('player_unavailable'));
+  } finally {
+    retireCurrentVideoTimestampOperationLease(operationLeaseId);
   }
+}
+
+async function consumeCurrentVideoTimestampLease(
+  params: Record<string, unknown> | undefined,
+  requestTabId: number | null,
+): Promise<CurrentVideoTimestampOperationLeaseConsumeResult> {
+  const operationKind = timestampOperationKind(params?.operationKind);
+  const leaseId = optionalNonEmptyString(params?.operationLeaseId);
+  const bvid = optionalNonEmptyString(params?.contextBvid);
+  const cid = optionalPositiveInteger(params?.contextCid);
+  const page = optionalPositiveInteger(params?.contextPage);
+  const sourceIdentityKey = optionalNonEmptyString(params?.sourceIdentityKey);
+  if (
+    !operationKind
+    || !leaseId
+    || !bvid
+    || !cid
+    || !page
+    || !sourceIdentityKey
+    || !requestTabId
+    || requestTabId <= 0
+  ) {
+    return { authorized: false };
+  }
+
+  const binding = consumeCurrentVideoTimestampOperationLease({
+    leaseId,
+    tabId: requestTabId,
+    operationKind,
+    bvid,
+    cid,
+    page,
+    sourceIdentityKey,
+  });
+  if (!binding) return { authorized: false };
+
+  const issuedGuard: CurrentVideoPrimaryTextAuthorizationGuard = {
+    bvid: binding.bvid,
+    cid: binding.cid,
+    page: binding.page,
+    sourceIdentityKey: binding.sourceIdentityKey,
+    selectionGeneration: binding.selectionGeneration,
+    transcriptClearGeneration: binding.transcriptClearGeneration,
+  };
+  if (!currentVideoPrimaryTextGuardEpochsCurrent(issuedGuard)) {
+    return { authorized: false };
+  }
+
+  const lookup = await getCurrentVideoContextLookupWithSelection({
+    primaryTextSelectionsReady: true,
+    selectedSourceIdentityKey: binding.sourceIdentityKey,
+  }, requestTabId);
+  const currentGuard = lookup.primaryTextGuard;
+  if (
+    !lookup.primaryTextAuthorized
+    || !currentGuard
+    || currentGuard.bvid !== binding.bvid
+    || currentGuard.cid !== binding.cid
+    || currentGuard.page !== binding.page
+    || currentGuard.sourceIdentityKey !== binding.sourceIdentityKey
+    || !currentVideoPrimaryTextGuardEpochsCurrent(issuedGuard)
+  ) {
+    return { authorized: false };
+  }
+
+  return {
+    authorized: await currentVideoPrimaryTextGuardStillAuthorized(lookup)
+      && currentVideoPrimaryTextGuardEpochsCurrent(issuedGuard),
+  };
 }
 
 async function markConsumedFromPlayerEvent(
@@ -911,7 +1030,6 @@ async function getCurrentVideoContextLookupWithSelection(
       primaryTextAuthorized: false,
     };
   }
-
   const readResult = await readCurrentVideoPrimaryTextSelections(chrome.storage.local);
   if (readResult.status !== 'ready' || !currentVideoPrimaryTextAuthorizationEpochsCurrent(epochs)) {
     return {
@@ -923,7 +1041,7 @@ async function getCurrentVideoContextLookupWithSelection(
 
   await currentVideoPrimaryTextGuardTestHook('before_active_source_check');
   const availableSourceIdentityKeys = lookup.context.cid
-    ? await getCurrentVideoActiveTranscriptSourceIdentityKeys({
+    ? getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys({
         bvid: lookup.context.bvid,
         cid: lookup.context.cid,
         page: lookup.context.currentPart.page,
@@ -1473,7 +1591,7 @@ async function currentVideoPrimaryTextGuardStillAuthorized(
   const readResult = await readCurrentVideoPrimaryTextSelections(chrome.storage.local);
   if (readResult.status !== 'ready' || !currentVideoPrimaryTextGuardEpochsCurrent(guard)) return false;
 
-  const availableSourceIdentityKeys = await getCurrentVideoActiveTranscriptSourceIdentityKeys({
+  const availableSourceIdentityKeys = getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys({
     bvid: guard.bvid,
     cid: guard.cid,
     page: guard.page,
@@ -1587,6 +1705,19 @@ function requirePositiveIntegerParam(value: unknown, name: string): number {
   const numeric = Number(value);
   if (Number.isInteger(numeric) && numeric > 0) return numeric;
   throw new Error(`INVALID_${name.toUpperCase()}`);
+}
+
+function optionalNonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function optionalPositiveInteger(value: unknown): number | null {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+}
+
+function timestampOperationKind(value: unknown): CurrentVideoTimestampOperationKind | null {
+  return value === 'jump' || value === 'return' ? value : null;
 }
 
 function normalizeAiConfigParam(value: unknown): UserConfig['ai'] {

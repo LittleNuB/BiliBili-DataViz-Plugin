@@ -649,6 +649,13 @@ def run_content_timestamp_operation_epoch_flow(page):
     page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&savedSource=current")
     expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
 
+    page.evaluate("window.__assistantMockRejectNextTimestampOperationLease()")
+    page.evaluate("window.__assistantMockStartContentTimestampJump('lease-denied', 'lease-denied', 3)")
+    denied_response = wait_for_content_timestamp_result(page, "lease-denied")
+    assert denied_response["ok"] is False
+    assert page.evaluate("window.__assistantMockPendingTimestampSeekCount()") == 0
+    expect(page.locator("#bdc-current-video-return")).to_have_count(0)
+
     page.evaluate("window.__assistantMockDeferNextTimestampSeek()")
     page.evaluate("window.__assistantMockStartContentTimestampJump('selection-old', 'selection-old', 4)")
     page.wait_for_function("window.__assistantMockPendingTimestampSeekCount() === 1")
@@ -866,6 +873,7 @@ def run_content_listener_controlled_error_flow(page):
               confidenceLabel: "高",
               evidencePreview: "受控错误测试",
               sourceIdentityKey: context.transcriptEvidence?.sourceIdentityKey || window.__assistantMockCurrentSourceIdentityKey(),
+              operationLeaseId: "qa-controlled-error-lease",
             },
           }, {}, (response) => {
             document.createElement = originalCreateElement;

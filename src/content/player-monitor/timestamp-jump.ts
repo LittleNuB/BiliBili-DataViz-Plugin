@@ -37,6 +37,7 @@ export async function performConfirmedTimestampJump(input: {
   payload: CurrentVideoTimestampJumpContentPayload;
   latestContext: CurrentVideoContextResult | null;
   video: TimestampJumpVideoLike | null;
+  operationLeaseAuthorized: boolean;
   now?: number;
 }): Promise<{
   response: CurrentVideoTimestampJumpResponse;
@@ -45,7 +46,9 @@ export async function performConfirmedTimestampJump(input: {
   const now = input.now ?? Date.now();
   const payload = input.payload;
 
-  const blocked = validateTimestampJump(payload, input.latestContext, input.video);
+  const blocked = input.operationLeaseAuthorized
+    ? validateTimestampJump(payload, input.latestContext, input.video)
+    : formatTimestampJumpFailureReason('context_mismatch');
   if (blocked) {
     return {
       response: {
@@ -115,6 +118,7 @@ export async function performTimestampReturn(input: {
   returnPoint: CurrentVideoTimestampReturnPoint | null;
   latestContext: CurrentVideoContextResult | null;
   video: TimestampJumpVideoLike | null;
+  operationLeaseAuthorized: boolean;
   now?: number;
 }): Promise<{
   response: CurrentVideoTimestampReturnResponse;
@@ -132,6 +136,19 @@ export async function performTimestampReturn(input: {
   if (now - returnPoint.savedAt > RETURN_POINT_TTL_MS) {
     return {
       response: blockedTimestampReturnResponse('返回位置已过期，请重新检索并跳转。'),
+      clearReturnPoint: true,
+    };
+  }
+
+  if (!input.operationLeaseAuthorized) {
+    return {
+      response: {
+        ok: false,
+        message: formatTimestampJumpFailureReason('context_mismatch'),
+        candidateId: returnPoint.candidateId,
+        returnPointSeconds: returnPoint.seconds,
+        targetSeconds: returnPoint.targetSeconds,
+      },
       clearReturnPoint: true,
     };
   }
@@ -200,6 +217,9 @@ function validateTimestampJump(
   if (typeof payload.sourceIdentityKey !== 'string' || !payload.sourceIdentityKey.trim()) {
     return formatTimestampJumpFailureReason('context_mismatch');
   }
+  if (typeof payload.operationLeaseId !== 'string' || !payload.operationLeaseId.trim()) {
+    return formatTimestampJumpFailureReason('context_mismatch');
+  }
 
   if (!contextMatchesPayload(latestContext, payload)) {
     return formatTimestampJumpFailureReason('context_mismatch');
@@ -226,6 +246,7 @@ function returnRequestMatchesReturnPoint(
   returnPoint: CurrentVideoTimestampReturnPoint,
 ): boolean {
   if (!payload) return false;
+  if (typeof payload.operationLeaseId !== 'string' || !payload.operationLeaseId.trim()) return false;
   if (payload.contextBvid !== returnPoint.bvid) return false;
   if (payload.contextPage !== returnPoint.page) return false;
   if (typeof payload.sourceIdentityKey !== 'string') return false;

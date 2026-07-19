@@ -20,7 +20,8 @@ test('explains metadata-only state and asks user to enable Chinese AI subtitles'
   assert.equal(state.status, 'enable_ai_subtitle');
   assert.equal(state.evidenceAvailable, false);
   assert.match(visibleText(state), /手动开启.?中文 AI.?字幕/);
-  assert.match(visibleText(state), /不是 DeepSeek 或模型失败/);
+  assert.match(visibleText(state), /不是 AI 服务失败/);
+  assert.doesNotMatch(visibleText(state), /元数据.*兜底|简介兜底|只能使用元数据/);
   assertFeatureGatesUnavailable(state);
   assertNoRawUiLeak(state);
 });
