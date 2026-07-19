@@ -979,6 +979,7 @@
         summaryCacheSourceIdentityKey = subtitleSourceIdentityKey();
       };
       window.__assistantMockSummaryCache = () => summaryCacheResult;
+      window.__assistantMockSummaryCacheSourceIdentityKey = () => summaryCacheSourceIdentityKey;
       window.__assistantMockDropSummaryCache = () => {
         summaryCacheResult = null;
         summaryCacheSourceIdentityKey = null;
@@ -1093,6 +1094,16 @@
       };
       window.__assistantMockClearPrimaryTextSelectionsForLocalSettings = clearPrimaryTextSelectionsForQa;
       window.__assistantMockClearPrimaryTextSelectionsForClearAll = clearPrimaryTextSelectionsForQa;
+      window.__assistantMockSelectSourceIdentityForCurrentPart = (sourceIdentityKey) => {
+        const partKey = `${mockBvid}:${mockCid}:${mockPage}`;
+        const oldValue = extensionStorage[primaryTextSelectionStorageKey];
+        const newValue = {
+          ...(oldValue || {}),
+          [partKey]: String(sourceIdentityKey || ""),
+        };
+        extensionStorage[primaryTextSelectionStorageKey] = newValue;
+        emitPrimaryTextStorageChange(oldValue, newValue);
+      };
       window.__assistantMockSetInvalidPrimaryTextSelections = () => {
         const oldValue = extensionStorage[primaryTextSelectionStorageKey];
         const newValue = ["invalid-selection-map"];

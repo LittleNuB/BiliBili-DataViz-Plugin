@@ -2420,11 +2420,13 @@ async function generateCurrentVideoSummaryHighlightsFromPage(): Promise<void> {
     assistantState.summaryContextKey = contextKey;
     assistantState.summaryError = '摘要与亮点生成失败，请确认当前视频页仍然打开后重试。';
   } finally {
+    const operationStale = assistantState.summaryRequestId !== operationId
+      || assistantState.contextKey !== contextKey;
     if (assistantState.summaryActiveRequest?.requestId === requestId) {
       assistantState.summaryActiveRequest = null;
       assistantState.summaryLoading = false;
       renderAssistantShell();
-      if (assistantState.contextKey !== contextKey) {
+      if (operationStale) {
         void restoreCurrentVideoSummaryHighlightsFromPage();
       }
     }
@@ -2864,8 +2866,8 @@ function replacePrimaryTextSelections(selections: Record<string, string>): void 
 }
 
 function invalidatePrimaryTextDependentAssistantState(): void {
+  assistantState.summaryRequestId += 1;
   if (!assistantState.summaryActiveRequest) {
-    assistantState.summaryRequestId += 1;
     assistantState.summaryLoading = false;
   }
   assistantState.summary = null;
