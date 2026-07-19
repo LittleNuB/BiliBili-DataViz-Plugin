@@ -1268,6 +1268,8 @@ def open_selected_summary_assistant(page, query=""):
 def run_tab_isolation_flow(page):
     section = open_selected_summary_assistant(page, "cachedSummary=1")
     expect(page.get_by_text("辅助：字幕正文状态")).to_have_count(0)
+    expect(page.get_by_text("字幕轨道", exact=True)).to_have_count(0)
+    expect(page.get_by_text("字幕正文", exact=True)).to_have_count(0)
     expect(page.get_by_role("button", name="重新检测字幕")).to_have_count(1)
     assert_only_assistant_tab(page, "summary")
     expect(page.get_by_role("tab", name="摘要")).to_have_attribute("aria-selected", "true")

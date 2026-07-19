@@ -1161,20 +1161,16 @@ function markAssistantTabPanel(panel: HTMLElement, tab: AssistantTab): void {
 }
 
 function appendVideoIdentity(parent: HTMLElement, context: CurrentVideoContext): void {
-  const block = section('视频与文字来源', 'bdc-assistant-section-auxiliary');
+  const block = section('当前视频', 'bdc-assistant-section-auxiliary');
   appendText(block, 'div', 'bdc-assistant-video-title', context.title?.trim() || '当前视频');
 
   const pills = document.createElement('div');
   pills.className = 'bdc-assistant-pills';
   pills.appendChild(pill('视频页已识别', Boolean(context.bvid)));
   pills.appendChild(pill(context.cid ? '当前分 P 已识别' : '等待分 P 信息', Boolean(context.cid)));
-  pills.appendChild(pill(`字幕正文 ${availabilityLabel(context.transcriptEvidence?.active ? 'available' : 'unavailable')}`, Boolean(context.transcriptEvidence?.active)));
   block.appendChild(pills);
 
   appendRow(block, '当前分 P', `第 ${context.currentPart.page}${context.currentPart.total ? ` / ${context.currentPart.total} P` : ' P'}`);
-  appendRow(block, '主要文本来源', primaryTextSourceLabel(context));
-  appendRow(block, '字幕轨道', availabilityLabel(context.sources.transcript));
-  appendRow(block, '字幕正文', transcriptEvidenceLabel(context));
   parent.appendChild(block);
 }
 
@@ -4225,51 +4221,6 @@ function compactStatusText(context: CurrentVideoContextResult | null): string {
   return '已识别视频，分 P 身份待刷新';
 }
 
-function transcriptEvidenceLabel(context: CurrentVideoContext): string {
-  const evidence = context.transcriptEvidence;
-  if (evidence?.active) return `已缓存 ${evidence.segmentCount} 条`;
-  if (evidence && evidence.status !== 'missing') return evidenceStatusLabel(evidence.status);
-  return availabilityLabel(context.sources.contentText);
-}
-
-function primaryTextSourceLabel(context: CurrentVideoContext): string {
-  const evidence = context.transcriptEvidence;
-  if (evidence?.active && evidence.source === 'bilibili_subtitle') {
-    return evidence.temporary
-      ? 'B站字幕正文（本次临时使用）'
-      : 'B站字幕正文';
-  }
-  if (context.subtitleProbe?.available || context.sources.transcript === 'available') {
-    return '已探测到字幕轨道，尚未取得正文';
-  }
-  return '暂无正文，请开启中文 AI 字幕后重新检测';
-}
-
-function evidenceStatusLabel(status: CurrentVideoTranscriptEvidenceState['status']): string {
-  switch (status) {
-    case 'cached':
-      return '已缓存';
-    case 'stale':
-      return '证据不匹配';
-    case 'empty':
-      return '正文为空';
-    case 'malformed':
-      return '正文异常';
-    case 'track_unavailable':
-      return '轨道不可读';
-    case 'language_mismatch':
-      return '语言不匹配';
-    case 'login_required':
-      return '需要登录权限';
-    case 'endpoint_failed':
-      return '读取失败';
-    case 'unsupported':
-      return '暂不支持';
-    default:
-      return '未缓存';
-  }
-}
-
 function subtitleRefreshResultText(context: CurrentVideoContextResult): string {
   const diagnostics = buildCurrentVideoSubtitleDiagnostics(context);
   if (context.kind === 'video' && context.transcriptEvidence?.active) {
@@ -4528,19 +4479,6 @@ function relatedFavoriteConfidenceLabel(value: SmartFavoriteQaCitedVideo['confid
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function availabilityLabel(value: string): string {
-  switch (value) {
-    case 'available':
-      return '可用';
-    case 'unavailable':
-      return '不可用';
-    case 'unknown':
-      return '未知';
-    default:
-      return '未知';
-  }
 }
 
 function summaryHighlightsStatusLabel(status: CurrentVideoSummaryHighlightsResult['status']): string {
