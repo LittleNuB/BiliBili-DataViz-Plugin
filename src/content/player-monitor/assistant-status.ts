@@ -621,6 +621,8 @@ interface InPageSummaryHighlightsRequest {
   requestId: string;
   params: Record<string, unknown>;
   contextKey: string;
+  selectionRevision: number;
+  selectedSourceIdentityKey: string | null;
   title: string;
   textSize: CurrentVideoSummaryHighlightsResult['textSize'];
   previousReady: CurrentVideoSummaryHighlightsResult | null;
@@ -2379,6 +2381,8 @@ async function generateCurrentVideoSummaryHighlightsFromPage(): Promise<void> {
     requestId,
     params,
     contextKey,
+    selectionRevision: primaryTextSelectionsRevision,
+    selectedSourceIdentityKey: selectedSourceIdentityKeyFromParams(params),
     title: context.title?.trim() || '当前视频',
     textSize,
     previousReady,
@@ -2439,9 +2443,19 @@ function cancelCurrentVideoSummaryHighlightsFromPage(): void {
   assistantState.summaryActiveRequest = null;
   assistantState.summaryRequestId += 1;
   assistantState.summaryLoading = false;
-  const retained = activeRequest.contextKey === assistantState.contextKey
+  const activeRequestStillCurrent = summaryActiveRequestStillMatchesCurrent(activeRequest);
+  const retained = activeRequestStillCurrent
     ? activeRequest.previousReady
     : null;
+  if (!activeRequestStillCurrent) {
+    assistantState.summary = null;
+    assistantState.summaryContextKey = '';
+    assistantState.summaryError = null;
+    renderAssistantShell();
+    void restoreCurrentVideoSummaryHighlightsFromPage();
+    void sendRuntimeRequest('CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS', activeRequest.params).catch(() => undefined);
+    return;
+  }
   assistantState.summary = retained ?? cancelledCurrentVideoSummaryHighlights(
     activeRequest.title,
     null,
@@ -2910,11 +2924,11 @@ function invalidateSummaryHighlightsForLiveConfigChange(userConfig: unknown): vo
   const visibleSummary = assistantState.summaryContextKey === assistantState.contextKey
     ? assistantState.summary
     : null;
-  const fallbackSummary = activeRequest?.contextKey === assistantState.contextKey
+  const activeRequestSummary = activeRequest && summaryActiveRequestStillMatchesCurrent(activeRequest)
     ? activeRequest.previousReady
     : null;
   const retained = currentVideoSummaryAfterLiveConfigChange(
-    visibleSummary ?? fallbackSummary,
+    visibleSummary ?? activeRequestSummary,
     userConfig,
   );
 
@@ -3062,6 +3076,21 @@ function primaryTextSubmissionBlockMessage(
     return '请先明确选择一个主要文本来源，再向当前视频提问。';
   }
   return null;
+}
+
+function summaryActiveRequestStillMatchesCurrent(
+  activeRequest: InPageSummaryHighlightsRequest,
+): boolean {
+  return activeRequest.contextKey === assistantState.contextKey
+    && activeRequest.selectionRevision === primaryTextSelectionsRevision
+    && activeRequest.selectedSourceIdentityKey === selectedSourceIdentityKeyFromParams(
+      currentPrimaryTextRequestParams(),
+    );
+}
+
+function selectedSourceIdentityKeyFromParams(params: Record<string, unknown>): string | null {
+  const value = params.selectedSourceIdentityKey;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function currentPrimaryTextRequestParams(): Record<string, unknown> {

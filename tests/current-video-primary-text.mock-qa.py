@@ -1348,6 +1348,44 @@ def run_summary_prior_cancel_flow(page):
     assert_no_horizontal_overflow(page)
 
 
+def run_summary_prior_cancel_after_source_selection_change_flow(page):
+    section = open_selected_summary_assistant(page, "cachedSummary=1")
+    old_text = "页内助手使用一次完整正文请求生成合并结果 1。"
+    expect(section.get_by_text(old_text)).to_be_visible()
+    page.evaluate("window.__assistantMockDeferNextProtectedAction('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    section.get_by_role("button", name="重新生成").click()
+    expect(section.get_by_text("正在生成摘要、关键要点和视频亮点，请稍等。")).to_be_visible()
+    expect(section.get_by_text(old_text)).to_be_visible()
+    expect(section.get_by_text("此前生成", exact=True)).to_be_visible()
+    page.wait_for_function("window.__assistantMockPendingProtectedResponseCount() === 1")
+    generation_message = last_message_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    old_request_id = generation_message["params"]["requestId"]
+    old_source = generation_message["params"]["selectedSourceIdentityKey"]
+    new_source = f"{old_source}:qa-selected-other"
+
+    page.evaluate(
+        "(sourceIdentityKey) => window.__assistantMockSelectSourceIdentityForCurrentPart(sourceIdentityKey)",
+        new_source,
+    )
+    expect(page.get_by_text("此前选择的主要文本来源已经不可用").first).to_be_visible()
+    expect(section.get_by_text(old_text)).to_have_count(0)
+    page.get_by_role("button", name="取消生成").click()
+    page.wait_for_function("(window.__assistantMockMessages || []).some(message => message.action === 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    cancel_message = last_message_for(page, "CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    assert cancel_message["params"]["requestId"] == old_request_id
+    assert cancel_message["params"]["selectedSourceIdentityKey"] == old_source
+    assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 1
+
+    page.evaluate("window.__assistantMockResolveProtectedResponses()")
+    page.wait_for_function("window.__assistantMockSummaryCache() !== null")
+    assert page.evaluate("window.__assistantMockSummaryCacheSourceIdentityKey()") == old_source
+    expect(section.get_by_text(old_text)).to_have_count(0)
+    expect(section.get_by_text("尚未生成。只有点击生成后才会发送当前选择的完整正文。")).to_be_visible()
+    assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 1
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
 def run_summary_runtime_only_reopen_flow(page):
     section = open_selected_summary_assistant(page)
     section.get_by_role("button", name="生成摘要与亮点").click()
@@ -1389,6 +1427,7 @@ def main():
                 ("prior-invalid", {"width": 1280, "height": 820}, False, lambda page: run_summary_prior_refresh_failure_flow(page, "invalid")),
                 ("prior-network-error", {"width": 1280, "height": 820}, False, lambda page: run_summary_prior_refresh_failure_flow(page, "network")),
                 ("prior-cancel", {"width": 1280, "height": 820}, False, run_summary_prior_cancel_flow),
+                ("prior-cancel-source-change", {"width": 1280, "height": 820}, False, run_summary_prior_cancel_after_source_selection_change_flow),
                 ("runtime-only-reopen", {"width": 1280, "height": 820}, False, run_summary_runtime_only_reopen_flow),
             ]
             summary_cases.extend(

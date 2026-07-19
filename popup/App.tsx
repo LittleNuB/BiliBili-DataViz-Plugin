@@ -58,6 +58,8 @@ interface PopupActiveSummaryHighlightsRequest {
   requestId: string;
   params: Record<string, unknown>;
   contextKey: string;
+  selectionRevision: number;
+  selectedSourceIdentityKey: string | null;
   previousReady: CurrentVideoSummaryHighlightsResult | null;
 }
 
@@ -288,6 +290,8 @@ export function App() {
         requestId,
         params: requestParams,
         contextKey: action.contextKey,
+        selectionRevision: action.selectionRevision,
+        selectedSourceIdentityKey: authorization.selectedSourceIdentityKey,
         previousReady,
       };
       const summary = await requestSW<CurrentVideoSummaryHighlightsResult>(
@@ -436,14 +440,23 @@ export function App() {
     activeSummaryRequestRef.current = null;
     summaryRequestRef.current += 1;
     setSummaryLoading(false);
-    const retained = activeRequest?.contextKey === currentVideoContextKeyRef.current
-      ? activeRequest.previousReady
-      : currentVideoSummary?.status === 'ready'
-        ? asPriorGeneratedCurrentVideoSummaryHighlights(currentVideoSummary)
-        : null;
+    const activeRequestStillCurrent = activeRequest
+      ? popupActiveSummaryRequestStillMatchesCurrent(activeRequest)
+      : true;
+    const retained = activeRequestStillCurrent
+      ? activeRequest?.previousReady ?? (
+          currentVideoSummary?.status === 'ready'
+            ? asPriorGeneratedCurrentVideoSummaryHighlights(currentVideoSummary)
+            : null
+        )
+      : null;
     if (retained) {
       setCurrentVideoSummary(retained);
       setCurrentVideoActionError('本次生成已取消，此前结果保持不变。');
+    } else if (activeRequest && !activeRequestStillCurrent) {
+      setCurrentVideoSummary(null);
+      setCurrentVideoActionError(null);
+      void restoreCurrentVideoSummaryCache(currentVideoContextRef.current);
     } else {
       setCurrentVideoSummary(cancelledCurrentVideoSummaryHighlights(
         currentVideoSummaryHighlightsTitle(currentVideoContextRef.current),
@@ -455,6 +468,16 @@ export function App() {
     if (activeRequest) {
       void requestSW('CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS', activeRequest.params).catch(() => null);
     }
+  }
+
+  function popupActiveSummaryRequestStillMatchesCurrent(
+    activeRequest: PopupActiveSummaryHighlightsRequest,
+  ): boolean {
+    return activeRequest.contextKey === currentVideoContextKeyRef.current
+      && activeRequest.selectionRevision === primaryTextSelectionRevisionRef.current
+      && activeRequest.selectedSourceIdentityKey === popupCurrentVideoAvailablePrimarySourceIdentityKey(
+        currentVideoContextRef.current,
+      );
   }
 
   function currentVideoScopeSnapshot(): PopupCurrentVideoScopeSnapshot {
@@ -501,13 +524,19 @@ export function App() {
       primaryTextSelectionRevisionRef.current += 1;
       setPrimaryTextSelectionRevision(primaryTextSelectionRevisionRef.current);
     }
+    const activeSummaryRequest = activeSummaryRequestRef.current;
     const retainedSummary = configChanged
       ? popupSummaryAfterLiveConfigChange(
-          currentVideoSummaryRef.current ?? activeSummaryRequestRef.current?.previousReady ?? null,
+          selectionChanged
+            ? null
+            : currentVideoSummaryRef.current ?? (
+                activeSummaryRequest && popupActiveSummaryRequestStillMatchesCurrent(activeSummaryRequest)
+                  ? activeSummaryRequest.previousReady
+                  : null
+              ),
           userConfig,
         )
       : null;
-    const activeSummaryRequest = activeSummaryRequestRef.current;
     if (configChanged && activeSummaryRequest) {
       activeSummaryRequestRef.current = null;
       void requestSW('CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS', activeSummaryRequest.params).catch(() => null);
@@ -2373,6 +2402,24 @@ function formatSeconds(seconds: number): string {
 function currentVideoSummaryHighlightsTitle(context: CurrentVideoContextResult | null): string {
   if (context?.kind !== 'video') return '当前视频';
   return context.title?.trim() || '当前视频';
+}
+
+function popupCurrentVideoAvailablePrimarySourceIdentityKey(
+  context: CurrentVideoContextResult | null,
+): string | null {
+  const evidence = context?.kind === 'video' ? context.transcriptEvidence : null;
+  if (
+    context?.kind !== 'video'
+    || context.cid === null
+    || evidence?.active !== true
+    || evidence.bvid !== context.bvid
+    || evidence.cid !== context.cid
+    || evidence.page !== context.currentPart.page
+    || !evidence.sourceIdentityKey
+  ) {
+    return null;
+  }
+  return evidence.sourceIdentityKey;
 }
 
 function currentVideoSummaryHighlightBindingsEqual(

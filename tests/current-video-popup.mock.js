@@ -11,6 +11,7 @@
   const userConfigKey = 'userConfig';
   const sourceV2 = `primary-text:bilibili_subtitle:${baseBvid}:9201:1:zh-cn:popup-source-v2`;
   const sourceV1 = `primary-text:bilibili_subtitle:${baseBvid}:9201:1:zh-cn:popup-source-v1`;
+  const sourceB = `primary-text:bilibili_subtitle:${baseBvid}:9201:1:zh-cn:popup-source-b`;
   const storage = {};
   const storageChangeListeners = new Set();
   const deferredActionCounts = new Map();
@@ -18,6 +19,7 @@
   const actionSequence = new Map();
   const cancelledSummaryRequestIds = new Set();
   let summaryCacheResult = null;
+  let summaryCacheSourceIdentityKey = null;
   let summaryReplacementSequence = 100;
   let returnAvailable = false;
 
@@ -500,6 +502,7 @@
   window.__popupMockMessages = messages;
   window.__popupMockSourceV1 = sourceV1;
   window.__popupMockSourceV2 = sourceV2;
+  window.__popupMockSourceB = sourceB;
   window.__popupMockStorage = storage;
   window.__popupMockDeferNextResponse = (action) => {
     deferredActionCounts.set(action, (deferredActionCounts.get(action) || 0) + 1);
@@ -515,12 +518,14 @@
     }
   };
   window.__popupMockSummaryCache = () => summaryCacheResult;
+  window.__popupMockSummaryCacheSourceIdentityKey = () => summaryCacheSourceIdentityKey;
   window.__popupMockReplaceSummaryGeneration = () => {
     summaryReplacementSequence += 1;
     summaryCacheResult = summaryResult(true, summaryReplacementSequence, {
       cacheHit: true,
       requestId: `mock-replacement-${summaryReplacementSequence}`,
     });
+    summaryCacheSourceIdentityKey = currentSourceIdentityKey();
   };
   window.__popupMockEmitSelectionChange = (mode = 'same') => {
     const oldValue = storage[storageKey];
@@ -528,6 +533,10 @@
     if (mode === 'clear') {
       delete storage[storageKey];
       newValue = undefined;
+    } else if (mode === 'other') {
+      const partKey = currentPartKey();
+      newValue = partKey ? { ...(oldValue || {}), [partKey]: sourceB } : {};
+      storage[storageKey] = newValue;
     } else if (mode === 'current') {
       const partKey = currentPartKey();
       const sourceIdentityKey = currentSourceIdentityKey();
@@ -593,6 +602,7 @@
                   cacheHit: true,
                   priorGenerated: ['disabled', 'unconfigured'].includes(currentSummaryState()),
                 });
+                summaryCacheSourceIdentityKey = exactSource || null;
               }
               const state = currentSummaryState();
               const cacheMissStatus = state === 'ready' ? null : state;
@@ -660,7 +670,10 @@
                   requestId,
                 },
               );
-              if (data.status === 'ready') summaryCacheResult = { ...data, cacheHit: true };
+              if (data.status === 'ready') {
+                summaryCacheResult = { ...data, cacheHit: true };
+                summaryCacheSourceIdentityKey = exactSource || null;
+              }
               return { success: true, data };
             });
           }

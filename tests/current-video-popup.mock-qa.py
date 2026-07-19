@@ -301,7 +301,7 @@ def run_generating_cancel_flow(page):
     page.evaluate("window.__popupMockResolveResponses('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
     page.wait_for_timeout(50)
     expect(page.get_by_text("手动生成已使用精确的当前正文来源。")).to_have_count(0)
-    expect(page.get_by_text("本次生成已取消，旧结果不会被替换。", exact=True)).to_be_visible()
+    expect(page.get_by_text("未生成", exact=False)).to_be_visible()
     assert page.evaluate("window.__popupMockSummaryCache()") is None
     assert_clean_page(page)
 
@@ -429,6 +429,39 @@ def run_prior_cancel_flow(page):
     expect(page.get_by_text(old_text)).to_be_visible()
     page.evaluate("window.__popupMockResolveResponses('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
     expect(page.get_by_text(old_text)).to_be_visible()
+    assert_clean_page(page)
+
+
+def run_prior_cancel_after_source_selection_change_flow(page):
+    page.route("**/*", route_popup)
+    page.goto(f"{POPUP_URL}?cachedSummary=1")
+    old_text = "手动生成已使用精确的当前正文来源。"
+    expect(page.get_by_text(old_text)).to_be_visible()
+
+    page.evaluate("window.__popupMockDeferNextResponse('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    page.get_by_role("button", name="重新生成摘要与亮点").click()
+    page.wait_for_function("window.__popupMockPendingResponseCount('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS') === 1")
+    generation_message = last_message_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    old_request_id = generation_message["params"]["requestId"]
+    old_source = generation_message["params"]["selectedSourceIdentityKey"]
+    assert old_source == page.evaluate("window.__popupMockSourceV2")
+
+    page.evaluate("window.__popupMockEmitSelectionChange('other')")
+    expect(page.get_by_text(old_text)).to_have_count(0)
+    expect(page.get_by_text("尚未生成", exact=False)).to_be_visible()
+    page.get_by_role("button", name="取消").click()
+    page.wait_for_function("(window.__popupMockMessages || []).some(message => message.action === 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    cancel_message = last_message_for(page, "CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    assert cancel_message["params"]["requestId"] == old_request_id
+    assert cancel_message["params"]["selectedSourceIdentityKey"] == old_source
+    assert len(messages_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")) == 1
+
+    page.evaluate("window.__popupMockResolveResponses('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    page.wait_for_timeout(50)
+    assert page.evaluate("window.__popupMockSummaryCacheSourceIdentityKey()") == old_source
+    expect(page.get_by_text(old_text)).to_have_count(0)
+    expect(page.get_by_text("尚未生成", exact=False)).to_be_visible()
+    assert len(messages_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")) == 1
     assert_clean_page(page)
 
 
@@ -672,6 +705,11 @@ def main():
             run_prior_cancel_flow(prior_cancel)
             assert not prior_cancel_errors, "\n".join(prior_cancel_errors)
             prior_cancel.close()
+
+            prior_cancel_source, prior_cancel_source_errors = new_checked_page(browser)
+            run_prior_cancel_after_source_selection_change_flow(prior_cancel_source)
+            assert not prior_cancel_source_errors, "\n".join(prior_cancel_source_errors)
+            prior_cancel_source.close()
 
             eight_highlights, eight_highlights_errors = new_checked_page(browser)
             run_eight_highlight_layout(eight_highlights)
