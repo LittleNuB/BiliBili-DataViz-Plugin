@@ -11,22 +11,45 @@ import { detectVideo } from './video-detector';
 import type { BiliVizContentMessage } from '../../shared/types/messages';
 import type {
   CurrentVideoTimestampJumpContentPayload,
+  CurrentVideoTimestampOperationKind,
+  CurrentVideoTimestampOperationLeaseConsumeResult,
+  CurrentVideoTimestampReturnContentPayload,
   CurrentVideoTimestampJumpResponse,
   CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
 import type { CurrentVideoContextResult } from '../../shared/types/current-video-context';
-import type { VideoKnowledgeJumpResponse, VideoKnowledgeNode } from '../../shared/types/video-knowledge';
+import { CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY } from '../../shared/current-video-primary-text-selection.ts';
 
 let cleanup: (() => void) | null = null;
+let monitoredVideoElement: HTMLVideoElement | null = null;
 let lastContextKey = '';
 let retryTimer: number | null = null;
+let videoRebindTimer: number | null = null;
 let latestContext: CurrentVideoContextResult | null = null;
 let currentVideoTimestampReturnPoint: CurrentVideoTimestampReturnPoint | null = null;
+let lastUrl = location.href;
+let navigationEpoch = 0;
+let timestampOperationEpoch = 0;
+const monitorInitializationKeys = new Set<string>();
 
-const RETURN_TOAST_ID = 'bdc-video-knowledge-return';
-const PAGE_RETURN_KEY = 'bdc-video-knowledge-return-point';
+const RETURN_TOAST_ID = 'bdc-current-video-return';
+const NAVIGATION_STABLE_DELAY_MS = 800;
+const VIDEO_REBIND_CHECK_INTERVAL_MS = 1000;
 
-function scheduleInitialize(delay = 0): void {
+interface NavigationSnapshot {
+  epoch: number;
+  href: string;
+}
+
+interface TimestampOperationSnapshot {
+  navigation: NavigationSnapshot;
+  operationEpoch: number;
+}
+
+function scheduleInitialize(
+  delay = 0,
+  snapshot: NavigationSnapshot = currentNavigationSnapshot(),
+): void {
   if (retryTimer !== null) {
     window.clearTimeout(retryTimer);
     retryTimer = null;
@@ -34,12 +57,29 @@ function scheduleInitialize(delay = 0): void {
 
   retryTimer = window.setTimeout(() => {
     retryTimer = null;
-    initializeMonitor();
+    if (!navigationSnapshotIsCurrent(snapshot)) return;
+    void initializeMonitor(snapshot);
   }, delay);
 }
 
-async function initializeMonitor(): Promise<void> {
-  const context = await collectAndPublishCurrentVideoContext();
+async function initializeMonitor(
+  snapshot: NavigationSnapshot = currentNavigationSnapshot(),
+): Promise<void> {
+  if (!navigationSnapshotIsCurrent(snapshot)) return;
+  const initializationKey = `${snapshot.epoch}:${snapshot.href}`;
+  if (monitorInitializationKeys.has(initializationKey)) return;
+  monitorInitializationKeys.add(initializationKey);
+  try {
+    await initializeMonitorForSnapshot(snapshot);
+  } finally {
+    monitorInitializationKeys.delete(initializationKey);
+  }
+}
+
+async function initializeMonitorForSnapshot(snapshot: NavigationSnapshot): Promise<void> {
+  if (!navigationSnapshotIsCurrent(snapshot)) return;
+  const context = await collectAndPublishCurrentVideoContext(snapshot);
+  if (!navigationSnapshotIsCurrent(snapshot)) return;
 
   if (!isVideoPage()) {
     cleanupMonitor();
@@ -49,21 +89,30 @@ async function initializeMonitor(): Promise<void> {
 
   if (context.kind !== 'video') {
     console.warn('[BiliViz] No BVID found on video page');
+    scheduleInitialize(1500, snapshot);
     return;
   }
 
   const contextKey = `${context.bvid}:${context.cid || `p${context.currentPart.page}`}`;
-  if (contextKey === lastContextKey) return;
-
-  cleanupMonitor();
+  const currentVideo = currentReadyVideoElement();
+  if (contextKey === lastContextKey && currentVideo === monitoredVideoElement) return;
+  if (!currentVideo) {
+    cleanupMonitor();
+    lastContextKey = '';
+    scheduleVideoRebindCheck(snapshot, contextKey);
+    return;
+  }
 
   try {
     const video = await detectVideo();
+    if (!navigationSnapshotIsCurrent(snapshot)) return;
+    if (contextKey === lastContextKey && video === monitoredVideoElement) return;
     const contextWithDuration = withVideoElementDuration(context, video);
+    if (!navigationSnapshotIsCurrent(snapshot)) return;
+    cleanupMonitor();
     latestContext = contextWithDuration;
     renderCurrentVideoAssistant(contextWithDuration);
     sendCurrentVideoContext(contextWithDuration);
-    showStoredPageReturnIfAvailable(contextWithDuration);
     lastContextKey = contextKey;
     console.log(
       `[BiliViz] Monitoring: ${contextWithDuration.title} (${contextWithDuration.bvid}, cid=${contextWithDuration.cid || 'unknown'}, p=${contextWithDuration.currentPart.page})`,
@@ -78,6 +127,7 @@ async function initializeMonitor(): Promise<void> {
       authorName: contextWithDuration.authorName ?? '',
     };
 
+    if (!navigationSnapshotIsCurrent(snapshot)) return;
     const removeEvents = attachEventListeners(video, videoCtx, (msg) => {
       chrome.runtime.sendMessage(msg).catch(() => {
         // SW may be inactive; the next heartbeat/action can wake it again.
@@ -92,31 +142,22 @@ async function initializeMonitor(): Promise<void> {
       removeEvents();
       removeHeartbeat();
     };
-  } catch (e) {
-    console.error('[BiliViz] Failed to initialize player monitor:', e);
+    monitoredVideoElement = video;
+    scheduleVideoRebindCheck(snapshot, contextKey);
+  } catch {
+    if (!navigationSnapshotIsCurrent(snapshot)) return;
+    cleanupMonitor();
+    lastContextKey = '';
+    scheduleVideoRebindCheck(snapshot, contextKey);
   }
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.action === 'VIDEO_KNOWLEDGE_MANUAL_JUMP') {
-    handleVideoKnowledgeManualJump(message.payload).then(sendResponse).catch((error) => {
-      sendResponse({
-        ok: false,
-        message: error instanceof Error ? error.message : String(error),
-        nodeId: String(message.payload?.node?.id ?? ''),
-        previousPositionSeconds: null,
-        targetSeconds: null,
-        targetPage: null,
-      } satisfies VideoKnowledgeJumpResponse);
-    });
-    return true;
-  }
-
   if (message?.action === 'CURRENT_VIDEO_TIMESTAMP_JUMP') {
-    handleCurrentVideoTimestampJump(message.payload).then(sendResponse).catch((error) => {
+    handleCurrentVideoTimestampJump(message.payload).then(sendResponse).catch(() => {
       sendResponse({
         ok: false,
-        message: error instanceof Error ? error.message : String(error),
+        message: '跳转失败，请确认当前视频页和播放器仍然可用后重试。',
         candidateId: String(message.payload?.candidateId ?? ''),
         targetSeconds: null,
         targetTimeLabel: null,
@@ -129,10 +170,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.action === 'CURRENT_VIDEO_TIMESTAMP_RETURN') {
-    handleCurrentVideoTimestampReturn().then(sendResponse).catch((error) => {
+    handleCurrentVideoTimestampReturn(message.payload).then(sendResponse).catch(() => {
       sendResponse({
         ok: false,
-        message: error instanceof Error ? error.message : String(error),
+        message: '返回失败，请确认当前视频页和播放器仍然可用后重试。',
         candidateId: null,
         returnPointSeconds: null,
         targetSeconds: null,
@@ -142,12 +183,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.action === 'COLLECT_CURRENT_VIDEO_CONTEXT') {
-    collectAndPublishCurrentVideoContext().then(sendResponse).catch((error) => {
+    const snapshot = currentNavigationSnapshot();
+    collectAndPublishCurrentVideoContext(snapshot).then(sendResponse).catch(() => {
       sendResponse({
         kind: 'no_context',
         url: location.href,
         collectedAt: Date.now(),
-        reason: error instanceof Error ? 'video_context_unavailable' : 'unknown',
+        reason: 'video_context_unavailable',
         pageType: isVideoPage() ? 'video' : 'non_video',
       } satisfies CurrentVideoContextResult);
     });
@@ -157,91 +199,182 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
-async function collectAndPublishCurrentVideoContext(): Promise<CurrentVideoContextResult> {
+async function collectAndPublishCurrentVideoContext(
+  snapshot: NavigationSnapshot = currentNavigationSnapshot(),
+): Promise<CurrentVideoContextResult> {
   const context = await collectCurrentVideoContext();
+  if (!navigationSnapshotIsCurrent(snapshot)) {
+    return currentNavigationNoContext();
+  }
   latestContext = context;
   renderCurrentVideoAssistant(context);
   sendCurrentVideoContext(context);
   return context;
 }
 
-async function handleVideoKnowledgeManualJump(payload: {
-  node?: VideoKnowledgeNode;
-  contextBvid?: string | null;
-  confirmed?: boolean;
-}): Promise<VideoKnowledgeJumpResponse> {
-  const node = payload.node;
-  if (!payload.confirmed || !node?.jumpAction?.requiresConfirmation) {
-    throw new Error('CONFIRMATION_REQUIRED');
-  }
-  if (!node.jumpAction) {
-    throw new Error('JUMP_TARGET_UNAVAILABLE');
-  }
-  if (latestContext?.kind !== 'video' || latestContext.bvid !== payload.contextBvid || node.bvid !== latestContext.bvid) {
-    throw new Error('VIDEO_CONTEXT_CHANGED');
-  }
-
-  const targetPage = node.jumpAction.targetPage;
-  const targetSeconds = node.jumpAction.targetSeconds;
-  if (node.jumpAction.type === 'page' && targetPage && targetPage !== latestContext.currentPart.page) {
-    const previousPositionSeconds = currentVideoElement()?.currentTime ?? null;
-    storePageReturn(latestContext.url, previousPositionSeconds);
-    window.setTimeout(() => {
-      location.assign(urlForPage(targetPage));
-    }, 0);
-    return {
-      ok: true,
-      message: `Opening ${node.jumpAction.previewLabel}`,
-      nodeId: node.id,
-      previousPositionSeconds,
-      targetSeconds,
-      targetPage,
-    };
-  }
-
-  if (typeof targetSeconds !== 'number' || !Number.isFinite(targetSeconds) || targetSeconds < 0) {
-    throw new Error('INVALID_SEEK_TARGET');
-  }
-
-  const video = await detectVideo();
-  const previousPositionSeconds = video.currentTime;
-  video.currentTime = Math.min(targetSeconds, Number.isFinite(video.duration) ? video.duration : targetSeconds);
-  showReturnToast(previousPositionSeconds);
-  return {
-    ok: true,
-    message: `Jumped to ${node.jumpAction.previewLabel}`,
-    nodeId: node.id,
-    previousPositionSeconds,
-    targetSeconds,
-    targetPage,
-  };
-}
-
 async function handleCurrentVideoTimestampJump(
   payload: CurrentVideoTimestampJumpContentPayload,
 ): Promise<CurrentVideoTimestampJumpResponse> {
+  handlePossibleNavigation();
+  const operation = beginTimestampOperation(true);
+  const operationLeaseAuthorized = await consumeCurrentVideoTimestampOperationLease('jump', payload);
+  if (!timestampOperationIsCurrent(operation)) {
+    return invalidatedTimestampJumpResponse(payload);
+  }
   const result = await performConfirmedTimestampJump({
     payload,
     latestContext,
     video: currentUsableVideoElement(),
+    operationLeaseAuthorized,
   });
+  if (!timestampOperationIsCurrent(operation)) {
+    return invalidatedTimestampJumpResponse(payload);
+  }
   if (result.returnPoint) {
     currentVideoTimestampReturnPoint = result.returnPoint;
-    showReturnToast(result.response.returnPointSeconds, undefined, handleCurrentVideoTimestampReturn);
+    showReturnToast(result.response.returnPointSeconds, requestCurrentVideoTimestampReturnFromBackground);
   }
   return result.response;
 }
 
-async function handleCurrentVideoTimestampReturn(): Promise<CurrentVideoTimestampReturnResponse> {
+async function handleCurrentVideoTimestampReturn(
+  payload: CurrentVideoTimestampReturnContentPayload | null = null,
+): Promise<CurrentVideoTimestampReturnResponse> {
+  handlePossibleNavigation();
+  const operation = beginTimestampOperation(false);
+  const returnPoint = currentVideoTimestampReturnPoint;
+  const operationLeaseAuthorized = payload
+    ? await consumeCurrentVideoTimestampOperationLease('return', payload)
+    : false;
+  if (!timestampOperationIsCurrent(operation)) {
+    return invalidatedTimestampReturnResponse(returnPoint);
+  }
   const result = await performTimestampReturn({
-    returnPoint: currentVideoTimestampReturnPoint,
+    payload,
+    returnPoint,
     latestContext,
     video: currentUsableVideoElement(),
+    operationLeaseAuthorized,
   });
-  if (result.clearReturnPoint) {
+  if (!timestampOperationIsCurrent(operation)) {
+    return invalidatedTimestampReturnResponse(returnPoint);
+  }
+  if (result.clearReturnPoint && currentVideoTimestampReturnPoint === returnPoint) {
     currentVideoTimestampReturnPoint = null;
+    document.getElementById(RETURN_TOAST_ID)?.remove();
   }
   return result.response;
+}
+
+async function consumeCurrentVideoTimestampOperationLease(
+  operationKind: CurrentVideoTimestampOperationKind,
+  payload: CurrentVideoTimestampJumpContentPayload | CurrentVideoTimestampReturnContentPayload,
+): Promise<boolean> {
+  if (!payload.operationLeaseId || !payload.sourceIdentityKey) return false;
+  try {
+    const response = await chrome.runtime.sendMessage({
+      action: 'CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE',
+      params: {
+        operationLeaseId: payload.operationLeaseId,
+        operationKind,
+        contextBvid: payload.contextBvid,
+        contextCid: payload.contextCid,
+        contextPage: payload.contextPage,
+        sourceIdentityKey: payload.sourceIdentityKey,
+      },
+    }) as {
+      success?: boolean;
+      data?: CurrentVideoTimestampOperationLeaseConsumeResult;
+    };
+    return response?.success === true && response.data?.authorized === true;
+  } catch {
+    return false;
+  }
+}
+
+async function requestCurrentVideoTimestampReturnFromBackground(): Promise<CurrentVideoTimestampReturnResponse> {
+  const returnPoint = currentVideoTimestampReturnPoint;
+  if (!returnPoint?.sourceIdentityKey) {
+    return {
+      ok: false,
+      message: '当前视频状态已变化，请重新预览并确认跳转后再返回。',
+      candidateId: returnPoint?.candidateId ?? null,
+      returnPointSeconds: null,
+      targetSeconds: null,
+    };
+  }
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      action: 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP',
+      params: {
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: returnPoint.sourceIdentityKey,
+      },
+    }) as { success?: boolean; data?: CurrentVideoTimestampReturnResponse };
+    if (response?.success && response.data) return response.data;
+  } catch {
+    // Fall through to the controlled response below.
+  }
+
+  return {
+    ok: false,
+    message: '返回失败，请确认当前 B 站视频页仍然打开后重试。',
+    candidateId: returnPoint.candidateId,
+    returnPointSeconds: null,
+    targetSeconds: null,
+  };
+}
+
+function beginTimestampOperation(clearExistingReturnPoint: boolean): TimestampOperationSnapshot {
+  timestampOperationEpoch += 1;
+  if (clearExistingReturnPoint) {
+    currentVideoTimestampReturnPoint = null;
+    document.getElementById(RETURN_TOAST_ID)?.remove();
+  }
+  return {
+    navigation: currentNavigationSnapshot(),
+    operationEpoch: timestampOperationEpoch,
+  };
+}
+
+function timestampOperationIsCurrent(operation: TimestampOperationSnapshot): boolean {
+  return operation.operationEpoch === timestampOperationEpoch
+    && navigationSnapshotIsCurrent(operation.navigation);
+}
+
+function invalidateTimestampOperations(clearReturnPoint = true): void {
+  timestampOperationEpoch += 1;
+  if (!clearReturnPoint) return;
+  currentVideoTimestampReturnPoint = null;
+  document.getElementById(RETURN_TOAST_ID)?.remove();
+}
+
+function invalidatedTimestampJumpResponse(
+  payload: CurrentVideoTimestampJumpContentPayload,
+): CurrentVideoTimestampJumpResponse {
+  return {
+    ok: false,
+    message: '当前视频状态已变化，请重新预览并确认跳转。',
+    candidateId: payload.candidateId,
+    targetSeconds: null,
+    targetTimeLabel: null,
+    returnPointSeconds: null,
+    sourceLabel: null,
+    confidence: null,
+  };
+}
+
+function invalidatedTimestampReturnResponse(
+  returnPoint: CurrentVideoTimestampReturnPoint | null,
+): CurrentVideoTimestampReturnResponse {
+  return {
+    ok: false,
+    message: '当前视频状态已变化，请重新跳转后再返回。',
+    candidateId: returnPoint?.candidateId ?? null,
+    returnPointSeconds: null,
+    targetSeconds: null,
+  };
 }
 
 function currentVideoElement(): HTMLVideoElement | null {
@@ -254,43 +387,15 @@ function currentUsableVideoElement(): HTMLVideoElement | null {
   return video;
 }
 
-function urlForPage(page: number): string {
-  const url = new URL(location.href);
-  url.searchParams.set('p', String(page));
-  return url.toString();
-}
-
-function storePageReturn(url: string, seconds: number | null): void {
-  try {
-    sessionStorage.setItem(PAGE_RETURN_KEY, JSON.stringify({ url, seconds, savedAt: Date.now() }));
-  } catch {
-    // Session storage can be unavailable in some embedded player contexts.
-  }
-}
-
-function showStoredPageReturnIfAvailable(context: CurrentVideoContextResult): void {
-  if (context.kind !== 'video') return;
-  try {
-    const raw = sessionStorage.getItem(PAGE_RETURN_KEY);
-    if (!raw) return;
-    const parsed = JSON.parse(raw) as { url?: unknown; seconds?: unknown; savedAt?: unknown };
-    if (typeof parsed.url !== 'string' || Date.now() - Number(parsed.savedAt ?? 0) > 10 * 60 * 1000) {
-      sessionStorage.removeItem(PAGE_RETURN_KEY);
-      return;
-    }
-    showReturnToast(
-      typeof parsed.seconds === 'number' && Number.isFinite(parsed.seconds) ? parsed.seconds : null,
-      parsed.url,
-    );
-    sessionStorage.removeItem(PAGE_RETURN_KEY);
-  } catch {
-    sessionStorage.removeItem(PAGE_RETURN_KEY);
-  }
+function currentReadyVideoElement(): HTMLVideoElement | null {
+  const video = currentVideoElement();
+  if (!video || !document.documentElement.contains(video)) return null;
+  if (!Number.isFinite(video.duration) || video.duration <= 0) return null;
+  return video;
 }
 
 function showReturnToast(
   seconds: number | null,
-  url?: string,
   onReturn?: () => Promise<CurrentVideoTimestampReturnResponse>,
 ): void {
   const existing = document.getElementById(RETURN_TOAST_ID);
@@ -327,10 +432,6 @@ function showReturnToast(
   back.textContent = '返回';
   back.style.cssText = 'flex:1;border:0;border-radius:6px;background:#ffb347;color:#1a1a2e;font-weight:700;font-size:12px;padding:6px 8px;cursor:pointer';
   back.addEventListener('click', async () => {
-    if (url) {
-      location.assign(url);
-      return;
-    }
     if (onReturn) {
       await onReturn();
       toast.remove();
@@ -365,9 +466,98 @@ function formatDuration(seconds: number): string {
 }
 
 function cleanupMonitor(): void {
-  if (!cleanup) return;
-  cleanup();
-  cleanup = null;
+  clearVideoRebindTimer();
+  if (cleanup) {
+    cleanup();
+    cleanup = null;
+  }
+  monitoredVideoElement = null;
+}
+
+function scheduleVideoRebindCheck(
+  snapshot: NavigationSnapshot,
+  contextKey: string,
+): void {
+  clearVideoRebindTimer();
+  videoRebindTimer = window.setTimeout(() => {
+    videoRebindTimer = null;
+    if (!navigationSnapshotIsCurrent(snapshot)) return;
+    const currentVideo = currentReadyVideoElement();
+    if (currentVideo !== monitoredVideoElement) {
+      if (monitoredVideoElement) {
+        cleanupMonitor();
+        lastContextKey = '';
+      }
+      void initializeMonitor(snapshot);
+      scheduleVideoRebindCheck(snapshot, contextKey);
+      return;
+    }
+    scheduleVideoRebindCheck(snapshot, contextKey);
+  }, VIDEO_REBIND_CHECK_INTERVAL_MS);
+}
+
+function clearVideoRebindTimer(): void {
+  if (videoRebindTimer === null) return;
+  window.clearTimeout(videoRebindTimer);
+  videoRebindTimer = null;
+}
+
+function currentNavigationSnapshot(): NavigationSnapshot {
+  return {
+    epoch: navigationEpoch,
+    href: location.href,
+  };
+}
+
+function navigationSnapshotIsCurrent(snapshot: NavigationSnapshot): boolean {
+  return snapshot.epoch === navigationEpoch && snapshot.href === location.href;
+}
+
+function currentNavigationNoContext(): CurrentVideoContextResult {
+  return {
+    kind: 'no_context',
+    url: location.href,
+    collectedAt: Date.now(),
+    reason: isVideoPage() ? 'video_context_unavailable' : 'non_video_page',
+    pageType: isVideoPage() ? 'video' : 'non_video',
+  };
+}
+
+function handlePossibleNavigation(): void {
+  const href = location.href;
+  if (href === lastUrl) return;
+
+  lastUrl = href;
+  navigationEpoch += 1;
+  if (retryTimer !== null) {
+    window.clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+  clearVideoRebindTimer();
+  cleanupMonitor();
+  lastContextKey = '';
+  invalidateTimestampOperations();
+  const pendingContext = currentNavigationNoContext();
+  latestContext = pendingContext;
+  renderCurrentVideoAssistant(pendingContext);
+  scheduleInitialize(NAVIGATION_STABLE_DELAY_MS, currentNavigationSnapshot());
+}
+
+function registerTimestampSelectionInvalidation(): void {
+  const storageChanges = chrome.storage?.onChanged;
+  if (!storageChanges?.addListener) return;
+  storageChanges.addListener((changes, areaName) => {
+    if (
+      areaName !== 'local'
+      || !Object.prototype.hasOwnProperty.call(
+        changes,
+        CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
+      )
+    ) {
+      return;
+    }
+    invalidateTimestampOperations();
+  });
 }
 
 function sendCurrentVideoContext(context: CurrentVideoContextResult): void {
@@ -382,25 +572,15 @@ function sendCurrentVideoContext(context: CurrentVideoContextResult): void {
 }
 
 scheduleInitialize();
+registerTimestampSelectionInvalidation();
 
-let lastUrl = location.href;
 const navObserver = new MutationObserver(() => {
-  if (location.href !== lastUrl) {
-    lastUrl = location.href;
-    lastContextKey = '';
-    scheduleInitialize(800);
-    window.setTimeout(() => scheduleInitialize(2500), 2500);
-  }
+  handlePossibleNavigation();
 });
 navObserver.observe(document.body, { childList: true, subtree: true });
 
 setInterval(() => {
-  if (location.href !== lastUrl) {
-    lastUrl = location.href;
-    lastContextKey = '';
-    scheduleInitialize(800);
-    window.setTimeout(() => scheduleInitialize(2500), 2500);
-  }
+  handlePossibleNavigation();
 }, 2000);
 
 console.log('[BiliViz] Player monitor loaded');

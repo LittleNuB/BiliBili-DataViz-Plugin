@@ -6,6 +6,8 @@ import type {
   LocalDataPrivacySummary,
 } from '../../shared/types/local-data-privacy.ts';
 import { ensureDynamicBill013Migration } from '../dynamic-bill/migration.ts';
+import { clearTemporaryCurrentVideoTranscriptCache } from '../current-video-temporary-transcript-cache.ts';
+import { runCurrentVideoTranscriptClearCoordinator } from '../current-video-transcript-clear-epoch.ts';
 import { getDynamicSyncState } from './dynamic-bill-repo.ts';
 import { db } from './db.ts';
 import { getRegisteredLocalDataCategories } from './local-data-category-registry.ts';
@@ -18,6 +20,7 @@ import {
   coordinateBlindBoxDrawHistoryClear,
   getBlindBoxRecentDrawnBvids,
 } from './blind-box-draw-history-repo.ts';
+import { coordinateCurrentVideoPrimaryTextSelectionClear } from './current-video-primary-text-selection-store.ts';
 
 export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySummary> {
   await ensureDynamicBill013Migration();
@@ -43,29 +46,32 @@ export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySumm
 }
 
 export async function clearCurrentVideoSubtitleCache(): Promise<LocalDataOperationResult> {
-  const [sourceCount, segmentCount] = await Promise.all([
-    db.currentVideoTranscriptSources.count(),
-    db.currentVideoTranscriptSegments.count(),
-  ]);
+  return await runCurrentVideoTranscriptClearCoordinator(async () => {
+    const [sourceCount, segmentCount] = await Promise.all([
+      db.currentVideoTranscriptSources.count(),
+      db.currentVideoTranscriptSegments.count(),
+    ]);
 
-  await db.transaction(
-    'rw',
-    db.currentVideoTranscriptSources,
-    db.currentVideoTranscriptSegments,
-    async () => {
-      await db.currentVideoTranscriptSources.clear();
-      await db.currentVideoTranscriptSegments.clear();
-    },
-  );
+    await db.transaction(
+      'rw',
+      db.currentVideoTranscriptSources,
+      db.currentVideoTranscriptSegments,
+      async () => {
+        await db.currentVideoTranscriptSources.clear();
+        await db.currentVideoTranscriptSegments.clear();
+      },
+    );
+    clearTemporaryCurrentVideoTranscriptCache();
 
-  return {
-    operation: 'clear_current_video_subtitle_cache',
-    completedAt: Date.now(),
-    cleared: {
-      currentVideoSubtitleSources: sourceCount,
-      currentVideoSubtitleSegments: segmentCount,
-    },
-  };
+    return {
+      operation: 'clear_current_video_subtitle_cache',
+      completedAt: Date.now(),
+      cleared: {
+        currentVideoSubtitleSources: sourceCount,
+        currentVideoSubtitleSegments: segmentCount,
+      },
+    };
+  });
 }
 
 export async function clearDynamicBillLocalData(): Promise<LocalDataOperationResult> {
@@ -93,25 +99,27 @@ export async function clearAllLocalData(confirmation: unknown): Promise<LocalDat
   if (await getHistorySyncing()) {
     throw new Error('HISTORY_SYNC_IN_PROGRESS');
   }
+  return await coordinateCurrentVideoPrimaryTextSelectionClear(async () =>
+    runCurrentVideoTranscriptClearCoordinator(async () =>
+      coordinateBlindBoxDrawHistoryClear(async recentDrawnBvids => {
+        const counts = await collectClearCounts(recentDrawnBvids.length);
+        await db.transaction('rw', db.tables, async () => {
+          for (const table of db.tables) {
+            await table.clear();
+          }
+        });
+        await chrome.storage.local.clear();
+        clearTemporaryCurrentVideoTranscriptCache();
 
-  return coordinateBlindBoxDrawHistoryClear(async recentDrawnBvids => {
-    const counts = await collectClearCounts(recentDrawnBvids.length);
-    await db.transaction('rw', db.tables, async () => {
-      for (const table of db.tables) {
-        await table.clear();
-      }
-    });
-    await chrome.storage.local.clear();
-
-    return {
-      operation: 'clear_all_local_data',
-      completedAt: Date.now(),
-      cleared: {
-        ...counts,
-        localSettings: true,
-      },
-    };
-  });
+        return {
+          operation: 'clear_all_local_data',
+          completedAt: Date.now(),
+          cleared: {
+            ...counts,
+            localSettings: true,
+          },
+        };
+      })));
 }
 
 async function summarizeHistory(): Promise<LocalDataPrivacySummary['history']> {
@@ -173,19 +181,33 @@ async function summarizeFavorites(): Promise<LocalDataPrivacySummary['favorites'
 }
 
 async function summarizeCurrentVideoSubtitles(): Promise<LocalDataPrivacySummary['currentVideoSubtitles']> {
-  const [sources, segmentCount, staleSegmentCount, lastUpdated] = await Promise.all([
+  const [sources, segments, lastUpdated] = await Promise.all([
     db.currentVideoTranscriptSources.toArray(),
-    db.currentVideoTranscriptSegments.count(),
-    db.currentVideoTranscriptSegments.filter(segment => segment.stale === true).count(),
+    db.currentVideoTranscriptSegments.toArray(),
     db.currentVideoTranscriptSources.orderBy('updatedAt').last(),
   ]);
-  const cachedVideoCount = new Set(sources.map(source => source.bvid).filter(Boolean)).size;
+  const staleSegmentCount = segments.filter(segment => segment.stale === true).length;
+  const sourceIdentityCount = new Set(
+    sources
+      .map(source => source.sourceIdentityKey ?? source.identityKey)
+      .filter(Boolean),
+  ).size;
+  const cachedVideoCount = new Set(
+    sources
+      .filter(source => source.status === 'cached')
+      .map(source => `${source.bvid}:${source.cid}:${source.page}`)
+      .filter(Boolean),
+  ).size;
 
   return {
     sourceCount: sources.length,
-    segmentCount,
+    sourceIdentityCount,
+    segmentCount: segments.length,
     staleSegmentCount,
     cachedVideoCount,
+    usageBytes: sources.length > 0 || segments.length > 0
+      ? serializedRowsSize([...sources, ...segments])
+      : 0,
     lastUpdatedAt: normalizeNullableTimestamp(lastUpdated?.updatedAt),
   };
 }
@@ -294,4 +316,16 @@ function latestTimestamp(...values: Array<number | null | undefined>): number | 
 
 function normalizeNullableTimestamp(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function serializedSize(value: unknown): number {
+  const text = JSON.stringify(value ?? null);
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(text).byteLength;
+  }
+  return text.length;
+}
+
+function serializedRowsSize(rows: unknown[]): number {
+  return rows.reduce<number>((sum, row) => sum + serializedSize(row), 0);
 }

@@ -24,7 +24,7 @@ test('prefers the most recently accessed active normal tab context', () => {
   ];
   const contexts = new Map<number, CurrentVideoContextResult>([
     [11, videoContext('https://www.bilibili.com/video/BVOlderCtx11', 'BVOlderCtx11', 1000)],
-    [22, videoContext('https://www.bilibili.com/video/BVLatestCtx22?p=2', 'BVLatestCtx22', 1001)],
+    [22, videoContext('https://www.bilibili.com/video/BVLatestCtx22?p=2', 'BVLatestCtx22', 1001, 2)],
   ]);
 
   const resolved = resolveCurrentVideoTabState(tabs, contexts, 2000);
@@ -90,6 +90,28 @@ test('ignores mismatched or stale contexts for the chosen video tab', () => {
   assert.equal(stale.context, null);
 });
 
+test('ignores same-BV contexts collected for a different page', () => {
+  const tabs: CurrentVideoTabSnapshot[] = [
+    {
+      id: 44,
+      url: 'https://www.bilibili.com/video/BVSameBv44?p=2',
+      active: true,
+      lastAccessed: 440,
+    },
+  ];
+
+  const resolved = resolveCurrentVideoTabState(
+    tabs,
+    new Map<number, CurrentVideoContextResult>([
+      [44, videoContext('https://www.bilibili.com/video/BVSameBv44?p=1', 'BVSameBv44', 1000, 1)],
+    ]),
+    2000,
+  );
+
+  assert.equal(resolved.tab?.id, 44);
+  assert.equal(resolved.context, null);
+});
+
 test('falls back to the freshest matching video context when tab urls are unavailable', () => {
   const tabs: CurrentVideoTabSnapshot[] = [
     {
@@ -116,7 +138,12 @@ test('falls back to the freshest matching video context when tab urls are unavai
   assert.equal(resolved.context?.kind === 'video' ? resolved.context.bvid : null, 'BVFallback52');
 });
 
-function videoContext(url: string, bvid: string, collectedAt: number): CurrentVideoContextResult {
+function videoContext(
+  url: string,
+  bvid: string,
+  collectedAt: number,
+  page = 1,
+): CurrentVideoContextResult {
   return {
     kind: 'video',
     url,
@@ -128,7 +155,7 @@ function videoContext(url: string, bvid: string, collectedAt: number): CurrentVi
     authorMid: 42,
     durationSeconds: 600,
     currentPart: {
-      page: 1,
+      page,
       title: 'Main part',
       total: 1,
     },

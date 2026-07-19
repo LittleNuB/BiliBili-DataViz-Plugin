@@ -8,11 +8,15 @@ import type {
 } from '../../shared/types/current-video-context';
 import type { CurrentVideoTranscriptEvidenceState } from '../../shared/types/current-video-transcript';
 import type {
+  CurrentVideoSegmentRetrievalResult,
   CurrentVideoTimestampJumpResponse,
+  CurrentVideoTimestampOperationKind,
+  CurrentVideoTimestampOperationLeaseConsumeResult,
   CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
 import type { CurrentVideoRelatedFavoritesResponse } from '../../shared/types/current-video-related-favorites';
-import type { VideoKnowledgeJumpResponse } from '../../shared/types/video-knowledge';
+import type { CurrentVideoSummaryResult } from '../../shared/types/current-video-summary';
+import type { VideoKnowledgeResult } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import type { SmartIndexResult } from '../../shared/types/favorite';
 import type { SmartFavoriteIndexRebuildResult } from '../../shared/types/local-data-privacy';
@@ -41,7 +45,11 @@ import {
   buildCurrentVideoTranscriptEvidenceState,
   withTranscriptEvidenceState,
 } from '../../shared/current-video-transcript-cache';
-import { searchCurrentVideoSegments } from '../../shared/current-video-segment-retrieval';
+import {
+  rewriteCurrentVideoSegmentQuery,
+  searchCurrentVideoSegments,
+} from '../../shared/current-video-segment-retrieval';
+import { cancelledCurrentVideoSummary } from '../../shared/current-video-summary';
 import { searchCurrentVideoSegmentsWithAiRerank } from '../current-video-segment-rerank';
 import {
   buildCurrentVideoRelatedFavoritesHint,
@@ -52,7 +60,7 @@ import {
   blockedTimestampReturnResponse,
   formatTimestampJumpFailureReason,
 } from '../../shared/current-video-timestamp-jump';
-import { buildVideoKnowledgeResult, findVideoKnowledgeNode } from '../../shared/video-knowledge';
+import { buildVideoKnowledgeResult } from '../../shared/video-knowledge';
 import {
   getQuickStats,
   getDashboardOverview,
@@ -75,7 +83,9 @@ import { DYNAMIC_BILL_STRATEGY } from '../dynamic-bill/strategy';
 import { getDynamicOverview, syncDynamicBillUpdates } from '../dynamic-bill/sync';
 import {
   extractBvidFromUrl,
+  extractPageFromUrl,
   isBilibiliVideoUrl,
+  resolveFreshMatchingVideoContext,
   resolveCurrentVideoTabState,
   type CurrentVideoTabSnapshot,
 } from '../current-video-context-resolver';
@@ -98,10 +108,38 @@ import {
   setDynamicBillFilterPreference,
 } from '../storage/dynamic-bill-repo';
 import {
+  getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys,
   getCurrentVideoTranscriptEvidenceState,
   getCurrentVideoTranscriptSegments,
 } from '../storage/current-video-transcript-repo';
+import {
+  buildTemporaryCurrentVideoTranscriptUnavailableState,
+  clearTemporaryCurrentVideoTranscriptCacheForTab,
+  getTemporaryCurrentVideoTranscriptOwnerReadResolution,
+  retainTemporaryCurrentVideoTranscriptOwner,
+  type CurrentVideoTemporaryTranscriptOwner,
+} from '../current-video-temporary-transcript-cache.ts';
+import { retainTemporaryTranscriptOwnerForContextSnapshot } from '../current-video-transcript-owner.ts';
 import { testAiConnection } from '../ai/openai-compatible';
+import {
+  canUseCurrentVideoPrimaryTextSelectionGeneration,
+  getCurrentVideoPrimaryTextSelectionMutationState,
+  saveCurrentVideoPrimaryTextSelection,
+} from '../storage/current-video-primary-text-selection-store.ts';
+import {
+  canUseCurrentVideoTranscriptClearGeneration,
+  getCurrentVideoTranscriptClearState,
+} from '../current-video-transcript-clear-epoch.ts';
+import {
+  readCurrentVideoPrimaryTextSelections,
+  resolveCurrentVideoPrimaryTextAuthorization,
+} from '../../shared/current-video-primary-text-selection.ts';
+import {
+  clearCurrentVideoTimestampOperationLeasesForTab,
+  consumeCurrentVideoTimestampOperationLease,
+  issueCurrentVideoTimestampOperationLease,
+  retireCurrentVideoTimestampOperationLease,
+} from '../current-video-timestamp-operation-lease.ts';
 
 const EXPORT_PAGE_LIMIT_MAX = 1000;
 const SUBTITLE_PROBE_CACHE_MS = 5 * 60 * 1000;
@@ -121,18 +159,55 @@ const DYNAMIC_BILL_MIGRATION_GATED_ACTIONS = new Set<RequestAction>([
 const currentVideoContexts = new Map<number, CurrentVideoContextResult>();
 const currentVideoSubtitleProbes = new Map<string, CurrentVideoSubtitleSourceState>();
 const currentVideoSubtitleProbeRequests = new Map<string, Promise<CurrentVideoSubtitleSourceState>>();
+const PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE = '主要文本来源选择还在读取中，请稍等本页保存的选择读取完成后再试。';
 
 interface CurrentVideoLookupOptions {
   forceContextRefresh?: boolean;
   forceSubtitleProbe?: boolean;
 }
 
+interface CurrentVideoContextLookupResult {
+  tab: CurrentVideoTabSnapshot | null;
+  context: CurrentVideoContextResult;
+  temporaryOwner?: CurrentVideoTemporaryTranscriptOwner;
+  primaryTextAuthorized?: boolean;
+  primaryTextGuard?: CurrentVideoPrimaryTextAuthorizationGuard;
+}
+
+interface BilibiliVideoUrlIdentity {
+  bvid: string;
+  page: number;
+}
+
+interface CurrentVideoPrimaryTextAuthorizationGuard {
+  bvid: string;
+  cid: number;
+  page: number;
+  sourceIdentityKey: string;
+  selectionGeneration: number;
+  transcriptClearGeneration: number;
+}
+
+interface CurrentVideoPrimaryTextAuthorizationEpochs {
+  selectionGeneration: number;
+  selectionMutating: boolean;
+  transcriptClearGeneration: number;
+  transcriptClearing: boolean;
+}
+
+type CurrentVideoPrimaryTextGuardTestPhase =
+  | 'before_active_source_check'
+  | 'before_evidence_bind'
+  | 'before_segment_body_read'
+  | 'after_segment_body_read'
+  | 'before_timestamp_message';
+
 export function setupMessageHandlers(): void {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Handle content script messages
     const contentMsg = message as BiliVizContentMessage;
     if (contentMsg.action && ['PLAYER_HEARTBEAT', 'PLAYER_ACTION', 'PAGE_NAVIGATION', 'CURRENT_VIDEO_CONTEXT_UPDATE'].includes(contentMsg.action)) {
-      handleContentMessage(contentMsg, sender.tab?.id ?? 0).then(() => {
+      handleContentMessage(contentMsg, sender.tab?.id ?? 0, sender.tab?.url ?? null).then(() => {
         sendResponse({ success: true });
       }).catch((err) => {
         sendResponse({ success: false, error: errorMessage(err) });
@@ -143,7 +218,7 @@ export function setupMessageHandlers(): void {
     // Handle UI request messages
     const request = message as BiliVizRequest;
     if (request.action) {
-      handleRequest(request).then(sendResponse).catch((err) => {
+      handleRequest(request, sender.tab?.id ?? null).then(sendResponse).catch((err) => {
         sendResponse({ success: false, error: errorMessage(err) });
       });
       return true;
@@ -154,28 +229,49 @@ export function setupMessageHandlers(): void {
 
   chrome.tabs.onRemoved.addListener((tabId) => {
     currentVideoContexts.delete(tabId);
+    clearTemporaryCurrentVideoTranscriptCacheForTab(tabId);
+    clearCurrentVideoTimestampOperationLeasesForTab(tabId);
   });
 
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     const nextUrl = changeInfo.url;
     if (!nextUrl) return;
-    if (!isBilibiliVideoUrl(nextUrl)) {
-      currentVideoContexts.delete(tabId);
-      return;
-    }
-
-    const cached = currentVideoContexts.get(tabId);
-    if (cached?.kind === 'video' && cached.bvid !== extractBvidFromUrl(nextUrl)) {
-      currentVideoContexts.delete(tabId);
-    }
+    currentVideoContexts.delete(tabId);
+    clearTemporaryCurrentVideoTranscriptCacheForTab(tabId);
+    clearCurrentVideoTimestampOperationLeasesForTab(tabId);
   });
 }
 
-async function handleContentMessage(msg: BiliVizContentMessage, tabId: number): Promise<void> {
+async function handleContentMessage(
+  msg: BiliVizContentMessage,
+  tabId: number,
+  senderTabUrl: string | null = null,
+): Promise<void> {
   switch (msg.action) {
     case 'CURRENT_VIDEO_CONTEXT_UPDATE': {
       if (tabId > 0) {
-        currentVideoContexts.set(tabId, msg.payload as CurrentVideoContextResult);
+        const context = msg.payload as CurrentVideoContextResult;
+        if (context.kind !== 'video') {
+          if (!senderTabUrl || !isBilibiliVideoUrl(senderTabUrl)) {
+            currentVideoContexts.delete(tabId);
+            clearTemporaryCurrentVideoTranscriptCacheForTab(tabId);
+          }
+          break;
+        }
+        if (!canAcceptCurrentVideoContextUpdate(context, senderTabUrl)) {
+          break;
+        }
+        currentVideoContexts.set(tabId, context);
+        if (context.cid) {
+          retainTemporaryCurrentVideoTranscriptOwner({
+            ownerTabId: tabId,
+            bvid: context.bvid,
+            cid: context.cid,
+            page: context.currentPart.page,
+          });
+        } else {
+          clearTemporaryCurrentVideoTranscriptCacheForTab(tabId);
+        }
       }
       break;
     }
@@ -212,11 +308,52 @@ async function handleContentMessage(msg: BiliVizContentMessage, tabId: number): 
       break;
     }
     case 'PAGE_NAVIGATION':
+      currentVideoContexts.delete(tabId);
+      clearTemporaryCurrentVideoTranscriptCacheForTab(tabId);
       break;
   }
 }
 
-async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizResponse<T>> {
+function canAcceptCurrentVideoContextUpdate(
+  context: CurrentVideoContext,
+  senderTabUrl: string | null,
+): boolean {
+  const contextUrlIdentity = bilibiliVideoUrlIdentity(context.url);
+  if (!contextUrlIdentity || !contextMatchesVideoUrlIdentity(context, contextUrlIdentity)) {
+    return false;
+  }
+
+  if (!senderTabUrl) return true;
+  const senderUrlIdentity = bilibiliVideoUrlIdentity(senderTabUrl);
+  return Boolean(
+    senderUrlIdentity
+    && senderUrlIdentity.bvid === contextUrlIdentity.bvid
+    && senderUrlIdentity.page === contextUrlIdentity.page,
+  );
+}
+
+function bilibiliVideoUrlIdentity(url: string | null | undefined): BilibiliVideoUrlIdentity | null {
+  if (!url || !isBilibiliVideoUrl(url)) return null;
+  const bvid = extractBvidFromUrl(url);
+  if (!bvid) return null;
+  return {
+    bvid,
+    page: extractPageFromUrl(url),
+  };
+}
+
+function contextMatchesVideoUrlIdentity(
+  context: CurrentVideoContext,
+  identity: BilibiliVideoUrlIdentity,
+): boolean {
+  return context.bvid === identity.bvid
+    && context.currentPart.page === identity.page;
+}
+
+async function handleRequest<T>(
+  request: BiliVizRequest,
+  requestTabId: number | null,
+): Promise<BiliVizResponse<T>> {
   if (DYNAMIC_BILL_MIGRATION_GATED_ACTIONS.has(request.action)) {
     await ensureDynamicBill013Migration();
   }
@@ -357,29 +494,72 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
     case 'CLEAR_ALL_LOCAL_DATA':
       return { success: true, data: await clearAllLocalData(request.params?.confirmation) as T };
     case 'GET_CURRENT_VIDEO_CONTEXT':
-      return { success: true, data: await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(request.params)) as T };
+      return { success: true, data: await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(request.params), requestTabId) as T };
+    case 'SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION': {
+      const cid = requirePositiveIntegerParam(request.params?.cid, 'cid');
+      const page = requirePositiveIntegerParam(request.params?.page, 'page');
+      return {
+        success: true,
+        data: await saveCurrentVideoPrimaryTextSelection({
+          bvid: requireStringParam(request.params?.bvid, 'bvid'),
+          cid,
+          page,
+          selectedSourceIdentityKey: requireStringParam(
+            request.params?.selectedSourceIdentityKey,
+            'selectedSourceIdentityKey',
+          ),
+        }) as T,
+      };
+    }
     case 'PROBE_CURRENT_VIDEO_SUBTITLE_SOURCE':
-      return { success: true, data: await probeSubtitleSourceForActiveTab(request.params) as T };
+      return { success: true, data: await probeSubtitleSourceForActiveTab(request.params, requestTabId) as T };
     case 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE':
-      return { success: true, data: await getTranscriptEvidenceForActiveTab(request.params) as T };
+      return { success: true, data: await getTranscriptEvidenceForActiveTab(request.params, requestTabId) as T };
     case 'GET_CURRENT_VIDEO_SUMMARY': {
-      const context = await getCurrentVideoContextForActiveTab();
-      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
-      return { success: true, data: await generateCurrentVideoSummary(context, { transcriptSegments }) as T };
+      if (!primaryTextSelectionsReady(request.params)) {
+        return { success: true, data: primaryTextSelectionNotReadySummary() as T };
+      }
+      const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
+      if (!lookup.primaryTextAuthorized) {
+        return { success: true, data: primaryTextSelectionNotReadySummary() as T };
+      }
+      const transcriptSegments = await getAuthorizedCurrentVideoTranscriptSegments(lookup);
+      if (!transcriptSegments) {
+        return { success: true, data: primaryTextSelectionNotReadySummary() as T };
+      }
+      return { success: true, data: await generateCurrentVideoSummary(lookup.context, { transcriptSegments }) as T };
     }
     case 'GET_VIDEO_KNOWLEDGE': {
-      const context = await getCurrentVideoContextForActiveTab();
-      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
-      return { success: true, data: buildVideoKnowledgeResult(context, { transcriptSegments }) as T };
+      if (!primaryTextSelectionsReady(request.params)) {
+        return { success: true, data: primaryTextSelectionNotReadyKnowledge() as T };
+      }
+      const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
+      if (!lookup.primaryTextAuthorized) {
+        return { success: true, data: primaryTextSelectionNotReadyKnowledge() as T };
+      }
+      const transcriptSegments = await getAuthorizedCurrentVideoTranscriptSegments(lookup);
+      if (!transcriptSegments) {
+        return { success: true, data: primaryTextSelectionNotReadyKnowledge() as T };
+      }
+      return { success: true, data: buildVideoKnowledgeResult(lookup.context, { transcriptSegments }) as T };
     }
     case 'SEARCH_CURRENT_VIDEO_SEGMENTS': {
       const query = String(request.params?.query ?? '');
-      const context = await getCurrentVideoContextForActiveTab();
-      const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
-      const videoKnowledge = buildVideoKnowledgeResult(context, { transcriptSegments });
+      if (!primaryTextSelectionsReady(request.params)) {
+        return { success: true, data: primaryTextSelectionNotReadySegmentResult(query) as T };
+      }
+      const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
+      if (!lookup.primaryTextAuthorized) {
+        return { success: true, data: primaryTextSelectionNotReadySegmentResult(query) as T };
+      }
+      const transcriptSegments = await getAuthorizedCurrentVideoTranscriptSegments(lookup);
+      if (!transcriptSegments) {
+        return { success: true, data: primaryTextSelectionNotReadySegmentResult(query) as T };
+      }
+      const videoKnowledge = buildVideoKnowledgeResult(lookup.context, { transcriptSegments });
       return {
         success: true,
-        data: await searchCurrentVideoSegmentsWithAiRerank(context, {
+        data: await searchCurrentVideoSegmentsWithAiRerank(lookup.context, {
           query,
           transcriptSegments,
           videoKnowledge,
@@ -394,11 +574,14 @@ async function handleRequest<T>(request: BiliVizRequest): Promise<BiliVizRespons
       };
     }
     case 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP':
-      return { success: true, data: await requestCurrentVideoSegmentJump(request.params) as T };
+      return { success: true, data: await requestCurrentVideoSegmentJump(request.params, requestTabId) as T };
     case 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP':
-      return { success: true, data: await returnCurrentVideoSegmentJump() as T };
-    case 'REQUEST_VIDEO_KNOWLEDGE_JUMP':
-      return { success: true, data: await requestVideoKnowledgeJump(request.params) as T };
+      return { success: true, data: await returnCurrentVideoSegmentJump(request.params, requestTabId) as T };
+    case 'CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE':
+      return {
+        success: true,
+        data: await consumeCurrentVideoTimestampLease(request.params, requestTabId) as T,
+      };
     case 'GET_SMART_FAVORITES':
       return { success: true, data: await getSmartFavoriteOverview() as T };
     case 'GET_SMART_FAVORITES_BY_PATH': {
@@ -533,47 +716,9 @@ async function getCurrentVideoRelatedFavorites(
   };
 }
 
-async function requestVideoKnowledgeJump(params: Record<string, unknown> | undefined): Promise<VideoKnowledgeJumpResponse> {
-  const nodeId = requireStringParam(params?.nodeId, 'nodeId');
-  const confirmed = params?.confirmed === true;
-  if (!confirmed) {
-    return {
-      ok: false,
-      message: 'CONFIRMATION_REQUIRED',
-      nodeId,
-      previousPositionSeconds: null,
-      targetSeconds: null,
-      targetPage: null,
-    };
-  }
-
-  const target = await resolveCurrentVideoLookupState();
-  const tabId = target.tab?.id ?? 0;
-  if (!target.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(target.tab.url)) {
-    throw new Error('NO_ACTIVE_BILIBILI_VIDEO_TAB');
-  }
-
-  if (target.context?.kind !== 'video') {
-    throw new Error('VIDEO_CONTEXT_UNAVAILABLE');
-  }
-  const knowledge = buildVideoKnowledgeResult(target.context);
-  const node = findVideoKnowledgeNode(knowledge, nodeId);
-  if (!node || !node.jumpAction) {
-    throw new Error('VIDEO_KNOWLEDGE_JUMP_TARGET_UNAVAILABLE');
-  }
-
-  return await chrome.tabs.sendMessage(tabId, {
-    action: 'VIDEO_KNOWLEDGE_MANUAL_JUMP',
-    payload: {
-      node,
-      contextBvid: target.context.bvid,
-      confirmed: true,
-    },
-  });
-}
-
 async function requestCurrentVideoSegmentJump(
   params: Record<string, unknown> | undefined,
+  requestTabId: number | null,
 ): Promise<CurrentVideoTimestampJumpResponse> {
   const candidateId = requireStringParam(params?.candidateId, 'candidateId');
   const query = requireStringParam(params?.query, 'query');
@@ -585,10 +730,24 @@ async function requestCurrentVideoSegmentJump(
       formatTimestampJumpFailureReason('confirmation_required'),
     );
   }
+  if (!primaryTextSelectionsReady(params)) {
+    return blockedTimestampJumpResponse(
+      candidateId,
+      'no_context',
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    );
+  }
 
-  const target = await resolveCurrentVideoLookupState();
-  const tabId = target.tab?.id ?? 0;
-  if (!target.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(target.tab.url)) {
+  const lookup = await getCurrentVideoContextLookupWithSelection(params, requestTabId);
+  if (!lookup.primaryTextAuthorized) {
+    return blockedTimestampJumpResponse(
+      candidateId,
+      'no_context',
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    );
+  }
+  const tabId = lookup.tab?.id ?? 0;
+  if (!lookup.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(lookup.tab.url)) {
     return blockedTimestampJumpResponse(
       candidateId,
       'no_context',
@@ -596,7 +755,7 @@ async function requestCurrentVideoSegmentJump(
     );
   }
 
-  const context = await getCurrentVideoContextForActiveTab();
+  const context = lookup.context;
   if (context.kind !== 'video') {
     return blockedTimestampJumpResponse(
       candidateId,
@@ -605,7 +764,14 @@ async function requestCurrentVideoSegmentJump(
     );
   }
 
-  const transcriptSegments = await getActiveCurrentVideoTranscriptSegments(context);
+  const transcriptSegments = await getAuthorizedCurrentVideoTranscriptSegments(lookup);
+  if (!transcriptSegments) {
+    return blockedTimestampJumpResponse(
+      candidateId,
+      'no_context',
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    );
+  }
   const videoKnowledge = buildVideoKnowledgeResult(context, { transcriptSegments });
   const result = searchCurrentVideoSegments(context, {
     query,
@@ -632,6 +798,33 @@ async function requestCurrentVideoSegmentJump(
     return blockedTimestampJumpResponse(candidateId, reason, preview.message);
   }
 
+  await currentVideoPrimaryTextGuardTestHook('before_timestamp_message');
+  if (!await currentVideoPrimaryTextGuardStillAuthorized(lookup)) {
+    return blockedTimestampJumpResponse(
+      candidateId,
+      'no_context',
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    );
+  }
+  const operationGuard = lookup.primaryTextGuard;
+  if (!operationGuard) {
+    return blockedTimestampJumpResponse(
+      candidateId,
+      'no_context',
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    );
+  }
+  const operationLeaseId = issueCurrentVideoTimestampOperationLease({
+    tabId,
+    operationKind: 'jump',
+    bvid: operationGuard.bvid,
+    cid: operationGuard.cid,
+    page: operationGuard.page,
+    sourceIdentityKey: operationGuard.sourceIdentityKey,
+    selectionGeneration: operationGuard.selectionGeneration,
+    transcriptClearGeneration: operationGuard.transcriptClearGeneration,
+  });
+
   try {
     const response = await chrome.tabs.sendMessage(tabId, {
       action: 'CURRENT_VIDEO_TIMESTAMP_JUMP',
@@ -649,6 +842,8 @@ async function requestCurrentVideoSegmentJump(
         confidence: preview.confidence,
         confidenceLabel: preview.confidenceLabel,
         evidencePreview: preview.evidencePreview,
+        sourceIdentityKey: operationGuard.sourceIdentityKey,
+        operationLeaseId,
       },
     });
     return response as CurrentVideoTimestampJumpResponse;
@@ -658,25 +853,131 @@ async function requestCurrentVideoSegmentJump(
       'player_unavailable',
       formatTimestampJumpFailureReason('player_unavailable'),
     );
+  } finally {
+    retireCurrentVideoTimestampOperationLease(operationLeaseId);
   }
 }
 
-async function returnCurrentVideoSegmentJump(): Promise<CurrentVideoTimestampReturnResponse> {
-  const target = await resolveCurrentVideoLookupState();
-  const tabId = target.tab?.id ?? 0;
-  if (!target.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(target.tab.url)) {
+async function returnCurrentVideoSegmentJump(
+  params: Record<string, unknown> | undefined,
+  requestTabId: number | null,
+): Promise<CurrentVideoTimestampReturnResponse> {
+  if (!primaryTextSelectionsReady(params)) {
+    return blockedTimestampReturnResponse(PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE);
+  }
+  const lookup = await getCurrentVideoContextLookupWithSelection(params, requestTabId);
+  if (!lookup.primaryTextAuthorized || !lookup.primaryTextGuard) {
+    return blockedTimestampReturnResponse(PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE);
+  }
+
+  const tabId = lookup.tab?.id ?? 0;
+  if (!lookup.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(lookup.tab.url)) {
     return blockedTimestampReturnResponse(formatTimestampJumpFailureReason('no_context'));
   }
+  if (lookup.context.kind !== 'video') {
+    return blockedTimestampReturnResponse(formatTimestampJumpFailureReason('no_context'));
+  }
+  if (!await currentVideoPrimaryTextGuardStillAuthorized(lookup)) {
+    return blockedTimestampReturnResponse(PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE);
+  }
+  const operationGuard = lookup.primaryTextGuard;
+  const operationLeaseId = issueCurrentVideoTimestampOperationLease({
+    tabId,
+    operationKind: 'return',
+    bvid: operationGuard.bvid,
+    cid: operationGuard.cid,
+    page: operationGuard.page,
+    sourceIdentityKey: operationGuard.sourceIdentityKey,
+    selectionGeneration: operationGuard.selectionGeneration,
+    transcriptClearGeneration: operationGuard.transcriptClearGeneration,
+  });
 
   try {
     const response = await chrome.tabs.sendMessage(tabId, {
       action: 'CURRENT_VIDEO_TIMESTAMP_RETURN',
-      payload: {},
+      payload: {
+        contextBvid: lookup.context.bvid,
+        contextCid: lookup.context.cid,
+        contextPage: lookup.context.currentPart.page,
+        sourceIdentityKey: operationGuard.sourceIdentityKey,
+        operationLeaseId,
+      },
     });
     return response as CurrentVideoTimestampReturnResponse;
   } catch {
     return blockedTimestampReturnResponse(formatTimestampJumpFailureReason('player_unavailable'));
+  } finally {
+    retireCurrentVideoTimestampOperationLease(operationLeaseId);
   }
+}
+
+async function consumeCurrentVideoTimestampLease(
+  params: Record<string, unknown> | undefined,
+  requestTabId: number | null,
+): Promise<CurrentVideoTimestampOperationLeaseConsumeResult> {
+  const operationKind = timestampOperationKind(params?.operationKind);
+  const leaseId = optionalNonEmptyString(params?.operationLeaseId);
+  const bvid = optionalNonEmptyString(params?.contextBvid);
+  const cid = optionalPositiveInteger(params?.contextCid);
+  const page = optionalPositiveInteger(params?.contextPage);
+  const sourceIdentityKey = optionalNonEmptyString(params?.sourceIdentityKey);
+  if (
+    !operationKind
+    || !leaseId
+    || !bvid
+    || !cid
+    || !page
+    || !sourceIdentityKey
+    || !requestTabId
+    || requestTabId <= 0
+  ) {
+    return { authorized: false };
+  }
+
+  const binding = consumeCurrentVideoTimestampOperationLease({
+    leaseId,
+    tabId: requestTabId,
+    operationKind,
+    bvid,
+    cid,
+    page,
+    sourceIdentityKey,
+  });
+  if (!binding) return { authorized: false };
+
+  const issuedGuard: CurrentVideoPrimaryTextAuthorizationGuard = {
+    bvid: binding.bvid,
+    cid: binding.cid,
+    page: binding.page,
+    sourceIdentityKey: binding.sourceIdentityKey,
+    selectionGeneration: binding.selectionGeneration,
+    transcriptClearGeneration: binding.transcriptClearGeneration,
+  };
+  if (!currentVideoPrimaryTextGuardEpochsCurrent(issuedGuard)) {
+    return { authorized: false };
+  }
+
+  const lookup = await getCurrentVideoContextLookupWithSelection({
+    primaryTextSelectionsReady: true,
+    selectedSourceIdentityKey: binding.sourceIdentityKey,
+  }, requestTabId);
+  const currentGuard = lookup.primaryTextGuard;
+  if (
+    !lookup.primaryTextAuthorized
+    || !currentGuard
+    || currentGuard.bvid !== binding.bvid
+    || currentGuard.cid !== binding.cid
+    || currentGuard.page !== binding.page
+    || currentGuard.sourceIdentityKey !== binding.sourceIdentityKey
+    || !currentVideoPrimaryTextGuardEpochsCurrent(issuedGuard)
+  ) {
+    return { authorized: false };
+  }
+
+  return {
+    authorized: await currentVideoPrimaryTextGuardStillAuthorized(lookup)
+      && currentVideoPrimaryTextGuardEpochsCurrent(issuedGuard),
+  };
 }
 
 async function markConsumedFromPlayerEvent(
@@ -688,44 +989,224 @@ async function markConsumedFromPlayerEvent(
 
 async function getCurrentVideoContextForActiveTab(
   options: CurrentVideoLookupOptions = {},
+  requestTabId: number | null = null,
 ): Promise<CurrentVideoContextResult> {
-  const context = await getRawCurrentVideoContextForActiveTab(options);
-  if (context.kind !== 'video') return context;
-  const withSubtitle = await enrichCurrentVideoContextWithSubtitleProbe(context, options);
-  return await enrichCurrentVideoContextWithTranscriptEvidence(withSubtitle);
+  return (await getCurrentVideoContextLookup(options, requestTabId)).context;
 }
 
-async function getRawCurrentVideoContextForActiveTab(
-  options: CurrentVideoLookupOptions = {},
+async function getCurrentVideoContextForActiveTabWithSelection(
+  params: Record<string, unknown> | undefined,
+  requestTabId: number | null = null,
 ): Promise<CurrentVideoContextResult> {
-  const { tab, context } = await resolveCurrentVideoLookupState();
+  return (await getCurrentVideoContextLookupWithSelection(params, requestTabId)).context;
+}
+
+async function getCurrentVideoContextLookupWithSelection(
+  params: Record<string, unknown> | undefined,
+  requestTabId: number | null = null,
+): Promise<CurrentVideoContextLookupResult> {
+  const options = currentVideoLookupOptions(params);
+  const requestedSourceIdentityKey = selectedSourceIdentityKey(params);
+  const epochs = currentVideoPrimaryTextAuthorizationEpochs();
+  if (!currentVideoPrimaryTextAuthorizationEpochsReady(epochs)) {
+    const lookup = await getRawCurrentVideoContextLookup(options, requestTabId);
+    return {
+      ...lookup,
+      context: lookup.context.kind === 'video'
+        ? withoutSelectedCurrentVideoTranscriptEvidence(lookup.context)
+        : lookup.context,
+      primaryTextAuthorized: false,
+    };
+  }
+  const lookup = await getRawCurrentVideoContextLookup(options, requestTabId);
+  if (lookup.context.kind !== 'video') {
+    return {
+      ...lookup,
+      primaryTextAuthorized: false,
+    };
+  }
+  if (!currentVideoPrimaryTextAuthorizationEpochsCurrent(epochs)) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(lookup.context),
+      primaryTextAuthorized: false,
+    };
+  }
+  const readResult = await readCurrentVideoPrimaryTextSelections(chrome.storage.local);
+  if (readResult.status !== 'ready' || !currentVideoPrimaryTextAuthorizationEpochsCurrent(epochs)) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(lookup.context),
+      primaryTextAuthorized: false,
+    };
+  }
+
+  await currentVideoPrimaryTextGuardTestHook('before_active_source_check');
+  const availableSourceIdentityKeys = lookup.context.cid
+    ? getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys({
+        bvid: lookup.context.bvid,
+        cid: lookup.context.cid,
+        page: lookup.context.currentPart.page,
+      }, lookup.temporaryOwner)
+    : [];
+  if (!currentVideoPrimaryTextAuthorizationEpochsCurrent(epochs)) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(lookup.context),
+      primaryTextAuthorized: false,
+    };
+  }
+  const authorization = resolveCurrentVideoPrimaryTextAuthorization({
+    readStatus: 'ready',
+    identity: {
+      bvid: lookup.context.bvid,
+      cid: lookup.context.cid,
+      page: lookup.context.currentPart.page,
+    },
+    selections: readResult.selections,
+    availableSourceIdentityKeys,
+  });
+  if (
+    !requestedSourceIdentityKey
+    || !authorization.ready
+    || authorization.selectedSourceIdentityKey !== requestedSourceIdentityKey
+  ) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(lookup.context),
+      primaryTextAuthorized: false,
+    };
+  }
+
+  const guard: CurrentVideoPrimaryTextAuthorizationGuard = {
+    bvid: lookup.context.bvid,
+    cid: lookup.context.cid as number,
+    page: lookup.context.currentPart.page,
+    sourceIdentityKey: requestedSourceIdentityKey,
+    selectionGeneration: epochs.selectionGeneration,
+    transcriptClearGeneration: epochs.transcriptClearGeneration,
+  };
+  if (!currentVideoPrimaryTextGuardEpochsCurrent(guard)) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(lookup.context),
+      primaryTextAuthorized: false,
+    };
+  }
+  const withSubtitle = await enrichCurrentVideoContextWithSubtitleProbe(lookup.context, options);
+  if (!currentVideoPrimaryTextGuardEpochsCurrent(guard)) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(withSubtitle),
+      primaryTextAuthorized: false,
+    };
+  }
+  await currentVideoPrimaryTextGuardTestHook('before_evidence_bind');
+  if (!currentVideoPrimaryTextGuardEpochsCurrent(guard)) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(withSubtitle),
+      primaryTextAuthorized: false,
+    };
+  }
+  const withEvidence = await bindSelectedCurrentVideoTranscriptEvidence(
+    withSubtitle,
+    requestedSourceIdentityKey,
+    lookup.temporaryOwner,
+    guard,
+  );
+  const authorizedLookup = {
+    ...lookup,
+    context: withEvidence,
+    primaryTextAuthorized: true,
+    primaryTextGuard: guard,
+  };
+  if (!await currentVideoPrimaryTextGuardStillAuthorized(authorizedLookup)) {
+    return {
+      ...lookup,
+      context: withoutSelectedCurrentVideoTranscriptEvidence(withSubtitle),
+      primaryTextAuthorized: false,
+    };
+  }
+  return {
+    ...authorizedLookup,
+    primaryTextAuthorized: true,
+  };
+}
+
+function withoutSelectedCurrentVideoTranscriptEvidence(
+  context: CurrentVideoContext,
+): CurrentVideoContext {
+  return withTranscriptEvidenceState(
+    {
+      ...context,
+      warnings: context.warnings.filter(warning => warning !== 'transcript_evidence_cached'),
+    },
+    buildCurrentVideoTranscriptEvidenceState({
+      status: 'missing',
+      target: {
+        bvid: context.bvid,
+        cid: context.cid,
+        page: context.currentPart.page,
+      },
+      now: Date.now(),
+      sourceType: context.subtitleProbe?.sourceType ?? 'none',
+      reason: 'primary_text_source_identity_required',
+      message: '当前请求没有绑定精确的主要文本来源，因此不会读取字幕正文。',
+      warnings: ['primary_text_source_identity_required'],
+    }),
+  );
+}
+
+async function getCurrentVideoContextLookup(
+  options: CurrentVideoLookupOptions = {},
+  requestTabId: number | null = null,
+): Promise<CurrentVideoContextLookupResult> {
+  const lookup = await getRawCurrentVideoContextLookup(options, requestTabId);
+  if (lookup.context.kind !== 'video') return lookup;
+  const withSubtitle = await enrichCurrentVideoContextWithSubtitleProbe(lookup.context, options);
+  return {
+    ...lookup,
+    context: await enrichCurrentVideoContextWithTranscriptEvidence(withSubtitle, lookup.temporaryOwner),
+  };
+}
+
+async function getRawCurrentVideoContextLookup(
+  options: CurrentVideoLookupOptions = {},
+  requestTabId: number | null = null,
+): Promise<CurrentVideoContextLookupResult> {
+  const { tab, context } = await resolveCurrentVideoLookupState(requestTabId);
   const url = tab?.url ?? null;
+  let resolvedContext: CurrentVideoContextResult;
 
   if (!url || !isBilibiliVideoUrl(url)) {
-    return buildNoContext(url, 'non_video_page', 'non_video');
-  }
-
-  if (tab?.id && (options.forceContextRefresh || context?.kind !== 'video')) {
+    resolvedContext = buildNoContext(url, 'non_video_page', 'non_video');
+  } else if (tab?.id && (options.forceContextRefresh || context?.kind !== 'video')) {
     const refreshed = await requestFreshCurrentVideoContext(tab.id, url);
-    if (refreshed) return refreshed;
+    resolvedContext = refreshed ?? buildNoContext(url, 'video_context_unavailable', 'video');
+  } else if (context?.kind === 'video') {
+    resolvedContext = context;
+  } else {
+    resolvedContext = buildNoContext(url, 'video_context_unavailable', 'video');
   }
 
-  if (context?.kind === 'video') {
-    return context;
-  }
-
-  return buildNoContext(url, 'video_context_unavailable', 'video');
+  return {
+    tab,
+    context: resolvedContext,
+    temporaryOwner: retainTemporaryTranscriptOwnerForContextSnapshot(resolvedContext, tab?.id ?? null),
+  };
 }
 
 async function probeSubtitleSourceForActiveTab(
   params: Record<string, unknown> | undefined,
+  requestTabId: number | null = null,
 ): Promise<CurrentVideoSubtitleSourceState> {
   const options = currentVideoLookupOptions({
     ...params,
     forceSubtitleProbe: params?.force === true || params?.forceSubtitleProbe === true,
     forceContextRefresh: params?.force === true || params?.forceContextRefresh === true,
   });
-  const context = await getCurrentVideoContextForActiveTab(options);
+  const context = await getCurrentVideoContextForActiveTab(options, requestTabId);
   if (context.kind === 'video' && context.subtitleProbe) {
     return context.subtitleProbe;
   }
@@ -734,12 +1215,35 @@ async function probeSubtitleSourceForActiveTab(
 
 async function getTranscriptEvidenceForActiveTab(
   params: Record<string, unknown> | undefined,
+  requestTabId: number | null = null,
 ): Promise<CurrentVideoTranscriptEvidenceState> {
-  const context = await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(params));
+  const lookup = await getRawCurrentVideoContextLookup(currentVideoLookupOptions(params), requestTabId);
   const requestedLanguage = typeof params?.language === 'string'
     ? params.language
     : null;
-  return await cacheCurrentVideoTranscriptEvidence(context, { requestedLanguage });
+  return await cacheCurrentVideoTranscriptEvidence(lookup.context, {
+    requestedLanguage,
+    protectedSourceIdentityKeys: currentVideoProtectedSourceIdentityKeys(lookup.context, params),
+    temporaryOwner: lookup.temporaryOwner,
+  });
+}
+
+async function bindSelectedCurrentVideoTranscriptEvidence(
+  context: CurrentVideoContextResult,
+  sourceIdentityKey: string | null,
+  temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
+  guard?: CurrentVideoPrimaryTextAuthorizationGuard,
+): Promise<CurrentVideoContextResult> {
+  if (context.kind !== 'video' || !sourceIdentityKey || !context.cid) return context;
+  const transcriptEvidence = await getCurrentVideoTranscriptEvidenceState({
+    bvid: context.bvid,
+    cid: context.cid,
+    page: context.currentPart.page,
+    sourceIdentityKey,
+  }, Date.now(), temporaryOwner, {
+    canUseEvidence: guard ? () => currentVideoPrimaryTextGuardEpochsCurrent(guard) : undefined,
+  });
+  return withTranscriptEvidenceState(context, transcriptEvidence);
 }
 
 async function enrichCurrentVideoContextWithSubtitleProbe(
@@ -778,6 +1282,7 @@ async function enrichCurrentVideoContextWithSubtitleProbe(
 
 async function enrichCurrentVideoContextWithTranscriptEvidence(
   context: CurrentVideoContext,
+  temporaryOwner?: CurrentVideoTemporaryTranscriptOwner,
 ): Promise<CurrentVideoContext> {
   if (!context.cid) {
     return withTranscriptEvidenceState(context, buildCurrentVideoTranscriptEvidenceState({
@@ -794,32 +1299,59 @@ async function enrichCurrentVideoContextWithTranscriptEvidence(
     }));
   }
 
-  const state = await getCurrentVideoTranscriptEvidenceState({
+  const identity = {
     bvid: context.bvid,
     cid: context.cid,
     page: context.currentPart.page,
-  });
+  };
+  const now = Date.now();
+  const state = temporaryOwner
+    && !getTemporaryCurrentVideoTranscriptOwnerReadResolution(temporaryOwner, identity, now)
+    ? buildTemporaryCurrentVideoTranscriptUnavailableState(identity, now)
+    : await getCurrentVideoTranscriptEvidenceState(identity, now, temporaryOwner);
   return withTranscriptEvidenceState(context, state);
 }
 
-async function getActiveCurrentVideoTranscriptSegments(
-  context: CurrentVideoContextResult,
+async function getAuthorizedCurrentVideoTranscriptSegments(
+  lookup: CurrentVideoContextLookupResult,
 ) {
+  const context = lookup.context;
+  const guard = lookup.primaryTextGuard;
   if (
-    context.kind !== 'video'
+    !guard
+    || context.kind !== 'video'
     || !context.cid
     || context.transcriptEvidence?.active !== true
+    || context.transcriptEvidence.sourceIdentityKey !== guard.sourceIdentityKey
   ) {
-    return [];
+    return null;
+  }
+  if (!await currentVideoPrimaryTextGuardStillAuthorized(lookup)) {
+    return null;
   }
 
-  return await getCurrentVideoTranscriptSegments({
+  await currentVideoPrimaryTextGuardTestHook('before_segment_body_read');
+  if (!currentVideoPrimaryTextGuardEpochsCurrent(guard)) {
+    return null;
+  }
+  const segments = await getCurrentVideoTranscriptSegments({
     bvid: context.bvid,
     cid: context.cid,
     page: context.currentPart.page,
     language: context.transcriptEvidence.language,
+    sourceIdentityKey: context.transcriptEvidence.sourceIdentityKey,
     sourceHash: context.transcriptEvidence.sourceHash,
+  }, lookup.temporaryOwner, {
+    canUseEvidence: () => currentVideoPrimaryTextGuardEpochsCurrent(guard),
   });
+  await currentVideoPrimaryTextGuardTestHook('after_segment_body_read');
+  if (segments.length <= 0 || !currentVideoPrimaryTextGuardEpochsCurrent(guard)) {
+    return null;
+  }
+  if (!await currentVideoPrimaryTextGuardStillAuthorized(lookup)) {
+    return null;
+  }
+  return segments;
 }
 
 function subtitleProbeCacheKey(context: CurrentVideoContext): string {
@@ -840,8 +1372,16 @@ async function requestFreshCurrentVideoContext(
       payload: {},
     }) as CurrentVideoContextResult;
     if (response?.kind !== 'video') return response ?? null;
-    if (extractBvidFromUrl(tabUrl) !== response.bvid) return null;
+    if (!canAcceptCurrentVideoContextUpdate(response, tabUrl)) return null;
     currentVideoContexts.set(tabId, response);
+    if (response.cid) {
+      retainTemporaryCurrentVideoTranscriptOwner({
+        ownerTabId: tabId,
+        bvid: response.bvid,
+        cid: response.cid,
+        page: response.currentPart.page,
+      });
+    }
     return response;
   } catch {
     return null;
@@ -857,7 +1397,245 @@ function currentVideoLookupOptions(
   };
 }
 
-async function resolveCurrentVideoLookupState(): Promise<{
+function primaryTextSelectionsReady(params: Record<string, unknown> | undefined): boolean {
+  return params?.primaryTextSelectionsReady === true;
+}
+
+function primaryTextSelectionNotReadySummary(now = Date.now()): CurrentVideoSummaryResult {
+  return {
+    ...cancelledCurrentVideoSummary(null, now),
+    title: '主要文本来源尚未就绪',
+    summary: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    missingSources: ['主要文本来源选择'],
+    limitations: ['读取完成前不会使用当前可见字幕正文，也不会请求 AI。'],
+    nextQuestions: [],
+    ai: {
+      status: 'not_requested',
+      model: null,
+      error: null,
+      note: '主要文本来源选择尚未读取完成，因此没有请求 AI。',
+    },
+  };
+}
+
+function primaryTextSelectionNotReadyKnowledge(now = Date.now()): VideoKnowledgeResult {
+  return {
+    status: 'ready',
+    title: '当前视频',
+    generatedAt: now,
+    sourceState: {
+      metadata: false,
+      description: false,
+      pages: false,
+      chapters: false,
+      transcript: false,
+      transcriptEvidence: false,
+      contentText: false,
+    },
+    transcriptEvidence: null,
+    nodes: [],
+    warnings: ['primary_text_selection_not_ready'],
+    limitations: [
+      PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+      '读取完成前不会把当前可见字幕正文当作主要文本来源。',
+    ],
+  };
+}
+
+function primaryTextSelectionNotReadySegmentResult(
+  query: string,
+  now = Date.now(),
+): CurrentVideoSegmentRetrievalResult {
+  const normalizedQuery = String(query ?? '').trim();
+  const queryRewrite = rewriteCurrentVideoSegmentQuery(normalizedQuery);
+  return {
+    status: 'no_evidence',
+    query: normalizedQuery,
+    normalizedQuery: queryRewrite.normalizedQuery,
+    title: '当前视频',
+    generatedAt: now,
+    candidates: [],
+    summary: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+    limitations: [
+      '主要文本来源选择读取完成前不会检索当前可见字幕正文。',
+      '本次没有请求 AI，也没有读取历史、收藏、关注或本地敏感文件。',
+    ],
+    queryRewrite,
+    evidenceState: {
+      transcriptSegmentCount: 0,
+      timedKnowledgeNodeCount: 0,
+      metadataHintAvailable: false,
+      contextFresh: false,
+    },
+    aiRerank: {
+      status: 'not_requested',
+      model: null,
+      note: '主要文本来源选择尚未读取完成，因此没有请求 AI 重排。',
+      error: null,
+      generatedAt: now,
+      payloadCandidateCount: 0,
+      appliedCandidateIds: [],
+      explanations: [],
+    },
+    qa: {
+      status: 'insufficient_evidence',
+      answer: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+      confidence: 0,
+      confidenceLabel: '低',
+      citedSegments: [],
+      sourceState: {
+        transcriptSegmentCount: 0,
+        timedKnowledgeNodeCount: 0,
+        metadataHintAvailable: false,
+        contextFresh: false,
+        hasCitableEvidence: false,
+        hasOnlyMetadataHints: false,
+      },
+      aiState: {
+        status: 'not_requested',
+        model: null,
+        note: '主要文本来源选择尚未读取完成，因此没有请求 AI 整理回答。',
+        error: null,
+        generatedAt: now,
+        payloadCandidateCount: 0,
+        citedCandidateIds: [],
+      },
+      limitations: ['请等本页保存的主要文本来源选择读取完成后再提问。'],
+    },
+  };
+}
+
+function currentVideoProtectedSourceIdentityKeys(
+  context: CurrentVideoContextResult,
+  params: Record<string, unknown> | undefined,
+): string[] {
+  const keys = new Set<string>();
+  const addKey = (value: unknown) => {
+    if (typeof value === 'string' && value.trim()) {
+      keys.add(value.trim());
+    }
+  };
+
+  if (context.kind === 'video') {
+    addKey(context.transcriptEvidence?.sourceIdentityKey);
+  }
+  addKey(params?.sourceIdentityKey);
+  addKey(params?.selectedSourceIdentityKey);
+
+  if (Array.isArray(params?.protectedSourceIdentityKeys)) {
+    for (const key of params.protectedSourceIdentityKeys) {
+      addKey(key);
+    }
+  }
+
+  return Array.from(keys);
+}
+
+function selectedSourceIdentityKey(params: Record<string, unknown> | undefined): string | null {
+  const value = params?.selectedSourceIdentityKey ?? params?.sourceIdentityKey;
+  return typeof value === 'string' && value.trim()
+    ? value.trim()
+    : null;
+}
+
+function currentVideoPrimaryTextAuthorizationEpochs(): CurrentVideoPrimaryTextAuthorizationEpochs {
+  const selection = getCurrentVideoPrimaryTextSelectionMutationState();
+  const transcriptClear = getCurrentVideoTranscriptClearState();
+  return {
+    selectionGeneration: selection.generation,
+    selectionMutating: selection.mutating,
+    transcriptClearGeneration: transcriptClear.generation,
+    transcriptClearing: transcriptClear.clearing,
+  };
+}
+
+function currentVideoPrimaryTextAuthorizationEpochsReady(
+  epochs: CurrentVideoPrimaryTextAuthorizationEpochs,
+): boolean {
+  return !epochs.selectionMutating
+    && !epochs.transcriptClearing;
+}
+
+function currentVideoPrimaryTextAuthorizationEpochsCurrent(
+  epochs: CurrentVideoPrimaryTextAuthorizationEpochs,
+): boolean {
+  return canUseCurrentVideoPrimaryTextSelectionGeneration(epochs.selectionGeneration)
+    && canUseCurrentVideoTranscriptClearGeneration(epochs.transcriptClearGeneration);
+}
+
+function currentVideoPrimaryTextGuardEpochsCurrent(
+  guard: CurrentVideoPrimaryTextAuthorizationGuard,
+): boolean {
+  return canUseCurrentVideoPrimaryTextSelectionGeneration(guard.selectionGeneration)
+    && canUseCurrentVideoTranscriptClearGeneration(guard.transcriptClearGeneration);
+}
+
+function currentVideoPrimaryTextGuardMatchesContext(
+  context: CurrentVideoContextResult,
+  guard: CurrentVideoPrimaryTextAuthorizationGuard,
+): boolean {
+  return context.kind === 'video'
+    && context.bvid === guard.bvid
+    && context.cid === guard.cid
+    && context.currentPart.page === guard.page;
+}
+
+async function currentVideoPrimaryTextGuardStillAuthorized(
+  lookup: Pick<CurrentVideoContextLookupResult, 'context' | 'temporaryOwner' | 'primaryTextGuard'>,
+): Promise<boolean> {
+  const guard = lookup.primaryTextGuard;
+  const context = lookup.context;
+  if (!guard || !currentVideoPrimaryTextGuardMatchesContext(context, guard)) return false;
+  if (!currentVideoPrimaryTextGuardEpochsCurrent(guard)) return false;
+  if (
+    context.kind !== 'video'
+    || !context.transcriptEvidence?.active
+    || context.transcriptEvidence.sourceIdentityKey !== guard.sourceIdentityKey
+  ) {
+    return false;
+  }
+
+  const readResult = await readCurrentVideoPrimaryTextSelections(chrome.storage.local);
+  if (readResult.status !== 'ready' || !currentVideoPrimaryTextGuardEpochsCurrent(guard)) return false;
+
+  const availableSourceIdentityKeys = getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys({
+    bvid: guard.bvid,
+    cid: guard.cid,
+    page: guard.page,
+  }, lookup.temporaryOwner);
+  if (!currentVideoPrimaryTextGuardEpochsCurrent(guard)) return false;
+  if (!availableSourceIdentityKeys.includes(guard.sourceIdentityKey)) return false;
+
+  const authorization = resolveCurrentVideoPrimaryTextAuthorization({
+    readStatus: 'ready',
+    identity: {
+      bvid: guard.bvid,
+      cid: guard.cid,
+      page: guard.page,
+    },
+    selections: readResult.selections,
+    availableSourceIdentityKeys,
+  });
+  return authorization.ready
+    && authorization.selectedSourceIdentityKey === guard.sourceIdentityKey;
+}
+
+async function currentVideoPrimaryTextGuardTestHook(
+  phase: CurrentVideoPrimaryTextGuardTestPhase,
+): Promise<void> {
+  const hook = (globalThis as typeof globalThis & {
+    __biliBillCurrentVideoPrimaryTextGuardTestHook__?: (
+      phase: CurrentVideoPrimaryTextGuardTestPhase,
+    ) => Promise<void> | void;
+  }).__biliBillCurrentVideoPrimaryTextGuardTestHook__;
+  if (typeof hook === 'function') {
+    await hook(phase);
+  }
+}
+
+async function resolveCurrentVideoLookupState(
+  requestTabId: number | null = null,
+): Promise<{
   tab: CurrentVideoTabSnapshot | null;
   context: CurrentVideoContextResult | null;
 }> {
@@ -871,6 +1649,14 @@ async function resolveCurrentVideoLookupState(): Promise<{
     active: tab.active ?? false,
     lastAccessed: typeof tab.lastAccessed === 'number' ? tab.lastAccessed : null,
   } satisfies CurrentVideoTabSnapshot)));
+
+  if (requestTabId && requestTabId > 0) {
+    const tab = tabs.find(candidate => candidate.id === requestTabId) ?? null;
+    return {
+      tab,
+      context: tab ? resolveFreshMatchingVideoContext(tab, currentVideoContexts) : null,
+    };
+  }
 
   return resolveCurrentVideoTabState(tabs, currentVideoContexts);
 }
@@ -920,6 +1706,25 @@ function normalizeDynamicBillFeedbackScope(value: unknown): DynamicBillFeedbackS
 function requireStringParam(value: unknown, name: string): string {
   if (typeof value === 'string' && value.trim()) return value;
   throw new Error(`MISSING_${name.toUpperCase()}`);
+}
+
+function requirePositiveIntegerParam(value: unknown, name: string): number {
+  const numeric = Number(value);
+  if (Number.isInteger(numeric) && numeric > 0) return numeric;
+  throw new Error(`INVALID_${name.toUpperCase()}`);
+}
+
+function optionalNonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function optionalPositiveInteger(value: unknown): number | null {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : null;
+}
+
+function timestampOperationKind(value: unknown): CurrentVideoTimestampOperationKind | null {
+  return value === 'jump' || value === 'return' ? value : null;
 }
 
 function normalizeAiConfigParam(value: unknown): UserConfig['ai'] {

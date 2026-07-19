@@ -51,6 +51,7 @@ export function resolveFreshMatchingVideoContext(
   const context = contexts.get(tab.id);
   if (!context || context.kind !== 'video') return null;
   if (extractBvidFromUrl(tab.url) !== context.bvid) return null;
+  if (extractPageFromUrl(tab.url) !== context.currentPart.page) return null;
   if (now - context.collectedAt > CURRENT_VIDEO_CONTEXT_MAX_AGE_MS) return null;
 
   return context;
@@ -71,6 +72,16 @@ export function extractBvidFromUrl(url: string): string {
     return parsed.pathname.match(/\/video\/(BV[A-Za-z0-9]+)/)?.[1] ?? '';
   } catch {
     return '';
+  }
+}
+
+export function extractPageFromUrl(url: string): number {
+  try {
+    const parsed = new URL(url);
+    const page = Number(parsed.searchParams.get('p') ?? '1');
+    return Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+  } catch {
+    return 1;
   }
 }
 

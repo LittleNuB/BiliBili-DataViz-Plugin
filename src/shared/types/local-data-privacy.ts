@@ -25,9 +25,11 @@ export interface LocalDataPrivacySummary {
   };
   currentVideoSubtitles: {
     sourceCount: number;
+    sourceIdentityCount: number;
     segmentCount: number;
     staleSegmentCount: number;
     cachedVideoCount: number;
+    usageBytes: number;
     lastUpdatedAt: number | null;
   };
   dynamicBill: {

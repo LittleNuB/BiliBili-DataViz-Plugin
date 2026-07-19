@@ -95,17 +95,3 @@ export interface VideoKnowledgeResult {
   warnings: string[];
   limitations: string[];
 }
-
-export interface VideoKnowledgeJumpRequest {
-  nodeId: string;
-  confirmed: boolean;
-}
-
-export interface VideoKnowledgeJumpResponse {
-  ok: boolean;
-  message: string;
-  nodeId: string;
-  previousPositionSeconds: number | null;
-  targetSeconds: number | null;
-  targetPage: number | null;
-}

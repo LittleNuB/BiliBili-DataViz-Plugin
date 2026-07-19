@@ -197,6 +197,22 @@ export interface CurrentVideoTimestampJumpContentPayload {
   confidence: number;
   confidenceLabel: CurrentVideoSegmentRetrievalConfidenceLabel;
   evidencePreview: string;
+  sourceIdentityKey: string;
+  operationLeaseId: string;
+}
+
+export interface CurrentVideoTimestampReturnContentPayload {
+  contextBvid: string;
+  contextCid: number | null;
+  contextPage: number;
+  sourceIdentityKey: string;
+  operationLeaseId: string;
+}
+
+export type CurrentVideoTimestampOperationKind = 'jump' | 'return';
+
+export interface CurrentVideoTimestampOperationLeaseConsumeResult {
+  authorized: boolean;
 }
 
 export interface CurrentVideoTimestampJumpResponse {

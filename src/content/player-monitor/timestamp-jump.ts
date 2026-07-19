@@ -1,6 +1,7 @@
 import type { CurrentVideoContextResult } from '../../shared/types/current-video-context';
 import type {
   CurrentVideoTimestampJumpContentPayload,
+  CurrentVideoTimestampReturnContentPayload,
   CurrentVideoTimestampJumpResponse,
   CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
@@ -27,6 +28,7 @@ export interface CurrentVideoTimestampReturnPoint {
   url: string;
   seconds: number;
   targetSeconds: number;
+  sourceIdentityKey: string;
   savedAt: number;
   wasPaused: boolean;
 }
@@ -35,6 +37,7 @@ export async function performConfirmedTimestampJump(input: {
   payload: CurrentVideoTimestampJumpContentPayload;
   latestContext: CurrentVideoContextResult | null;
   video: TimestampJumpVideoLike | null;
+  operationLeaseAuthorized: boolean;
   now?: number;
 }): Promise<{
   response: CurrentVideoTimestampJumpResponse;
@@ -43,7 +46,9 @@ export async function performConfirmedTimestampJump(input: {
   const now = input.now ?? Date.now();
   const payload = input.payload;
 
-  const blocked = validateTimestampJump(payload, input.latestContext, input.video);
+  const blocked = input.operationLeaseAuthorized
+    ? validateTimestampJump(payload, input.latestContext, input.video)
+    : formatTimestampJumpFailureReason('context_mismatch');
   if (blocked) {
     return {
       response: {
@@ -101,6 +106,7 @@ export async function performConfirmedTimestampJump(input: {
       url: context.url,
       seconds: returnPointSeconds,
       targetSeconds: payload.targetSeconds,
+      sourceIdentityKey: payload.sourceIdentityKey,
       savedAt: now,
       wasPaused,
     },
@@ -108,9 +114,11 @@ export async function performConfirmedTimestampJump(input: {
 }
 
 export async function performTimestampReturn(input: {
+  payload: CurrentVideoTimestampReturnContentPayload | null;
   returnPoint: CurrentVideoTimestampReturnPoint | null;
   latestContext: CurrentVideoContextResult | null;
   video: TimestampJumpVideoLike | null;
+  operationLeaseAuthorized: boolean;
   now?: number;
 }): Promise<{
   response: CurrentVideoTimestampReturnResponse;
@@ -128,6 +136,32 @@ export async function performTimestampReturn(input: {
   if (now - returnPoint.savedAt > RETURN_POINT_TTL_MS) {
     return {
       response: blockedTimestampReturnResponse('返回位置已过期，请重新检索并跳转。'),
+      clearReturnPoint: true,
+    };
+  }
+
+  if (!input.operationLeaseAuthorized) {
+    return {
+      response: {
+        ok: false,
+        message: formatTimestampJumpFailureReason('context_mismatch'),
+        candidateId: returnPoint.candidateId,
+        returnPointSeconds: returnPoint.seconds,
+        targetSeconds: returnPoint.targetSeconds,
+      },
+      clearReturnPoint: true,
+    };
+  }
+
+  if (!returnRequestMatchesReturnPoint(input.payload, returnPoint)) {
+    return {
+      response: {
+        ok: false,
+        message: formatTimestampJumpFailureReason('context_mismatch'),
+        candidateId: returnPoint.candidateId,
+        returnPointSeconds: returnPoint.seconds,
+        targetSeconds: returnPoint.targetSeconds,
+      },
       clearReturnPoint: true,
     };
   }
@@ -180,6 +214,12 @@ function validateTimestampJump(
   if (!payload.confirmed) {
     return formatTimestampJumpFailureReason('confirmation_required');
   }
+  if (typeof payload.sourceIdentityKey !== 'string' || !payload.sourceIdentityKey.trim()) {
+    return formatTimestampJumpFailureReason('context_mismatch');
+  }
+  if (typeof payload.operationLeaseId !== 'string' || !payload.operationLeaseId.trim()) {
+    return formatTimestampJumpFailureReason('context_mismatch');
+  }
 
   if (!contextMatchesPayload(latestContext, payload)) {
     return formatTimestampJumpFailureReason('context_mismatch');
@@ -196,6 +236,24 @@ function contextMatchesPayload(
   if (context.bvid !== payload.contextBvid) return false;
   if (context.currentPart.page !== payload.contextPage) return false;
   if (typeof payload.contextCid === 'number' && context.cid !== payload.contextCid) {
+    return false;
+  }
+  return true;
+}
+
+function returnRequestMatchesReturnPoint(
+  payload: CurrentVideoTimestampReturnContentPayload | null,
+  returnPoint: CurrentVideoTimestampReturnPoint,
+): boolean {
+  if (!payload) return false;
+  if (typeof payload.operationLeaseId !== 'string' || !payload.operationLeaseId.trim()) return false;
+  if (payload.contextBvid !== returnPoint.bvid) return false;
+  if (payload.contextPage !== returnPoint.page) return false;
+  if (typeof payload.sourceIdentityKey !== 'string') return false;
+  if (typeof returnPoint.cid === 'number' && payload.contextCid !== returnPoint.cid) {
+    return false;
+  }
+  if (payload.sourceIdentityKey !== returnPoint.sourceIdentityKey) {
     return false;
   }
   return true;

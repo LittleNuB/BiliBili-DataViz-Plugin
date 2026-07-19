@@ -82,13 +82,13 @@ export function buildCurrentVideoSubtitleDiagnostics(
     return diagnostics({
       status: 'missing_cid',
       tone: 'blocked',
-      title: '缺少 CID，暂时不能检测字幕',
-      message: 'Bili-Bill 还没有拿到当前分 P 的 CID，因此不能安全请求 B 站字幕来源或读取字幕正文。',
+      title: '当前分 P 身份未就绪，暂时不能检测字幕',
+      message: 'Bili-Bill 还没有确认当前分 P 的完整身份，因此不能安全请求 B 站字幕来源或读取字幕正文。',
       action: '请确认视频页加载完成；如果播放器里已经开启中文 AI 字幕，请点击重新检测字幕。',
       evidenceAvailable: false,
       canRetry: true,
       detailLines: [
-        'CID 仍未知时，摘要只能使用标题、UP 主、简介、分 P 或章节等元数据兜底。',
+        '在完整分 P 身份和匹配的字幕正文就绪前，摘要、知识节点、片段检索和跳转保持不可用。',
       ],
     });
   }
@@ -135,8 +135,8 @@ export function buildCurrentVideoSubtitleDiagnostics(
   return diagnostics({
     status: 'metadata_only',
     tone: 'warning',
-    title: '仍使用元数据和简介兜底',
-    message: '当前没有可引用的字幕正文；摘要不能当作完整视频总结，片段检索和跳转也不能定位到具体字幕时间。',
+    title: '当前没有可用字幕正文',
+    message: '当前没有可引用的字幕正文，摘要、知识节点、片段检索和跳转暂不可用。',
     action: '如果这个视频提供中文 AI 字幕，请先在播放器里开启，再点击重新检测字幕。',
     evidenceAvailable: false,
     canRetry: true,
@@ -153,11 +153,11 @@ function transcriptEvidenceDiagnostics(
         status: 'stale',
         tone: 'warning',
         title: '本地字幕证据与当前视频不匹配',
-        message: '本地缓存的字幕正文不属于当前 BVID、CID、分 P 或语言，已经停止作为当前视频证据使用。',
+        message: '本地缓存的字幕正文不属于当前视频、分 P 或语言，已经停止作为当前视频证据使用。',
         action: '点击重新检测字幕，重新读取当前视频的字幕正文。',
         evidenceAvailable: false,
         canRetry: true,
-        detailLines: ['为了避免把旧视频片段当作当前视频证据，摘要、检索和跳转会继续使用元数据或简介兜底。'],
+        detailLines: ['为了避免把旧视频片段当作当前视频证据，摘要、知识节点、片段检索和跳转会保持不可用。'],
       });
     case 'empty':
       return diagnostics({
@@ -176,7 +176,7 @@ function transcriptEvidenceDiagnostics(
         tone: 'warning',
         title: '字幕正文结构异常',
         message: 'B 站返回的字幕正文结构无法稳定解析，Bili-Bill 不会把它当作可引用字幕证据。',
-        action: '可以稍后重新检测字幕；在结构恢复前，摘要和定位功能只能使用元数据或简介兜底。',
+        action: '可以稍后重新检测字幕；在结构恢复前，摘要、知识节点、片段检索和跳转保持不可用。',
         evidenceAvailable: false,
         canRetry: true,
         detailLines: [notModelFailureText()],
@@ -208,7 +208,7 @@ function transcriptEvidenceDiagnostics(
         status: 'fetch_failed',
         tone: 'warning',
         title: '字幕正文拉取失败',
-        message: '已尝试读取字幕正文，但请求失败；当前仍只能使用元数据或简介作为本地证据。',
+        message: '已尝试读取字幕正文，但请求失败；摘要、知识节点、片段检索和跳转暂不可用。',
         action: '请稍后重试，或确认当前视频页仍然打开且字幕已在播放器里开启。',
         evidenceAvailable: false,
         canRetry: true,
@@ -232,7 +232,7 @@ function transcriptEvidenceDiagnostics(
         status: 'metadata_only',
         tone: 'warning',
         title: '当前页面暂时不能读取字幕正文',
-        message: '当前上下文不满足读取字幕正文的条件；Bili-Bill 仍使用元数据或简介兜底。',
+        message: '当前上下文不满足读取字幕正文的条件；需要匹配的字幕正文后才能使用视频助手功能。',
         action: '请确认当前标签页是 B 站视频页，再重新检测字幕。',
         evidenceAvailable: false,
         canRetry: true,
@@ -242,8 +242,8 @@ function transcriptEvidenceDiagnostics(
       return diagnostics({
         status: 'metadata_only',
         tone: 'warning',
-        title: '仍使用元数据和简介兜底',
-        message: '当前没有可引用的字幕正文；摘要不能当作完整视频总结，片段检索和跳转也不能定位到具体字幕时间。',
+        title: '当前没有可用字幕正文',
+        message: '当前没有可引用的字幕正文，摘要、知识节点、片段检索和跳转暂不可用。',
         action: '如果这个视频提供中文 AI 字幕，请先在播放器里开启，再点击重新检测字幕。',
         evidenceAvailable: false,
         canRetry: true,
@@ -279,7 +279,7 @@ function subtitleProbeDiagnostics(
       action: '请确认 B 站已登录，并在播放器里开启中文 AI 字幕后重新检测。',
         evidenceAvailable: false,
         canRetry: true,
-        detailLines: ['这不是 DeepSeek 或模型失败；当前缺少的是 B 站字幕访问权限。'],
+        detailLines: ['这不是 AI 服务失败；当前缺少的是 B 站字幕访问权限。'],
       });
     case 'unavailable':
       return diagnostics({
@@ -301,7 +301,7 @@ function subtitleProbeDiagnostics(
         action: '请稍后重试，或确认当前 B 站视频页仍然打开。',
         evidenceAvailable: false,
         canRetry: true,
-        detailLines: ['当前仍使用元数据或简介兜底；不会把简介当作完整视频正文。'],
+        detailLines: ['取得并确认当前分 P 的字幕正文前，视频助手功能保持不可用。'],
       });
     case 'malformed':
       return diagnostics({
@@ -309,7 +309,7 @@ function subtitleProbeDiagnostics(
         tone: 'warning',
         title: '字幕来源结构异常',
         message: 'B 站播放器返回的字幕来源结构无法稳定识别，暂时不会继续读取字幕正文。',
-        action: '可以稍后重新检测字幕；在结构恢复前，摘要和定位功能只能使用元数据或简介兜底。',
+        action: '可以稍后重新检测字幕；在结构恢复前，摘要、知识节点、片段检索和跳转保持不可用。',
         evidenceAvailable: false,
         canRetry: true,
         detailLines: [notModelFailureText()],
@@ -318,10 +318,10 @@ function subtitleProbeDiagnostics(
       return diagnostics({
         status: probe.reason === 'missing_cid' ? 'missing_cid' : 'metadata_only',
         tone: 'warning',
-        title: probe.reason === 'missing_cid' ? '缺少 CID，暂时不能检测字幕' : '当前页面暂时不能检测字幕',
+        title: probe.reason === 'missing_cid' ? '当前分 P 身份未就绪，暂时不能检测字幕' : '当前页面暂时不能检测字幕',
         message: probe.reason === 'missing_cid'
-          ? 'Bili-Bill 还没有拿到当前分 P 的 CID，因此不能安全请求 B 站字幕来源。'
-          : '当前页面不满足字幕检测条件；仍使用元数据或简介兜底。',
+          ? 'Bili-Bill 还没有确认当前分 P 的完整身份，因此不能安全请求 B 站字幕来源。'
+          : '当前页面不满足字幕检测条件；视频助手功能暂不可用。',
         action: '请确认视频页加载完成，并在播放器里开启中文 AI 字幕后重新检测字幕。',
         evidenceAvailable: false,
         canRetry: true,
@@ -349,7 +349,7 @@ function featureGates(evidenceAvailable: boolean): CurrentVideoSubtitleFeatureGa
   }
 
   return [
-    { label: '摘要', available: false, message: '不可用：没有字幕正文时只能展示元数据或简介说明，不能完整总结。' },
+    { label: '摘要', available: false, message: '不可用：需要先取得并确认当前分 P 的字幕正文。' },
     { label: '知识节点', available: false, message: '不可用：没有字幕正文时不会生成推测时间点。' },
     { label: '片段检索', available: false, message: '不可用：没有字幕正文时不能定位具体片段。' },
     { label: '手动跳转', available: false, message: '不可用：没有可定位片段时不会提供跳转目标。' },
@@ -385,5 +385,5 @@ function formatDuration(seconds: number): string {
 }
 
 function notModelFailureText(): string {
-  return '这不是 DeepSeek 或模型失败；当前缺少的是可引用的当前视频字幕正文。';
+  return '这不是 AI 服务失败；当前缺少的是可引用的当前视频字幕正文。';
 }

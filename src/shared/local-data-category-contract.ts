@@ -28,6 +28,7 @@ export interface LocalDataClearedCounts {
 export interface LocalDataCategoryUsage {
   count: number;
   usageBytes: number;
+  details?: LocalDataClearedCounts;
 }
 
 export interface LocalDataCategoryClearResult {
