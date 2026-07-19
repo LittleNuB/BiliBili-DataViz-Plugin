@@ -524,6 +524,20 @@ def run_loaded_storage_change_invalidation_flow(page):
     assert_no_horizontal_overflow(page)
 
 
+def run_fail_closed_page_knowledge_copy(page):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&savedSource=current&knowledgeNoEvidence=1")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+    page.get_by_text("展开助手").click()
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    page.get_by_role("button", name="刷新节点").click()
+    expect(page.get_by_text("当前没有可引用的字幕正文；知识节点暂不可用。")).to_be_visible()
+    expect(page.get_by_text("简介辅助", exact=True)).to_have_count(0)
+    expect(page.get_by_text("分 P / 章节辅助", exact=True)).to_have_count(0)
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
 def run_navigation_epoch_flow(page, mode):
     page.route("**/*", route_mock)
     query = "deferInitialContext=1" if mode == "collect" else "deferVideoDetection=1"
@@ -1072,6 +1086,11 @@ def main():
             run_loaded_storage_change_invalidation_flow(storage_change)
             assert not storage_change_errors, "\n".join(storage_change_errors)
             storage_change.close()
+
+            knowledge_blocked, knowledge_blocked_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_fail_closed_page_knowledge_copy(knowledge_blocked)
+            assert not knowledge_blocked_errors, "\n".join(knowledge_blocked_errors)
+            knowledge_blocked.close()
 
             deferred_collect, deferred_collect_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
             run_navigation_epoch_flow(deferred_collect, "collect")

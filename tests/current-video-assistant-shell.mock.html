@@ -361,6 +361,24 @@
           warnings: subtitleCached ? ["transcript_nodes_generated"] : ["transcript_probe_pending"],
         };
 
+        if (mockParams.get("knowledgeNoEvidence") === "1") {
+          return {
+            ...base,
+            sourceState: {
+              metadata: true,
+              description: true,
+              pages: true,
+              chapters: true,
+              transcript: false,
+              transcriptEvidence: false,
+              contentText: false,
+            },
+            transcriptEvidence: null,
+            nodes: [],
+            limitations: ["当前没有可引用的字幕正文，知识节点暂不可用。"],
+          };
+        }
+
         if (!subtitleCached) {
           return {
             ...base,

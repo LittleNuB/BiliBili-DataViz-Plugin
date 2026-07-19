@@ -1775,15 +1775,17 @@ function appendVideoKnowledge(parent: HTMLElement, context: CurrentVideoContext)
   );
   status.style.color = transcriptNodeCount > 0 ? '#a0e7a0' : '#ffcf8a';
 
+  const nodes = knowledge.nodes.slice(0, 5);
   const meta = document.createElement('div');
   meta.className = 'bdc-assistant-candidate-meta';
   appendBadge(meta, transcriptNodeCount > 0 ? `字幕节点 ${transcriptNodeCount} 条` : '暂无字幕节点');
-  appendBadge(meta, knowledge.sourceState.transcriptEvidence ? '字幕正文已缓存' : '字幕正文未缓存');
-  if (knowledge.sourceState.description) appendBadge(meta, '简介辅助');
-  if (knowledge.sourceState.pages || knowledge.sourceState.chapters) appendBadge(meta, '分 P / 章节辅助');
+  appendBadge(meta, knowledge.transcriptEvidence?.active ? '字幕正文已缓存' : '字幕正文未缓存');
+  if (nodes.some(node => node.source === 'description')) appendBadge(meta, '简介辅助');
+  if (nodes.some(node => node.source === 'page' || node.source === 'chapter')) {
+    appendBadge(meta, '分 P / 章节辅助');
+  }
   block.appendChild(meta);
 
-  const nodes = knowledge.nodes.slice(0, 5);
   if (nodes.length === 0) {
     appendText(block, 'div', 'bdc-assistant-subtitle-detail', '当前没有足够安全的当前视频知识节点候选。');
     appendVideoKnowledgeLimitations(block, knowledge);
