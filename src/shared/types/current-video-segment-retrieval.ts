@@ -199,6 +199,7 @@ export interface CurrentVideoTimestampJumpContentPayload {
   evidencePreview: string;
   sourceIdentityKey: string;
   operationLeaseId: string;
+  returnAuthorizationKind: CurrentVideoTimestampOperationAuthorizationKind;
 }
 
 export interface CurrentVideoTimestampReturnContentPayload {
@@ -210,6 +211,7 @@ export interface CurrentVideoTimestampReturnContentPayload {
 }
 
 export type CurrentVideoTimestampOperationKind = 'jump' | 'return';
+export type CurrentVideoTimestampOperationAuthorizationKind = 'primary_text' | 'subtitle_view';
 
 export interface CurrentVideoTimestampOperationLeaseConsumeResult {
   authorized: boolean;

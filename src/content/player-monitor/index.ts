@@ -11,6 +11,7 @@ import { detectVideo } from './video-detector';
 import type { BiliVizContentMessage } from '../../shared/types/messages';
 import type {
   CurrentVideoTimestampJumpContentPayload,
+  CurrentVideoTimestampOperationAuthorizationKind,
   CurrentVideoTimestampOperationKind,
   CurrentVideoTimestampOperationLeaseConsumeResult,
   CurrentVideoTimestampReturnContentPayload,
@@ -232,7 +233,10 @@ async function handleCurrentVideoTimestampJump(
   }
   if (result.returnPoint) {
     currentVideoTimestampReturnPoint = result.returnPoint;
-    showReturnToast(result.response.returnPointSeconds, requestCurrentVideoTimestampReturnFromBackground);
+    showReturnToast(
+      result.response.returnPointSeconds,
+      () => requestCurrentVideoTimestampReturnFromBackground(payload.returnAuthorizationKind),
+    );
   }
   return result.response;
 }
@@ -292,7 +296,9 @@ async function consumeCurrentVideoTimestampOperationLease(
   }
 }
 
-async function requestCurrentVideoTimestampReturnFromBackground(): Promise<CurrentVideoTimestampReturnResponse> {
+async function requestCurrentVideoTimestampReturnFromBackground(
+  authorizationKind: CurrentVideoTimestampOperationAuthorizationKind,
+): Promise<CurrentVideoTimestampReturnResponse> {
   const returnPoint = currentVideoTimestampReturnPoint;
   if (!returnPoint?.sourceIdentityKey) {
     return {
@@ -305,12 +311,17 @@ async function requestCurrentVideoTimestampReturnFromBackground(): Promise<Curre
   }
 
   try {
+    const subtitleView = authorizationKind === 'subtitle_view';
     const response = await chrome.runtime.sendMessage({
-      action: 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP',
-      params: {
-        primaryTextSelectionsReady: true,
-        selectedSourceIdentityKey: returnPoint.sourceIdentityKey,
-      },
+      action: subtitleView
+        ? 'RETURN_CURRENT_VIDEO_SUBTITLE_JUMP'
+        : 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP',
+      params: subtitleView
+        ? { sourceIdentityKey: returnPoint.sourceIdentityKey }
+        : {
+            primaryTextSelectionsReady: true,
+            selectedSourceIdentityKey: returnPoint.sourceIdentityKey,
+          },
     }) as { success?: boolean; data?: CurrentVideoTimestampReturnResponse };
     if (response?.success && response.data) return response.data;
   } catch {

@@ -1,8 +1,12 @@
-import type { CurrentVideoTimestampOperationKind } from '../shared/types/current-video-segment-retrieval.ts';
+import type {
+  CurrentVideoTimestampOperationAuthorizationKind,
+  CurrentVideoTimestampOperationKind,
+} from '../shared/types/current-video-segment-retrieval.ts';
 
 export interface CurrentVideoTimestampOperationLeaseBinding {
   tabId: number;
   operationKind: CurrentVideoTimestampOperationKind;
+  authorizationKind?: CurrentVideoTimestampOperationAuthorizationKind;
   bvid: string;
   cid: number;
   page: number;
@@ -47,6 +51,7 @@ export function issueCurrentVideoTimestampOperationLease(
   const leaseId = createLeaseId(now);
   operationLeases.set(leaseId, {
     ...binding,
+    authorizationKind: binding.authorizationKind ?? 'primary_text',
     leaseId,
     expiresAt: now + CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE_TTL_MS,
   });
@@ -81,6 +86,7 @@ export function consumeCurrentVideoTimestampOperationLease(
     cid: lease.cid,
     page: lease.page,
     sourceIdentityKey: lease.sourceIdentityKey,
+    authorizationKind: lease.authorizationKind ?? 'primary_text',
     selectionGeneration: lease.selectionGeneration,
     transcriptClearGeneration: lease.transcriptClearGeneration,
   };

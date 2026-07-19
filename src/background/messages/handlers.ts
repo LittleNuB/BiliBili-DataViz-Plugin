@@ -14,6 +14,11 @@ import type {
   CurrentVideoTimestampOperationLeaseConsumeResult,
   CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
+import type {
+  CurrentVideoSubtitleLine,
+  CurrentVideoSubtitleViewSourcesResult,
+  CurrentVideoSubtitleViewingSource,
+} from '../../shared/current-video-subtitle-view.ts';
 import type { CurrentVideoRelatedFavoritesResponse } from '../../shared/types/current-video-related-favorites';
 import type { CurrentVideoSummaryHighlightsResult } from '../../shared/types/current-video-summary';
 import type { VideoKnowledgeResult } from '../../shared/types/video-knowledge';
@@ -78,6 +83,11 @@ import {
   blockedTimestampReturnResponse,
   formatTimestampJumpFailureReason,
 } from '../../shared/current-video-timestamp-jump';
+import {
+  buildBilibiliSubtitleViewingSource,
+  buildCurrentVideoSubtitleJumpPreview,
+  currentVideoSubtitleContextKey,
+} from '../../shared/current-video-subtitle-view.ts';
 import { buildVideoKnowledgeResult } from '../../shared/video-knowledge';
 import {
   getQuickStats,
@@ -133,6 +143,7 @@ import {
   undoDynamicBillCreatorLessReminder,
 } from '../storage/dynamic-bill-repo';
 import {
+  getCurrentVideoActiveTranscriptSourceIdentityKeys,
   getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys,
   getCurrentVideoTranscriptEvidenceState,
   getCurrentVideoTranscriptSegments,
@@ -697,6 +708,8 @@ export async function handleRequest<T>(
         }) as T,
       };
     }
+    case 'GET_CURRENT_VIDEO_SUBTITLE_VIEW_SOURCES':
+      return { success: true, data: await getCurrentVideoSubtitleViewSources(request.params, requestTabId) as T };
     case 'GET_CURRENT_VIDEO_RELATED_FAVORITES': {
       const context = await getCurrentVideoContextForActiveTab();
       return {
@@ -708,8 +721,12 @@ export async function handleRequest<T>(
       return { success: true, data: await requestCurrentVideoSegmentJump(request.params, requestTabId) as T };
     case 'REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP':
       return { success: true, data: await requestCurrentVideoHighlightJump(request.params, requestTabId) as T };
+    case 'REQUEST_CURRENT_VIDEO_SUBTITLE_JUMP':
+      return { success: true, data: await requestCurrentVideoSubtitleJump(request.params, requestTabId) as T };
     case 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP':
       return { success: true, data: await returnCurrentVideoSegmentJump(request.params, requestTabId) as T };
+    case 'RETURN_CURRENT_VIDEO_SUBTITLE_JUMP':
+      return { success: true, data: await returnCurrentVideoSubtitleJump(request.params, requestTabId) as T };
     case 'CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE':
       return {
         success: true,
@@ -891,6 +908,182 @@ async function getCurrentVideoRelatedFavorites(
   };
 }
 
+async function getCurrentVideoSubtitleViewSources(
+  params: Record<string, unknown> | undefined,
+  requestTabId: number | null,
+): Promise<CurrentVideoSubtitleViewSourcesResult> {
+  const lookup = await getCurrentVideoSubtitleViewLookup(params, requestTabId);
+  return await buildCurrentVideoSubtitleViewSourcesForLookup(lookup);
+}
+
+async function requestCurrentVideoSubtitleJump(
+  params: Record<string, unknown> | undefined,
+  requestTabId: number | null,
+): Promise<CurrentVideoTimestampJumpResponse> {
+  const lineId = requireStringParam(params?.lineId, 'lineId');
+  const lineBindingKey = requireStringParam(params?.lineBindingKey, 'lineBindingKey');
+  const sourceIdentityKey = requireStringParam(params?.sourceIdentityKey, 'sourceIdentityKey');
+  const confirmed = params?.confirmed === true;
+  if (!confirmed) {
+    return blockedTimestampJumpResponse(
+      lineId,
+      'confirmation_required',
+      formatTimestampJumpFailureReason('confirmation_required'),
+    );
+  }
+
+  const lookup = await getCurrentVideoSubtitleViewLookup(params, requestTabId);
+  const tabId = lookup.tab?.id ?? 0;
+  if (!lookup.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(lookup.tab.url) || lookup.context.kind !== 'video') {
+    return blockedTimestampJumpResponse(
+      lineId,
+      'no_context',
+      formatTimestampJumpFailureReason('no_context'),
+    );
+  }
+  const context = lookup.context;
+  const contextCid = context.cid;
+  if (!contextCid) {
+    return blockedTimestampJumpResponse(
+      lineId,
+      'no_context',
+      formatTimestampJumpFailureReason('no_context'),
+    );
+  }
+
+  const source = await getCurrentVideoSubtitleViewingSourceByIdentity(lookup, sourceIdentityKey);
+  const line = source?.lines.find(item =>
+    item.lineId === lineId
+    && item.lineBindingKey === lineBindingKey
+    && subtitleLineMatchesCurrentContext(item, context),
+  ) ?? null;
+  if (!source || !line) {
+    return blockedTimestampJumpResponse(
+      lineId,
+      'candidate_not_found',
+      '当前字幕来源或字幕行已变化，请重新打开预览后再跳转。',
+    );
+  }
+
+  const preview = buildCurrentVideoSubtitleJumpPreview(source, line);
+  if (!preview.canJump || preview.targetSeconds === null || preview.targetTimeLabel === null) {
+    return blockedTimestampJumpResponse(
+      lineId,
+      'invalid_timestamp',
+      preview.message,
+    );
+  }
+
+  const transcriptClear = getCurrentVideoTranscriptClearState();
+  if (transcriptClear.clearing || !canUseCurrentVideoTranscriptClearGeneration(transcriptClear.generation)) {
+    return blockedTimestampJumpResponse(
+      lineId,
+      'stale_context',
+      '字幕缓存正在更新，请稍后重新打开预览。',
+    );
+  }
+  const selection = getCurrentVideoPrimaryTextSelectionMutationState();
+  const operationLeaseId = issueCurrentVideoTimestampOperationLease({
+    tabId,
+    operationKind: 'jump',
+    authorizationKind: 'subtitle_view',
+    bvid: context.bvid,
+    cid: contextCid,
+    page: context.currentPart.page,
+    sourceIdentityKey: source.identity.sourceIdentityKey,
+    selectionGeneration: selection.generation,
+    transcriptClearGeneration: transcriptClear.generation,
+  });
+
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, {
+      action: 'CURRENT_VIDEO_TIMESTAMP_JUMP',
+      payload: {
+        candidateId: line.lineId,
+        confirmed: true,
+        contextBvid: context.bvid,
+        contextCid,
+        contextPage: context.currentPart.page,
+        contextUrl: context.url,
+        contextCollectedAt: context.collectedAt,
+        targetSeconds: preview.targetSeconds,
+        targetTimeLabel: preview.targetTimeLabel,
+        sourceLabel: source.sourceLabel,
+        confidence: 1,
+        confidenceLabel: '高',
+        evidencePreview: line.text,
+        sourceIdentityKey: source.identity.sourceIdentityKey,
+        operationLeaseId,
+        returnAuthorizationKind: 'subtitle_view',
+      },
+    });
+    return response as CurrentVideoTimestampJumpResponse;
+  } catch {
+    return blockedTimestampJumpResponse(
+      lineId,
+      'player_unavailable',
+      formatTimestampJumpFailureReason('player_unavailable'),
+    );
+  } finally {
+    retireCurrentVideoTimestampOperationLease(operationLeaseId);
+  }
+}
+
+async function returnCurrentVideoSubtitleJump(
+  params: Record<string, unknown> | undefined,
+  requestTabId: number | null,
+): Promise<CurrentVideoTimestampReturnResponse> {
+  const sourceIdentityKey = requireStringParam(params?.sourceIdentityKey, 'sourceIdentityKey');
+  const lookup = await getCurrentVideoSubtitleViewLookup(params, requestTabId);
+  const tabId = lookup.tab?.id ?? 0;
+  if (!lookup.tab?.url || tabId <= 0 || !isBilibiliVideoUrl(lookup.tab.url) || lookup.context.kind !== 'video') {
+    return blockedTimestampReturnResponse(formatTimestampJumpFailureReason('no_context'));
+  }
+  if (!lookup.context.cid) {
+    return blockedTimestampReturnResponse(formatTimestampJumpFailureReason('no_context'));
+  }
+
+  const source = await getCurrentVideoSubtitleViewingSourceByIdentity(lookup, sourceIdentityKey);
+  if (!source) {
+    return blockedTimestampReturnResponse('当前字幕来源已变化，请重新打开字幕页后再返回。');
+  }
+
+  const transcriptClear = getCurrentVideoTranscriptClearState();
+  if (transcriptClear.clearing || !canUseCurrentVideoTranscriptClearGeneration(transcriptClear.generation)) {
+    return blockedTimestampReturnResponse('字幕缓存正在更新，请稍后重试。');
+  }
+  const selection = getCurrentVideoPrimaryTextSelectionMutationState();
+  const operationLeaseId = issueCurrentVideoTimestampOperationLease({
+    tabId,
+    operationKind: 'return',
+    authorizationKind: 'subtitle_view',
+    bvid: lookup.context.bvid,
+    cid: lookup.context.cid,
+    page: lookup.context.currentPart.page,
+    sourceIdentityKey: source.identity.sourceIdentityKey,
+    selectionGeneration: selection.generation,
+    transcriptClearGeneration: transcriptClear.generation,
+  });
+
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, {
+      action: 'CURRENT_VIDEO_TIMESTAMP_RETURN',
+      payload: {
+        contextBvid: lookup.context.bvid,
+        contextCid: lookup.context.cid,
+        contextPage: lookup.context.currentPart.page,
+        sourceIdentityKey: source.identity.sourceIdentityKey,
+        operationLeaseId,
+      },
+    });
+    return response as CurrentVideoTimestampReturnResponse;
+  } catch {
+    return blockedTimestampReturnResponse(formatTimestampJumpFailureReason('player_unavailable'));
+  } finally {
+    retireCurrentVideoTimestampOperationLease(operationLeaseId);
+  }
+}
+
 async function requestCurrentVideoSegmentJump(
   params: Record<string, unknown> | undefined,
   requestTabId: number | null,
@@ -1019,6 +1212,7 @@ async function requestCurrentVideoSegmentJump(
         evidencePreview: preview.evidencePreview,
         sourceIdentityKey: operationGuard.sourceIdentityKey,
         operationLeaseId,
+        returnAuthorizationKind: 'primary_text',
       },
     });
     return response as CurrentVideoTimestampJumpResponse;
@@ -1158,6 +1352,7 @@ async function requestCurrentVideoHighlightJump(
         evidencePreview: highlight.description,
         sourceIdentityKey: operationGuard.sourceIdentityKey,
         operationLeaseId,
+        returnAuthorizationKind: 'primary_text',
       },
     });
     return response as CurrentVideoTimestampJumpResponse;
@@ -1259,6 +1454,12 @@ async function consumeCurrentVideoTimestampLease(
   });
   if (!binding) return { authorized: false };
 
+  if (binding.authorizationKind === 'subtitle_view') {
+    return {
+      authorized: await currentVideoSubtitleSourceStillAvailable(binding, requestTabId),
+    };
+  }
+
   const issuedGuard: CurrentVideoPrimaryTextAuthorizationGuard = {
     bvid: binding.bvid,
     cid: binding.cid,
@@ -1306,6 +1507,205 @@ async function getCurrentVideoContextForActiveTab(
   requestTabId: number | null = null,
 ): Promise<CurrentVideoContextResult> {
   return (await getCurrentVideoContextLookup(options, requestTabId)).context;
+}
+
+async function getCurrentVideoSubtitleViewLookup(
+  params: Record<string, unknown> | undefined,
+  requestTabId: number | null = null,
+): Promise<CurrentVideoContextLookupResult> {
+  const lookup = await getRawCurrentVideoContextLookup(currentVideoLookupOptions(params), requestTabId);
+  if (lookup.context.kind !== 'video') return lookup;
+  return {
+    ...lookup,
+    context: await enrichCurrentVideoContextWithTranscriptEvidence(lookup.context, lookup.temporaryOwner),
+  };
+}
+
+async function buildCurrentVideoSubtitleViewSourcesForLookup(
+  lookup: CurrentVideoContextLookupResult,
+): Promise<CurrentVideoSubtitleViewSourcesResult> {
+  const now = Date.now();
+  const context = lookup.context;
+  if (context.kind !== 'video') {
+    return {
+      status: 'no_context',
+      message: '当前没有可用的视频页，请在 B 站视频页使用字幕。',
+      checkedAt: now,
+      contextKey: null,
+      title: null,
+      partTitle: null,
+      durationSeconds: null,
+      sources: [],
+    };
+  }
+
+  const base = {
+    checkedAt: now,
+    contextKey: currentVideoSubtitleContextKey(context),
+    title: context.title,
+    partTitle: context.currentPart.title,
+    durationSeconds: context.durationSeconds,
+  };
+  if (!context.cid) {
+    return {
+      ...base,
+      status: 'no_context',
+      message: '当前分 P 身份还不完整，暂时不能读取字幕全文。',
+      sources: [],
+    };
+  }
+
+  const evidence = context.transcriptEvidence;
+  if (evidence?.active && evidence.sourceIdentityKey && evidence.sourceHash) {
+    const transcriptClear = getCurrentVideoTranscriptClearState();
+    const segments = await getCurrentVideoTranscriptSegments({
+      bvid: context.bvid,
+      cid: context.cid,
+      page: context.currentPart.page,
+      language: evidence.language,
+      sourceIdentityKey: evidence.sourceIdentityKey,
+      sourceHash: evidence.sourceHash,
+    }, lookup.temporaryOwner, {
+      canUseEvidence: () =>
+        !transcriptClear.clearing
+        && canUseCurrentVideoTranscriptClearGeneration(transcriptClear.generation),
+    });
+    const source = buildBilibiliSubtitleViewingSource({
+      bvid: context.bvid,
+      cid: context.cid,
+      page: context.currentPart.page,
+      language: evidence.language,
+      sourceType: evidence.sourceType,
+      temporary: evidence.temporary === true,
+      segments,
+    });
+    if (source) {
+      return {
+        ...base,
+        status: 'ready',
+        message: `已读取 ${source.sourceLabel} ${source.lineCount} 条。`,
+        sources: [source],
+      };
+    }
+    return {
+      ...base,
+      status: 'empty',
+      message: '字幕来源存在，但没有可展示的有效字幕行。',
+      sources: [],
+    };
+  }
+
+  const status = subtitleViewingUnavailableStatus(context);
+  return {
+    ...base,
+    ...status,
+    sources: [],
+  };
+}
+
+async function getCurrentVideoSubtitleViewingSourceByIdentity(
+  lookup: CurrentVideoContextLookupResult,
+  sourceIdentityKey: string,
+): Promise<CurrentVideoSubtitleViewingSource | null> {
+  const result = await buildCurrentVideoSubtitleViewSourcesForLookup(lookup);
+  return result.sources.find(source =>
+    source.identity.sourceIdentityKey === sourceIdentityKey
+    && source.lineCount > 0,
+  ) ?? null;
+}
+
+async function currentVideoSubtitleSourceStillAvailable(
+  binding: {
+    bvid: string;
+    cid: number;
+    page: number;
+    sourceIdentityKey: string;
+    transcriptClearGeneration: number;
+  },
+  requestTabId: number,
+): Promise<boolean> {
+  if (!canUseCurrentVideoTranscriptClearGeneration(binding.transcriptClearGeneration)) {
+    return false;
+  }
+  const lookup = await getCurrentVideoSubtitleViewLookup(undefined, requestTabId);
+  if (
+    lookup.context.kind !== 'video'
+    || lookup.context.bvid !== binding.bvid
+    || lookup.context.cid !== binding.cid
+    || lookup.context.currentPart.page !== binding.page
+  ) {
+    return false;
+  }
+  const activeKeys = await getCurrentVideoActiveTranscriptSourceIdentityKeys({
+    bvid: binding.bvid,
+    cid: binding.cid,
+    page: binding.page,
+  }, lookup.temporaryOwner);
+  if (!activeKeys.includes(binding.sourceIdentityKey)) return false;
+  return Boolean(await getCurrentVideoSubtitleViewingSourceByIdentity(lookup, binding.sourceIdentityKey));
+}
+
+function subtitleViewingUnavailableStatus(
+  context: CurrentVideoContext,
+): Pick<CurrentVideoSubtitleViewSourcesResult, 'status' | 'message'> {
+  const evidence = context.transcriptEvidence;
+  if (!evidence) {
+    return {
+      status: 'detecting',
+      message: '正在确认当前视频是否已有可读字幕全文。',
+    };
+  }
+  if (evidence.status === 'empty') {
+    return {
+      status: 'empty',
+      message: '已找到字幕来源，但没有返回可展示的字幕行。',
+    };
+  }
+  if (evidence.status === 'malformed') {
+    return {
+      status: 'malformed',
+      message: '字幕正文结构异常，暂时不能展示或导出。',
+    };
+  }
+  if (evidence.status === 'stale') {
+    return {
+      status: 'unavailable',
+      message: '本地字幕证据与当前视频或分 P 不匹配，请重新检测字幕。',
+    };
+  }
+  if (
+    context.subtitleProbe?.available
+    || context.sources.transcript === 'available'
+    || evidence.status === 'track_unavailable'
+    || evidence.status === 'missing'
+  ) {
+    return {
+      status: 'requires_user_subtitle',
+      message: 'B站字幕需要先在播放器里手动开启中文 AI 字幕；已完成的本地字幕稿只有存在时才会显示。',
+    };
+  }
+  if (evidence.status === 'login_required') {
+    return {
+      status: 'unavailable',
+      message: '字幕需要当前浏览器会话具备访问权限；Bili-Bill 不会读取本地敏感文件。',
+    };
+  }
+  return {
+    status: 'unavailable',
+    message: '当前没有可展示的字幕全文。',
+  };
+}
+
+function subtitleLineMatchesCurrentContext(
+  line: CurrentVideoSubtitleLine,
+  context: CurrentVideoContext,
+): boolean {
+  return Boolean(
+    context.cid
+    && line.bvid === context.bvid
+    && line.cid === context.cid
+    && line.page === context.currentPart.page,
+  );
 }
 
 async function getCurrentVideoContextForActiveTabWithSelection(
