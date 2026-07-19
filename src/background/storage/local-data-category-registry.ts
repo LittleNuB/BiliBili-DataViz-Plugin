@@ -59,6 +59,9 @@ export type LocalDataCategoryTableName =
   | 'dynamicBillExplanations'
   | 'dynamicBillFeedback'
   | 'dynamicBillCreatorPauses'
+  | 'dynamicBillFeedbackActions'
+  | 'dynamicBillCreatorFeedbackCounts'
+  | 'dynamicBillCreatorReviewPrompts'
   | 'dynamicBillRotationRecords';
 
 export interface LocalDataCategoryTable {
@@ -104,6 +107,9 @@ export function getRegisteredLocalDataCategories(): LocalDataCategoryRegistratio
       dynamicBillExplanations: db.dynamicBillExplanations,
       dynamicBillFeedback: db.dynamicBillFeedback,
       dynamicBillCreatorPauses: db.dynamicBillCreatorPauses,
+      dynamicBillFeedbackActions: db.dynamicBillFeedbackActions,
+      dynamicBillCreatorFeedbackCounts: db.dynamicBillCreatorFeedbackCounts,
+      dynamicBillCreatorReviewPrompts: db.dynamicBillCreatorReviewPrompts,
       dynamicBillRotationRecords: db.dynamicBillRotationRecords,
     },
     storage: {
@@ -144,6 +150,9 @@ export function createRegisteredLocalDataCategories(
         tables.dynamicBillItems,
         tables.dynamicBillExplanations,
         tables.dynamicBillCreatorPauses,
+        tables.dynamicBillFeedbackActions,
+        tables.dynamicBillCreatorFeedbackCounts,
+        tables.dynamicBillCreatorReviewPrompts,
         tables.dynamicBillRotationRecords,
       ],
       clearOnlyTables: [tables.dynamicBillFeedback],
@@ -154,7 +163,10 @@ export function createRegisteredLocalDataCategories(
       dynamicBillItems: counts[2] ?? 0,
       dynamicBillExplanations: counts[3] ?? 0,
       dynamicBillCreatorPauses: counts[4] ?? 0,
-      dynamicBillRotationRecords: counts[5] ?? 0,
+      dynamicBillFeedbackActions: counts[5] ?? 0,
+      dynamicBillCreatorFeedbackCounts: counts[6] ?? 0,
+      dynamicBillCreatorReviewPrompts: counts[7] ?? 0,
+      dynamicBillRotationRecords: counts[8] ?? 0,
     })),
     blindBoxDrawHistoryCategory(dependencies),
     storageCategory(

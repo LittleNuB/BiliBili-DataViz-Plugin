@@ -752,6 +752,9 @@ test('dynamic bill clear counts only 0.13 data and removes hidden legacy feedbac
     dynamicBillItems: 1,
     dynamicBillExplanations: 1,
     dynamicBillCreatorPauses: 1,
+    dynamicBillFeedbackActions: 0,
+    dynamicBillCreatorFeedbackCounts: 0,
+    dynamicBillCreatorReviewPrompts: 0,
     dynamicBillRotationRecords: 1,
   });
   assert.deepEqual(summary, {
@@ -760,6 +763,10 @@ test('dynamic bill clear counts only 0.13 data and removes hidden legacy feedbac
     billItemCount: 0,
     rotationRecordCount: 0,
     creatorPauseCount: 0,
+    feedbackActionCount: 0,
+    creatorFeedbackCount: 0,
+    creatorReviewPromptCount: 0,
+    activeCreatorPauses: [],
     unopenedItems: 0,
     openedItems: 0,
     consumedItems: 0,
@@ -852,6 +859,9 @@ test('registered dynamic bill lifecycle uses real Dexie tables and fails closed 
       dynamicBillItems: 1,
       dynamicBillExplanations: 1,
       dynamicBillCreatorPauses: 1,
+      dynamicBillFeedbackActions: 0,
+      dynamicBillCreatorFeedbackCounts: 0,
+      dynamicBillCreatorReviewPrompts: 0,
       dynamicBillRotationRecords: 1,
     });
     assert.deepEqual(successfulLifecycle.after, {
@@ -866,9 +876,12 @@ test('registered dynamic bill lifecycle uses real Dexie tables and fails closed 
     db.dynamicBillItems.count(),
     db.dynamicBillExplanations.count(),
     db.dynamicBillCreatorPauses.count(),
+    db.dynamicBillFeedbackActions.count(),
+    db.dynamicBillCreatorFeedbackCounts.count(),
+    db.dynamicBillCreatorReviewPrompts.count(),
     db.dynamicBillRotationRecords.count(),
     db.dynamicBillFeedback.count(),
-  ]), [0, 0, 0, 0, 0, 0, 0]);
+  ]), [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
   assert.equal(await db.dynamicBillMigrations.count(), 1);
   assert.equal(storageData.has('dynamicBillSyncState'), false);
   assert.equal(storageData.has('dynamicBillFilterPreference'), false);

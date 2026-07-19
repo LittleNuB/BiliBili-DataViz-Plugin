@@ -1470,9 +1470,9 @@ test('Dexie 0.12 subtitle cache upgrade clears only transcript tables transactio
   assert.deepEqual(tables.favoriteItems, [{ id: 2 }]);
 });
 
-test('real Dexie v9 to v10 upgrade clears only transcript tables and preserves unrelated data', async () => {
+test('real Dexie v9 to v11 upgrade clears legacy transcript rows and adds feedback tables', async () => {
   const { BiliAnalyticsDB } = await import('../src/background/storage/db.ts');
-  const dbName = uniqueTestDbName('v9-v10');
+  const dbName = uniqueTestDbName('v9-v11');
   const legacy = new Dexie(dbName);
   legacy.version(9).stores(dexieV9Stores());
   await legacy.open();
@@ -1495,7 +1495,7 @@ test('real Dexie v9 to v10 upgrade clears only transcript tables and preserves u
   try {
     await upgraded.open();
 
-    assert.equal(upgraded.verno, 10);
+    assert.equal(upgraded.verno, 11);
     assert.equal(await upgraded.currentVideoTranscriptSources.count(), 0);
     assert.equal(await upgraded.currentVideoTranscriptSegments.count(), 0);
     assert.equal((await upgraded.watchHistory.where('bvid').equals('BV1MigrationKeep').first())?.title, 'Kept history BV1MigrationKeep');
@@ -1503,6 +1503,9 @@ test('real Dexie v9 to v10 upgrade clears only transcript tables and preserves u
     assert.equal((await upgraded.dynamicBillItems.where('billKey').equals('migration-dynamic-bill').first())?.status, 'unopened');
     assert.equal(await upgraded.currentVideoTranscriptSources.where('sourceIdentityKey').equals('missing').count(), 0);
     assert.equal(await upgraded.currentVideoTranscriptSegments.where('sourceIdentityKey').equals('missing').count(), 0);
+    assert.equal(await upgraded.dynamicBillFeedbackActions.count(), 0);
+    assert.equal(await upgraded.dynamicBillCreatorFeedbackCounts.count(), 0);
+    assert.equal(await upgraded.dynamicBillCreatorReviewPrompts.count(), 0);
   } finally {
     upgraded.close();
     await Dexie.delete(dbName);

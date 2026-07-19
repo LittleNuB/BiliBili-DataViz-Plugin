@@ -43,7 +43,7 @@ test('settings local data cards expose natural Chinese summaries only', () => {
   assertCleanUserCopy(copy);
 });
 
-test('settings page does not present Dynamic Bill pause or rotation detail', async () => {
+test('settings page keeps Dynamic Bill storage internals out of ordinary copy', async () => {
   const source = await readFile(
     new URL('../dashboard/modules/settings/SettingsPage.tsx', import.meta.url),
     'utf8',
@@ -125,7 +125,7 @@ test('registered categories collect usage, clear independently, and read back th
   const categories = createRegisteredLocalDataCategories(dependencies);
   const usageBefore = await Promise.all(categories.map(category => category.collectUsage()));
 
-  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 1, 6, 2, 3]);
+  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 1, 9, 2, 3]);
   assert.ok(usageBefore.every(usage => usage.usageBytes > 0));
   assert.equal(usageBefore[2].details?.currentVideoSubtitleSources, 1);
   assert.equal(usageBefore[2].details?.currentVideoSubtitleSegments, 1);
@@ -157,6 +157,9 @@ test('registered categories collect usage, clear independently, and read back th
     assert.ok(Object.keys(clearResult.cleared).length > 0);
     if (category.id === 'dynamicBill') {
       assert.equal(clearResult.cleared.dynamicBillCreatorPauses, 1);
+      assert.equal(clearResult.cleared.dynamicBillFeedbackActions, 1);
+      assert.equal(clearResult.cleared.dynamicBillCreatorFeedbackCounts, 1);
+      assert.equal(clearResult.cleared.dynamicBillCreatorReviewPrompts, 1);
       assert.equal(clearResult.cleared.dynamicBillRotationRecords, 1);
       assert.equal('dynamicBillFeedback' in clearResult.cleared, false);
     }
@@ -286,6 +289,10 @@ function makeSummary(): LocalDataPrivacySummary {
       billItemCount: 6,
       rotationRecordCount: 4,
       creatorPauseCount: 1,
+      feedbackActionCount: 0,
+      creatorFeedbackCount: 0,
+      creatorReviewPromptCount: 0,
+      activeCreatorPauses: [],
       unopenedItems: 2,
       openedItems: 1,
       consumedItems: 2,
@@ -314,6 +321,9 @@ function createRegistryDependencies(): LocalDataCategoryRegistryDependencies {
     'dynamicBillExplanations',
     'dynamicBillFeedback',
     'dynamicBillCreatorPauses',
+    'dynamicBillFeedbackActions',
+    'dynamicBillCreatorFeedbackCounts',
+    'dynamicBillCreatorReviewPrompts',
     'dynamicBillRotationRecords',
   ];
   const tables = Object.fromEntries(

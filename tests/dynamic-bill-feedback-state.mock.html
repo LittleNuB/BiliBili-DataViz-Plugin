@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>动态账单少提醒 QA</title>
+    <link rel="stylesheet" href="../dashboard/styles/dashboard.css" />
+    <style>
+      .qa-main {
+        min-width: 0;
+      }
+
+      .qa-status {
+        color: var(--bb-muted);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bb-shell">
+      <aside class="bb-sidebar">
+        <div class="bb-brand">
+          <span class="bb-brand-mark">BB</span>
+          <span class="bb-brand-text"><strong>Bili-Bill</strong><span>动态账单</span></span>
+        </div>
+      </aside>
+      <main class="qa-main">
+        <div class="dynamic-bill-page">
+          <section class="dynamic-bill-status-copy">
+            <strong id="qa-notice">准备检查少提醒流程</strong>
+            <span>撤销窗口为 8 秒；过期后才进入有效次数。</span>
+          </section>
+          <section class="dynamic-bill-layout">
+            <div class="dynamic-bill-board" aria-label="动态账单栏目">
+              <article class="dynamic-bill-column tone-blue">
+                <div class="dynamic-bill-column-head">
+                  <div>
+                    <h3>关注轮换</h3>
+                    <p>剩余已关注 UP 的最近新投稿。</p>
+                  </div>
+                  <span>1/1</span>
+                </div>
+                <div class="dynamic-bill-item-list">
+                  <button type="button" class="dynamic-bill-item-card is-selected">
+                    <span class="dynamic-bill-card-meta">#1 · <span id="qa-card-status">未打开</span></span>
+                    <strong>示例 UP</strong>
+                    <span class="dynamic-bill-card-title">匿名示例新投稿</span>
+                    <span class="dynamic-bill-card-fact">可用本地观看记录中未发现同一新视频。</span>
+                  </button>
+                </div>
+              </article>
+            </div>
+            <aside class="dynamic-bill-detail" aria-label="账单项详情">
+              <span class="dynamic-bill-kicker">关注轮换 / <span id="qa-detail-status">未打开</span></span>
+              <h3>示例 UP</h3>
+              <p>新投稿：匿名示例新投稿</p>
+              <div class="dynamic-bill-action-grid">
+                <button type="button" class="is-primary">打开新视频</button>
+                <button type="button" id="qa-less">少提醒这个 UP</button>
+                <a href="https://space.bilibili.com/12345" target="_blank" rel="noreferrer">打开 UP 主页</a>
+              </div>
+            </aside>
+          </section>
+
+          <section class="settings-panel">
+            <div class="settings-section-head">
+              <div>
+                <h3>设置页暂停恢复</h3>
+                <p>只恢复 Bili-Bill 本地提醒资格，不修改 B 站关注关系。</p>
+              </div>
+            </div>
+            <div id="qa-settings-pauses" class="settings-pause-list"></div>
+          </section>
+
+          <div class="dynamic-bill-feedback-dock" id="qa-dock" aria-live="polite"></div>
+          <p class="qa-status" id="qa-status" role="status">正在检查</p>
+        </div>
+      </main>
+    </div>
+    <script>
+      const state = {
+        status: "未打开",
+        pauseActive: false,
+        pendingUndo: false,
+        effectiveCount: 2,
+        promptCreated: false,
+        promptState: "",
+        openedSpaceRequests: 0,
+      };
+      const notice = document.querySelector("#qa-notice");
+      const dock = document.querySelector("#qa-dock");
+      const settings = document.querySelector("#qa-settings-pauses");
+      const rawForbidden = ["未消费", "猜你喜欢", "fallback", "transcript", "confidence", "sourceHash", "segmentId", "subtitle_url"];
+
+      document.querySelector("#qa-less").addEventListener("click", () => {
+        state.status = "已处理";
+        state.pauseActive = true;
+        state.pendingUndo = true;
+        notice.textContent = "已少提醒「示例 UP」；8 秒内可撤销，过期后才计入有效次数。";
+        render();
+      });
+
+      window.__dynamicBillFeedbackQa = {
+        state,
+        expirePending() {
+          if (!state.pendingUndo) return;
+          state.pendingUndo = false;
+          state.effectiveCount += 1;
+          if (state.effectiveCount >= 3 && !state.promptCreated) {
+            state.promptCreated = true;
+            state.promptState = "pending";
+          }
+          notice.textContent = "少提醒已生效。";
+          render();
+        },
+        simulateRefresh() {
+          render();
+        },
+        result() {
+          const hasHorizontalOverflow = document.documentElement.scrollWidth > window.innerWidth + 1;
+          const visibleCopy = visibleText();
+          const leaked = rawForbidden.some((token) => visibleCopy.toLowerCase().includes(token.toLowerCase()));
+          const dockButtons = [...document.querySelectorAll("#qa-dock button")].map((button) => button.textContent.trim());
+          return {
+            passed: !hasHorizontalOverflow && !leaked,
+            hasHorizontalOverflow,
+            leaked,
+            status: state.status,
+            pauseActive: state.pauseActive,
+            pendingUndo: state.pendingUndo,
+            effectiveCount: state.effectiveCount,
+            promptCreated: state.promptCreated,
+            promptState: state.promptState,
+            openedSpaceRequests: state.openedSpaceRequests,
+            dockButtons,
+            promptCount: document.querySelectorAll("[data-prompt]").length,
+          };
+        },
+      };
+
+      function render() {
+        document.querySelector("#qa-card-status").textContent = state.status;
+        document.querySelector("#qa-detail-status").textContent = state.status;
+        dock.replaceChildren();
+        settings.replaceChildren();
+
+        if (state.pendingUndo) {
+          const panel = reviewPanel("已少提醒「示例 UP」", "撤销窗口为 8 秒；窗口结束后才计入有效次数。");
+          const actions = document.createElement("div");
+          actions.className = "dynamic-bill-feedback-actions";
+          const undo = document.createElement("button");
+          undo.type = "button";
+          undo.textContent = "撤销";
+          undo.addEventListener("click", () => {
+            state.status = "未打开";
+            state.pauseActive = false;
+            state.pendingUndo = false;
+            notice.textContent = "已撤销对「示例 UP」的少提醒，本次不会计入有效次数。";
+            render();
+          });
+          const wait = document.createElement("button");
+          wait.type = "button";
+          wait.disabled = true;
+          wait.textContent = "等待生效";
+          actions.append(undo, wait);
+          panel.append(actions);
+          dock.append(panel);
+        }
+
+        if (state.promptState === "pending") {
+          const panel = reviewPanel("要检查「示例 UP」的关注关系吗？", "你已经 3 次选择少提醒这个 UP。Bili-Bill 只会打开主页或暂不处理，不会自动取关。");
+          panel.dataset.prompt = "true";
+          const actions = document.createElement("div");
+          actions.className = "dynamic-bill-feedback-actions";
+          const open = document.createElement("button");
+          open.type = "button";
+          open.textContent = "打开 UP 主页";
+          open.addEventListener("click", () => {
+            state.openedSpaceRequests += 1;
+            state.promptState = "opened";
+            notice.textContent = "已打开「示例 UP」的 B 站主页；当前暂停不变。";
+            render();
+          });
+          const dismiss = document.createElement("button");
+          dismiss.type = "button";
+          dismiss.textContent = "暂不处理";
+          dismiss.addEventListener("click", () => {
+            state.promptState = "dismissed";
+            notice.textContent = "已暂不处理「示例 UP」；当前暂停不变。";
+            render();
+          });
+          actions.append(open, dismiss);
+          panel.append(actions);
+          dock.append(panel);
+        }
+
+        if (state.pauseActive) {
+          const item = document.createElement("article");
+          item.className = "settings-pause-item";
+          item.innerHTML = `
+            <div>
+              <strong>示例 UP</strong>
+              <span>约 30 天后自动恢复；到期时间 2026/08/17 20:00</span>
+            </div>
+          `;
+          const restore = document.createElement("button");
+          restore.type = "button";
+          restore.className = "settings-action";
+          restore.textContent = "恢复提醒";
+          restore.addEventListener("click", () => {
+            state.pauseActive = false;
+            notice.textContent = "已恢复「示例 UP」的动态账单提醒；这不会修改 B 站关注关系。";
+            render();
+          });
+          item.append(restore);
+          settings.append(item);
+        } else {
+          const empty = document.createElement("div");
+          empty.className = "settings-data-empty";
+          empty.textContent = "当前没有暂停提醒的 UP。";
+          settings.append(empty);
+        }
+
+        const result = window.__dynamicBillFeedbackQa.result();
+        document.body.dataset.qa = result.passed ? "passed" : "failed";
+        document.querySelector("#qa-status").textContent = result.passed ? "检查通过" : "检查未通过";
+      }
+
+      function reviewPanel(title, detail) {
+        const panel = document.createElement("section");
+        panel.className = "dynamic-bill-creator-review";
+        const strong = document.createElement("strong");
+        strong.textContent = title;
+        const span = document.createElement("span");
+        span.textContent = detail;
+        panel.append(strong, span);
+        return panel;
+      }
+
+      function visibleText() {
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+          acceptNode(node) {
+            const parent = node.parentElement;
+            if (!parent || parent.closest("script, style")) return NodeFilter.FILTER_REJECT;
+            return NodeFilter.FILTER_ACCEPT;
+          },
+        });
+        const parts = [];
+        while (walker.nextNode()) {
+          const value = walker.currentNode.nodeValue.trim();
+          if (value) parts.push(value);
+        }
+        return parts.join("\\n");
+      }
+
+      render();
+    </script>
+  </body>
+</html>

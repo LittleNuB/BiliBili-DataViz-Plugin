@@ -2,11 +2,14 @@ import Dexie, { type Table } from 'dexie';
 import type { WatchHistoryRecord, PlayerEvent, DailyAggregate } from '../../shared/types/watch-event.ts';
 import type { FavoriteFolder, FavoriteItem, SmartFavoriteIndex } from '../../shared/types/favorite.ts';
 import type {
+  DynamicBillCreatorFeedbackCountRecord,
   DynamicBillCreatorPauseRecord,
   DynamicBillExplanation,
+  DynamicBillFeedbackActionRecord,
   DynamicBillFeedbackRecord,
   DynamicBillItem,
   DynamicBillMigrationRecord,
+  DynamicBillCreatorReviewPromptRecord,
   DynamicBillRotationRecord,
   FollowedCreator,
   FollowedVideoUpdate,
@@ -30,6 +33,9 @@ export class BiliAnalyticsDB extends Dexie {
   dynamicBillExplanations!: Table<DynamicBillExplanation, number>;
   dynamicBillFeedback!: Table<DynamicBillFeedbackRecord, number>;
   dynamicBillCreatorPauses!: Table<DynamicBillCreatorPauseRecord, number>;
+  dynamicBillFeedbackActions!: Table<DynamicBillFeedbackActionRecord, number>;
+  dynamicBillCreatorFeedbackCounts!: Table<DynamicBillCreatorFeedbackCountRecord, number>;
+  dynamicBillCreatorReviewPrompts!: Table<DynamicBillCreatorReviewPromptRecord, number>;
   dynamicBillRotationRecords!: Table<DynamicBillRotationRecord, number>;
   dynamicBillMigrations!: Table<DynamicBillMigrationRecord, number>;
   currentVideoTranscriptSources!: Table<CurrentVideoTranscriptSourceRecord, number>;
@@ -272,6 +278,47 @@ export class BiliAnalyticsDB extends Dexie {
       currentVideoTranscriptSegments:
         '++id, &segmentId, sourceIdentityKey, bvid, [bvid+cid+page], [bvid+cid+page+language], sourceHash, stale, updatedAt',
     }).upgrade(clearLegacyCurrentVideoTranscriptCache);
+
+    this.version(11).stores({
+      watchHistory:
+        '++id, kid, &sessionKey, avid, bvid, [avid+cid+viewAt], authorMid, tagName, viewAt, dt',
+      playerEvents:
+        '++id, [bvid+cid], eventType, timestamp, tabId',
+      dailyAggregates:
+        '++id, &date',
+      favoriteFolders:
+        '++id, &mediaId, title, syncedAt',
+      favoriteItems:
+        '++id, &itemKey, mediaId, avid, bvid, authorMid, tagName, favTime, syncedAt',
+      smartFavoriteIndex:
+        '++id, &itemKey, status, indexedAt, contentHash',
+      followedCreators:
+        '++id, &mid, followedAt, followAgeKnown, isActive, firstSeenAt, syncedAt, lastSeenAt',
+      followedVideoUpdates:
+        '++id, &updateKey, dynamicId, bvid, authorMid, dynamicTime, pubtime, syncedAt',
+      dynamicBillItems:
+        '++id, &billKey, column, status, creatorMid, updateKey, generatedAt, localRank',
+      dynamicBillFeedback:
+        '++id, [scope+key], scope, key, creatorMid, billKey, column, createdAt',
+      dynamicBillExplanations:
+        '++id, &billKey, status, generatedAt, model, contentHash',
+      dynamicBillCreatorPauses:
+        '++id, &creatorMid, expiresAt, startedAt, source, actionKey, updatedAt',
+      dynamicBillFeedbackActions:
+        '++id, &actionKey, undoToken, billKey, creatorMid, [billKey+creatorMid], state, undoDeadlineAt, createdAt, finalizedAt',
+      dynamicBillCreatorFeedbackCounts:
+        '++id, &creatorMid, effectiveCount, updatedAt',
+      dynamicBillCreatorReviewPrompts:
+        '++id, &creatorMid, state, createdAt, updatedAt',
+      dynamicBillRotationRecords:
+        '++id, &creatorMid, lastShownAt, lastColumn, updatedAt',
+      dynamicBillMigrations:
+        '++id, &version, completedAt',
+      currentVideoTranscriptSources:
+        '++id, &identityKey, &sourceIdentityKey, partIdentityKey, bvid, [bvid+cid+page], [bvid+cid+page+language], sourceHash, bodyHash, timelineHash, stale, updatedAt, lastAccessedAt',
+      currentVideoTranscriptSegments:
+        '++id, &segmentId, sourceIdentityKey, bvid, [bvid+cid+page], [bvid+cid+page+language], sourceHash, stale, updatedAt',
+    });
   }
 }
 
