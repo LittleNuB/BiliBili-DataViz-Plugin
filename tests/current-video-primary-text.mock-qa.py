@@ -1277,23 +1277,34 @@ def run_summary_late_old_source_response_after_selection_change_flow(page):
     generate_message = last_message_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
     old_request_id = generate_message["params"]["requestId"]
     old_source = generate_message["params"]["selectedSourceIdentityKey"]
-    new_source = f"{old_source}:qa-selected-other"
+    b_text = "页内助手使用一次完整正文请求生成合并结果 7。"
+    late_a_text = "页内助手使用一次完整正文请求生成合并结果 8。"
 
+    evidence_reads_before = message_count_for(page, "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE")
+    page.evaluate("window.__assistantMockReplaceSubtitleSource('b')")
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    page.wait_for_function(
+        """(before) => (window.__assistantMockMessages || []).filter(
+            (message) => message.action === "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE"
+        ).length > before""",
+        arg=evidence_reads_before,
+    )
+    new_source = page.evaluate("window.__assistantMockCurrentSourceIdentityKey()")
+    page.evaluate("window.__assistantMockSeedSummaryCacheForCurrentSource(7)")
     page.evaluate(
         "(sourceIdentityKey) => window.__assistantMockSelectSourceIdentityForCurrentPart(sourceIdentityKey)",
         new_source,
     )
-    expect(page.get_by_text("此前选择的主要文本来源已经不可用").first).to_be_visible()
     page.evaluate("window.__assistantMockResolveProtectedResponses()")
-    page.wait_for_function("window.__assistantMockSummaryCache() !== null")
+    page.wait_for_function("window.__assistantMockSummaryCacheForCurrentSource() !== null")
+    expect(section.get_by_text(b_text)).to_be_visible()
 
     assert message_count_for(page, "CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 0
     assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 1
-    assert page.evaluate("window.__assistantMockSummaryCache().requestId") == old_request_id
-    assert page.evaluate("window.__assistantMockSummaryCacheSourceIdentityKey()") == old_source
-    expect(section.get_by_text("页内助手使用一次完整正文请求生成合并结果", exact=False)).to_have_count(0)
-    expect(page.get_by_text("此前选择的主要文本来源已不可用").first).to_be_visible()
-    expect(section.get_by_text("尚未生成。只有点击生成后才会发送当前选择的完整正文。")).to_be_visible()
+    assert page.evaluate("(source) => window.__assistantMockSummaryCacheForSource(source).requestId", old_source) == old_request_id
+    assert page.evaluate("window.__assistantMockSummaryCacheForCurrentSource().requestId") != old_request_id
+    expect(section.get_by_text(late_a_text)).to_have_count(0)
+    expect(section.get_by_text(b_text)).to_be_visible()
     assert_clean_visible_text(page)
     assert_no_horizontal_overflow(page)
 
@@ -1351,6 +1362,7 @@ def run_summary_prior_cancel_flow(page):
 def run_summary_prior_cancel_after_source_selection_change_flow(page):
     section = open_selected_summary_assistant(page, "cachedSummary=1")
     old_text = "页内助手使用一次完整正文请求生成合并结果 1。"
+    b_text = "页内助手使用一次完整正文请求生成合并结果 7。"
     expect(section.get_by_text(old_text)).to_be_visible()
     page.evaluate("window.__assistantMockDeferNextProtectedAction('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
     section.get_by_role("button", name="重新生成").click()
@@ -1361,13 +1373,22 @@ def run_summary_prior_cancel_after_source_selection_change_flow(page):
     generation_message = last_message_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
     old_request_id = generation_message["params"]["requestId"]
     old_source = generation_message["params"]["selectedSourceIdentityKey"]
-    new_source = f"{old_source}:qa-selected-other"
+    evidence_reads_before = message_count_for(page, "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE")
+    page.evaluate("window.__assistantMockReplaceSubtitleSource('b')")
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    page.wait_for_function(
+        """(before) => (window.__assistantMockMessages || []).filter(
+            (message) => message.action === "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE"
+        ).length > before""",
+        arg=evidence_reads_before,
+    )
+    new_source = page.evaluate("window.__assistantMockCurrentSourceIdentityKey()")
+    page.evaluate("window.__assistantMockSeedSummaryCacheForCurrentSource(7)")
 
     page.evaluate(
         "(sourceIdentityKey) => window.__assistantMockSelectSourceIdentityForCurrentPart(sourceIdentityKey)",
         new_source,
     )
-    expect(page.get_by_text("此前选择的主要文本来源已经不可用").first).to_be_visible()
     expect(section.get_by_text(old_text)).to_have_count(0)
     page.get_by_role("button", name="取消生成").click()
     page.wait_for_function("(window.__assistantMockMessages || []).some(message => message.action === 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
@@ -1375,12 +1396,13 @@ def run_summary_prior_cancel_after_source_selection_change_flow(page):
     assert cancel_message["params"]["requestId"] == old_request_id
     assert cancel_message["params"]["selectedSourceIdentityKey"] == old_source
     assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 1
+    expect(section.get_by_text(b_text)).to_be_visible()
 
     page.evaluate("window.__assistantMockResolveProtectedResponses()")
-    page.wait_for_function("window.__assistantMockSummaryCache() !== null")
-    assert page.evaluate("window.__assistantMockSummaryCacheSourceIdentityKey()") == old_source
+    page.wait_for_function("window.__assistantMockSummaryCacheForCurrentSource() !== null")
+    assert page.evaluate("window.__assistantMockSummaryCacheForCurrentSource().requestId") != old_request_id
     expect(section.get_by_text(old_text)).to_have_count(0)
-    expect(section.get_by_text("尚未生成。只有点击生成后才会发送当前选择的完整正文。")).to_be_visible()
+    expect(section.get_by_text(b_text)).to_be_visible()
     assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 1
     assert_clean_visible_text(page)
     assert_no_horizontal_overflow(page)

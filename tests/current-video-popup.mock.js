@@ -22,6 +22,7 @@
   let summaryCacheSourceIdentityKey = null;
   let summaryReplacementSequence = 100;
   let returnAvailable = false;
+  let activeBaseSourceIdentityKey = sourceV2;
 
   if (params.get('savedV1') === '1') {
     storage[storageKey] = { [`${baseBvid}:9201:1`]: sourceV1 };
@@ -34,7 +35,7 @@
 
   function currentSourceIdentityKey() {
     if (cid === null) return null;
-    if (bvid === baseBvid && cid === 9201 && page === 1) return sourceV2;
+    if (bvid === baseBvid && cid === 9201 && page === 1) return activeBaseSourceIdentityKey;
     return `primary-text:bilibili_subtitle:${bvid}:${cid}:${page}:zh-cn:popup-source-current`;
   }
 
@@ -387,6 +388,12 @@
     };
   }
 
+  function seedSummaryCacheForCurrentSource(sequence) {
+    summaryCacheResult = summaryResult(true, sequence, { cacheHit: true });
+    summaryCacheSourceIdentityKey = currentSourceIdentityKey();
+    return summaryCacheResult;
+  }
+
   function knowledgeResult(authorized, sequence) {
     return {
       status: authorized ? 'ready' : 'no_context',
@@ -519,6 +526,7 @@
   };
   window.__popupMockSummaryCache = () => summaryCacheResult;
   window.__popupMockSummaryCacheSourceIdentityKey = () => summaryCacheSourceIdentityKey;
+  window.__popupMockSeedSummaryCacheForCurrentSource = (sequence = 7) => seedSummaryCacheForCurrentSource(Number(sequence) || 7);
   window.__popupMockReplaceSummaryGeneration = () => {
     summaryReplacementSequence += 1;
     summaryCacheResult = summaryResult(true, summaryReplacementSequence, {
@@ -535,10 +543,13 @@
       newValue = undefined;
     } else if (mode === 'other') {
       const partKey = currentPartKey();
+      activeBaseSourceIdentityKey = sourceB;
+      seedSummaryCacheForCurrentSource(7);
       newValue = partKey ? { ...(oldValue || {}), [partKey]: sourceB } : {};
       storage[storageKey] = newValue;
     } else if (mode === 'current') {
       const partKey = currentPartKey();
+      activeBaseSourceIdentityKey = sourceV2;
       const sourceIdentityKey = currentSourceIdentityKey();
       newValue = partKey && sourceIdentityKey ? { ...(oldValue || {}), [partKey]: sourceIdentityKey } : {};
       storage[storageKey] = newValue;
@@ -608,6 +619,7 @@
               const cacheMissStatus = state === 'ready' ? null : state;
               const matchingCache = params.get('cachedSummary') === '1'
                 && summaryCacheResult
+                && summaryCacheSourceIdentityKey === exactSource
                 && summaryCacheResult.model === currentChatModel()
                 ? withLiveConfigCacheState(summaryCacheResult)
                 : null;

@@ -436,6 +436,7 @@ def run_prior_cancel_after_source_selection_change_flow(page):
     page.route("**/*", route_popup)
     page.goto(f"{POPUP_URL}?cachedSummary=1")
     old_text = "手动生成已使用精确的当前正文来源。"
+    b_text = "较新的手动生成结果 7 已采用当前正文。"
     expect(page.get_by_text(old_text)).to_be_visible()
 
     page.evaluate("window.__popupMockDeferNextResponse('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
@@ -446,9 +447,19 @@ def run_prior_cancel_after_source_selection_change_flow(page):
     old_source = generation_message["params"]["selectedSourceIdentityKey"]
     assert old_source == page.evaluate("window.__popupMockSourceV2")
 
+    context_reads_before = len(messages_for(page, "GET_CURRENT_VIDEO_CONTEXT"))
     page.evaluate("window.__popupMockEmitSelectionChange('other')")
+    page.wait_for_function(
+        """(before) => {
+            const messages = window.__popupMockMessages || [];
+            const contextReads = messages.filter(message => message.action === "GET_CURRENT_VIDEO_CONTEXT");
+            return contextReads.length > before
+              && contextReads.some(message => message.params && message.params.forceContextRefresh === true);
+        }""",
+        arg=context_reads_before,
+    )
     expect(page.get_by_text(old_text)).to_have_count(0)
-    expect(page.get_by_text("尚未生成", exact=False)).to_be_visible()
+    expect(page.get_by_text(b_text)).to_be_visible()
     page.get_by_role("button", name="取消").click()
     page.wait_for_function("(window.__popupMockMessages || []).some(message => message.action === 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
     cancel_message = last_message_for(page, "CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
@@ -458,9 +469,10 @@ def run_prior_cancel_after_source_selection_change_flow(page):
 
     page.evaluate("window.__popupMockResolveResponses('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
     page.wait_for_timeout(50)
-    assert page.evaluate("window.__popupMockSummaryCacheSourceIdentityKey()") == old_source
+    assert page.evaluate("window.__popupMockSummaryCacheSourceIdentityKey()") == page.evaluate("window.__popupMockSourceB")
+    assert page.evaluate("window.__popupMockSummaryCache().requestId") != old_request_id
     expect(page.get_by_text(old_text)).to_have_count(0)
-    expect(page.get_by_text("尚未生成", exact=False)).to_be_visible()
+    expect(page.get_by_text(b_text)).to_be_visible()
     assert len(messages_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")) == 1
     assert_clean_page(page)
 

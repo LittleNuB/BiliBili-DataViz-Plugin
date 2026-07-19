@@ -214,7 +214,9 @@ export function App() {
         configChanged,
         userConfig: changes[USER_CONFIG_STORAGE_KEY]?.newValue,
       });
-      if (configChanged) {
+      if (selectionChanged) {
+        void fetchCurrentVideoContext({ forceContextRefresh: true });
+      } else if (configChanged) {
         void restoreCurrentVideoSummaryCache(currentVideoContextRef.current);
       }
     };
@@ -240,11 +242,14 @@ export function App() {
     }
   }
 
-  async function fetchCurrentVideoContext() {
+  async function fetchCurrentVideoContext(options: { forceContextRefresh?: boolean } = {}) {
     const requestId = currentVideoContextRequestRef.current + 1;
     currentVideoContextRequestRef.current = requestId;
     try {
-      const context = await requestSW<CurrentVideoContextResult>('GET_CURRENT_VIDEO_CONTEXT');
+      const context = await requestSW<CurrentVideoContextResult>(
+        'GET_CURRENT_VIDEO_CONTEXT',
+        options.forceContextRefresh ? { forceContextRefresh: true } : undefined,
+      );
       if (currentVideoContextRequestRef.current !== requestId) return;
       commitCurrentVideoContext(context);
       void restoreCurrentVideoSummaryCache(context);

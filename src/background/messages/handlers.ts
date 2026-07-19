@@ -652,10 +652,11 @@ export async function handleRequest<T>(
       const requestId = optionalStringParam(request.params?.requestId);
       if (requestId) {
         cancelCurrentVideoSummaryHighlightsRequest(requestId);
-      }
-      const sourceIdentityKey = selectedSourceIdentityKey(request.params);
-      if (sourceIdentityKey) {
-        cancelCurrentVideoSummaryHighlightsForSource(sourceIdentityKey);
+      } else {
+        const sourceIdentityKey = selectedSourceIdentityKey(request.params);
+        if (sourceIdentityKey) {
+          cancelCurrentVideoSummaryHighlightsForSource(sourceIdentityKey);
+        }
       }
       return { success: true, data: { cancelled: true } as T };
     }

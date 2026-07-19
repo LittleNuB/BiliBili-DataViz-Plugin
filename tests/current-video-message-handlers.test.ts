@@ -773,6 +773,129 @@ test('combined generation cancellation during preflight makes zero network calls
   }
 });
 
+test('late exact cancel for an older same-source generation does not abort the newer request', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  await db.currentVideoSummaryHighlights.clear();
+  const tabId = 18_619;
+  const context = handlerVideoContext('BV1LateExactCancel', 4819);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'late-exact-cancel-source',
+    'newer same-source generation must survive an older exact cancel',
+  );
+  const sourceIdentityKey = evidence.sourceRecord.identityKey;
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 8_819 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+  await sendRequest<void>({
+    action: 'UPDATE_CONFIG',
+    params: {
+      ai: {
+        baseURL: 'https://example.invalid',
+        apiKey: 'handler-test-key',
+        chatModel: 'handler-test-model',
+      },
+      assistant: { currentVideoAiAssistantEnabled: true },
+    },
+  }, tabId, context.url);
+
+  const originalFetch = globalThis.fetch;
+  const fetchRecords: Array<{
+    signal: AbortSignal | null;
+    resolve: (response: Response) => void;
+    reject: (error: Error) => void;
+  }> = [];
+  const fetchWaiters: Array<{ count: number; resolve: () => void }> = [];
+  const waitForFetchCount = async (count: number): Promise<void> => {
+    if (fetchRecords.length >= count) return;
+    await new Promise<void>(resolve => fetchWaiters.push({ count, resolve }));
+  };
+  const notifyFetchWaiters = () => {
+    for (const waiter of [...fetchWaiters]) {
+      if (fetchRecords.length < waiter.count) continue;
+      fetchWaiters.splice(fetchWaiters.indexOf(waiter), 1);
+      waiter.resolve();
+    }
+  };
+  const response = () => new Response(JSON.stringify({
+    choices: [{ message: { content: JSON.stringify(handlerSummaryHighlightsAiOutput()) } }],
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  try {
+    globalThis.fetch = ((_input, init) => {
+      const signal = init?.signal ?? null;
+      let resolveFetch!: (value: Response) => void;
+      let rejectFetch!: (error: Error) => void;
+      const promise = new Promise<Response>((resolve, reject) => {
+        resolveFetch = resolve;
+        rejectFetch = reject;
+      });
+      fetchRecords.push({
+        signal,
+        resolve: resolveFetch,
+        reject: rejectFetch,
+      });
+      if (signal?.aborted) {
+        rejectFetch(new Error('MOCK_FETCH_ABORTED'));
+      } else {
+        signal?.addEventListener('abort', () => rejectFetch(new Error('MOCK_FETCH_ABORTED')), { once: true });
+      }
+      notifyFetchWaiters();
+      return promise;
+    }) as typeof fetch;
+
+    const firstGeneration = sendRequest<CurrentVideoSummaryHighlightsResult>({
+      action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+      params: {
+        requestId: 'handler-late-exact-cancel-a1',
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+    await waitForFetchCount(1);
+
+    const secondGeneration = sendRequest<CurrentVideoSummaryHighlightsResult>({
+      action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+      params: {
+        requestId: 'handler-late-exact-cancel-a2',
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+    await waitForFetchCount(2);
+
+    assert.equal(fetchRecords[0]?.signal?.aborted, true);
+    await sendRequest<void>({
+      action: 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+      params: {
+        requestId: 'handler-late-exact-cancel-a1',
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+    assert.equal(fetchRecords[1]?.signal?.aborted, false);
+
+    fetchRecords[1]?.resolve(response());
+    const secondResponse = await secondGeneration;
+    const firstResponse = await firstGeneration;
+
+    assert.equal(firstResponse.success, true);
+    assert.equal(firstResponse.data?.status, 'cancelled');
+    assert.equal(secondResponse.success, true);
+    assert.equal(secondResponse.data?.status, 'ready');
+    assert.equal(secondResponse.data?.requestId, 'handler-late-exact-cancel-a2');
+    const cachedRows = await db.currentVideoSummaryHighlights.toArray();
+    assert.equal(cachedRows.length, 1);
+    assert.equal(cachedRows[0]?.requestAudit.requestId, 'handler-late-exact-cancel-a2');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('combined generation disable during preflight makes zero network calls', async () => {
   resetChromeHarness();
   await resetTranscriptDb();

@@ -77,6 +77,7 @@
       let summaryGeneration = 0;
       let summaryCacheResult = null;
       let summaryCacheSourceIdentityKey = null;
+      const summaryCacheBySourceIdentityKey = new Map();
       const cancelledSummaryRequestIds = new Set();
       let searchReadCount = 0;
       let knowledgeReadCount = 0;
@@ -484,13 +485,20 @@
         };
       }
 
-      if (mockParams.get("cachedSummary") === "1") {
-        summaryGeneration = 1;
-        summaryCacheResult = summaryHighlightsResult({
+      function seedSummaryCacheForCurrentSource(generation = 1) {
+        summaryGeneration = Number(generation) || 1;
+        const result = summaryHighlightsResult({
           cacheHit: true,
           priorGenerated: ["disabled", "unconfigured"].includes(currentSummaryState()),
         });
+        summaryCacheResult = result;
         summaryCacheSourceIdentityKey = subtitleSourceIdentityKey();
+        summaryCacheBySourceIdentityKey.set(summaryCacheSourceIdentityKey, result);
+        return summaryCacheResult;
+      }
+
+      if (mockParams.get("cachedSummary") === "1") {
+        seedSummaryCacheForCurrentSource(1);
       }
 
       function summaryStateFromParams() {
@@ -509,10 +517,9 @@
         if (!summaryRequestAuthorized(params)) {
           return summaryHighlightsResult({ state: "no_text" });
         }
-        if (summaryCacheResult
-          && summaryCacheSourceIdentityKey === params.selectedSourceIdentityKey
-          && summaryCacheResult.model === currentChatModel()) {
-          return withLiveConfigCacheState(summaryCacheResult);
+        const matchingCache = summaryCacheBySourceIdentityKey.get(params.selectedSourceIdentityKey);
+        if (matchingCache && matchingCache.model === currentChatModel()) {
+          return withLiveConfigCacheState(matchingCache);
         }
         const state = summaryStateFromParams();
         if (state === "disabled" || state === "unconfigured") {
@@ -545,6 +552,7 @@
           };
           summaryCacheResult = { ...result, cacheHit: true };
           summaryCacheSourceIdentityKey = capturedSourceIdentityKey;
+          summaryCacheBySourceIdentityKey.set(capturedSourceIdentityKey, summaryCacheResult);
           return { success: true, data: result };
         };
         if (deferNextProtectedAction !== "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") {
@@ -910,6 +918,9 @@
       window.__contentRuntimeListenersForQa = contentRuntimeListeners;
       window.__assistantMockStorage = extensionStorage;
       window.__assistantMockCurrentSourceIdentityKey = () => subtitleSourceIdentityKey();
+      window.__assistantMockSeedSummaryCacheForCurrentSource = (generation = 7) => (
+        seedSummaryCacheForCurrentSource(generation)
+      );
       window.__assistantMockResolvePrimaryTextStorage = () => {
         deferPrimaryTextStorage = false;
         const pending = pendingPrimaryTextStorageReads.splice(0);
@@ -977,12 +988,20 @@
         summaryGeneration += 1;
         summaryCacheResult = summaryHighlightsResult({ cacheHit: true });
         summaryCacheSourceIdentityKey = subtitleSourceIdentityKey();
+        summaryCacheBySourceIdentityKey.set(summaryCacheSourceIdentityKey, summaryCacheResult);
       };
       window.__assistantMockSummaryCache = () => summaryCacheResult;
       window.__assistantMockSummaryCacheSourceIdentityKey = () => summaryCacheSourceIdentityKey;
+      window.__assistantMockSummaryCacheForCurrentSource = () => (
+        summaryCacheBySourceIdentityKey.get(subtitleSourceIdentityKey()) || null
+      );
+      window.__assistantMockSummaryCacheForSource = (sourceIdentityKey) => (
+        summaryCacheBySourceIdentityKey.get(String(sourceIdentityKey || "")) || null
+      );
       window.__assistantMockDropSummaryCache = () => {
         summaryCacheResult = null;
         summaryCacheSourceIdentityKey = null;
+        summaryCacheBySourceIdentityKey.clear();
       };
       window.__assistantMockDeferNextTimestampSeek = () => {
         deferNextTimestampSeek = true;
