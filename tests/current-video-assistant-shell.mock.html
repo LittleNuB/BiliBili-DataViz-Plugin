@@ -102,6 +102,8 @@
       const pendingTimestampSeeks = [];
       let rejectNextTimestampOperationLease = false;
       let timestampOperationLeaseSequence = 0;
+      let deferNextTimestampOperationLease = false;
+      const pendingTimestampOperationLeases = [];
       const contentTimestampResults = {};
       let replacedOldVideoElement = null;
       let replacedNewVideoElement = null;
@@ -699,6 +701,14 @@
       };
       window.__assistantMockRejectNextTimestampOperationLease = () => {
         rejectNextTimestampOperationLease = true;
+      };
+      window.__assistantMockDeferNextTimestampOperationLease = () => {
+        deferNextTimestampOperationLease = true;
+      };
+      window.__assistantMockPendingTimestampOperationLeaseCount = () => pendingTimestampOperationLeases.length;
+      window.__assistantMockResolveTimestampOperationLeases = () => {
+        const pending = pendingTimestampOperationLeases.splice(0);
+        for (const resolve of pending) resolve();
       };
       window.__assistantMockPendingTimestampSeekCount = () => pendingTimestampSeeks.length;
       window.__assistantMockResolveTimestampSeeks = () => {
@@ -1305,9 +1315,24 @@
               });
             }
             if (message.action === "CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE") {
-              const authorized = !rejectNextTimestampOperationLease;
-              rejectNextTimestampOperationLease = false;
-              return Promise.resolve({ success: true, data: { authorized } });
+              const respond = () => {
+                const selections = extensionStorage[primaryTextSelectionStorageKey];
+                const partKey = `${message.params?.contextBvid}:${message.params?.contextCid}:${message.params?.contextPage}`;
+                const selectedSource = selections && !Array.isArray(selections)
+                  ? selections[partKey]
+                  : null;
+                const authorized = !rejectNextTimestampOperationLease
+                  && (!deferNextTimestampOperationLease || selectedSource === message.params?.sourceIdentityKey);
+                rejectNextTimestampOperationLease = false;
+                deferNextTimestampOperationLease = false;
+                return { success: true, data: { authorized } };
+              };
+              if (deferNextTimestampOperationLease) {
+                return new Promise((resolve) => {
+                  pendingTimestampOperationLeases.push(() => resolve(respond()));
+                });
+              }
+              return Promise.resolve(respond());
             }
             return Promise.resolve({ success: true, data: null });
           },

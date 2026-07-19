@@ -339,7 +339,10 @@
           case 'GET_VIDEO_KNOWLEDGE':
             return maybeDeferResponse(message.action, {
               success: true,
-              data: knowledgeResult(authorized, nextActionSequence(message.action)),
+              data: knowledgeResult(
+                params.get('knowledgeNoEvidence') === '1' ? false : authorized,
+                nextActionSequence(message.action),
+              ),
             });
           case 'SEARCH_CURRENT_VIDEO_SEGMENTS':
             return maybeDeferResponse(message.action, {

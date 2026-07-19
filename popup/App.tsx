@@ -1692,10 +1692,10 @@ function videoKnowledgeNotice(knowledge: VideoKnowledgeResult | null, transcript
   }
   const evidence = knowledge.transcriptEvidence;
   if (!evidence) {
-    return '当前没有可引用字幕正文。节点只使用元数据、简介、分 P 或章节；不会生成推测时间戳。';
+    return '当前没有可引用字幕正文，知识节点暂不可用。';
   }
   if (evidence.status === 'stale') {
-    return '本地字幕证据与当前视频或分 P 不匹配，已回退到元数据、简介、分 P 或章节节点。';
+    return '本地字幕证据与当前视频或分 P 不匹配，知识节点暂不可用。';
   }
   if (evidence.status === 'language_mismatch') {
     return '本地字幕语言与当前请求不匹配，暂不生成字幕节点。';
@@ -1707,7 +1707,7 @@ function videoKnowledgeNotice(knowledge: VideoKnowledgeResult | null, transcript
     return '字幕正文结构异常，暂不作为节点证据。';
   }
   if (evidence.active) {
-    return '已检测到本地字幕证据，但没有匹配当前版本的可用片段，已回退到辅助节点。';
+    return '已检测到本地字幕证据，但没有匹配当前版本的可用片段。';
   }
   return evidence.message || '当前没有可引用字幕正文；不会生成推测时间戳。';
 }

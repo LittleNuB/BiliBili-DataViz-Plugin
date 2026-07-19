@@ -649,21 +649,25 @@ def run_content_timestamp_operation_epoch_flow(page):
     page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2&savedSource=current")
     expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
 
+    initial_position = page.evaluate("window.__assistantMockPlaybackPosition()")
     page.evaluate("window.__assistantMockRejectNextTimestampOperationLease()")
     page.evaluate("window.__assistantMockStartContentTimestampJump('lease-denied', 'lease-denied', 3)")
     denied_response = wait_for_content_timestamp_result(page, "lease-denied")
     assert denied_response["ok"] is False
     assert page.evaluate("window.__assistantMockPendingTimestampSeekCount()") == 0
+    assert page.evaluate("window.__assistantMockPlaybackPosition()") == initial_position
     expect(page.locator("#bdc-current-video-return")).to_have_count(0)
 
-    page.evaluate("window.__assistantMockDeferNextTimestampSeek()")
+    page.evaluate("window.__assistantMockDeferNextTimestampOperationLease()")
     page.evaluate("window.__assistantMockStartContentTimestampJump('selection-old', 'selection-old', 4)")
-    page.wait_for_function("window.__assistantMockPendingTimestampSeekCount() === 1")
+    page.wait_for_function("window.__assistantMockPendingTimestampOperationLeaseCount() === 1")
+    assert page.evaluate("window.__assistantMockPendingTimestampSeekCount()") == 0
     page.evaluate("window.__assistantMockClearPrimaryTextSelectionsForLocalSettings()")
-    page.evaluate("window.__assistantMockResolveTimestampSeeks()")
+    page.evaluate("window.__assistantMockResolveTimestampOperationLeases()")
     selection_response = wait_for_content_timestamp_result(page, "selection-old")
     assert selection_response["ok"] is False
     assert "当前视频" in selection_response["message"]
+    assert page.evaluate("window.__assistantMockPlaybackPosition()") == initial_position
     expect(page.locator("#bdc-current-video-return")).to_have_count(0)
 
     page.evaluate("window.__assistantMockDeferNextTimestampSeek()")

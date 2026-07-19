@@ -248,6 +248,18 @@ def run_knowledge_newer_wins(page):
     assert_clean_page(page)
 
 
+def run_fail_closed_knowledge_copy(page):
+    page.route("**/*", route_popup)
+    page.goto(f"{POPUP_URL}?knowledgeNoEvidence=1")
+    expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
+    page.get_by_role("button", name="刷新", exact=True).click()
+    expect(page.get_by_text("当前没有可引用字幕正文，知识节点暂不可用。")).to_be_visible()
+    visible = page.locator("body").inner_text()
+    assert "节点只使用元数据、简介" not in visible
+    assert "已回退到元数据" not in visible
+    assert_clean_page(page)
+
+
 def run_search_revision_race(page):
     page.route("**/*", route_popup)
     page.goto(POPUP_URL)
@@ -399,6 +411,11 @@ def main():
             run_knowledge_newer_wins(knowledge_race)
             assert not knowledge_race_errors, "\n".join(knowledge_race_errors)
             knowledge_race.close()
+
+            knowledge_blocked, knowledge_blocked_errors = new_checked_page(browser)
+            run_fail_closed_knowledge_copy(knowledge_blocked)
+            assert not knowledge_blocked_errors, "\n".join(knowledge_blocked_errors)
+            knowledge_blocked.close()
 
             search_race, search_race_errors = new_checked_page(browser)
             run_search_revision_race(search_race)
