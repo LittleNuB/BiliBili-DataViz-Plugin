@@ -1539,6 +1539,8 @@ function appendSegmentJumpControls(
 ): void {
   const preview = candidate.jumpPreview;
   const selected = assistantState.segmentPreviewCandidateId === candidate.id;
+  const timestampOperationLoading = assistantState.segmentJumpLoading
+    || assistantState.segmentReturnLoading;
   const controls = document.createElement('div');
   controls.className = 'bdc-assistant-jump-actions';
 
@@ -1554,7 +1556,7 @@ function appendSegmentJumpControls(
       assistantState.segmentJumpStatus = selected ? assistantState.segmentJumpStatus : null;
       renderAssistantShell();
     },
-    !preview.canJump,
+    !preview.canJump || timestampOperationLoading,
   ));
   parent.appendChild(controls);
 
@@ -1627,6 +1629,7 @@ function segmentJumpPreviewPanel(
       assistantState.segmentPreviewCandidateId = null;
       renderAssistantShell();
     },
+    assistantState.segmentJumpLoading || assistantState.segmentReturnLoading,
   ));
   panel.appendChild(actions);
   return panel;
@@ -1963,6 +1966,8 @@ async function confirmCurrentVideoSegmentJumpFromPage(
   candidate: CurrentVideoSegmentRetrievalCandidate,
   result: CurrentVideoSegmentRetrievalResult,
 ): Promise<void> {
+  if (assistantState.segmentJumpLoading || assistantState.segmentReturnLoading) return;
+
   const preview = candidate.jumpPreview;
   if (!preview.canJump) {
     invalidateSegmentTimestampRequests();
@@ -2020,6 +2025,8 @@ async function confirmCurrentVideoSegmentJumpFromPage(
 }
 
 async function returnCurrentVideoSegmentJumpFromPage(): Promise<void> {
+  if (assistantState.segmentReturnLoading || assistantState.segmentJumpLoading) return;
+
   const operation = beginSegmentTimestampOperation();
   assistantState.segmentReturnLoading = true;
   assistantState.segmentJumpLoading = false;

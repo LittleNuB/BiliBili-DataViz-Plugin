@@ -602,6 +602,8 @@ def run_late_assistant_timestamp_flow(page, operation, invalidation, newer=False
         page.evaluate("window.__assistantMockDeferNextProtectedAction('REQUEST_CURRENT_VIDEO_SEGMENT_JUMP')")
         page.get_by_role("button", name="确认跳转").click()
         expect(page.get_by_text("正在确认跳转...")).to_be_visible()
+        expect(page.get_by_role("button", name="收起预览")).to_be_disabled()
+        expect(page.get_by_role("button", name="取消")).to_be_disabled()
 
     if invalidation == "part":
         page.evaluate("window.__assistantMockSwitchToPart(2)")
