@@ -104,7 +104,9 @@ try {
   await cdp?.close().catch(() => {});
   browser.process.kill();
   await rm(browser.profileDir, { recursive: true, force: true }).catch(() => {});
-  await new Promise(resolve => server.instance.close(resolve));
+  const serverClosed = new Promise(resolve => server.instance.close(resolve));
+  server.instance.closeAllConnections?.();
+  await serverClosed;
 }
 
 async function startServer() {
