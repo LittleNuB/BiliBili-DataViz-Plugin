@@ -33,10 +33,7 @@ import type {
   VideoKnowledgeNode,
   VideoKnowledgeResult,
 } from '../../shared/types/video-knowledge';
-import {
-  buildCurrentVideoSubtitleDiagnostics,
-  type CurrentVideoSubtitleDiagnostics,
-} from '../../shared/current-video-subtitle-diagnostics';
+import { buildCurrentVideoSubtitleDiagnostics } from '../../shared/current-video-subtitle-diagnostics';
 import {
   createCurrentVideoFullTextRequestId,
   buildCurrentVideoPrimaryTextState,
@@ -351,16 +348,6 @@ const CSS = `
 #${CARD_ID} .bdc-assistant-segmented-option-active {
   background: rgba(127, 219, 255, 0.16);
   color: #ffffff;
-}
-#${CARD_ID} .bdc-assistant-subtitle-box {
-  border-radius: 8px;
-  padding: 10px;
-}
-#${CARD_ID} .bdc-assistant-subtitle-title {
-  font-size: 12px;
-  font-weight: 750;
-  line-height: 1.35;
-  margin-bottom: 5px;
 }
 #${CARD_ID} .bdc-assistant-subtitle-text {
   color: #dbe2ef;
@@ -1053,7 +1040,7 @@ function renderExpandedPanel(root: HTMLElement): void {
 
   const actions = document.createElement('div');
   actions.className = 'bdc-assistant-actions';
-  actions.appendChild(button('重新检测字幕', 'bdc-assistant-button bdc-assistant-button-quiet', () => {
+  actions.appendChild(button(assistantState.subtitleRefreshing ? '检测中...' : '重新检测字幕', 'bdc-assistant-button bdc-assistant-button-quiet', () => {
     void refreshSubtitleEvidenceFromPage();
   }, assistantState.subtitleRefreshing || assistantState.context?.kind !== 'video'));
   actions.appendChild(button('收起', 'bdc-assistant-button bdc-assistant-button-quiet', () => {
@@ -1068,7 +1055,6 @@ function renderExpandedPanel(root: HTMLElement): void {
 
   const context = assistantState.context;
   if (context?.kind === 'video') {
-    appendSubtitleDiagnostics(body, context);
     appendVideoIdentity(body, context);
     appendPrimaryTextSourceSwitcher(body, context);
     appendAssistantTabs(body);
@@ -1430,61 +1416,9 @@ function primaryTextSelectionSaveFailedForContext(context: CurrentVideoContext):
   return partKey ? primaryTextSelectionSaveFailedPartKeys.has(partKey) : false;
 }
 
-function appendSubtitleDiagnostics(parent: HTMLElement, context: CurrentVideoContext): void {
-  const diagnostics = buildCurrentVideoSubtitleDiagnostics(context, {
-    refreshing: assistantState.subtitleRefreshing,
-  });
-  const block = section('辅助：字幕正文状态', 'bdc-assistant-section-auxiliary');
-  const box = document.createElement('div');
-  box.className = 'bdc-assistant-subtitle-box';
-  box.style.border = `1px solid ${subtitleDiagnosticsBorder(diagnostics)}`;
-  box.style.background = subtitleDiagnosticsBackground(diagnostics);
-
-  const title = document.createElement('div');
-  title.className = 'bdc-assistant-subtitle-title';
-  title.style.color = subtitleDiagnosticsColor(diagnostics);
-  title.textContent = safeVisibleText(diagnostics.title);
-  box.appendChild(title);
-
-  appendText(box, 'div', 'bdc-assistant-subtitle-text', safeVisibleText(summarySubtitleMessage(context, diagnostics)));
-  appendText(box, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(summarySubtitleAction(context, diagnostics)));
-
-  appendText(
-    box,
-    'div',
-    'bdc-assistant-subtitle-detail',
-    safeVisibleText(context.transcriptEvidence?.active
-      ? '主要文本：B站字幕正文已可用；后续完整文本请求仍需用户主动触发。'
-      : '主要文本：尚未取得正文；不会把可能存在的字幕或轨道当作正文。'),
-  );
-
-  const buttonEl = button(
-    assistantState.subtitleRefreshing ? '检测中...' : '重新检测字幕',
-    'bdc-assistant-button bdc-assistant-button-primary',
-    () => {
-      void refreshSubtitleEvidenceFromPage();
-    },
-    assistantState.subtitleRefreshing || !diagnostics.canRetry,
-  );
-  box.appendChild(buttonEl);
-  if (assistantState.subtitleStatus) {
-    appendText(box, 'div', 'bdc-assistant-status', safeVisibleText(assistantState.subtitleStatus));
-  }
-
-  block.appendChild(box);
-  parent.appendChild(block);
-}
-
 function appendSubtitleView(parent: HTMLElement, context: CurrentVideoContext): void {
   const block = section('字幕', 'bdc-assistant-section-primary');
   markAssistantTabPanel(block, 'subtitles');
-  const head = block.querySelector('.bdc-assistant-section-head');
-  head?.appendChild(button(
-    assistantState.subtitleViewLoading ? '读取中...' : '刷新',
-    'bdc-assistant-button bdc-assistant-button-quiet',
-    () => { void ensureSubtitleViewLoaded(true); },
-    assistantState.subtitleViewLoading,
-  ));
 
   if (!currentSubtitleViewIsFresh() && !assistantState.subtitleViewLoading) {
     void ensureSubtitleViewLoaded(false);
@@ -1497,6 +1431,9 @@ function appendSubtitleView(parent: HTMLElement, context: CurrentVideoContext): 
     '这里只查看当前字幕来源；切换查看来源不会改变用于视频助手的主要文本来源，也不会请求 AI。',
   );
 
+  if (assistantState.subtitleStatus) {
+    appendText(block, 'div', 'bdc-assistant-status', safeVisibleText(assistantState.subtitleStatus));
+  }
   if (assistantState.subtitleViewLoading) {
     appendText(block, 'div', 'bdc-assistant-status', '正在读取当前分 P 的字幕全文...');
   }
@@ -4333,71 +4270,12 @@ function evidenceStatusLabel(status: CurrentVideoTranscriptEvidenceState['status
   }
 }
 
-function summarySubtitleMessage(
-  context: CurrentVideoContext,
-  diagnostics: CurrentVideoSubtitleDiagnostics,
-): string {
-  if (assistantState.subtitleRefreshing || diagnostics.status === 'reading_body') {
-    return '正在刷新当前视频上下文、检测字幕来源，并尝试读取字幕正文。';
-  }
-  if (context.transcriptEvidence?.active) {
-    return `已取得并缓存当前分 P 匹配的字幕正文 ${context.transcriptEvidence.segmentCount} 条，可作为主要文本来源。`;
-  }
-
-  switch (diagnostics.status) {
-    case 'missing_cid':
-      return '还没有确认当前分 P 的完整身份，暂时不能安全检测字幕正文。';
-    case 'track_found':
-      return '已发现字幕轨道，但还没有取得可引用的字幕正文。';
-    case 'enable_ai_subtitle':
-      return '当前还没有可用字幕正文。通常需要先在播放器里手动开启中文 AI 字幕。';
-    case 'login_required':
-      return '字幕需要当前浏览器会话具备访问权限；Bili-Bill 不会读取本地敏感文件。';
-    case 'no_track':
-      return 'B 站播放器接口没有返回可用字幕轨道，当前没有可用视频正文。';
-    case 'fetch_failed':
-      return '字幕正文读取失败，当前没有可用视频正文。';
-    case 'malformed':
-      return '字幕正文结构暂时无法稳定解析，因此不会作为主要文本来源。';
-    case 'empty':
-      return '已找到字幕来源，但没有返回有效正文片段。';
-    case 'language_mismatch':
-      return '当前可读字幕不是中文 AI 字幕，因此不会作为当前视频正文证据。';
-    case 'unsupported_host':
-      return '字幕来源不在受限的 B 站字幕域名范围内，已拒绝读取。';
-    case 'stale':
-      return '本地字幕证据与当前视频不匹配，不能作为当前分 P 正文。';
-    default:
-      return '当前没有可引用的字幕正文。';
-  }
-}
-
-function summarySubtitleAction(
-  context: CurrentVideoContext,
-  diagnostics: CurrentVideoSubtitleDiagnostics,
-): string {
-  if (assistantState.subtitleRefreshing || diagnostics.status === 'reading_body') {
-    return '请保持当前视频页打开，检测完成后只更新文本来源状态。';
-  }
-  if (context.transcriptEvidence?.active) {
-    return coverageText(context.transcriptEvidence) || '如果刚切换分 P，可以再次重新检测字幕。';
-  }
-  return diagnostics.action;
-}
-
 function subtitleRefreshResultText(context: CurrentVideoContextResult): string {
   const diagnostics = buildCurrentVideoSubtitleDiagnostics(context);
   if (context.kind === 'video' && context.transcriptEvidence?.active) {
     return `已刷新：已取得字幕正文 ${context.transcriptEvidence.segmentCount} 条。`;
   }
   return `已刷新：${diagnostics.title}。`;
-}
-
-function coverageText(evidence: CurrentVideoTranscriptEvidenceState): string {
-  if (typeof evidence.coverageStartSeconds !== 'number' || typeof evidence.coverageEndSeconds !== 'number') {
-    return '';
-  }
-  return `可引用范围：${formatDuration(evidence.coverageStartSeconds)}-${formatDuration(evidence.coverageEndSeconds)}。`;
 }
 
 function videoKnowledgeNotice(knowledge: VideoKnowledgeResult, transcriptNodeCount: number): string {
@@ -4663,27 +4541,6 @@ function availabilityLabel(value: string): string {
     default:
       return '未知';
   }
-}
-
-function subtitleDiagnosticsColor(state: CurrentVideoSubtitleDiagnostics): string {
-  if (state.tone === 'ready') return '#a0e7a0';
-  if (state.tone === 'info') return '#c8e6ff';
-  if (state.tone === 'blocked') return '#ff8a8a';
-  return '#ffcf8a';
-}
-
-function subtitleDiagnosticsBorder(state: CurrentVideoSubtitleDiagnostics): string {
-  if (state.tone === 'ready') return 'rgba(160,231,160,0.28)';
-  if (state.tone === 'info') return 'rgba(127,219,255,0.28)';
-  if (state.tone === 'blocked') return 'rgba(255,138,138,0.28)';
-  return 'rgba(255,179,71,0.24)';
-}
-
-function subtitleDiagnosticsBackground(state: CurrentVideoSubtitleDiagnostics): string {
-  if (state.tone === 'ready') return 'rgba(160,231,160,0.08)';
-  if (state.tone === 'info') return 'rgba(127,219,255,0.08)';
-  if (state.tone === 'blocked') return 'rgba(255,138,138,0.08)';
-  return 'rgba(255,179,71,0.08)';
 }
 
 function summaryHighlightsStatusLabel(status: CurrentVideoSummaryHighlightsResult['status']): string {

@@ -414,6 +414,7 @@ def run_late_switch_flow(page):
     page.evaluate("window.__assistantMockSwitchDuringTranscript()")
     page.get_by_role("button", name="重新检测字幕").first.click()
 
+    select_assistant_tab(page, "字幕")
     expect(page.get_by_text("当前视频或分 P 已切换，请在当前分 P 重新检测字幕。")).to_be_visible()
     expect(page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕")).to_have_count(0)
     assert_no_full_text_or_search(page)
@@ -1266,6 +1267,8 @@ def open_selected_summary_assistant(page, query=""):
 
 def run_tab_isolation_flow(page):
     section = open_selected_summary_assistant(page, "cachedSummary=1")
+    expect(page.get_by_text("辅助：字幕正文状态")).to_have_count(0)
+    expect(page.get_by_role("button", name="重新检测字幕")).to_have_count(1)
     assert_only_assistant_tab(page, "summary")
     expect(page.get_by_role("tab", name="摘要")).to_have_attribute("aria-selected", "true")
     expect(section.locator(".bdc-assistant-citation-title").filter(has_text="摘要")).to_be_visible()

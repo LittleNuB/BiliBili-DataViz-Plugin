@@ -14,6 +14,7 @@ import type {
   CurrentVideoTimestampReturnResponse,
 } from '../src/shared/types/current-video-segment-retrieval.ts';
 import type { CurrentVideoSummaryHighlightsResult } from '../src/shared/types/current-video-summary.ts';
+import type { CurrentVideoSubtitleViewSourcesResult } from '../src/shared/current-video-subtitle-view.ts';
 import type { VideoKnowledgeResult } from '../src/shared/types/video-knowledge.ts';
 import {
   CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
@@ -1874,6 +1875,176 @@ test('return operation lease is denied when transcript cache clears before conte
       primaryTextSelectionsReady: true,
       selectedSourceIdentityKey: sourceIdentityKey,
     },
+  }, tabId, context.url);
+
+  assert.equal(returned.success, true);
+  assert.equal(leaseAuthorized, false);
+  assert.equal(seekCount, 0);
+});
+
+test('subtitle jump lease is denied when the exact viewing source is replaced before content consumes delivery', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_636;
+  const context = handlerVideoContext('BV1SubtitleLeaseSource', 5403);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'subtitle-lease-source',
+    'the original subtitle viewing source must remain exact until delivery',
+  );
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 13_300 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+  const view = await sendRequest<CurrentVideoSubtitleViewSourcesResult>({
+    action: 'GET_CURRENT_VIDEO_SUBTITLE_VIEW_SOURCES',
+    params: {},
+  }, tabId, context.url);
+  const source = view.data?.sources[0];
+  const line = source?.lines[0];
+  assert.equal(view.data?.status, 'ready');
+  assert.ok(source);
+  assert.ok(line);
+
+  let leaseAuthorized: boolean | null = null;
+  let seekCount = 0;
+  setTabMessageHandler(tabId, async (message) => {
+    const payload = contentTimestampPayload(message, 'CURRENT_VIDEO_TIMESTAMP_JUMP');
+    const replacement = await seedHandlerTranscript(
+      context,
+      tabId,
+      'subtitle-lease-source-replacement',
+      'a replacement subtitle body must invalidate the older viewing source',
+    );
+    await confirmHandlerTranscriptCurrent(context, tabId, replacement);
+    assert.notEqual(replacement.sourceRecord.sourceIdentityKey, source.identity.sourceIdentityKey);
+    const consumed = await sendRequest<CurrentVideoTimestampOperationLeaseConsumeResult>({
+      action: 'CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE',
+      params: timestampLeaseConsumeParams(payload, 'jump'),
+    }, tabId, context.url);
+    leaseAuthorized = consumed.data?.authorized ?? false;
+    if (leaseAuthorized) seekCount += 1;
+    return blockedTimestampJumpMock(line.lineId);
+  });
+
+  const jump = await sendRequest<CurrentVideoTimestampJumpResponse>({
+    action: 'REQUEST_CURRENT_VIDEO_SUBTITLE_JUMP',
+    params: {
+      sourceIdentityKey: source.identity.sourceIdentityKey,
+      lineId: line.lineId,
+      lineBindingKey: line.lineBindingKey,
+      confirmed: true,
+    },
+  }, tabId, context.url);
+
+  assert.equal(jump.success, true);
+  assert.equal(leaseAuthorized, false);
+  assert.equal(seekCount, 0);
+});
+
+test('subtitle jump lease is denied when the current part changes before content consumes delivery', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_637;
+  const context = handlerVideoContext('BV1SubtitleLeasePart', 5404, 1);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'subtitle-lease-part',
+    'the subtitle jump belongs only to the original video part',
+  );
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 13_400 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+  const view = await sendRequest<CurrentVideoSubtitleViewSourcesResult>({
+    action: 'GET_CURRENT_VIDEO_SUBTITLE_VIEW_SOURCES',
+    params: {},
+  }, tabId, context.url);
+  const source = view.data?.sources[0];
+  const line = source?.lines[0];
+  assert.ok(source);
+  assert.ok(line);
+
+  let leaseAuthorized: boolean | null = null;
+  let seekCount = 0;
+  setTabMessageHandler(tabId, async (message) => {
+    const payload = contentTimestampPayload(message, 'CURRENT_VIDEO_TIMESTAMP_JUMP');
+    const nextContext = handlerVideoContext(context.bvid, 6404, 2);
+    setTabs([{ id: tabId, url: nextContext.url, active: true, lastAccessed: 13_401 }]);
+    emitTabUpdated(tabId, nextContext.url);
+    await sendContentMessage(
+      { action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: nextContext },
+      tabId,
+      nextContext.url,
+    );
+    const consumed = await sendRequest<CurrentVideoTimestampOperationLeaseConsumeResult>({
+      action: 'CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE',
+      params: timestampLeaseConsumeParams(payload, 'jump'),
+    }, tabId, nextContext.url);
+    leaseAuthorized = consumed.data?.authorized ?? false;
+    if (leaseAuthorized) seekCount += 1;
+    return blockedTimestampJumpMock(line.lineId);
+  });
+
+  const jump = await sendRequest<CurrentVideoTimestampJumpResponse>({
+    action: 'REQUEST_CURRENT_VIDEO_SUBTITLE_JUMP',
+    params: {
+      sourceIdentityKey: source.identity.sourceIdentityKey,
+      lineId: line.lineId,
+      lineBindingKey: line.lineBindingKey,
+      confirmed: true,
+    },
+  }, tabId, context.url);
+
+  assert.equal(jump.success, true);
+  assert.equal(leaseAuthorized, false);
+  assert.equal(seekCount, 0);
+});
+
+test('subtitle return lease is denied when the subtitle cache clears before content consumes delivery', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_638;
+  const context = handlerVideoContext('BV1SubtitleLeaseReturn', 5405);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'subtitle-lease-return',
+    'the subtitle return belongs to the exact cached viewing source',
+  );
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 13_500 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+  const view = await sendRequest<CurrentVideoSubtitleViewSourcesResult>({
+    action: 'GET_CURRENT_VIDEO_SUBTITLE_VIEW_SOURCES',
+    params: {},
+  }, tabId, context.url);
+  const source = view.data?.sources[0];
+  assert.ok(source);
+
+  let leaseAuthorized: boolean | null = null;
+  let seekCount = 0;
+  setTabMessageHandler(tabId, async (message) => {
+    const payload = contentTimestampPayload(message, 'CURRENT_VIDEO_TIMESTAMP_RETURN');
+    await sendRequest({ action: 'CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE', params: {} }, tabId, context.url);
+    const consumed = await sendRequest<CurrentVideoTimestampOperationLeaseConsumeResult>({
+      action: 'CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE',
+      params: timestampLeaseConsumeParams(payload, 'return'),
+    }, tabId, context.url);
+    leaseAuthorized = consumed.data?.authorized ?? false;
+    if (leaseAuthorized) seekCount += 1;
+    return {
+      ok: false,
+      message: '当前视频状态已变化，请重新预览并确认跳转。',
+      candidateId: null,
+      returnPointSeconds: null,
+      targetSeconds: null,
+    };
+  });
+
+  const returned = await sendRequest<CurrentVideoTimestampReturnResponse>({
+    action: 'RETURN_CURRENT_VIDEO_SUBTITLE_JUMP',
+    params: { sourceIdentityKey: source.identity.sourceIdentityKey },
   }, tabId, context.url);
 
   assert.equal(returned.success, true);
