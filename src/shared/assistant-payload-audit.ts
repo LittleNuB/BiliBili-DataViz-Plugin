@@ -1,6 +1,7 @@
 export interface AssistantPayloadAuditContract {
   name: string;
   allowedPaths: readonly string[];
+  contentStringPaths?: readonly string[];
 }
 
 export interface AssistantPayloadAuditViolation {
@@ -138,6 +139,13 @@ export const currentVideoSummaryHighlightsPayloadContract: AssistantPayloadAudit
     '$.textLines[].text',
     '$.outputRules',
     '$.outputRules[]',
+  ],
+  contentStringPaths: [
+    '$.request.model',
+    '$.video.title',
+    '$.video.partTitle',
+    '$.source.language',
+    '$.textLines[].text',
   ],
 };
 
@@ -299,6 +307,7 @@ export function auditAssistantPayload(
     path: '$',
     normalizedPath: '$',
     allowed,
+    contentStringPaths: new Set(contract.contentStringPaths ?? []),
     violations,
   });
   return {
@@ -327,6 +336,7 @@ interface VisitState {
   path: string;
   normalizedPath: string;
   allowed: Set<string>;
+  contentStringPaths: Set<string>;
   violations: AssistantPayloadAuditViolation[];
 }
 
@@ -339,7 +349,9 @@ function visitPayload(value: unknown, state: VisitState): void {
   }
 
   if (typeof value === 'string') {
-    checkSensitiveString(value, state.path, state.violations);
+    if (!state.contentStringPaths.has(state.normalizedPath)) {
+      checkSensitiveString(value, state.path, state.violations);
+    }
     return;
   }
 

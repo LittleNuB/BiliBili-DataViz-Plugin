@@ -95,6 +95,8 @@ def assert_no_protected_actions(page):
 
 
 def assert_clean_page(page):
+    actions = page.evaluate("(window.__popupMockMessages || []).map(message => message.action)")
+    assert "GET_CURRENT_VIDEO_SUMMARY" not in actions, "popup called the legacy bounded summary route"
     visible = page.locator("body").inner_text()
     for term in FORBIDDEN_VISIBLE_TERMS:
         assert term not in visible, f"popup leaked raw visible term: {term}"
@@ -117,6 +119,7 @@ def run_manual_exact_flow(page):
     page.get_by_role("button", name="生成摘要与亮点").click()
     expect(page.get_by_text("手动生成已使用精确的当前正文来源。")).to_be_visible()
     expect(page.get_by_text("视频亮点")).to_be_visible()
+    expect(page.get_by_text("等待时间和费用由你配置的 AI 服务决定。", exact=False)).to_be_visible()
     assert page.get_by_text("亮点 ").count() >= 4
     page.get_by_role("button", name="预览跳转").first.click()
     page.get_by_role("button", name="确认跳转").first.click()
@@ -256,15 +259,17 @@ def run_summary_failure_states(page):
     assert_clean_page(page)
 
     page.goto(f"{POPUP_URL}?summaryDisabled=1")
-    page.get_by_role("button", name="生成摘要与亮点").click()
     expect(page.get_by_text("当前视频 AI 助手未开启，本次没有发送正文。")).to_be_visible()
     expect(page.get_by_role("button", name="前往设置")).to_be_visible()
+    expect(page.get_by_role("button", name="暂不可生成")).to_be_disabled()
+    assert len(messages_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")) == 0
     assert_clean_page(page)
 
     page.goto(f"{POPUP_URL}?summaryUnconfigured=1")
-    page.get_by_role("button", name="生成摘要与亮点").click()
     expect(page.get_by_text("AI 服务尚未配置完整，本次没有发送正文。")).to_be_visible()
     expect(page.get_by_role("button", name="前往设置")).to_be_visible()
+    expect(page.get_by_role("button", name="暂不可生成")).to_be_disabled()
+    assert len(messages_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")) == 0
     assert_clean_page(page)
 
     page.goto(f"{POPUP_URL}?summaryInvalid=1")
@@ -285,12 +290,19 @@ def run_generating_cancel_flow(page):
     page.evaluate("window.__popupMockDeferNextResponse('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
     page.get_by_role("button", name="生成摘要与亮点").click()
     page.wait_for_function("window.__popupMockPendingResponseCount('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS') === 1")
+    generation_message = last_message_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    page.evaluate("window.__popupMockEmitSelectionChange('clear')")
     expect(page.get_by_role("button", name="取消")).to_be_visible()
     page.get_by_role("button", name="取消").click()
     page.wait_for_function("(window.__popupMockMessages || []).some(message => message.action === 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    cancel_message = last_message_for(page, "CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    assert cancel_message["params"]["requestId"] == generation_message["params"]["requestId"]
+    assert cancel_message["params"]["selectedSourceIdentityKey"] == generation_message["params"]["selectedSourceIdentityKey"]
     page.evaluate("window.__popupMockResolveResponses('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
     page.wait_for_timeout(50)
     expect(page.get_by_text("手动生成已使用精确的当前正文来源。")).to_have_count(0)
+    expect(page.get_by_text("本次生成已取消，旧结果不会被替换。", exact=True)).to_be_visible()
+    assert page.evaluate("window.__popupMockSummaryCache()") is None
     assert_clean_page(page)
 
 
@@ -302,6 +314,71 @@ def run_cache_restore_and_refresh(page):
     page.get_by_role("button", name="重新生成摘要与亮点").click()
     expect(page.get_by_text("手动生成已使用精确的当前正文来源。")).to_be_visible()
     assert len(messages_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")) == 1
+    assert_clean_page(page)
+
+
+def run_authorization_off_cache_restore(page):
+    page.route("**/*", route_popup)
+    page.goto(f"{POPUP_URL}?cachedSummary=1&summaryDisabled=1")
+    expect(page.get_by_text("此前生成", exact=True)).to_be_visible()
+    expect(page.get_by_text("关闭授权后仍可查看，但不能重新生成。", exact=False)).to_be_visible()
+    expect(page.get_by_role("button", name="暂不可生成")).to_be_disabled()
+    assert len(messages_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")) == 0
+    assert_clean_page(page)
+
+
+def run_highlight_preview_replacement_race(page):
+    page.route("**/*", route_popup)
+    page.goto(f"{POPUP_URL}?cachedSummary=1")
+    expect(page.get_by_text("已读取本地缓存的摘要与亮点。")).to_be_visible()
+    page.get_by_role("button", name="预览跳转").first.click()
+    expect(page.get_by_text("确认跳转前预览")).to_be_visible()
+    page.evaluate("window.__popupMockReplaceSummaryGeneration()")
+    page.get_by_role("button", name="确认跳转").click()
+    expect(page.get_by_text("亮点结果或页面状态已变化，请重新预览后再试。")).to_be_visible()
+    expect(page.get_by_role("button", name="返回原位置")).to_have_count(0)
+    jump_message = last_message_for(page, "REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP")
+    current_cache = page.evaluate("window.__popupMockSummaryCache()")
+    assert jump_message["params"]["requestId"] != current_cache["requestId"]
+    assert_clean_page(page)
+
+
+def run_prior_refresh_terminal_flow(page, terminal):
+    query = {
+        "invalid": "cachedSummary=1&summaryInvalid=1",
+        "network": "cachedSummary=1&summaryReject=1",
+    }[terminal]
+    expected = (
+        "模型返回的摘要与亮点没有通过校验，旧结果不会被替换。"
+        if terminal == "invalid"
+        else "摘要与亮点生成失败，请确认当前 B 站视频页仍然打开后重试。"
+    )
+    page.route("**/*", route_popup)
+    page.goto(f"{POPUP_URL}?{query}")
+    old_text = "手动生成已使用精确的当前正文来源。"
+    expect(page.get_by_text(old_text)).to_be_visible()
+    page.get_by_role("button", name="重新生成摘要与亮点").click()
+    expect(page.get_by_text(expected)).to_be_visible()
+    expect(page.get_by_text(old_text)).to_be_visible()
+    expect(page.get_by_text("此前生成", exact=True)).to_be_visible()
+    assert_clean_page(page)
+
+
+def run_prior_cancel_flow(page):
+    page.route("**/*", route_popup)
+    page.goto(f"{POPUP_URL}?cachedSummary=1")
+    old_text = "手动生成已使用精确的当前正文来源。"
+    expect(page.get_by_text(old_text)).to_be_visible()
+    page.evaluate("window.__popupMockDeferNextResponse('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    page.get_by_role("button", name="重新生成摘要与亮点").click()
+    expect(page.get_by_text("正在生成新的摘要与亮点，此前结果会保留到新结果通过校验。")).to_be_visible()
+    expect(page.get_by_text(old_text)).to_be_visible()
+    expect(page.get_by_text("此前生成", exact=True)).to_be_visible()
+    page.get_by_role("button", name="取消").click()
+    expect(page.get_by_text("本次生成已取消，此前结果保持不变。")).to_be_visible()
+    expect(page.get_by_text(old_text)).to_be_visible()
+    page.evaluate("window.__popupMockResolveResponses('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    expect(page.get_by_text(old_text)).to_be_visible()
     assert_clean_page(page)
 
 
@@ -506,6 +583,31 @@ def main():
             assert not cached_summary_errors, "\n".join(cached_summary_errors)
             cached_summary.close()
 
+            authorization_off_cache, authorization_off_cache_errors = new_checked_page(browser)
+            run_authorization_off_cache_restore(authorization_off_cache)
+            assert not authorization_off_cache_errors, "\n".join(authorization_off_cache_errors)
+            authorization_off_cache.close()
+
+            highlight_replacement, highlight_replacement_errors = new_checked_page(browser)
+            run_highlight_preview_replacement_race(highlight_replacement)
+            assert not highlight_replacement_errors, "\n".join(highlight_replacement_errors)
+            highlight_replacement.close()
+
+            prior_invalid, prior_invalid_errors = new_checked_page(browser)
+            run_prior_refresh_terminal_flow(prior_invalid, "invalid")
+            assert not prior_invalid_errors, "\n".join(prior_invalid_errors)
+            prior_invalid.close()
+
+            prior_network, prior_network_errors = new_checked_page(browser)
+            run_prior_refresh_terminal_flow(prior_network, "network")
+            assert not prior_network_errors, "\n".join(prior_network_errors)
+            prior_network.close()
+
+            prior_cancel, prior_cancel_errors = new_checked_page(browser)
+            run_prior_cancel_flow(prior_cancel)
+            assert not prior_cancel_errors, "\n".join(prior_cancel_errors)
+            prior_cancel.close()
+
             eight_highlights, eight_highlights_errors = new_checked_page(browser)
             run_eight_highlight_layout(eight_highlights)
             assert not eight_highlights_errors, "\n".join(eight_highlights_errors)
@@ -546,7 +648,7 @@ def main():
             assert not desktop_errors, "\n".join(desktop_errors)
             desktop.close()
 
-            print("current-video popup real UI QA passed: open/reprobe no generation, cache restore no generation, summary/highlight success, no-text, AI disabled, AI unconfigured, generating cancel, request error, invalid rejection, 4-8 highlights, highlight preview/confirm/return, knowledge/search/jump/return scope races, stale source blocked, responsive no raw visible leak, no overflow, no console errors")
+            print("current-video popup real UI QA passed: combined summary/key-points/highlights, open/reprobe no generation, no-click disabled/unconfigured entry, cache restore and authorization-off prior result, failed-refresh old-result preservation, exact source-change cancel with late-response rejection, no-text/generating/error/invalid states, 4-8 highlights, preview/confirm/return and replacement rejection, responsive no-overflow/no-console/raw-copy checks")
         finally:
             browser.close()
 

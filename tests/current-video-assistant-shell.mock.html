@@ -73,7 +73,10 @@
       let mockPage = 1;
       let subtitleCached = mockParams.get("subtitleCached") === "1";
       let switchDuringNextTranscriptFetch = false;
-      let summaryReadCount = 0;
+      let summaryGeneration = 0;
+      let summaryCacheResult = null;
+      let summaryCacheSourceIdentityKey = null;
+      const cancelledSummaryRequestIds = new Set();
       let searchReadCount = 0;
       let knowledgeReadCount = 0;
       let playbackPosition = 12;
@@ -282,61 +285,251 @@
         };
       }
 
-      function currentSummary() {
-        summaryReadCount += 1;
-        const log = document.querySelector("[data-testid='runtime-log']");
-        if (log) log.textContent = `摘要刷新 ${summaryReadCount} 次；字幕缓存=${subtitleCached ? "是" : "否"}`;
-
-        if (subtitleCached) {
+      function summaryHighlightsResult(options = {}) {
+        const textSize = { lineCount: 12, charCount: 360, utf8Bytes: 720 };
+        const generatedAt = options.generatedAt || 10_000 + summaryGeneration;
+        const requestId = options.requestId || `mock-page-summary-${summaryGeneration}`;
+        const base = {
+          title: "页内助手 Shell Mock 视频",
+          sourceLabel: null,
+          textSize,
+          summarySentences: [],
+          keyPoints: [],
+          highlights: [],
+          limitations: [],
+          generatedAt,
+          model: "mock-model",
+          cacheKey: null,
+          cacheHit: false,
+          current: true,
+          requestId: null,
+          canGenerate: true,
+          priorGenerated: false,
+          generationBlockedMessage: null,
+        };
+        const state = options.state || "ready";
+        if (state === "not_requested") {
           return {
-            status: "ready",
-            sourceTier: "transcript_summary",
-            sourceTierLabel: "字幕正文摘要",
-            confidence: "medium",
-            generationMode: "local_fallback",
-            title: "页内助手 Shell Mock 视频",
-            summary: "基于本地缓存的字幕正文证据，视频开头说明页内助手如何留在播放页内展示摘要与字幕状态。",
-            bullets: [
-              "0:00-0:04：说明页内助手不再把单视频流程交给全局面板。",
-              "0:04-0:08：重新检测字幕后，摘要使用本地字幕正文证据。",
-            ],
-            evidence: [],
-            timestampRanges: [
-              {
-                startSeconds: 0,
-                endSeconds: 8,
-                label: "0:00-0:08",
-                evidenceSnippet: "页内助手留在播放页内；字幕正文已缓存为本地证据。",
-                ["segment" + "Ids"]: [["transcript", "BV1ShellMock9", "2202", "1", "zh-cn", "hash-hidden-in-ui", "0"].join(":")],
-                language: "zh-CN",
-              },
-            ],
-            missingSources: ["弹幕", "评论", "画面识别"],
-            warnings: [],
-            limitations: ["本结果基于当前视频本地缓存的字幕正文证据，不包含弹幕、评论或画面识别。"],
-            nextQuestions: ["刷新字幕正文证据"],
-            ai: { status: "not_requested", model: null, error: null, note: "本地证据结果；本次没有请求 AI。" },
-            generatedAt: Date.now(),
+            ...base,
+            status: "not_requested",
+            message: "可在这里手动生成摘要与亮点；打开面板不会自动发送正文。",
+            ai: { status: "not_requested", model: null, error: null, note: "尚未请求生成。" },
+            model: null,
+          };
+        }
+        if (state === "no_text") {
+          return {
+            ...base,
+            status: "no_text",
+            message: "当前没有可用的主要正文，无法生成摘要与亮点。",
+            limitations: ["请先检测并选择主要文本来源。"],
+            ai: { status: "not_requested", model: "mock-model", error: null, note: "本次没有请求 AI。" },
+          };
+        }
+        if (state === "disabled") {
+          return {
+            ...base,
+            status: "error",
+            message: "当前视频 AI 助手未开启，本次没有发送正文。",
+            limitations: ["开启后仍需再次点击生成。"],
+            ai: { status: "disabled", model: "mock-model", error: null, note: "请先在设置中开启当前视频 AI 助手。" },
+            canGenerate: false,
+            generationBlockedMessage: "要生成或刷新，请先在设置中开启“当前视频 AI 助手”。",
+          };
+        }
+        if (state === "unconfigured") {
+          return {
+            ...base,
+            status: "error",
+            message: "AI 服务尚未配置完整，本次没有发送正文。",
+            limitations: ["配置完成后需要再次点击生成。"],
+            ai: { status: "not_configured", model: "mock-model", error: null, note: "请先完成 AI 服务配置。" },
+            canGenerate: false,
+            generationBlockedMessage: "要生成或刷新，请先完成 AI 服务配置。",
+          };
+        }
+        if (state === "invalid") {
+          return {
+            ...base,
+            status: "invalid_output",
+            message: "模型返回的摘要与亮点没有通过校验，旧结果不会被替换。",
+            limitations: ["请稍后重试。"],
+            ai: { status: "invalid_output", model: "mock-model", error: "invalid", note: "已拒绝本次结果。" },
+          };
+        }
+        if (state === "error") {
+          return {
+            ...base,
+            status: "error",
+            message: "摘要与亮点生成失败，旧结果不会被替换。",
+            limitations: ["本次失败不会写入本地结果。"],
+            ai: { status: "failed", model: "mock-model", error: "mock-error", note: "请检查 AI 设置后重试。" },
+          };
+        }
+        if (state === "cancelled") {
+          return {
+            ...base,
+            status: "cancelled",
+            message: "本次生成已取消，未写入新的摘要与亮点。",
+            limitations: ["此前结果不会被替换。"],
+            ai: { status: "cancelled", model: "mock-model", error: null, note: "已取消本次生成。" },
           };
         }
 
+        const highlightCount = Math.max(4, Math.min(8, Number(mockParams.get("highlightCount") || 4)));
+        const highlights = Array.from({ length: highlightCount }, (_, index) => {
+          const startSeconds = index * 8;
+          const endSeconds = startSeconds + 6;
+          return {
+            id: `highlight-${index + 1}`,
+            title: `页内亮点 ${index + 1}`,
+            description: `这是第 ${index + 1} 个经过校验的页内亮点说明。`,
+            startSeconds,
+            endSeconds,
+            timeRangeLabel: `0:${String(startSeconds).padStart(2, "0")}-0:${String(endSeconds).padStart(2, "0")}`,
+            evidenceLineNumbers: [index + 1],
+          };
+        });
+        const priorGenerated = options.priorGenerated === true;
         return {
+          ...base,
           status: "ready",
-          sourceTier: "description_summary",
-          sourceTierLabel: "简介摘要",
-          confidence: "medium",
-          generationMode: "local_fallback",
-          title: "页内助手 Shell Mock 视频",
-          summary: "基于可见简介和元数据，这个 mock 用于验证页内助手 Shell；当前还没有字幕正文。",
-          bullets: ["简介说明了测试目标，但不会被当作完整视频正文。"],
-          evidence: [],
-          timestampRanges: [],
-          missingSources: ["字幕正文/页面可见文字"],
-          warnings: ["transcript_probe_pending"],
-          limitations: ["当前没有可引用的字幕正文；这不是完整视频总结。"],
-          nextQuestions: ["刷新当前视频元数据"],
-          ai: { status: "not_requested", model: null, error: null, note: "本地证据结果；本次没有请求 AI。" },
-          generatedAt: Date.now(),
+          message: priorGenerated
+            ? "已读取此前生成的摘要与亮点；关闭授权后仍可查看，但不能重新生成。"
+            : options.cacheHit
+              ? "已读取本地缓存的摘要与亮点。"
+              : `已生成 3 条摘要、3 个要点和 ${highlightCount} 个亮点。`,
+          sourceLabel: "B站字幕",
+          summarySentences: [
+            { id: "summary-1", text: `页内助手使用一次完整正文请求生成合并结果 ${summaryGeneration}。`, evidenceLineNumbers: [1, 2] },
+            { id: "summary-2", text: "摘要保持自然中文，不展示正文摘录。", evidenceLineNumbers: [3, 4] },
+            { id: "summary-3", text: "亮点时间来自已经核对的正文行。", evidenceLineNumbers: [5, 6] },
+          ],
+          keyPoints: [
+            { id: "key-point-1", text: "先确认当前主要文本来源。", evidenceLineNumbers: [1] },
+            { id: "key-point-2", text: "再生成摘要与亮点。", evidenceLineNumbers: [3] },
+            { id: "key-point-3", text: "最后预览并确认跳转。", evidenceLineNumbers: [5] },
+          ],
+          highlights,
+          limitations: ["摘要区不展示正文摘录；亮点时间只来自已校验的当前正文行。"],
+          ai: { status: "generated", model: "mock-model", error: null, note: options.cacheHit ? "已从本地缓存读取。" : "已完成生成并通过校验。" },
+          cacheKey: "mock-page-summary-cache",
+          cacheHit: options.cacheHit === true,
+          requestId,
+          canGenerate: !priorGenerated,
+          priorGenerated,
+          generationBlockedMessage: priorGenerated
+            ? "要重新生成，请先在设置中开启“当前视频 AI 助手”。"
+            : null,
+        };
+      }
+
+      if (mockParams.get("cachedSummary") === "1") {
+        summaryGeneration = 1;
+        summaryCacheResult = summaryHighlightsResult({
+          cacheHit: true,
+          priorGenerated: mockParams.get("summaryDisabled") === "1",
+        });
+        summaryCacheSourceIdentityKey = subtitleSourceIdentityKey();
+      }
+
+      function summaryStateFromParams() {
+        if (mockParams.get("summaryDisabled") === "1") return "disabled";
+        if (mockParams.get("summaryUnconfigured") === "1") return "unconfigured";
+        return mockParams.get("summaryState") || "ready";
+      }
+
+      function summaryRequestAuthorized(params) {
+        const partKey = `${mockBvid}:${mockCid}:${mockPage}`;
+        const selected = extensionStorage[primaryTextSelectionStorageKey]?.[partKey];
+        return params?.primaryTextSelectionsReady === true
+          && params?.selectedSourceIdentityKey === subtitleSourceIdentityKey()
+          && selected === params.selectedSourceIdentityKey;
+      }
+
+      function summaryCacheResponse(params) {
+        if (!summaryRequestAuthorized(params)) {
+          return summaryHighlightsResult({ state: "no_text" });
+        }
+        if (summaryCacheResult && summaryCacheSourceIdentityKey === params.selectedSourceIdentityKey) {
+          return summaryCacheResult;
+        }
+        const state = summaryStateFromParams();
+        if (state === "disabled" || state === "unconfigured") {
+          return summaryHighlightsResult({ state });
+        }
+        return summaryHighlightsResult({ state: "not_requested" });
+      }
+
+      function generateSummaryHighlights(params) {
+        const requestId = String(params?.requestId || "");
+        const capturedSourceIdentityKey = String(params?.selectedSourceIdentityKey || "");
+        if (mockParams.get("summaryReject") === "1") {
+          return Promise.reject(new Error("MOCK_SUMMARY_NETWORK_FAILURE"));
+        }
+        const finish = () => {
+          if (cancelledSummaryRequestIds.has(requestId)) {
+            return { success: true, data: summaryHighlightsResult({ state: "cancelled", requestId }) };
+          }
+          if (!capturedSourceIdentityKey) {
+            return { success: true, data: summaryHighlightsResult({ state: "no_text", requestId }) };
+          }
+          const state = summaryStateFromParams();
+          if (state !== "ready") {
+            return { success: true, data: summaryHighlightsResult({ state, requestId }) };
+          }
+          summaryGeneration += 1;
+          const result = {
+            ...summaryHighlightsResult({ requestId }),
+            current: capturedSourceIdentityKey === subtitleSourceIdentityKey(),
+          };
+          summaryCacheResult = { ...result, cacheHit: true };
+          summaryCacheSourceIdentityKey = capturedSourceIdentityKey;
+          return { success: true, data: result };
+        };
+        if (deferNextProtectedAction !== "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") {
+          return Promise.resolve(finish());
+        }
+        deferNextProtectedAction = null;
+        return new Promise((resolve) => {
+          pendingProtectedResponses.push(() => resolve(finish()));
+        });
+      }
+
+      function requestCurrentVideoHighlightJump(params) {
+        const result = summaryCacheResult;
+        const highlight = result?.highlights?.find((item) => item.id === params?.highlightId);
+        const bindingMatches = Boolean(
+          highlight
+          && params?.confirmed === true
+          && params?.cacheKey === result.cacheKey
+          && params?.requestId === result.requestId
+          && params?.generatedAt === result.generatedAt
+          && params?.model === result.model
+        );
+        if (!bindingMatches) {
+          return {
+            ok: false,
+            message: "亮点结果已变化，请重新预览后再跳转。",
+            candidateId: String(params?.highlightId || ""),
+            targetSeconds: null,
+            targetTimeLabel: null,
+            returnPointSeconds: null,
+            sourceLabel: null,
+            confidence: null,
+          };
+        }
+        returnPointSeconds = playbackPosition;
+        playbackPosition = highlight.startSeconds;
+        return {
+          ok: true,
+          message: `已跳到 ${formatMockTime(highlight.startSeconds)}，可返回 ${formatMockTime(returnPointSeconds)}。`,
+          candidateId: highlight.id,
+          targetSeconds: highlight.startSeconds,
+          targetTimeLabel: formatMockTime(highlight.startSeconds),
+          returnPointSeconds,
+          sourceLabel: "视频亮点",
+          confidence: 1,
         };
       }
 
@@ -718,6 +911,17 @@
       window.__assistantMockResolveProtectedResponses = () => {
         const pending = pendingProtectedResponses.splice(0);
         for (const resolve of pending) resolve();
+      };
+      window.__assistantMockPendingProtectedResponseCount = () => pendingProtectedResponses.length;
+      window.__assistantMockReplaceSummaryGeneration = () => {
+        summaryGeneration += 1;
+        summaryCacheResult = summaryHighlightsResult({ cacheHit: true });
+        summaryCacheSourceIdentityKey = subtitleSourceIdentityKey();
+      };
+      window.__assistantMockSummaryCache = () => summaryCacheResult;
+      window.__assistantMockDropSummaryCache = () => {
+        summaryCacheResult = null;
+        summaryCacheSourceIdentityKey = null;
       };
       window.__assistantMockDeferNextTimestampSeek = () => {
         deferNextTimestampSeek = true;
@@ -1310,8 +1514,22 @@
               }
               return Promise.resolve({ success: true, data: evidence });
             }
-            if (message.action === "GET_CURRENT_VIDEO_SUMMARY") {
-              return maybeDeferProtectedResponse(message.action, { success: true, data: currentSummary() });
+            if (message.action === "GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE") {
+              return maybeDeferProtectedResponse(message.action, { success: true, data: summaryCacheResponse(message.params) });
+            }
+            if (message.action === "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") {
+              return generateSummaryHighlights(message.params);
+            }
+            if (message.action === "CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") {
+              const requestId = String(message.params?.requestId || "");
+              if (requestId) cancelledSummaryRequestIds.add(requestId);
+              return Promise.resolve({ success: true, data: { cancelled: true } });
+            }
+            if (message.action === "REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP") {
+              return maybeDeferProtectedResponse(message.action, {
+                success: true,
+                data: requestCurrentVideoHighlightJump(message.params),
+              });
             }
             if (message.action === "GET_VIDEO_KNOWLEDGE") {
               return maybeDeferProtectedResponse(message.action, { success: true, data: currentVideoKnowledge() });

@@ -15,6 +15,9 @@
   const deferredActionCounts = new Map();
   const pendingResponses = [];
   const actionSequence = new Map();
+  const cancelledSummaryRequestIds = new Set();
+  let summaryCacheResult = null;
+  let summaryReplacementSequence = 100;
   let returnAvailable = false;
 
   if (params.get('savedV1') === '1') {
@@ -39,7 +42,9 @@
 
   function maybeDeferResponse(action, response) {
     const remaining = deferredActionCounts.get(action) || 0;
-    if (remaining <= 0) return Promise.resolve(response);
+    if (remaining <= 0) {
+      return Promise.resolve(typeof response === 'function' ? response() : response);
+    }
     deferredActionCounts.set(action, remaining - 1);
     return new Promise((resolve) => pendingResponses.push({ action, response, resolve }));
   }
@@ -162,9 +167,12 @@
         cacheHit: false,
         current: true,
         requestId: null,
+        canGenerate: true,
+        priorGenerated: false,
+        generationBlockedMessage: null,
       };
     }
-    if (options.status === 'disabled' || params.get('summaryDisabled') === '1') {
+    if (!options.cacheHit && (options.status === 'disabled' || params.get('summaryDisabled') === '1')) {
       return {
         status: 'error',
         title: 'Popup 授权 Mock 视频',
@@ -182,9 +190,12 @@
         cacheHit: false,
         current: true,
         requestId: null,
+        canGenerate: false,
+        priorGenerated: false,
+        generationBlockedMessage: '要生成或刷新，请先在设置中开启“当前视频 AI 助手”。',
       };
     }
-    if (options.status === 'unconfigured' || params.get('summaryUnconfigured') === '1') {
+    if (!options.cacheHit && (options.status === 'unconfigured' || params.get('summaryUnconfigured') === '1')) {
       return {
         status: 'error',
         title: 'Popup 授权 Mock 视频',
@@ -202,9 +213,12 @@
         cacheHit: false,
         current: true,
         requestId: null,
+        canGenerate: false,
+        priorGenerated: false,
+        generationBlockedMessage: '要生成或刷新，请先完成 AI 服务配置。',
       };
     }
-    if (options.status === 'invalid' || params.get('summaryInvalid') === '1') {
+    if (!options.cacheHit && (options.status === 'invalid' || params.get('summaryInvalid') === '1')) {
       return {
         status: 'invalid_output',
         title: 'Popup 授权 Mock 视频',
@@ -222,9 +236,12 @@
         cacheHit: false,
         current: true,
         requestId: null,
+        canGenerate: true,
+        priorGenerated: false,
+        generationBlockedMessage: null,
       };
     }
-    if (options.status === 'error' || params.get('summaryError') === '1') {
+    if (!options.cacheHit && (options.status === 'error' || params.get('summaryError') === '1')) {
       return {
         status: 'error',
         title: 'Popup 授权 Mock 视频',
@@ -242,12 +259,43 @@
         cacheHit: false,
         current: true,
         requestId: null,
+        canGenerate: true,
+        priorGenerated: false,
+        generationBlockedMessage: null,
       };
     }
+    if (options.status === 'cancelled') {
+      return {
+        status: 'cancelled',
+        title: 'Popup 授权 Mock 视频',
+        message: '本次生成已取消，旧结果不会被替换。',
+        sourceLabel: null,
+        textSize,
+        summarySentences: [],
+        keyPoints: [],
+        highlights: [],
+        limitations: ['如需更新，请重新点击生成。'],
+        ai: { status: 'cancelled', model: 'mock-model', error: null, note: '本次生成已取消。' },
+        generatedAt: Date.now(),
+        model: 'mock-model',
+        cacheKey: null,
+        cacheHit: false,
+        current: true,
+        requestId: options.requestId || null,
+        canGenerate: true,
+        priorGenerated: false,
+        generationBlockedMessage: null,
+      };
+    }
+    const priorGenerated = options.cacheHit === true && params.get('summaryDisabled') === '1';
     return {
       status: 'ready',
       title: 'Popup 授权 Mock 视频',
-      message: options.cacheHit ? '已读取本地缓存的摘要与亮点。' : `已生成 3 条摘要、3 个要点和 ${highlightCount} 个亮点。`,
+      message: priorGenerated
+        ? '已读取此前生成的摘要与亮点；关闭授权后仍可查看，但不能重新生成。'
+        : options.cacheHit
+          ? '已读取本地缓存的摘要与亮点。'
+          : `已生成 3 条摘要、3 个要点和 ${highlightCount} 个亮点。`,
       sourceLabel: 'B站字幕',
       textSize,
       summarySentences: [
@@ -268,7 +316,12 @@
       cacheKey: 'mock-summary-highlight-cache',
       cacheHit: options.cacheHit === true,
       current: true,
-      requestId: `mock-request-${sequence}`,
+      requestId: options.requestId || `mock-request-${sequence}`,
+      canGenerate: !priorGenerated,
+      priorGenerated,
+      generationBlockedMessage: priorGenerated
+        ? '要重新生成，请先在设置中开启“当前视频 AI 助手”。'
+        : null,
     };
   }
 
@@ -398,8 +451,16 @@
     for (const item of selected) {
       const index = pendingResponses.indexOf(item);
       if (index >= 0) pendingResponses.splice(index, 1);
-      item.resolve(item.response);
+      item.resolve(typeof item.response === 'function' ? item.response() : item.response);
     }
+  };
+  window.__popupMockSummaryCache = () => summaryCacheResult;
+  window.__popupMockReplaceSummaryGeneration = () => {
+    summaryReplacementSequence += 1;
+    summaryCacheResult = summaryResult(true, summaryReplacementSequence, {
+      cacheHit: true,
+      requestId: `mock-replacement-${summaryReplacementSequence}`,
+    });
   };
   window.__popupMockEmitSelectionChange = (mode = 'same') => {
     const oldValue = storage[storageKey];
@@ -453,11 +514,26 @@
           case 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE':
             return maybeDeferResponse(message.action, { success: true, data: transcriptEvidence() });
           case 'GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE':
-            return maybeDeferResponse(message.action, {
-              success: true,
-              data: params.get('cachedSummary') === '1'
-                ? summaryResult(authorized, nextActionSequence(message.action), { cacheHit: true })
-                : {
+            return maybeDeferResponse(message.action, () => {
+              if (params.get('cachedSummary') === '1' && !summaryCacheResult) {
+                summaryCacheResult = summaryResult(authorized, nextActionSequence(message.action), { cacheHit: true });
+              }
+              const cacheMissStatus = params.get('summaryDisabled') === '1'
+                ? 'disabled'
+                : params.get('summaryUnconfigured') === '1'
+                  ? 'unconfigured'
+                  : null;
+              return {
+                success: true,
+                data: params.get('cachedSummary') === '1'
+                  ? summaryCacheResult
+                  : cacheMissStatus
+                    ? summaryResult(
+                      authorized,
+                      nextActionSequence(message.action),
+                      { status: cacheMissStatus },
+                    )
+                  : {
                   status: 'not_requested',
                   title: 'Popup 授权 Mock 视频',
                   message: '可在这里手动生成摘要与亮点；打开面板不会自动发送正文。',
@@ -474,19 +550,42 @@
                   cacheHit: false,
                   current: true,
                   requestId: null,
+                  canGenerate: true,
+                  priorGenerated: false,
+                  generationBlockedMessage: null,
                 },
+              };
             });
-          case 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS':
-            return maybeDeferResponse(message.action, {
-              success: true,
-              data: summaryResult(
+          case 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS': {
+            const sequence = nextActionSequence(message.action);
+            const requestId = String(message.params?.requestId || '');
+            if (params.get('summaryReject') === '1') {
+              return Promise.reject(new Error('MOCK_POPUP_SUMMARY_NETWORK_FAILURE'));
+            }
+            return maybeDeferResponse(message.action, () => {
+              if (cancelledSummaryRequestIds.has(requestId)) {
+                return {
+                  success: true,
+                  data: summaryResult(true, sequence, { status: 'cancelled', requestId }),
+                };
+              }
+              const data = summaryResult(
                 params.get('summaryNoText') === '1' ? true : authorized,
-                nextActionSequence(message.action),
-                { status: params.get('summaryNoText') === '1' ? 'no_text' : undefined },
-              ),
+                sequence,
+                {
+                  status: params.get('summaryNoText') === '1' ? 'no_text' : undefined,
+                  requestId,
+                },
+              );
+              if (data.status === 'ready') summaryCacheResult = { ...data, cacheHit: true };
+              return { success: true, data };
             });
-          case 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS':
+          }
+          case 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS': {
+            const requestId = String(message.params?.requestId || '');
+            if (requestId) cancelledSummaryRequestIds.add(requestId);
             return maybeDeferResponse(message.action, { success: true, data: { cancelled: true } });
+          }
           case 'GET_VIDEO_KNOWLEDGE':
             return maybeDeferResponse(message.action, {
               success: true,
@@ -527,17 +626,29 @@
               confidence: authorized ? 0.88 : null,
             } });
           case 'REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP':
-            returnAvailable = authorized;
+            {
+            const bindingMatches = Boolean(
+              summaryCacheResult
+              && message.params?.confirmed === true
+              && message.params?.cacheKey === summaryCacheResult.cacheKey
+              && message.params?.requestId === summaryCacheResult.requestId
+              && message.params?.generatedAt === summaryCacheResult.generatedAt
+              && message.params?.model === summaryCacheResult.model
+              && summaryCacheResult.highlights.some(item => item.id === message.params?.highlightId)
+            );
+            const allowed = authorized && bindingMatches;
+            returnAvailable = allowed;
             return maybeDeferResponse(message.action, { success: true, data: {
-              ok: authorized,
-              message: authorized ? '已跳到 0:00，可返回 0:12。' : '主要文本来源不可用，未跳转。',
+              ok: allowed,
+              message: allowed ? '已跳到 0:00，可返回 0:12。' : '亮点结果已变化，请重新预览。',
               candidateId: String(message.params?.highlightId || ''),
-              targetSeconds: authorized ? 0 : null,
-              targetTimeLabel: authorized ? '0:00' : null,
-              returnPointSeconds: authorized ? 12 : null,
-              sourceLabel: authorized ? '视频亮点' : null,
-              confidence: authorized ? 1 : null,
+              targetSeconds: allowed ? 0 : null,
+              targetTimeLabel: allowed ? '0:00' : null,
+              returnPointSeconds: allowed ? 12 : null,
+              sourceLabel: allowed ? '视频亮点' : null,
+              confidence: allowed ? 1 : null,
             } });
+            }
           case 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP':
             if (params.get('rawReturnFailure') === '1') {
               return maybeDeferResponse(message.action, { success: true, data: {

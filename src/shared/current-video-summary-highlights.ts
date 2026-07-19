@@ -1,15 +1,22 @@
 import type {
   CurrentVideoFullTextRequestEnvelope,
 } from './current-video-primary-text.ts';
+import type { AiConfig } from './types/config.ts';
 import type {
+  CurrentVideoSummaryHighlightBinding,
+  CurrentVideoSummaryHighlightsCacheRecord,
   CurrentVideoSummaryHighlight,
   CurrentVideoSummaryHighlightsAiState,
-  CurrentVideoSummaryHighlightsRequestSnapshot,
+  CurrentVideoSummaryHighlightsRequestAudit,
   CurrentVideoSummaryHighlightsResult,
   CurrentVideoSummaryHighlightsTextSize,
   CurrentVideoSummaryKeyPoint,
   CurrentVideoSummarySentence,
 } from './types/current-video-summary.ts';
+import {
+  assertAssistantPayloadAudit,
+  currentVideoSummaryHighlightsPayloadContract,
+} from './assistant-payload-audit.ts';
 
 export interface CurrentVideoSummaryHighlightsAiPayload {
   intent: 'current_video_summary_highlights_v1';
@@ -46,6 +53,12 @@ export interface CurrentVideoSummaryHighlightsAiOutput {
   highlights?: unknown;
 }
 
+export type CurrentVideoSummaryHighlightsChat = (
+  config: AiConfig,
+  messages: Array<{ role: 'system' | 'user'; content: string }>,
+  options?: { signal?: AbortSignal },
+) => Promise<CurrentVideoSummaryHighlightsAiOutput>;
+
 export type CurrentVideoSummaryHighlightsValidationResult =
   | {
       ok: true;
@@ -55,6 +68,15 @@ export type CurrentVideoSummaryHighlightsValidationResult =
       ok: false;
       reason: string;
     };
+
+// Hard limits for untrusted model output. String lengths use UTF-16 code units.
+export const CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_OUTPUT_LIMITS = Object.freeze({
+  summarySentenceChars: 240,
+  keyPointChars: 180,
+  highlightTitleChars: 80,
+  highlightDescriptionChars: 240,
+  evidenceLineNumbersPerItem: 12,
+});
 
 interface TextItemRecord {
   text: string;
@@ -100,7 +122,7 @@ export function buildCurrentVideoSummaryHighlightsAiPayload(
     outputRules: [
       '只返回 JSON 对象，不要 Markdown。',
       'summarySentences 必须是 2-4 条中文句子，每条包含 text 和 evidenceLineNumbers。',
-      'keyPoints 必须是 3-5 条有序中文要点，每条包含 text 和 evidenceLineNumbers。',
+      'keyPoints 必须是 3-5 条按正文先后排列的中文要点，每条包含 text 和 evidenceLineNumbers；各项最早引用行号不得倒退。',
       'highlights 必须是 4-8 条，按出现时间排序；每条包含 title、description、startSeconds、endSeconds、evidenceLineNumbers。',
       '所有 evidenceLineNumbers 必须引用 textLines 中存在的 lineNo。',
       '每个 highlight 的 startSeconds/endSeconds 必须来自引用行附近，且时间范围要与至少一条引用行重叠。',
@@ -128,6 +150,16 @@ export function buildCurrentVideoSummaryHighlightsMessages(
   ];
 }
 
+export async function requestCurrentVideoSummaryHighlightsAi(
+  config: AiConfig,
+  payload: CurrentVideoSummaryHighlightsAiPayload,
+  chat: CurrentVideoSummaryHighlightsChat,
+  options: { signal?: AbortSignal } = {},
+): Promise<CurrentVideoSummaryHighlightsAiOutput> {
+  assertAssistantPayloadAudit(payload, currentVideoSummaryHighlightsPayloadContract);
+  return await chat(config, buildCurrentVideoSummaryHighlightsMessages(payload), options);
+}
+
 export function validateCurrentVideoSummaryHighlightsAiOutput(
   output: unknown,
   envelope: CurrentVideoFullTextRequestEnvelope,
@@ -136,23 +168,31 @@ export function validateCurrentVideoSummaryHighlightsAiOutput(
     return invalid('output_not_object');
   }
   const record = output as CurrentVideoSummaryHighlightsAiOutput;
-  const summaryItems = normalizeTextRecords(record.summarySentences, 'summary_sentences');
-  if (!summaryItems.ok) return invalid(summaryItems.reason);
-  if (summaryItems.items.length < 2 || summaryItems.items.length > 4) {
+  if (Array.isArray(record.summarySentences) && (record.summarySentences.length < 2 || record.summarySentences.length > 4)) {
     return invalid('summary_sentence_count');
   }
+  const summaryItems = normalizeTextRecords(
+    record.summarySentences,
+    'summary_sentences',
+    CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_OUTPUT_LIMITS.summarySentenceChars,
+  );
+  if (!summaryItems.ok) return invalid(summaryItems.reason);
 
-  const keyPointItems = normalizeTextRecords(record.keyPoints, 'key_points');
-  if (!keyPointItems.ok) return invalid(keyPointItems.reason);
-  if (keyPointItems.items.length < 3 || keyPointItems.items.length > 5) {
+  if (Array.isArray(record.keyPoints) && (record.keyPoints.length < 3 || record.keyPoints.length > 5)) {
     return invalid('key_point_count');
   }
+  const keyPointItems = normalizeTextRecords(
+    record.keyPoints,
+    'key_points',
+    CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_OUTPUT_LIMITS.keyPointChars,
+  );
+  if (!keyPointItems.ok) return invalid(keyPointItems.reason);
 
-  const highlightItems = normalizeHighlightRecords(record.highlights);
-  if (!highlightItems.ok) return invalid(highlightItems.reason);
-  if (highlightItems.items.length < 4 || highlightItems.items.length > 8) {
+  if (Array.isArray(record.highlights) && (record.highlights.length < 4 || record.highlights.length > 8)) {
     return invalid('highlight_count');
   }
+  const highlightItems = normalizeHighlightRecords(record.highlights);
+  if (!highlightItems.ok) return invalid(highlightItems.reason);
 
   const lineMap = new Map(envelope.text.lines.map(line => [line.lineNo, line]));
   const allTextItems = [...summaryItems.items, ...keyPointItems.items];
@@ -163,6 +203,15 @@ export function validateCurrentVideoSummaryHighlightsAiOutput(
     }
   }
 
+  let previousKeyPointLine = -1;
+  for (const item of keyPointItems.items) {
+    const firstEvidenceLine = item.evidenceLineNumbers[0];
+    if (firstEvidenceLine < previousKeyPointLine) {
+      return invalid('key_point_order_invalid');
+    }
+    previousKeyPointLine = firstEvidenceLine;
+  }
+
   let lastHighlightStart = -1;
   for (const item of highlightItems.items) {
     if (!hasChineseText(item.title) || !hasChineseText(item.description)) {
@@ -171,7 +220,7 @@ export function validateCurrentVideoSummaryHighlightsAiOutput(
     if (!evidenceLinesExist(item.evidenceLineNumbers, lineMap)) {
       return invalid('highlight_evidence_line_missing');
     }
-    if (!validHighlightBounds(item, envelope.video.durationSeconds)) {
+    if (!validHighlightBounds(item, envelope)) {
       return invalid('highlight_bounds_invalid');
     }
     if (item.startSeconds < lastHighlightStart) {
@@ -209,9 +258,9 @@ export function validateCurrentVideoSummaryHighlightsAiOutput(
   };
 }
 
-export function requestSnapshotFromEnvelope(
+export function requestAuditFromEnvelope(
   envelope: CurrentVideoFullTextRequestEnvelope,
-): CurrentVideoSummaryHighlightsRequestSnapshot {
+): CurrentVideoSummaryHighlightsRequestAudit {
   return {
     requestId: envelope.requestId,
     operation: 'summary_highlights',
@@ -234,14 +283,44 @@ export function requestSnapshotFromEnvelope(
       lineCount: envelope.text.lineCount,
       charCount: envelope.text.charCount,
       utf8Bytes: envelope.text.utf8Bytes,
-      lines: envelope.text.lines.map(line => ({
-        lineNo: line.lineNo,
-        startSeconds: line.startSeconds,
-        endSeconds: line.endSeconds,
-        text: line.text,
-      })),
     },
   };
+}
+
+export function currentVideoSummaryHighlightBindingFromResult(
+  result: CurrentVideoSummaryHighlightsResult,
+  highlightId: string,
+): CurrentVideoSummaryHighlightBinding | null {
+  if (
+    result.status !== 'ready'
+    || !result.cacheKey
+    || !result.requestId
+    || !result.model
+    || !result.highlights.some(highlight => highlight.id === highlightId)
+  ) {
+    return null;
+  }
+  return {
+    highlightId,
+    cacheKey: result.cacheKey,
+    generatedAt: result.generatedAt,
+    requestId: result.requestId,
+    model: result.model,
+  };
+}
+
+export function currentVideoSummaryHighlightBindingMatchesRecord(
+  binding: CurrentVideoSummaryHighlightBinding | null,
+  record: Pick<CurrentVideoSummaryHighlightsCacheRecord, 'cacheKey' | 'generatedAt' | 'model' | 'result'>,
+): boolean {
+  return Boolean(
+    binding
+    && binding.cacheKey === record.cacheKey
+    && binding.generatedAt === record.generatedAt
+    && binding.requestId === record.result.requestId
+    && binding.model === record.model
+    && record.result.highlights.some(highlight => highlight.id === binding.highlightId),
+  );
 }
 
 export function notRequestedCurrentVideoSummaryHighlights(
@@ -297,6 +376,8 @@ export function disabledCurrentVideoSummaryHighlights(
     model,
     ai: aiState('disabled', model, '请在设置中开启“当前视频 AI 助手”后，再手动生成。'),
     limitations: ['开启开关本身不会发送正文，仍需再次点击生成。'],
+    canGenerate: false,
+    generationBlockedMessage: '要生成或刷新，请先在设置中开启“当前视频 AI 助手”。',
     now,
   });
 }
@@ -315,6 +396,8 @@ export function notConfiguredCurrentVideoSummaryHighlights(
     model,
     ai: aiState('not_configured', model, '请先配置服务地址、模型和 API Key。'),
     limitations: ['配置完成后需要再次点击生成；不会自动补发。'],
+    canGenerate: false,
+    generationBlockedMessage: '要生成或刷新，请先完成 AI 服务配置。',
     now,
   });
 }
@@ -399,6 +482,16 @@ export function cancelledCurrentVideoSummaryHighlights(
   });
 }
 
+export function asPriorGeneratedCurrentVideoSummaryHighlights(
+  result: CurrentVideoSummaryHighlightsResult,
+): CurrentVideoSummaryHighlightsResult {
+  if (result.status !== 'ready') return result;
+  return {
+    ...result,
+    priorGenerated: true,
+  };
+}
+
 export function readyCurrentVideoSummaryHighlights(input: {
   title: string;
   sourceLabel: 'B站字幕' | '本地转录';
@@ -412,6 +505,9 @@ export function readyCurrentVideoSummaryHighlights(input: {
   current: boolean;
   requestId: string;
   generatedAt: number;
+  canGenerate?: boolean;
+  priorGenerated?: boolean;
+  generationBlockedMessage?: string | null;
 }): CurrentVideoSummaryHighlightsResult {
   return {
     status: 'ready',
@@ -432,6 +528,9 @@ export function readyCurrentVideoSummaryHighlights(input: {
     cacheHit: input.cacheHit,
     current: input.current,
     requestId: input.requestId,
+    canGenerate: input.canGenerate ?? true,
+    priorGenerated: input.priorGenerated ?? false,
+    generationBlockedMessage: input.generationBlockedMessage ?? null,
   };
 }
 
@@ -466,12 +565,19 @@ export function formatTimeRange(startSeconds: number, endSeconds: number): strin
 function normalizeTextRecords(
   value: unknown,
   label: string,
+  maxTextChars: number,
 ): { ok: true; items: TextItemRecord[] } | { ok: false; reason: string } {
   if (!Array.isArray(value)) return { ok: false, reason: `${label}_not_array` };
   const items: TextItemRecord[] = [];
   for (const item of value) {
     if (!item || typeof item !== 'object') return { ok: false, reason: `${label}_item_not_object` };
     const record = item as Record<string, unknown>;
+    if (typeof record.text === 'string' && record.text.length > maxTextChars) {
+      return { ok: false, reason: `${label}_text_too_long` };
+    }
+    if (evidenceReferenceCount(record) > CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_OUTPUT_LIMITS.evidenceLineNumbersPerItem) {
+      return { ok: false, reason: `${label}_evidence_too_many` };
+    }
     const text = normalizeText(record.text);
     const evidenceLineNumbers = normalizeEvidenceLines(record);
     if (!text) return { ok: false, reason: `${label}_text_missing` };
@@ -489,6 +595,15 @@ function normalizeHighlightRecords(
   for (const item of value) {
     if (!item || typeof item !== 'object') return { ok: false, reason: 'highlight_item_not_object' };
     const record = item as Record<string, unknown>;
+    if (typeof record.title === 'string' && record.title.length > CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_OUTPUT_LIMITS.highlightTitleChars) {
+      return { ok: false, reason: 'highlight_title_too_long' };
+    }
+    if (typeof record.description === 'string' && record.description.length > CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_OUTPUT_LIMITS.highlightDescriptionChars) {
+      return { ok: false, reason: 'highlight_description_too_long' };
+    }
+    if (evidenceReferenceCount(record) > CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_OUTPUT_LIMITS.evidenceLineNumbersPerItem) {
+      return { ok: false, reason: 'highlight_evidence_too_many' };
+    }
     const title = normalizeText(record.title);
     const description = normalizeText(record.description);
     const startSeconds = normalizeSeconds(record.startSeconds);
@@ -510,15 +625,20 @@ function normalizeHighlightRecords(
   return { ok: true, items };
 }
 
+function evidenceReferenceCount(record: Record<string, unknown>): number {
+  const raw = record.evidenceLineNumbers;
+  return Array.isArray(raw) ? raw.length : 0;
+}
+
 function normalizeEvidenceLines(record: Record<string, unknown>): number[] {
-  const raw = record.evidenceLineNumbers ?? record.evidenceLines ?? record.lineNumbers;
+  const raw = record.evidenceLineNumbers;
   if (!Array.isArray(raw)) return [];
+  if (raw.some(item => typeof item !== 'number' || !Number.isInteger(item) || item <= 0)) {
+    return [];
+  }
   const seen = new Set<number>();
   for (const item of raw) {
-    const lineNo = Math.floor(Number(item));
-    if (Number.isInteger(lineNo) && lineNo > 0) {
-      seen.add(lineNo);
-    }
+    seen.add(item);
   }
   return Array.from(seen).sort((a, b) => a - b);
 }
@@ -530,9 +650,8 @@ function normalizeText(value: unknown): string {
 }
 
 function normalizeSeconds(value: unknown): number | null {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return null;
-  return Math.round(Math.max(0, numeric) * 1000) / 1000;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.round(value * 1000) / 1000;
 }
 
 function evidenceLinesExist(
@@ -542,10 +661,18 @@ function evidenceLinesExist(
   return lineNumbers.length > 0 && lineNumbers.every(lineNo => lineMap.has(lineNo));
 }
 
-function validHighlightBounds(item: HighlightRecord, durationSeconds: number | null): boolean {
+function validHighlightBounds(
+  item: HighlightRecord,
+  envelope: CurrentVideoFullTextRequestEnvelope,
+): boolean {
   if (!Number.isFinite(item.startSeconds) || !Number.isFinite(item.endSeconds)) return false;
   if (item.startSeconds < 0 || item.endSeconds <= item.startSeconds) return false;
-  if (durationSeconds !== null && item.endSeconds > durationSeconds + 1) return false;
+  const capturedEndSeconds = envelope.text.lines.reduce(
+    (latest, line) => Math.max(latest, line.endSeconds),
+    0,
+  );
+  const upperBound = envelope.video.durationSeconds ?? capturedEndSeconds;
+  if (upperBound > 0 && item.endSeconds > upperBound + 1) return false;
   return true;
 }
 
@@ -577,6 +704,9 @@ function baseResult(input: {
   model?: string | null;
   ai: CurrentVideoSummaryHighlightsAiState;
   limitations?: string[];
+  canGenerate?: boolean;
+  priorGenerated?: boolean;
+  generationBlockedMessage?: string | null;
   now: number;
 }): CurrentVideoSummaryHighlightsResult {
   return {
@@ -596,6 +726,9 @@ function baseResult(input: {
     cacheHit: false,
     current: true,
     requestId: null,
+    canGenerate: input.canGenerate ?? true,
+    priorGenerated: input.priorGenerated ?? false,
+    generationBlockedMessage: input.generationBlockedMessage ?? null,
   };
 }
 

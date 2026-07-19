@@ -129,36 +129,40 @@ export interface CurrentVideoSummaryHighlightsResult {
   cacheHit: boolean;
   current: boolean;
   requestId: string | null;
+  canGenerate: boolean;
+  priorGenerated: boolean;
+  generationBlockedMessage: string | null;
 }
 
-export interface CurrentVideoSummaryHighlightsRequestSnapshotLine {
-  lineNo: number;
-  startSeconds: number;
-  endSeconds: number;
-  text: string;
+export interface CurrentVideoSummaryHighlightsPrimaryTextAuditIdentity {
+  bvid: string;
+  cid: number;
+  page: number;
+  source: string;
+  sourceType: string;
+  language: string | null;
+  bodyHash: string;
+  timelineHash: string;
+  sourceHash: string;
+  sourceIdentityKey: string;
+  lineCount: number;
 }
 
-export interface CurrentVideoSummaryHighlightsRequestSnapshot {
+export interface CurrentVideoSummaryHighlightsRequestAudit {
   requestId: string;
   operation: 'summary_highlights';
   submittedAt: number;
   model: string;
-  primaryTextIdentity: {
-    bvid: string;
-    cid: number;
-    page: number;
-    source: string;
-    sourceType: string;
-    language: string | null;
-    bodyHash: string;
-    timelineHash: string;
-    sourceHash: string;
-    sourceIdentityKey: string;
-    lineCount: number;
-  };
-  text: CurrentVideoSummaryHighlightsTextSize & {
-    lines: CurrentVideoSummaryHighlightsRequestSnapshotLine[];
-  };
+  primaryTextIdentity: CurrentVideoSummaryHighlightsPrimaryTextAuditIdentity;
+  text: CurrentVideoSummaryHighlightsTextSize;
+}
+
+export interface CurrentVideoSummaryHighlightBinding {
+  highlightId: string;
+  cacheKey: string;
+  generatedAt: number;
+  requestId: string;
+  model: string;
 }
 
 export interface CurrentVideoSummaryHighlightsCacheRecord {
@@ -172,6 +176,6 @@ export interface CurrentVideoSummaryHighlightsCacheRecord {
   generatedAt: number;
   lastAccessedAt: number;
   serializedBytes: number;
-  requestSnapshot: CurrentVideoSummaryHighlightsRequestSnapshot;
+  requestAudit: CurrentVideoSummaryHighlightsRequestAudit;
   result: CurrentVideoSummaryHighlightsResult;
 }

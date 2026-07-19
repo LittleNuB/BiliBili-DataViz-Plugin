@@ -42,9 +42,11 @@ import {
   cancelCurrentVideoSummaryHighlightsRequest,
   currentVideoSummaryHighlightsTitle,
   generateCurrentVideoSummaryHighlights,
+  invalidateCurrentVideoSummaryHighlightsAuthorization,
   readCachedCurrentVideoSummaryHighlights,
 } from '../current-video-summary-highlights';
 import {
+  currentVideoSummaryHighlightBindingMatchesRecord,
   disabledCurrentVideoSummaryHighlights,
   noTextCurrentVideoSummaryHighlights,
   notConfiguredCurrentVideoSummaryHighlights,
@@ -455,9 +457,18 @@ export async function handleRequest<T>(
       return { success: true };
     case 'GET_CONFIG':
       return { success: true, data: await loadConfig() as T };
-    case 'UPDATE_CONFIG':
+    case 'UPDATE_CONFIG': {
+      const previousConfig = await loadConfig();
       await saveConfig(request.params as Partial<UserConfig>);
+      const nextConfig = await loadConfig();
+      if (
+        previousConfig.assistant.currentVideoAiAssistantEnabled
+        && !nextConfig.assistant.currentVideoAiAssistantEnabled
+      ) {
+        invalidateCurrentVideoSummaryHighlightsAuthorization();
+      }
       return { success: true };
+    }
     case 'EXPORT_DATA': {
       const allRecords = await db.watchHistory.toArray();
       const format = (request.params?.format as string) ?? 'json';
@@ -600,8 +611,12 @@ export async function handleRequest<T>(
         success: true,
         data: await generateCurrentVideoSummaryHighlights(lookup.context, {
           config,
+          requestId: optionalStringParam(request.params?.requestId) ?? undefined,
           transcriptSegments,
           resolveCurrentIdentity: () => resolveCurrentVideoSummaryHighlightCommitIdentity(request.params, requestTabId),
+          authorizationStillEnabled: async () => (
+            await loadConfig()
+          ).assistant.currentVideoAiAssistantEnabled,
         }) as T,
       };
     }
@@ -995,6 +1010,9 @@ async function requestCurrentVideoHighlightJump(
 ): Promise<CurrentVideoTimestampJumpResponse> {
   const highlightId = requireStringParam(params?.highlightId ?? params?.candidateId, 'highlightId');
   const model = requireStringParam(params?.model, 'model');
+  const cacheKey = requireStringParam(params?.cacheKey, 'cacheKey');
+  const generationRequestId = requireStringParam(params?.requestId, 'requestId');
+  const generatedAt = requirePositiveIntegerParam(params?.generatedAt, 'generatedAt');
   const confirmed = params?.confirmed === true;
   if (!confirmed) {
     return blockedTimestampJumpResponse(
@@ -1045,7 +1063,18 @@ async function requestCurrentVideoHighlightJump(
     identity: { sourceIdentityKey: operationGuard.sourceIdentityKey },
     model,
   });
-  if (!record || record.cacheKey !== expectedCacheKey) {
+  const binding = {
+    highlightId,
+    cacheKey,
+    generatedAt,
+    requestId: generationRequestId,
+    model,
+  };
+  if (
+    !record
+    || record.cacheKey !== expectedCacheKey
+    || !currentVideoSummaryHighlightBindingMatchesRecord(binding, record)
+  ) {
     return blockedTimestampJumpResponse(
       highlightId,
       'candidate_not_found',
@@ -1697,6 +1726,9 @@ function primaryTextSelectionNotReadySummaryHighlights(now = Date.now()): Curren
     cacheHit: false,
     current: true,
     requestId: null,
+    canGenerate: false,
+    priorGenerated: false,
+    generationBlockedMessage: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
   };
 }
 
@@ -1727,15 +1759,14 @@ function primaryTextSelectionNotReadyKnowledge(now = Date.now()): VideoKnowledge
 async function resolveCurrentVideoSummaryHighlightCommitIdentity(
   params: Record<string, unknown> | undefined,
   requestTabId: number | null,
-): Promise<{ sourceIdentityKey: string }> {
+): Promise<{ sourceIdentityKey: string } | null> {
+  const config = await loadConfig();
+  if (!config.assistant.currentVideoAiAssistantEnabled) return null;
   const lookup = await getCurrentVideoContextLookupWithSelection(params, requestTabId);
   if (lookup.primaryTextAuthorized && lookup.primaryTextGuard) {
     return { sourceIdentityKey: lookup.primaryTextGuard.sourceIdentityKey };
   }
-  if (lookup.context.kind === 'video' && lookup.context.transcriptEvidence?.sourceIdentityKey) {
-    return { sourceIdentityKey: lookup.context.transcriptEvidence.sourceIdentityKey };
-  }
-  return { sourceIdentityKey: 'not-current-video-summary-highlights' };
+  return null;
 }
 
 function formatTimestampLabel(seconds: number): string {

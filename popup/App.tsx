@@ -18,14 +18,18 @@ import type {
 } from '../src/shared/types/current-video-segment-retrieval';
 import type {
   CurrentVideoSummaryHighlight,
+  CurrentVideoSummaryHighlightBinding,
   CurrentVideoSummaryHighlightsResult,
 } from '../src/shared/types/current-video-summary';
 import type { VideoKnowledgeNode, VideoKnowledgeResult } from '../src/shared/types/video-knowledge';
 import {
+  asPriorGeneratedCurrentVideoSummaryHighlights,
   cancelledCurrentVideoSummaryHighlights,
+  currentVideoSummaryHighlightBindingFromResult,
   formatTextSize,
   loadingCurrentVideoSummaryHighlights,
 } from '../src/shared/current-video-summary-highlights';
+import { createCurrentVideoFullTextRequestId } from '../src/shared/current-video-primary-text';
 import {
   buildCurrentVideoSubtitleDiagnostics,
   type CurrentVideoSubtitleDiagnostics,
@@ -48,6 +52,13 @@ interface PopupCurrentVideoScopeSnapshot {
 
 interface PopupCurrentVideoActionSnapshot extends PopupCurrentVideoScopeSnapshot {
   requestId: number;
+}
+
+interface PopupActiveSummaryHighlightsRequest {
+  requestId: string;
+  params: Record<string, unknown>;
+  contextKey: string;
+  previousReady: CurrentVideoSummaryHighlightsResult | null;
 }
 
 function popupCurrentVideoContextKey(context: CurrentVideoContextResult | null): string {
@@ -100,6 +111,7 @@ export function App() {
   const currentVideoContextRequestRef = useRef(0);
   const subtitleReprobeRequestRef = useRef(0);
   const summaryRequestRef = useRef(0);
+  const activeSummaryRequestRef = useRef<PopupActiveSummaryHighlightsRequest | null>(null);
   const knowledgeRequestRef = useRef(0);
   const subtitleReprobeActiveRef = useRef(false);
 
@@ -163,36 +175,73 @@ export function App() {
   }
 
   async function fetchCurrentVideoSummary() {
+    if (currentVideoSummary?.canGenerate === false) {
+      setCurrentVideoActionError(
+        currentVideoSummary.generationBlockedMessage ?? '当前不能生成或刷新，请先检查设置。',
+      );
+      return;
+    }
     if (subtitleReprobeActiveRef.current) {
       setCurrentVideoActionError('正在重新检测字幕，请等待检测完成后再试。');
       return;
     }
     const action = beginCurrentVideoAction(summaryRequestRef);
     const context = currentVideoContextRef.current;
+    const previousReady = currentVideoSummary?.status === 'ready'
+      ? asPriorGeneratedCurrentVideoSummaryHighlights(currentVideoSummary)
+      : null;
+    let outboundRequestId: string | null = null;
     setCurrentVideoActionError(null);
     setSummaryLoading(true);
-    setCurrentVideoSummary(loadingCurrentVideoSummaryHighlights());
+    setCurrentVideoSummary(previousReady ?? loadingCurrentVideoSummaryHighlights());
     try {
       const authorization = await popupCurrentVideoPrimaryTextAuthorization(context);
       if (!currentVideoActionIsCurrent(action, summaryRequestRef)) return;
       if (!authorization.ready) {
-        setCurrentVideoSummary(null);
+        setCurrentVideoSummary(previousReady);
         setCurrentVideoActionError(authorization.message);
         return;
       }
       if (!currentVideoActionIsCurrent(action, summaryRequestRef)) return;
+      const requestId = createCurrentVideoFullTextRequestId('cvsh-popup');
+      outboundRequestId = requestId;
+      const requestParams = { ...authorization.params, requestId };
+      activeSummaryRequestRef.current = {
+        requestId,
+        params: requestParams,
+        contextKey: action.contextKey,
+        previousReady,
+      };
       const summary = await requestSW<CurrentVideoSummaryHighlightsResult>(
         'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
-        authorization.params,
+        requestParams,
       );
       if (!currentVideoActionIsCurrent(action, summaryRequestRef)) return;
-      setCurrentVideoSummary(summary);
+      if (summary.status === 'ready') {
+        setCurrentVideoSummary(summary);
+      } else if (previousReady) {
+        setCurrentVideoSummary(previousReady);
+        setCurrentVideoActionError(summary.message);
+      } else {
+        setCurrentVideoSummary(summary);
+      }
     } catch {
       if (!currentVideoActionIsCurrent(action, summaryRequestRef)) return;
-      setCurrentVideoSummary(null);
+      setCurrentVideoSummary(previousReady);
       setCurrentVideoActionError('摘要与亮点生成失败，请确认当前 B 站视频页仍然打开后重试。');
     } finally {
-      if (currentVideoActionIsCurrent(action, summaryRequestRef)) setSummaryLoading(false);
+      if (
+        outboundRequestId
+        && activeSummaryRequestRef.current?.requestId === outboundRequestId
+      ) {
+        activeSummaryRequestRef.current = null;
+        setSummaryLoading(false);
+        if (!currentVideoActionIsCurrent(action, summaryRequestRef)) {
+          void restoreCurrentVideoSummaryCache(currentVideoContextRef.current);
+        }
+      } else if (currentVideoActionIsCurrent(action, summaryRequestRef)) {
+        setSummaryLoading(false);
+      }
     }
   }
 
@@ -206,9 +255,11 @@ export function App() {
         authorization.params,
       );
       if (!currentVideoActionIsCurrent(action, summaryRequestRef)) return;
-      if (result.status === 'ready') {
-        setCurrentVideoSummary(result);
-      }
+      setCurrentVideoSummary((current) => (
+        result.status === 'ready' || current?.status !== 'ready'
+          ? result
+          : current
+      ));
     } catch {
       // Cache restore is opportunistic and must not block opening the popup.
     }
@@ -303,21 +354,29 @@ export function App() {
   }
 
   function cancelCurrentVideoSummary() {
+    const activeRequest = activeSummaryRequestRef.current;
+    activeSummaryRequestRef.current = null;
     summaryRequestRef.current += 1;
     setSummaryLoading(false);
-    setCurrentVideoSummary(cancelledCurrentVideoSummaryHighlights(
-      currentVideoSummaryHighlightsTitle(currentVideoContextRef.current),
-      currentVideoSummary?.model ?? null,
-      currentVideoSummary?.textSize ?? { lineCount: 0, charCount: null, utf8Bytes: 0 },
-    ));
-    void popupCurrentVideoPrimaryTextAuthorization(currentVideoContextRef.current)
-      .then((authorization) => {
-        if (authorization.ready) {
-          return requestSW('CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS', authorization.params);
-        }
-        return null;
-      })
-      .catch(() => null);
+    const retained = activeRequest?.contextKey === currentVideoContextKeyRef.current
+      ? activeRequest.previousReady
+      : currentVideoSummary?.status === 'ready'
+        ? asPriorGeneratedCurrentVideoSummaryHighlights(currentVideoSummary)
+        : null;
+    if (retained) {
+      setCurrentVideoSummary(retained);
+      setCurrentVideoActionError('本次生成已取消，此前结果保持不变。');
+    } else {
+      setCurrentVideoSummary(cancelledCurrentVideoSummaryHighlights(
+        currentVideoSummaryHighlightsTitle(currentVideoContextRef.current),
+        currentVideoSummary?.model ?? null,
+        currentVideoSummary?.textSize ?? { lineCount: 0, charCount: null, utf8Bytes: 0 },
+      ));
+      setCurrentVideoActionError(null);
+    }
+    if (activeRequest) {
+      void requestSW('CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS', activeRequest.params).catch(() => null);
+    }
   }
 
   function currentVideoScopeSnapshot(): PopupCurrentVideoScopeSnapshot {
@@ -364,7 +423,7 @@ export function App() {
     knowledgeRequestRef.current += 1;
     subtitleReprobeRequestRef.current += 1;
     subtitleReprobeActiveRef.current = false;
-    setSummaryLoading(false);
+    if (!activeSummaryRequestRef.current) setSummaryLoading(false);
     setKnowledgeLoading(false);
     setSubtitleProbeLoading(false);
     setCurrentVideoSummary(null);
@@ -814,7 +873,7 @@ function CurrentVideoAssistantStatus({
   const [segmentReturnAvailable, setSegmentReturnAvailable] = useState(false);
   const [segmentJumpLoading, setSegmentJumpLoading] = useState(false);
   const [segmentReturnLoading, setSegmentReturnLoading] = useState(false);
-  const [highlightPreviewId, setHighlightPreviewId] = useState<string | null>(null);
+  const [highlightPreview, setHighlightPreview] = useState<CurrentVideoSummaryHighlightBinding | null>(null);
   const [highlightJumpStatus, setHighlightJumpStatus] = useState<string | null>(null);
   const [highlightReturnAvailable, setHighlightReturnAvailable] = useState(false);
   const [highlightJumpLoading, setHighlightJumpLoading] = useState(false);
@@ -842,12 +901,12 @@ function CurrentVideoAssistantStatus({
     setSegmentPreviewCandidateId(null);
     setSegmentJumpStatus(null);
     setSegmentReturnAvailable(false);
-    setHighlightPreviewId(null);
+    setHighlightPreview(null);
     setHighlightJumpStatus(null);
     setHighlightReturnAvailable(false);
   }, [operationScopeKey, primaryTextSelectionRevision, currentVideoOperationRevision]);
 
-  async function confirmHighlightJump(highlight: CurrentVideoSummaryHighlight) {
+  async function confirmHighlightJump(binding: CurrentVideoSummaryHighlightBinding) {
     if (
       !summary
       || summary.status !== 'ready'
@@ -856,6 +915,12 @@ function CurrentVideoAssistantStatus({
       || segmentSearchBusyRef.current
       || timestampBusyRef.current
     ) return;
+    const currentBinding = currentVideoSummaryHighlightBindingFromResult(summary, binding.highlightId);
+    if (!currentVideoSummaryHighlightBindingsEqual(currentBinding, binding)) {
+      setHighlightPreview(null);
+      setHighlightJumpStatus('亮点结果已更新，请重新预览后再跳转。');
+      return;
+    }
     const action = beginScopedAction(timestampRequestRef);
     timestampBusyRef.current = true;
     setHighlightJumpLoading(true);
@@ -871,16 +936,16 @@ function CurrentVideoAssistantStatus({
       }
       if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
       const result = await requestSW<CurrentVideoTimestampJumpResponse>('REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP', {
-        highlightId: highlight.id,
-        model: summary.model,
+        ...binding,
         confirmed: true,
         ...authorization.params,
       });
       if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
       setHighlightJumpStatus(result.ok
         ? '已跳到亮点位置，可返回原位置。'
-        : '未能完成亮点跳转，请回到当前视频页确认页面和播放器状态后重试。');
+        : '亮点结果或页面状态已变化，请重新预览后再试。');
       setHighlightReturnAvailable(result.ok && result.returnPointSeconds !== null);
+      if (!result.ok) setHighlightPreview(null);
     } catch {
       if (!scopedActionIsCurrent(action, timestampRequestRef)) return;
       setHighlightJumpStatus('亮点跳转失败，请确认当前 B 站视频页仍然打开后重试。');
@@ -1188,17 +1253,22 @@ function CurrentVideoAssistantStatus({
           </div>
           <CurrentVideoSummaryHighlightsPanel
             summary={summary}
-            previewId={highlightPreviewId}
+            preview={highlightPreview}
             jumpStatus={highlightJumpStatus}
             returnAvailable={highlightReturnAvailable}
             jumpLoading={highlightJumpLoading}
             returnLoading={highlightReturnLoading}
             controlsDisabled={loading || subtitleProbeLoading || segmentLoading || segmentJumpLoading || segmentReturnLoading}
-            onPreview={setHighlightPreviewId}
+            onPreview={setHighlightPreview}
             onConfirmJump={confirmHighlightJump}
             onReturn={returnHighlightJump}
             onOpenSettings={onOpenSettings}
           />
+          {loading && (
+            <div style={{ color: '#C8E6FF', fontSize: '10px', lineHeight: 1.45, marginTop: '6px' }}>
+              正在生成新的摘要与亮点，此前结果会保留到新结果通过校验。
+            </div>
+          )}
           <div style={{
             marginTop: '6px',
             color: '#FFCF8A',
@@ -1234,20 +1304,24 @@ function CurrentVideoAssistantStatus({
           <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
             <button
               onClick={onRefresh}
-              disabled={loading || subtitleProbeLoading}
+              disabled={loading || subtitleProbeLoading || summary?.canGenerate === false}
               style={{
                 flex: 1,
                 background: '#FB7299',
                 color: '#fff',
                 border: 'none',
                 borderRadius: '6px',
-                cursor: loading || subtitleProbeLoading ? 'default' : 'pointer',
+                cursor: loading || subtitleProbeLoading || summary?.canGenerate === false ? 'default' : 'pointer',
                 fontSize: '11px',
                 padding: '6px 8px',
-                opacity: loading || subtitleProbeLoading ? 0.7 : 1,
+                opacity: loading || subtitleProbeLoading || summary?.canGenerate === false ? 0.7 : 1,
               }}
             >
-              {loading ? '生成中...' : (summary?.status === 'ready' ? '重新生成摘要与亮点' : '生成摘要与亮点')}
+              {loading
+                ? '生成中...'
+                : summary?.canGenerate === false
+                  ? '暂不可生成'
+                  : (summary?.status === 'ready' ? '重新生成摘要与亮点' : '生成摘要与亮点')}
             </button>
             {loading && (
               <button
@@ -1283,7 +1357,7 @@ function CurrentVideoAssistantStatus({
 
 function CurrentVideoSummaryHighlightsPanel({
   summary,
-  previewId,
+  preview,
   jumpStatus,
   returnAvailable,
   jumpLoading,
@@ -1295,18 +1369,27 @@ function CurrentVideoSummaryHighlightsPanel({
   onOpenSettings,
 }: {
   summary: CurrentVideoSummaryHighlightsResult | null;
-  previewId: string | null;
+  preview: CurrentVideoSummaryHighlightBinding | null;
   jumpStatus: string | null;
   returnAvailable: boolean;
   jumpLoading: boolean;
   returnLoading: boolean;
   controlsDisabled: boolean;
-  onPreview: (highlightId: string | null) => void;
-  onConfirmJump: (highlight: CurrentVideoSummaryHighlight) => void;
+  onPreview: (binding: CurrentVideoSummaryHighlightBinding | null) => void;
+  onConfirmJump: (binding: CurrentVideoSummaryHighlightBinding) => void;
   onReturn: () => void;
   onOpenSettings: () => void;
 }) {
-  const previewHighlight = summary?.highlights.find(highlight => highlight.id === previewId) ?? null;
+  const activePreview = summary
+    && currentVideoSummaryHighlightBindingsEqual(
+      preview,
+      preview ? currentVideoSummaryHighlightBindingFromResult(summary, preview.highlightId) : null,
+    )
+    ? preview
+    : null;
+  const previewHighlight = summary?.highlights.find(
+    highlight => highlight.id === activePreview?.highlightId,
+  ) ?? null;
   if (!summary) {
     return (
       <div style={{
@@ -1343,7 +1426,7 @@ function CurrentVideoSummaryHighlightsPanel({
           fontSize: '10px',
           fontWeight: 700,
         }}>
-          {summaryHighlightsStatusLabel(summary.status)}
+          {summary.priorGenerated ? '此前生成' : summaryHighlightsStatusLabel(summary.status)}
         </span>
         <span style={{ color: '#A0A0B0', fontSize: '10px', textAlign: 'right' }}>
           {formatTextSize(summary.textSize)}
@@ -1377,9 +1460,13 @@ function CurrentVideoSummaryHighlightsPanel({
             <HighlightCard
               key={highlight.id}
               highlight={highlight}
-              selected={highlight.id === previewId}
+              selected={highlight.id === activePreview?.highlightId}
               disabled={controlsDisabled}
-              onPreview={onPreview}
+              onPreview={(selectedHighlight) => onPreview(
+                selectedHighlight && summary
+                  ? currentVideoSummaryHighlightBindingFromResult(summary, selectedHighlight.id)
+                  : null,
+              )}
             />
           ))}
           {previewHighlight && (
@@ -1387,7 +1474,7 @@ function CurrentVideoSummaryHighlightsPanel({
               highlight={previewHighlight}
               disabled={controlsDisabled}
               loading={jumpLoading}
-              onConfirm={onConfirmJump}
+              onConfirm={() => activePreview && onConfirmJump(activePreview)}
               onCancel={() => onPreview(null)}
             />
           )}
@@ -1442,7 +1529,7 @@ function HighlightCard({
   highlight: CurrentVideoSummaryHighlight;
   selected: boolean;
   disabled: boolean;
-  onPreview: (highlightId: string | null) => void;
+  onPreview: (highlight: CurrentVideoSummaryHighlight | null) => void;
 }) {
   return (
     <div style={{
@@ -1464,7 +1551,7 @@ function HighlightCard({
       <button
         type="button"
         disabled={disabled}
-        onClick={() => onPreview(selected ? null : highlight.id)}
+        onClick={() => onPreview(selected ? null : highlight)}
         style={{
           marginTop: '5px',
           background: 'rgba(0, 161, 214, 0.20)',
@@ -1491,7 +1578,7 @@ function HighlightJumpPreview({
   loading,
 }: {
   highlight: CurrentVideoSummaryHighlight;
-  onConfirm: (highlight: CurrentVideoSummaryHighlight) => void;
+  onConfirm: () => void;
   onCancel: () => void;
   disabled: boolean;
   loading: boolean;
@@ -1520,7 +1607,7 @@ function HighlightJumpPreview({
         <button
           type="button"
           disabled={disabled}
-          onClick={() => onConfirm(highlight)}
+          onClick={onConfirm}
           style={{
             flex: 1,
             background: disabled ? 'rgba(255,255,255,0.08)' : '#FFB347',
@@ -2193,17 +2280,32 @@ function currentVideoSummaryHighlightsTitle(context: CurrentVideoContextResult |
   return context.title?.trim() || '当前视频';
 }
 
+function currentVideoSummaryHighlightBindingsEqual(
+  left: CurrentVideoSummaryHighlightBinding | null,
+  right: CurrentVideoSummaryHighlightBinding | null,
+): boolean {
+  return Boolean(
+    left
+    && right
+    && left.highlightId === right.highlightId
+    && left.cacheKey === right.cacheKey
+    && left.generatedAt === right.generatedAt
+    && left.requestId === right.requestId
+    && left.model === right.model,
+  );
+}
+
 function currentVideoSummaryActionNotice(
   context: CurrentVideoContextResult | null,
   summary: CurrentVideoSummaryHighlightsResult | null,
 ): string {
   if (summary) {
-    return `本次正文规模：${formatTextSize(summary.textSize)}。摘要不展示正文摘录；亮点时间只来自已校验行。`;
+    return `本次正文规模：${formatTextSize(summary.textSize)}。等待时间和费用由你配置的 AI 服务决定。`;
   }
   if (context?.kind === 'video') {
     const lineCount = context.transcriptEvidence?.segmentCount ?? 0;
     const bytes = context.transcriptEvidence?.serializedBytes ?? 0;
-    return `可发送正文规模：${lineCount} 行，约 ${formatBytes(bytes)}。只有点击生成才会发送完整正文。`;
+    return `可发送正文规模：${lineCount} 行，约 ${formatBytes(bytes)}。只有点击生成才会发送；等待时间和费用由你配置的 AI 服务决定。`;
   }
   return '当前没有可发送的正文。只有在视频页选择主要文本来源后，才可以手动生成。';
 }

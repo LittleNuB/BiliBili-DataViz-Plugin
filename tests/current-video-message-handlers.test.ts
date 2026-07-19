@@ -516,6 +516,90 @@ test('background full-text handlers fail closed when the readiness marker is mis
   assert.equal(storageReadCount('userConfig'), 0);
 });
 
+test('UPDATE_CONFIG disables and aborts an in-flight combined generation through handleRequest', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  await db.currentVideoSummaryHighlights.clear();
+  const tabId = 18_608;
+  const context = handlerVideoContext('BV1ConfigDisable', 4808);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'config-disable-source',
+    '这一行正文用于验证关闭授权会取消正在生成的摘要与亮点。',
+  );
+  const sourceIdentityKey = evidence.sourceRecord.identityKey;
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 8_800 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const terminal of ['resolve', 'reject'] as const) {
+      await db.currentVideoSummaryHighlights.clear();
+      await sendRequest<void>({
+        action: 'UPDATE_CONFIG',
+        params: {
+          ai: {
+            baseURL: 'https://example.invalid',
+            apiKey: 'handler-test-key',
+            chatModel: 'handler-test-model',
+          },
+          assistant: { currentVideoAiAssistantEnabled: true },
+        },
+      }, tabId, context.url);
+
+      let resolveFetch!: (response: Response) => void;
+      let rejectFetch!: (error: Error) => void;
+      let markFetchStarted!: () => void;
+      let outboundSignal: AbortSignal | null = null;
+      const fetchStarted = new Promise<void>(resolve => { markFetchStarted = resolve; });
+      const deferredFetch = new Promise<Response>((resolve, reject) => {
+        resolveFetch = resolve;
+        rejectFetch = reject;
+      });
+      globalThis.fetch = ((_input, init) => {
+        outboundSignal = init?.signal as AbortSignal | null;
+        markFetchStarted();
+        return deferredFetch;
+      }) as typeof fetch;
+
+      const generation = sendRequest<CurrentVideoSummaryHighlightsResult>({
+        action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+        params: {
+          requestId: `handler-config-disable-${terminal}`,
+          primaryTextSelectionsReady: true,
+          selectedSourceIdentityKey: sourceIdentityKey,
+        },
+      }, tabId, context.url);
+      await fetchStarted;
+
+      await sendRequest<void>({
+        action: 'UPDATE_CONFIG',
+        params: { assistant: { currentVideoAiAssistantEnabled: false } },
+      }, tabId, context.url);
+      assert.equal(outboundSignal?.aborted, true);
+
+      if (terminal === 'resolve') {
+        resolveFetch(new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(handlerSummaryHighlightsAiOutput()) } }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } }));
+      } else {
+        rejectFetch(new Error('late handler network rejection'));
+      }
+      const response = await generation;
+      assert.equal(response.success, true);
+      assert.equal(response.data?.status, 'cancelled');
+      assert.equal(await db.currentVideoSummaryHighlights.count(), 0);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('background keeps an exact missing saved V1 selection inactive without touching active V2', async () => {
   resetChromeHarness();
   await resetTranscriptDb();
@@ -1422,6 +1506,26 @@ function handlerVideoContext(bvid: string, cid: number, page = 1): CurrentVideoC
     },
     transcriptEvidence: null,
     warnings: ['transcript_probe_pending'],
+  };
+}
+
+function handlerSummaryHighlightsAiOutput() {
+  return {
+    summarySentences: [
+      { text: '本段说明关闭授权时必须取消请求。', evidenceLineNumbers: [1] },
+      { text: '取消后的结果不得写入本地缓存。', evidenceLineNumbers: [1] },
+    ],
+    keyPoints: [
+      { text: '先启动生成请求。', evidenceLineNumbers: [1] },
+      { text: '再关闭完整文本授权。', evidenceLineNumbers: [1] },
+      { text: '最后确认缓存为空。', evidenceLineNumbers: [1] },
+    ],
+    highlights: [
+      { title: '启动请求', description: '开始发送一次完整正文请求。', startSeconds: 2, endSeconds: 3, evidenceLineNumbers: [1] },
+      { title: '关闭授权', description: '设置更新会使请求失效。', startSeconds: 3, endSeconds: 4, evidenceLineNumbers: [1] },
+      { title: '中止网络', description: '旧请求的网络信号被中止。', startSeconds: 4, endSeconds: 5, evidenceLineNumbers: [1] },
+      { title: '拒绝写入', description: '迟到结果不会进入本地缓存。', startSeconds: 5, endSeconds: 6, evidenceLineNumbers: [1] },
+    ],
   };
 }
 
