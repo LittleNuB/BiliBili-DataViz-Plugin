@@ -3,7 +3,11 @@ import type {
   CurrentVideoContextResult,
 } from '../../shared/types/current-video-context';
 import type { BiliVizResponse, RequestAction } from '../../shared/types/messages';
-import type { CurrentVideoSummaryResult } from '../../shared/types/current-video-summary';
+import type {
+  CurrentVideoSummaryHighlight,
+  CurrentVideoSummaryHighlightBinding,
+  CurrentVideoSummaryHighlightsResult,
+} from '../../shared/types/current-video-summary';
 import type { CurrentVideoTranscriptEvidenceState } from '../../shared/types/current-video-transcript';
 import type {
   CurrentVideoSegmentRetrievalCandidate,
@@ -27,9 +31,17 @@ import {
   type CurrentVideoSubtitleDiagnostics,
 } from '../../shared/current-video-subtitle-diagnostics';
 import {
+  createCurrentVideoFullTextRequestId,
   buildCurrentVideoPrimaryTextState,
   type CurrentVideoPrimaryTextSourceOption,
 } from '../../shared/current-video-primary-text';
+import {
+  asPriorGeneratedCurrentVideoSummaryHighlights,
+  cancelledCurrentVideoSummaryHighlights,
+  currentVideoSummaryHighlightBindingFromResult,
+  formatTextSize,
+  loadingCurrentVideoSummaryHighlights,
+} from '../../shared/current-video-summary-highlights.ts';
 import {
   CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
   currentVideoPrimaryTextPartKey,
@@ -40,6 +52,7 @@ import {
 
 const CARD_ID = 'bdc-current-video-assistant';
 const STYLE_ID = 'bdc-current-video-assistant-style';
+const USER_CONFIG_STORAGE_KEY = 'userConfig';
 
 const RAW_FIELD_PATTERN = new RegExp(
   `\\b(?:${[
@@ -561,11 +574,19 @@ interface AssistantState {
   expanded: boolean;
   context: CurrentVideoContextResult | null;
   contextKey: string;
-  summary: CurrentVideoSummaryResult | null;
+  summary: CurrentVideoSummaryHighlightsResult | null;
   summaryContextKey: string;
   summaryLoading: boolean;
+  summaryCacheLoading: boolean;
   summaryError: string | null;
   summaryRequestId: number;
+  summaryActiveRequest: InPageSummaryHighlightsRequest | null;
+  summaryHighlightPreview: CurrentVideoSummaryHighlightBinding | null;
+  summaryHighlightJumpStatus: string | null;
+  summaryHighlightJumpLoading: boolean;
+  summaryHighlightReturnAvailable: boolean;
+  summaryHighlightReturnLoading: boolean;
+  summaryHighlightTimestampRequestId: number;
   knowledge: VideoKnowledgeResult | null;
   knowledgeContextKey: string;
   knowledgeLoading: boolean;
@@ -596,6 +617,17 @@ interface AssistantState {
   subtitleRequestId: number;
 }
 
+interface InPageSummaryHighlightsRequest {
+  requestId: string;
+  params: Record<string, unknown>;
+  contextKey: string;
+  selectionRevision: number;
+  selectedSourceIdentityKey: string | null;
+  title: string;
+  textSize: CurrentVideoSummaryHighlightsResult['textSize'];
+  previousReady: CurrentVideoSummaryHighlightsResult | null;
+}
+
 const primaryTextSelections = new Map<string, string>();
 const primaryTextSelectionSaveFailedPartKeys = new Set<string>();
 let primaryTextSelectionsLoaded = false;
@@ -612,8 +644,16 @@ const assistantState: AssistantState = {
   summary: null,
   summaryContextKey: '',
   summaryLoading: false,
+  summaryCacheLoading: false,
   summaryError: null,
   summaryRequestId: 0,
+  summaryActiveRequest: null,
+  summaryHighlightPreview: null,
+  summaryHighlightJumpStatus: null,
+  summaryHighlightJumpLoading: false,
+  summaryHighlightReturnAvailable: false,
+  summaryHighlightReturnLoading: false,
+  summaryHighlightTimestampRequestId: 0,
   knowledge: null,
   knowledgeContextKey: '',
   knowledgeLoading: false,
@@ -648,8 +688,12 @@ export function renderCurrentVideoAssistant(context: CurrentVideoContextResult):
   injectStyle();
   ensurePrimaryTextSelectionStorageListener();
   ensurePrimaryTextSelectionsLoaded();
+  const previousContextKey = assistantState.contextKey;
   updateAssistantContext(context);
   renderAssistantShell();
+  if (assistantState.expanded && previousContextKey !== assistantState.contextKey) {
+    void restoreCurrentVideoSummaryHighlightsFromPage();
+  }
 }
 
 function updateAssistantContext(context: CurrentVideoContextResult): void {
@@ -659,6 +703,13 @@ function updateAssistantContext(context: CurrentVideoContextResult): void {
     assistantState.summary = null;
     assistantState.summaryContextKey = '';
     assistantState.summaryError = null;
+    assistantState.summaryCacheLoading = false;
+    assistantState.summaryHighlightPreview = null;
+    assistantState.summaryHighlightJumpStatus = null;
+    assistantState.summaryHighlightJumpLoading = false;
+    assistantState.summaryHighlightReturnAvailable = false;
+    assistantState.summaryHighlightReturnLoading = false;
+    assistantState.summaryHighlightTimestampRequestId += 1;
     assistantState.knowledge = null;
     assistantState.knowledgeContextKey = '';
     assistantState.knowledgeError = null;
@@ -722,6 +773,7 @@ function renderCollapsedCard(root: HTMLElement): void {
   const expand = button('展开助手', 'bdc-assistant-button bdc-assistant-button-primary', () => {
     assistantState.expanded = true;
     renderAssistantShell();
+    void restoreCurrentVideoSummaryHighlightsFromPage();
   });
   actions.appendChild(expand);
   header.appendChild(actions);
@@ -780,7 +832,7 @@ function renderExpandedPanel(root: HTMLElement): void {
   }
 
   const footer = section('全局入口', 'bdc-assistant-section-auxiliary');
-  appendText(footer, 'div', 'bdc-assistant-muted', '全局总览用于长期视图；当前切片只确认视频文本来源，不会自动发送完整文本请求。');
+  appendText(footer, 'div', 'bdc-assistant-muted', '全局总览用于长期视图；打开、切换或恢复本地结果都不会自动发送完整正文。');
   footer.appendChild(dashboardLink('打开全局总览'));
   body.appendChild(footer);
 
@@ -1645,87 +1697,214 @@ function appendSegmentLimitations(
 }
 
 function appendSummary(parent: HTMLElement): void {
-  const block = section('辅助摘要', 'bdc-assistant-section-auxiliary');
+  const block = section('摘要与亮点', 'bdc-assistant-section-primary');
   const context = assistantState.context?.kind === 'video' ? assistantState.context : null;
   const primaryTextBlockReason = context
     ? primaryTextSubmissionBlockMessage(buildPrimaryTextStateForContext(context))
     : null;
+  const summary = assistantState.summaryContextKey === assistantState.contextKey
+    ? assistantState.summary
+    : null;
+  const actionBlocked = Boolean(primaryTextBlockReason)
+    || assistantState.summaryCacheLoading
+    || summary?.canGenerate === false;
+  const head = block.querySelector('.bdc-assistant-section-head');
 
   if (assistantState.summaryLoading) {
-    appendText(block, 'div', 'bdc-assistant-muted', '正在刷新当前视频摘要...');
-    parent.appendChild(block);
-    return;
+    head?.appendChild(button(
+      '取消生成',
+      'bdc-assistant-button bdc-assistant-button-warn',
+      cancelCurrentVideoSummaryHighlightsFromPage,
+    ));
+  } else {
+    head?.appendChild(button(
+      summary?.status === 'ready' ? '重新生成' : '生成摘要与亮点',
+      'bdc-assistant-button bdc-assistant-button-primary',
+      () => { void generateCurrentVideoSummaryHighlightsFromPage(); },
+      actionBlocked,
+    ));
+  }
+
+  const textSize = summary?.textSize ?? {
+    lineCount: context?.transcriptEvidence?.segmentCount ?? 0,
+    charCount: null,
+    utf8Bytes: context?.transcriptEvidence?.serializedBytes ?? 0,
+  };
+  appendText(
+    block,
+    'div',
+    'bdc-assistant-subtitle-detail',
+    `正文规模：${formatTextSize(textSize)}。等待时间和费用由你配置的 AI 服务决定。`,
+  );
+
+  if (assistantState.summaryLoading) {
+    appendText(block, 'div', 'bdc-assistant-muted', '正在生成摘要、关键要点和视频亮点，请稍等。');
   }
 
   if (assistantState.summaryError) {
     appendText(block, 'div', 'bdc-assistant-subtitle-text', assistantState.summaryError);
-    block.appendChild(button('重试摘要', 'bdc-assistant-button bdc-assistant-button-primary', () => {
-      void loadCurrentVideoSummary(true);
-    }, Boolean(primaryTextBlockReason)));
-    parent.appendChild(block);
-    return;
   }
 
   if (primaryTextBlockReason) {
     appendText(block, 'div', 'bdc-assistant-subtitle-text', primaryTextBlockReason);
   }
 
-  const summary = assistantState.summary;
-  if (!summary || assistantState.summaryContextKey !== assistantState.contextKey) {
-    appendText(block, 'div', 'bdc-assistant-muted', '展开后会读取当前视频摘要。');
-    block.appendChild(button('读取摘要', 'bdc-assistant-button bdc-assistant-button-primary', () => {
-      void loadCurrentVideoSummary(true);
-    }, Boolean(primaryTextBlockReason)));
+  if (assistantState.summaryCacheLoading) {
+    appendText(block, 'div', 'bdc-assistant-muted', '正在读取本页此前保存的摘要与亮点...');
+    if (summary?.status !== 'ready') {
+      parent.appendChild(block);
+      return;
+    }
+  }
+
+  if (!summary) {
+    appendText(block, 'div', 'bdc-assistant-muted', '尚未生成。只有点击生成后才会发送当前选择的完整正文。');
     parent.appendChild(block);
     return;
   }
 
   const meta = document.createElement('div');
   meta.className = 'bdc-assistant-summary-meta';
-  appendBadge(meta, summary.sourceTierLabel ?? summaryStatusLabel(summary.status));
-  appendBadge(meta, summary.generationMode === 'ai' ? '已整理摘要' : '本地证据摘要');
-  appendBadge(meta, `依据${summaryConfidenceLabel(summary.confidence)}`);
+  appendBadge(meta, summary.priorGenerated ? '此前生成' : summaryHighlightsStatusLabel(summary.status));
+  if (summary.sourceLabel) appendBadge(meta, summary.sourceLabel);
+  if (summary.cacheHit && !summary.priorGenerated) appendBadge(meta, '本地缓存');
   block.appendChild(meta);
 
-  appendText(block, 'div', 'bdc-assistant-summary-text', safeVisibleText(summary.summary));
+  appendText(
+    block,
+    'div',
+    summary.status === 'ready' ? 'bdc-assistant-status' : 'bdc-assistant-subtitle-text',
+    safeVisibleText(summary.message),
+  );
 
-  if (summary.bullets.length > 0) {
+  if (summary.status === 'ready') {
+    appendText(block, 'div', 'bdc-assistant-citation-title', '摘要');
+    for (const sentence of summary.summarySentences) {
+      appendText(block, 'div', 'bdc-assistant-summary-text', safeVisibleText(sentence.text));
+    }
+
+    appendText(block, 'div', 'bdc-assistant-citation-title', '关键要点');
     const list = document.createElement('ul');
     list.className = 'bdc-assistant-list';
-    for (const item of summary.bullets.slice(0, 3)) {
+    for (const item of summary.keyPoints) {
       const li = document.createElement('li');
-      li.textContent = safeVisibleText(item);
+      li.textContent = safeVisibleText(item.text);
       list.appendChild(li);
     }
     block.appendChild(list);
-  }
 
-  if (summary.timestampRanges.length > 0) {
-    for (const range of summary.timestampRanges.slice(0, 3)) {
-      appendText(
-        block,
-        'div',
-        'bdc-assistant-evidence',
-        `字幕证据 ${range.label}：${safeVisibleText(range.evidenceSnippet)}`,
-      );
+    appendText(block, 'div', 'bdc-assistant-citation-title', '视频亮点');
+    const highlights = document.createElement('div');
+    highlights.className = 'bdc-assistant-candidate-list';
+    for (const highlight of summary.highlights) {
+      highlights.appendChild(summaryHighlightCard(highlight, summary));
     }
-  }
+    block.appendChild(highlights);
 
-  if (summary.limitations.length > 0) {
+    const preview = activeSummaryHighlightPreview(summary);
+    if (preview) {
+      const highlight = summary.highlights.find(item => item.id === preview.highlightId);
+      if (highlight) block.appendChild(summaryHighlightJumpPreview(highlight, preview));
+    }
+    appendSummaryHighlightJumpStatus(block);
+  } else if (summary.limitations.length > 0) {
     appendText(
       block,
       'div',
       'bdc-assistant-subtitle-detail',
-      summary.limitations.slice(0, 2).map(safeVisibleText).join(' '),
+      safeVisibleText(summary.limitations[0]),
     );
   }
 
   if (needsAiSettingsLink(summary.ai.status)) {
-    appendText(block, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(summary.ai.note));
+    if (summary.generationBlockedMessage) {
+      appendText(block, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(summary.generationBlockedMessage));
+    }
     block.appendChild(dashboardLink('打开设置', '#settings'));
   }
 
   parent.appendChild(block);
+}
+
+function summaryHighlightCard(
+  highlight: CurrentVideoSummaryHighlight,
+  summary: CurrentVideoSummaryHighlightsResult,
+): HTMLElement {
+  const card = document.createElement('article');
+  card.className = 'bdc-assistant-candidate-card';
+  const head = document.createElement('div');
+  head.className = 'bdc-assistant-candidate-head';
+  appendText(head, 'div', 'bdc-assistant-candidate-title', safeVisibleText(highlight.title));
+  appendText(head, 'div', 'bdc-assistant-candidate-strength', safeVisibleText(highlight.timeRangeLabel));
+  card.appendChild(head);
+  appendText(card, 'div', 'bdc-assistant-subtitle-detail', safeVisibleText(highlight.description));
+
+  const binding = currentVideoSummaryHighlightBindingFromResult(summary, highlight.id);
+  const selected = currentVideoSummaryHighlightBindingsEqual(
+    assistantState.summaryHighlightPreview,
+    binding,
+  );
+  card.appendChild(button(
+    selected ? '收起预览' : '预览跳转',
+    'bdc-assistant-button bdc-assistant-button-quiet',
+    () => {
+      assistantState.summaryHighlightPreview = selected ? null : binding;
+      assistantState.summaryHighlightJumpStatus = null;
+      renderAssistantShell();
+    },
+    !binding || assistantState.summaryHighlightJumpLoading || assistantState.summaryHighlightReturnLoading,
+  ));
+  return card;
+}
+
+function summaryHighlightJumpPreview(
+  highlight: CurrentVideoSummaryHighlight,
+  binding: CurrentVideoSummaryHighlightBinding,
+): HTMLElement {
+  const panel = document.createElement('div');
+  panel.className = 'bdc-assistant-jump-preview';
+  appendText(panel, 'div', 'bdc-assistant-jump-preview-title', '确认跳转前预览');
+  appendText(panel, 'div', 'bdc-assistant-candidate-evidence', `目标时间：${safeVisibleText(highlight.timeRangeLabel)}`);
+  appendText(panel, 'div', 'bdc-assistant-subtitle-detail', `${safeVisibleText(highlight.title)}：${safeVisibleText(highlight.description)}`);
+  appendText(panel, 'div', 'bdc-assistant-subtitle-detail', '确认后才会跳转，并可返回原位置。');
+  const actions = document.createElement('div');
+  actions.className = 'bdc-assistant-jump-actions';
+  actions.appendChild(button(
+    assistantState.summaryHighlightJumpLoading ? '确认中...' : '确认跳转',
+    'bdc-assistant-button bdc-assistant-button-warn',
+    () => { void confirmCurrentVideoSummaryHighlightJumpFromPage(binding); },
+    assistantState.summaryHighlightJumpLoading || assistantState.summaryHighlightReturnLoading,
+  ));
+  actions.appendChild(button(
+    '取消',
+    'bdc-assistant-button bdc-assistant-button-quiet',
+    () => {
+      assistantState.summaryHighlightPreview = null;
+      renderAssistantShell();
+    },
+    assistantState.summaryHighlightJumpLoading || assistantState.summaryHighlightReturnLoading,
+  ));
+  panel.appendChild(actions);
+  return panel;
+}
+
+function appendSummaryHighlightJumpStatus(parent: HTMLElement): void {
+  if (assistantState.summaryHighlightJumpStatus) {
+    appendText(
+      parent,
+      'div',
+      'bdc-assistant-jump-status',
+      safeVisibleText(assistantState.summaryHighlightJumpStatus),
+    );
+  }
+  if (assistantState.summaryHighlightReturnAvailable) {
+    parent.appendChild(button(
+      assistantState.summaryHighlightReturnLoading ? '返回中...' : '返回原位置',
+      'bdc-assistant-button bdc-assistant-button-warn',
+      () => { void returnCurrentVideoSummaryHighlightJumpFromPage(); },
+      assistantState.summaryHighlightReturnLoading || assistantState.summaryHighlightJumpLoading,
+    ));
+  }
 }
 
 function appendVideoKnowledge(parent: HTMLElement, context: CurrentVideoContext): void {
@@ -1878,14 +2057,9 @@ async function loadCurrentVideoRelatedFavoritesFromPage(force: boolean): Promise
   renderAssistantShell();
 
   try {
-    const summaryHint = assistantState.summary
-      && assistantState.summaryContextKey === contextKey
-      && (assistantState.summary.sourceTier === 'description_summary' || assistantState.summary.sourceTier === 'metadata_summary')
-      ? assistantState.summary.summary
-      : null;
     const result = await sendRuntimeRequest<CurrentVideoRelatedFavoritesResponse>('GET_CURRENT_VIDEO_RELATED_FAVORITES', {
       question: assistantState.segmentQuery,
-      summaryHint,
+      summaryHint: null,
       limit: 5,
     });
     if (assistantState.relatedFavoritesRequestId !== requestId || assistantState.contextKey !== contextKey) return;
@@ -2115,6 +2289,7 @@ async function refreshSubtitleEvidenceFromPage(): Promise<void> {
     assistantState.subtitleRefreshing = false;
     assistantState.subtitleStatus = subtitleRefreshResultText(nextContext);
     renderAssistantShell();
+    if (assistantState.expanded) void restoreCurrentVideoSummaryHighlightsFromPage();
   } catch {
     if (assistantState.subtitleRequestId !== requestId) return;
     assistantState.subtitleRefreshing = false;
@@ -2130,47 +2305,251 @@ function finishStaleSubtitleRefresh(requestId: number): void {
   renderAssistantShell();
 }
 
-async function loadCurrentVideoSummary(force: boolean): Promise<void> {
+async function restoreCurrentVideoSummaryHighlightsFromPage(): Promise<void> {
   if (assistantState.context?.kind !== 'video') return;
-  if (assistantState.summaryLoading) return;
+  if (assistantState.summaryLoading || assistantState.summaryCacheLoading) return;
   const primaryTextBlockReason = primaryTextSubmissionBlockMessage(
     buildPrimaryTextStateForContext(assistantState.context),
   );
-  if (primaryTextBlockReason) {
-    assistantState.summary = null;
-    assistantState.summaryError = primaryTextBlockReason;
-    renderAssistantShell();
-    return;
-  }
-  if (
-    !force
-    && assistantState.summary
-    && assistantState.summaryContextKey === assistantState.contextKey
-  ) {
-    return;
-  }
+  if (primaryTextBlockReason) return;
 
-  const requestId = assistantState.summaryRequestId + 1;
+  const operationId = assistantState.summaryRequestId + 1;
   const contextKey = assistantState.contextKey;
-  assistantState.summaryRequestId = requestId;
-  assistantState.summaryLoading = true;
+  assistantState.summaryRequestId = operationId;
+  assistantState.summaryCacheLoading = true;
   assistantState.summaryError = null;
   renderAssistantShell();
 
   try {
-    const summary = await sendRuntimeRequest<CurrentVideoSummaryResult>(
-      'GET_CURRENT_VIDEO_SUMMARY',
+    const summary = await sendRuntimeRequest<CurrentVideoSummaryHighlightsResult>(
+      'GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE',
       currentPrimaryTextRequestParams(),
     );
-    if (assistantState.summaryRequestId !== requestId || assistantState.contextKey !== contextKey) return;
-    assistantState.summary = summary;
+    if (assistantState.summaryRequestId !== operationId || assistantState.contextKey !== contextKey) return;
+    const currentSummary = assistantState.summaryContextKey === contextKey
+      ? assistantState.summary
+      : null;
+    if (summary.status === 'ready' || currentSummary?.status !== 'ready') {
+      assistantState.summary = summary;
+      assistantState.summaryContextKey = contextKey;
+    }
+  } catch {
+    if (assistantState.summaryRequestId !== operationId) return;
+    assistantState.summaryError = '此前结果读取失败，请确认当前视频页仍然打开后重试。';
+  } finally {
+    if (assistantState.summaryRequestId === operationId) {
+      assistantState.summaryCacheLoading = false;
+      renderAssistantShell();
+    }
+  }
+}
+
+async function generateCurrentVideoSummaryHighlightsFromPage(): Promise<void> {
+  if (assistantState.context?.kind !== 'video' || assistantState.summaryActiveRequest) return;
+  const context = assistantState.context;
+  const currentSummary = assistantState.summaryContextKey === assistantState.contextKey
+    ? assistantState.summary
+    : null;
+  if (currentSummary?.canGenerate === false) {
+    assistantState.summaryError = currentSummary.generationBlockedMessage
+      ?? '当前不能生成或刷新，请先检查设置。';
+    renderAssistantShell();
+    return;
+  }
+  const primaryTextBlockReason = primaryTextSubmissionBlockMessage(
+    buildPrimaryTextStateForContext(context),
+  );
+  if (primaryTextBlockReason) {
+    assistantState.summaryError = primaryTextBlockReason;
+    renderAssistantShell();
+    return;
+  }
+
+  const operationId = assistantState.summaryRequestId + 1;
+  const contextKey = assistantState.contextKey;
+  const requestId = createCurrentVideoFullTextRequestId('cvsh-page');
+  const params = { ...currentPrimaryTextRequestParams(), requestId };
+  const textSize = currentSummary?.textSize ?? {
+    lineCount: context.transcriptEvidence?.segmentCount ?? 0,
+    charCount: null,
+    utf8Bytes: context.transcriptEvidence?.serializedBytes ?? 0,
+  };
+  const previousReady = currentSummary?.status === 'ready'
+    ? asPriorGeneratedCurrentVideoSummaryHighlights(currentSummary)
+    : null;
+  const activeRequest: InPageSummaryHighlightsRequest = {
+    requestId,
+    params,
+    contextKey,
+    selectionRevision: primaryTextSelectionsRevision,
+    selectedSourceIdentityKey: selectedSourceIdentityKeyFromParams(params),
+    title: context.title?.trim() || '当前视频',
+    textSize,
+    previousReady,
+  };
+  assistantState.summaryRequestId = operationId;
+  assistantState.summaryActiveRequest = activeRequest;
+  assistantState.summaryLoading = true;
+  assistantState.summaryCacheLoading = false;
+  assistantState.summaryError = null;
+  assistantState.summary = previousReady ?? {
+    ...loadingCurrentVideoSummaryHighlights(),
+    title: activeRequest.title,
+    textSize,
+    requestId,
+  };
+  assistantState.summaryContextKey = contextKey;
+  assistantState.summaryHighlightPreview = null;
+  renderAssistantShell();
+
+  try {
+    const summary = await sendRuntimeRequest<CurrentVideoSummaryHighlightsResult>(
+      'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+      params,
+    );
+    if (assistantState.summaryRequestId !== operationId || assistantState.contextKey !== contextKey) return;
+    if (summary.status === 'ready') {
+      assistantState.summary = summary;
+      assistantState.summaryError = null;
+    } else if (previousReady) {
+      assistantState.summary = previousReady;
+      assistantState.summaryError = summary.message;
+    } else {
+      assistantState.summary = summary;
+    }
     assistantState.summaryContextKey = contextKey;
   } catch {
-    if (assistantState.summaryRequestId !== requestId) return;
-    assistantState.summaryError = '摘要刷新失败：请确认当前 B 站视频页仍然打开，稍后再试。';
+    if (assistantState.summaryRequestId !== operationId || assistantState.contextKey !== contextKey) return;
+    assistantState.summary = previousReady;
+    assistantState.summaryContextKey = contextKey;
+    assistantState.summaryError = '摘要与亮点生成失败，请确认当前视频页仍然打开后重试。';
   } finally {
-    if (assistantState.summaryRequestId === requestId) {
+    const operationStale = assistantState.summaryRequestId !== operationId
+      || assistantState.contextKey !== contextKey;
+    if (assistantState.summaryActiveRequest?.requestId === requestId) {
+      assistantState.summaryActiveRequest = null;
       assistantState.summaryLoading = false;
+      renderAssistantShell();
+      if (operationStale) {
+        void restoreCurrentVideoSummaryHighlightsFromPage();
+      }
+    }
+  }
+}
+
+function cancelCurrentVideoSummaryHighlightsFromPage(): void {
+  const activeRequest = assistantState.summaryActiveRequest;
+  if (!activeRequest) return;
+  assistantState.summaryActiveRequest = null;
+  assistantState.summaryRequestId += 1;
+  assistantState.summaryLoading = false;
+  const activeRequestStillCurrent = summaryActiveRequestStillMatchesCurrent(activeRequest);
+  const retained = activeRequestStillCurrent
+    ? activeRequest.previousReady
+    : null;
+  if (!activeRequestStillCurrent) {
+    assistantState.summary = null;
+    assistantState.summaryContextKey = '';
+    assistantState.summaryError = null;
+    renderAssistantShell();
+    void restoreCurrentVideoSummaryHighlightsFromPage();
+    void sendRuntimeRequest('CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS', activeRequest.params).catch(() => undefined);
+    return;
+  }
+  assistantState.summary = retained ?? cancelledCurrentVideoSummaryHighlights(
+    activeRequest.title,
+    null,
+    activeRequest.textSize,
+  );
+  assistantState.summaryContextKey = assistantState.contextKey;
+  assistantState.summaryError = retained ? '本次生成已取消，此前结果保持不变。' : null;
+  renderAssistantShell();
+  void sendRuntimeRequest('CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS', activeRequest.params).catch(() => undefined);
+}
+
+async function confirmCurrentVideoSummaryHighlightJumpFromPage(
+  binding: CurrentVideoSummaryHighlightBinding,
+): Promise<void> {
+  if (
+    assistantState.summaryHighlightJumpLoading
+    || assistantState.summaryHighlightReturnLoading
+    || assistantState.context?.kind !== 'video'
+  ) return;
+  const summary = assistantState.summaryContextKey === assistantState.contextKey
+    ? assistantState.summary
+    : null;
+  const currentBinding = summary
+    ? currentVideoSummaryHighlightBindingFromResult(summary, binding.highlightId)
+    : null;
+  if (!currentVideoSummaryHighlightBindingsEqual(binding, currentBinding)) {
+    assistantState.summaryHighlightPreview = null;
+    assistantState.summaryHighlightJumpStatus = '亮点结果已更新，请重新预览后再跳转。';
+    renderAssistantShell();
+    return;
+  }
+
+  const operationId = assistantState.summaryHighlightTimestampRequestId + 1;
+  assistantState.summaryHighlightTimestampRequestId = operationId;
+  assistantState.summaryHighlightJumpLoading = true;
+  assistantState.summaryHighlightReturnLoading = false;
+  assistantState.summaryHighlightReturnAvailable = false;
+  assistantState.summaryHighlightJumpStatus = '正在确认跳转...';
+  renderAssistantShell();
+
+  try {
+    const response = await sendRuntimeRequest<CurrentVideoTimestampJumpResponse>(
+      'REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP',
+      {
+        ...binding,
+        confirmed: true,
+        ...currentPrimaryTextRequestParams(),
+      },
+    );
+    if (assistantState.summaryHighlightTimestampRequestId !== operationId) return;
+    assistantState.summaryHighlightJumpStatus = response.ok
+      ? '已跳到亮点位置，可返回原位置。'
+      : '亮点结果或页面状态已变化，请重新预览后再试。';
+    assistantState.summaryHighlightReturnAvailable = response.ok && response.returnPointSeconds !== null;
+    assistantState.summaryHighlightPreview = null;
+  } catch {
+    if (assistantState.summaryHighlightTimestampRequestId !== operationId) return;
+    assistantState.summaryHighlightJumpStatus = '亮点跳转失败，请确认当前视频页仍然打开后重试。';
+    assistantState.summaryHighlightReturnAvailable = false;
+  } finally {
+    if (assistantState.summaryHighlightTimestampRequestId === operationId) {
+      assistantState.summaryHighlightJumpLoading = false;
+      renderAssistantShell();
+    }
+  }
+}
+
+async function returnCurrentVideoSummaryHighlightJumpFromPage(): Promise<void> {
+  if (
+    !assistantState.summaryHighlightReturnAvailable
+    || assistantState.summaryHighlightReturnLoading
+    || assistantState.summaryHighlightJumpLoading
+  ) return;
+  const operationId = assistantState.summaryHighlightTimestampRequestId + 1;
+  assistantState.summaryHighlightTimestampRequestId = operationId;
+  assistantState.summaryHighlightReturnLoading = true;
+  assistantState.summaryHighlightJumpStatus = '正在返回原位置...';
+  renderAssistantShell();
+  try {
+    const response = await sendRuntimeRequest<CurrentVideoTimestampReturnResponse>(
+      'RETURN_CURRENT_VIDEO_SEGMENT_JUMP',
+      currentPrimaryTextRequestParams(),
+    );
+    if (assistantState.summaryHighlightTimestampRequestId !== operationId) return;
+    assistantState.summaryHighlightJumpStatus = response.ok
+      ? '已返回原位置。'
+      : '未能返回原位置，请确认当前视频页和播放器状态后重试。';
+    if (response.ok) assistantState.summaryHighlightReturnAvailable = false;
+  } catch {
+    if (assistantState.summaryHighlightTimestampRequestId !== operationId) return;
+    assistantState.summaryHighlightJumpStatus = '返回原位置失败，请确认当前视频页仍然打开后重试。';
+  } finally {
+    if (assistantState.summaryHighlightTimestampRequestId === operationId) {
+      assistantState.summaryHighlightReturnLoading = false;
       renderAssistantShell();
     }
   }
@@ -2430,6 +2809,7 @@ function ensurePrimaryTextSelectionsLoaded(): void {
       if (assistantState.context) {
         updateAssistantContext(assistantState.context);
         renderAssistantShell();
+        if (assistantState.expanded) void restoreCurrentVideoSummaryHighlightsFromPage();
       }
     })
     .catch(() => {
@@ -2452,28 +2832,41 @@ function ensurePrimaryTextSelectionStorageListener(): void {
   if (!storageChanges?.addListener) return;
 
   storageChanges.addListener((changes, areaName) => {
-    if (
-      areaName !== 'local'
-      || !Object.prototype.hasOwnProperty.call(
-        changes,
-        CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
-      )
-    ) {
-      return;
+    if (areaName !== 'local') return;
+    const selectionChanged = Object.prototype.hasOwnProperty.call(
+      changes,
+      CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
+    );
+    const configChanged = Object.prototype.hasOwnProperty.call(changes, USER_CONFIG_STORAGE_KEY)
+      && currentVideoSummaryConfigRelevantChange(
+        changes[USER_CONFIG_STORAGE_KEY]?.oldValue,
+        changes[USER_CONFIG_STORAGE_KEY]?.newValue,
+      );
+
+    if (selectionChanged) {
+      const change = changes[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY];
+      const selections = normalizeCurrentVideoPrimaryTextSelections(change?.newValue);
+      primaryTextSelectionsLoadRequestId += 1;
+      primaryTextSelectionsRevision += 1;
+      replacePrimaryTextSelections(selections);
+      primaryTextSelectionsLoaded = true;
+      primaryTextSelectionsLoading = false;
+      primaryTextSelectionsReadFailed = false;
+      primaryTextSelectionSaveFailedPartKeys.clear();
+      invalidatePrimaryTextDependentAssistantState();
+      if (assistantState.context) {
+        updateAssistantContext(assistantState.context);
+        renderAssistantShell();
+        if (assistantState.expanded) void restoreCurrentVideoSummaryHighlightsFromPage();
+      }
     }
-    const change = changes[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY];
-    const selections = normalizeCurrentVideoPrimaryTextSelections(change?.newValue);
-    primaryTextSelectionsLoadRequestId += 1;
-    primaryTextSelectionsRevision += 1;
-    replacePrimaryTextSelections(selections);
-    primaryTextSelectionsLoaded = true;
-    primaryTextSelectionsLoading = false;
-    primaryTextSelectionsReadFailed = false;
-    primaryTextSelectionSaveFailedPartKeys.clear();
-    invalidatePrimaryTextDependentAssistantState();
-    if (assistantState.context) {
-      updateAssistantContext(assistantState.context);
-      renderAssistantShell();
+
+    if (configChanged) {
+      invalidateSummaryHighlightsForLiveConfigChange(changes[USER_CONFIG_STORAGE_KEY]?.newValue);
+      if (assistantState.context) {
+        renderAssistantShell();
+        if (assistantState.expanded) void restoreCurrentVideoSummaryHighlightsFromPage();
+      }
     }
   });
   primaryTextSelectionStorageListenerRegistered = true;
@@ -2488,10 +2881,19 @@ function replacePrimaryTextSelections(selections: Record<string, string>): void 
 
 function invalidatePrimaryTextDependentAssistantState(): void {
   assistantState.summaryRequestId += 1;
+  if (!assistantState.summaryActiveRequest) {
+    assistantState.summaryLoading = false;
+  }
   assistantState.summary = null;
   assistantState.summaryContextKey = '';
-  assistantState.summaryLoading = false;
+  assistantState.summaryCacheLoading = false;
   assistantState.summaryError = null;
+  assistantState.summaryHighlightPreview = null;
+  assistantState.summaryHighlightJumpStatus = null;
+  assistantState.summaryHighlightJumpLoading = false;
+  assistantState.summaryHighlightReturnAvailable = false;
+  assistantState.summaryHighlightReturnLoading = false;
+  assistantState.summaryHighlightTimestampRequestId += 1;
 
   assistantState.knowledgeRequestId += 1;
   assistantState.knowledge = null;
@@ -2515,6 +2917,100 @@ function invalidatePrimaryTextDependentAssistantState(): void {
   assistantState.subtitleRefreshing = false;
   assistantState.subtitleStatus = null;
   assistantState.primaryTextStatus = null;
+}
+
+function invalidateSummaryHighlightsForLiveConfigChange(userConfig: unknown): void {
+  const activeRequest = assistantState.summaryActiveRequest;
+  const visibleSummary = assistantState.summaryContextKey === assistantState.contextKey
+    ? assistantState.summary
+    : null;
+  const activeRequestSummary = activeRequest && summaryActiveRequestStillMatchesCurrent(activeRequest)
+    ? activeRequest.previousReady
+    : null;
+  const retained = currentVideoSummaryAfterLiveConfigChange(
+    visibleSummary ?? activeRequestSummary,
+    userConfig,
+  );
+
+  if (activeRequest) {
+    assistantState.summaryActiveRequest = null;
+    void sendRuntimeRequest('CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS', activeRequest.params).catch(() => undefined);
+  }
+  assistantState.summaryRequestId += 1;
+  assistantState.summaryLoading = false;
+  assistantState.summaryCacheLoading = false;
+  assistantState.summaryError = null;
+  assistantState.summary = retained;
+  assistantState.summaryContextKey = retained ? assistantState.contextKey : '';
+  assistantState.summaryHighlightPreview = null;
+  assistantState.summaryHighlightJumpStatus = null;
+  assistantState.summaryHighlightJumpLoading = false;
+  assistantState.summaryHighlightReturnAvailable = false;
+  assistantState.summaryHighlightReturnLoading = false;
+  assistantState.summaryHighlightTimestampRequestId += 1;
+}
+
+function currentVideoSummaryAfterLiveConfigChange(
+  summary: CurrentVideoSummaryHighlightsResult | null,
+  userConfig: unknown,
+): CurrentVideoSummaryHighlightsResult | null {
+  if (summary?.status !== 'ready') return null;
+  const gate = currentVideoSummaryGenerationGate(userConfig);
+  return {
+    ...asPriorGeneratedCurrentVideoSummaryHighlights(summary),
+    canGenerate: gate.canGenerate,
+    generationBlockedMessage: gate.blockedMessage,
+  };
+}
+
+function currentVideoSummaryConfigRelevantChange(oldValue: unknown, newValue: unknown): boolean {
+  const oldGate = currentVideoSummaryGenerationGate(oldValue);
+  const newGate = currentVideoSummaryGenerationGate(newValue);
+  return oldGate.enabled !== newGate.enabled
+    || oldGate.configured !== newGate.configured
+    || oldGate.baseURL !== newGate.baseURL
+    || oldGate.apiKey !== newGate.apiKey
+    || oldGate.chatModel !== newGate.chatModel;
+}
+
+function currentVideoSummaryGenerationGate(value: unknown): {
+  enabled: boolean;
+  configured: boolean;
+  baseURL: string;
+  apiKey: string;
+  chatModel: string;
+  canGenerate: boolean;
+  blockedMessage: string | null;
+} {
+  const config = isPlainRecord(value) ? value : {};
+  const assistant = isPlainRecord(config.assistant) ? config.assistant : {};
+  const ai = isPlainRecord(config.ai) ? config.ai : {};
+  const enabled = assistant.currentVideoAiAssistantEnabled === true;
+  const baseURL = stringValue(ai.baseURL);
+  const apiKey = stringValue(ai.apiKey);
+  const chatModel = stringValue(ai.chatModel);
+  const configured = Boolean(baseURL && apiKey && chatModel);
+  return {
+    enabled,
+    configured,
+    baseURL,
+    apiKey,
+    chatModel,
+    canGenerate: enabled && configured,
+    blockedMessage: !enabled
+      ? '要生成或刷新，请先在设置中开启“当前视频 AI 助手”。'
+      : configured
+        ? null
+        : '要生成或刷新，请先完成 AI 服务配置。',
+  };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 interface SegmentTimestampOperationSnapshot {
@@ -2580,6 +3076,21 @@ function primaryTextSubmissionBlockMessage(
     return '请先明确选择一个主要文本来源，再向当前视频提问。';
   }
   return null;
+}
+
+function summaryActiveRequestStillMatchesCurrent(
+  activeRequest: InPageSummaryHighlightsRequest,
+): boolean {
+  return activeRequest.contextKey === assistantState.contextKey
+    && activeRequest.selectionRevision === primaryTextSelectionsRevision
+    && activeRequest.selectedSourceIdentityKey === selectedSourceIdentityKeyFromParams(
+      currentPrimaryTextRequestParams(),
+    );
+}
+
+function selectedSourceIdentityKeyFromParams(params: Record<string, unknown>): string | null {
+  const value = params.selectedSourceIdentityKey;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function currentPrimaryTextRequestParams(): Record<string, unknown> {
@@ -3011,25 +3522,53 @@ function subtitleDiagnosticsBackground(state: CurrentVideoSubtitleDiagnostics): 
   return 'rgba(255,179,71,0.08)';
 }
 
-function summaryStatusLabel(status: CurrentVideoSummaryResult['status']): string {
+function summaryHighlightsStatusLabel(status: CurrentVideoSummaryHighlightsResult['status']): string {
   switch (status) {
     case 'ready':
-      return '摘要可用';
+      return '摘要与亮点';
+    case 'not_requested':
+      return '未生成';
     case 'no_context':
       return '无上下文';
+    case 'no_text':
+      return '无正文';
     case 'loading':
-      return '加载中';
+      return '准备中';
+    case 'generating':
+      return '生成中';
     case 'cancelled':
       return '已取消';
+    case 'invalid_output':
+      return '已拒绝';
+    case 'error':
+      return '未生成';
     default:
       return '未知状态';
   }
 }
 
-function summaryConfidenceLabel(value: 'low' | 'medium' | 'high'): string {
-  if (value === 'high') return '高';
-  if (value === 'medium') return '中';
-  return '低';
+function currentVideoSummaryHighlightBindingsEqual(
+  left: CurrentVideoSummaryHighlightBinding | null,
+  right: CurrentVideoSummaryHighlightBinding | null,
+): boolean {
+  return Boolean(
+    left
+    && right
+    && left.highlightId === right.highlightId
+    && left.cacheKey === right.cacheKey
+    && left.generatedAt === right.generatedAt
+    && left.requestId === right.requestId
+    && left.model === right.model,
+  );
+}
+
+function activeSummaryHighlightPreview(
+  summary: CurrentVideoSummaryHighlightsResult,
+): CurrentVideoSummaryHighlightBinding | null {
+  const preview = assistantState.summaryHighlightPreview;
+  if (!preview) return null;
+  const current = currentVideoSummaryHighlightBindingFromResult(summary, preview.highlightId);
+  return currentVideoSummaryHighlightBindingsEqual(preview, current) ? preview : null;
 }
 
 function segmentRetrievalStatusMessage(

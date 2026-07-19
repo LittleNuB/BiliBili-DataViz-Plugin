@@ -1470,7 +1470,7 @@ test('Dexie 0.12 subtitle cache upgrade clears only transcript tables transactio
   assert.deepEqual(tables.favoriteItems, [{ id: 2 }]);
 });
 
-test('real Dexie v9 to v11 upgrade clears legacy transcript rows and adds feedback tables', async () => {
+test('real Dexie v9 to current upgrade clears legacy transcript rows and adds 0.13 tables', async () => {
   const { BiliAnalyticsDB } = await import('../src/background/storage/db.ts');
   const dbName = uniqueTestDbName('v9-v11');
   const legacy = new Dexie(dbName);
@@ -1495,7 +1495,7 @@ test('real Dexie v9 to v11 upgrade clears legacy transcript rows and adds feedba
   try {
     await upgraded.open();
 
-    assert.equal(upgraded.verno, 11);
+    assert.equal(upgraded.verno, 12);
     assert.equal(await upgraded.currentVideoTranscriptSources.count(), 0);
     assert.equal(await upgraded.currentVideoTranscriptSegments.count(), 0);
     assert.equal((await upgraded.watchHistory.where('bvid').equals('BV1MigrationKeep').first())?.title, 'Kept history BV1MigrationKeep');
@@ -1506,6 +1506,7 @@ test('real Dexie v9 to v11 upgrade clears legacy transcript rows and adds feedba
     assert.equal(await upgraded.dynamicBillFeedbackActions.count(), 0);
     assert.equal(await upgraded.dynamicBillCreatorFeedbackCounts.count(), 0);
     assert.equal(await upgraded.dynamicBillCreatorReviewPrompts.count(), 0);
+    assert.equal(await upgraded.currentVideoSummaryHighlights.count(), 0);
   } finally {
     upgraded.close();
     await Dexie.delete(dbName);

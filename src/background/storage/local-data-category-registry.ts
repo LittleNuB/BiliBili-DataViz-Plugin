@@ -14,6 +14,7 @@ import {
   collectBlindBoxDrawHistoryUsage,
   readBlindBoxDrawHistoryAfterClear,
 } from './blind-box-draw-history-repo.ts';
+import { runCurrentVideoSummaryHighlightsClearCoordinator } from '../current-video-summary-highlights-clear-epoch.ts';
 import {
   CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
 } from '../../shared/current-video-primary-text-selection.ts';
@@ -53,6 +54,7 @@ export type LocalDataCategoryTableName =
   | 'smartFavoriteIndex'
   | 'currentVideoTranscriptSources'
   | 'currentVideoTranscriptSegments'
+  | 'currentVideoSummaryHighlights'
   | 'followedCreators'
   | 'followedVideoUpdates'
   | 'dynamicBillItems'
@@ -101,6 +103,7 @@ export function getRegisteredLocalDataCategories(): LocalDataCategoryRegistratio
       smartFavoriteIndex: db.smartFavoriteIndex,
       currentVideoTranscriptSources: db.currentVideoTranscriptSources,
       currentVideoTranscriptSegments: db.currentVideoTranscriptSegments,
+      currentVideoSummaryHighlights: db.currentVideoSummaryHighlights,
       followedCreators: db.followedCreators,
       followedVideoUpdates: db.followedVideoUpdates,
       dynamicBillItems: db.dynamicBillItems,
@@ -143,6 +146,7 @@ export function createRegisteredLocalDataCategories(
       smartFavoriteIndexes: counts[2] ?? 0,
     })),
     currentVideoSubtitleCategory(dependencies),
+    currentVideoSummaryHighlightCategory(dependencies),
     tableCategory(dependencies, 'dynamicBill', '动态账单', {
       tables: [
         tables.followedCreators,
@@ -177,6 +181,56 @@ export function createRegisteredLocalDataCategories(
       coordinateCurrentVideoPrimaryTextSelectionClear,
     ),
   ];
+}
+
+function currentVideoSummaryHighlightCategory(
+  dependencies: LocalDataCategoryRegistryDependencies,
+): LocalDataCategoryRegistration {
+  const table = dependencies.tables.currentVideoSummaryHighlights;
+  const collectUsage = async () => {
+    const rows = await table.toArray();
+    const latestGeneratedAt = rows.reduce<number | null>((latest, row) => {
+      const generatedAt = row && typeof row === 'object'
+        ? normalizeTimestamp((row as Record<string, unknown>).generatedAt)
+        : null;
+      if (!generatedAt) return latest;
+      return latest === null ? generatedAt : Math.max(latest, generatedAt);
+    }, null);
+    return {
+      count: rows.length,
+      usageBytes: rows.length > 0 ? serializedRowsSize(rows) : 0,
+      details: {
+        currentVideoSummaryHighlightParts: rows.length,
+        currentVideoSummaryHighlightBytes: rows.length > 0 ? serializedRowsSize(rows) : 0,
+      },
+      latestGeneratedAt,
+    };
+  };
+  return {
+    id: 'currentVideoSummaryHighlights',
+    label: '当前视频摘要与亮点缓存',
+    includeInClearAll: true,
+    collectUsage,
+    clear: async () => runCurrentVideoSummaryHighlightsClearCoordinator(async () => {
+      const usage = await collectUsage();
+      await dependencies.transaction([table], async () => {
+        await table.clear();
+      });
+      return {
+        cleared: {
+          currentVideoSummaryHighlightParts: usage.count,
+          currentVideoSummaryHighlightBytes: usage.usageBytes,
+        },
+      };
+    }),
+    readAfterClear: async () => {
+      const usage = await collectUsage();
+      return {
+        ...usage,
+        empty: usage.count === 0 && usage.usageBytes === 0,
+      };
+    },
+  };
 }
 
 function blindBoxDrawHistoryCategory(
@@ -393,4 +447,8 @@ function sourceIdentityKey(row: unknown): string | null {
   return typeof sourceIdentity === 'string' && sourceIdentity.trim()
     ? sourceIdentity
     : null;
+}
+
+function normalizeTimestamp(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }

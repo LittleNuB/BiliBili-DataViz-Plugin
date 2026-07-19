@@ -35,7 +35,7 @@ FORBIDDEN_ASSISTANT_IDENTITY_TERMS = [
     "4404",
 ]
 FULL_TEXT_OR_SEARCH_ACTIONS = {
-    "GET_CURRENT_VIDEO_SUMMARY",
+    "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS",
     "GET_VIDEO_KNOWLEDGE",
     "SEARCH_CURRENT_VIDEO_SEGMENTS",
 }
@@ -122,6 +122,7 @@ def assert_no_full_text_or_search(page):
 
 
 def assert_clean_visible_text(page):
+    assert "GET_CURRENT_VIDEO_SUMMARY" not in message_actions(page), "legacy bounded summary route was called"
     text = page.locator("body").inner_text()
     for term in FORBIDDEN_VISIBLE_TERMS:
         assert term not in text, f"visible raw term leaked: {term}"
@@ -262,7 +263,7 @@ def run_deferred_storage_flow(page):
     counts_before = {
         action: message_count_for(page, action)
         for action in [
-            "GET_CURRENT_VIDEO_SUMMARY",
+            "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS",
             "GET_VIDEO_KNOWLEDGE",
             "SEARCH_CURRENT_VIDEO_SEGMENTS",
             "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
@@ -335,17 +336,17 @@ def run_rejected_storage_single_v2_flow(page):
     page.get_by_text("展开助手").click()
     expect(page.get_by_text("正在读取本页保存的主要文本来源选择").first).to_be_visible()
     expect(page.locator("textarea")).to_be_disabled()
-    expect(page.get_by_role("button", name="读取摘要")).to_be_disabled()
+    expect(page.get_by_role("button", name="生成摘要与亮点")).to_be_disabled()
     expect(page.get_by_role("button", name="刷新节点")).to_be_disabled()
 
     blocked_actions = [
-        "GET_CURRENT_VIDEO_SUMMARY",
+        "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS",
         "GET_VIDEO_KNOWLEDGE",
         "SEARCH_CURRENT_VIDEO_SEGMENTS",
         "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
     ]
     counts_before_reject = {action: message_count_for(page, action) for action in blocked_actions}
-    page.get_by_role("button", name="读取摘要").evaluate("(button) => button.click()")
+    page.get_by_role("button", name="生成摘要与亮点").evaluate("(button) => button.click()")
     page.get_by_role("button", name="刷新节点").evaluate("(button) => button.click()")
     page.get_by_role("button", name="重新检测字幕").first.evaluate("(button) => button.click()")
     page.locator("textarea").evaluate(
@@ -364,7 +365,7 @@ def run_rejected_storage_single_v2_flow(page):
     expect(page.locator("textarea")).to_be_disabled()
 
     counts_after_reject = {action: message_count_for(page, action) for action in blocked_actions}
-    page.get_by_role("button", name="读取摘要").evaluate("(button) => button.click()")
+    page.get_by_role("button", name="生成摘要与亮点").evaluate("(button) => button.click()")
     page.get_by_role("button", name="刷新节点").evaluate("(button) => button.click()")
     page.get_by_role("button", name="提问").evaluate("(button) => button.click()")
     for action, count in counts_after_reject.items():
@@ -380,12 +381,12 @@ def run_rejected_storage_single_v2_flow(page):
     page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕").get_by_role("button", name="用于视频助手").click()
     expect(page.get_by_text("保存主要文本来源失败").first).to_be_visible()
     expect(page.locator("textarea")).to_be_disabled()
-    expect(page.get_by_role("button", name="读取摘要")).to_be_disabled()
+    expect(page.get_by_role("button", name="生成摘要与亮点")).to_be_disabled()
     expect(page.get_by_role("button", name="刷新节点")).to_be_disabled()
     storage_after_failed_set = page.evaluate("window.__assistantMockStorage.currentVideoPrimaryTextSelections || {}")
     assert current_v2_key not in list(storage_after_failed_set.values()), "failed save must roll back in-memory selection"
     counts_after_failed_set = {action: message_count_for(page, action) for action in blocked_actions}
-    page.get_by_role("button", name="读取摘要").evaluate("(button) => button.click()")
+    page.get_by_role("button", name="生成摘要与亮点").evaluate("(button) => button.click()")
     page.get_by_role("button", name="刷新节点").evaluate("(button) => button.click()")
     page.get_by_role("button", name="提问").evaluate("(button) => button.click()")
     for action, count in counts_after_failed_set.items():
@@ -396,13 +397,13 @@ def run_rejected_storage_single_v2_flow(page):
     page.wait_for_timeout(50)
     expect(page.get_by_text("保存主要文本来源失败").first).to_be_visible()
     expect(page.locator("textarea")).to_be_disabled()
-    expect(page.get_by_role("button", name="读取摘要")).to_be_disabled()
+    expect(page.get_by_role("button", name="生成摘要与亮点")).to_be_disabled()
     expect(page.get_by_role("button", name="刷新节点")).to_be_disabled()
 
     page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕").get_by_role("button", name="用于视频助手").click()
     expect(page.get_by_text("已用于当前视频助手").first).to_be_visible()
     expect(page.locator("textarea")).to_be_enabled()
-    expect(page.get_by_role("button", name="读取摘要")).to_be_enabled()
+    expect(page.get_by_role("button", name="生成摘要与亮点")).to_be_enabled()
     expect(page.get_by_role("button", name="刷新节点")).to_be_enabled()
     storage_after_success = page.evaluate("window.__assistantMockStorage.currentVideoPrimaryTextSelections || {}")
     assert current_v2_key in list(storage_after_success.values()), "successful explicit selection must persist exact V2"
@@ -437,7 +438,7 @@ def run_loaded_selection_save_failure_flow(page):
     expect(page.get_by_role("button", name="确认跳转")).to_be_visible()
 
     blocked_actions = [
-        "GET_CURRENT_VIDEO_SUMMARY",
+        "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS",
         "GET_VIDEO_KNOWLEDGE",
         "SEARCH_CURRENT_VIDEO_SEGMENTS",
         "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
@@ -447,12 +448,12 @@ def run_loaded_selection_save_failure_flow(page):
     page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕").get_by_role("button", name="用于视频助手").click()
     expect(page.get_by_text("保存主要文本来源失败").first).to_be_visible()
     expect(page.locator("textarea")).to_be_disabled()
-    expect(page.get_by_role("button", name="读取摘要")).to_be_disabled()
+    expect(page.get_by_role("button", name="生成摘要与亮点")).to_be_disabled()
     expect(page.get_by_role("button", name="刷新节点")).to_be_disabled()
     expect(page.get_by_role("button", name="确认跳转")).to_be_disabled()
 
     counts_after_set_failure = {action: message_count_for(page, action) for action in blocked_actions}
-    page.get_by_role("button", name="读取摘要").evaluate("(button) => button.click()")
+    page.get_by_role("button", name="生成摘要与亮点").evaluate("(button) => button.click()")
     page.get_by_role("button", name="刷新节点").evaluate("(button) => button.click()")
     page.get_by_role("button", name="提问").evaluate("(button) => button.click()")
     page.get_by_role("button", name="确认跳转").evaluate("(button) => button.click()")
@@ -988,7 +989,7 @@ def run_selection_save_blocks_operations_flow(page):
     counts_before = {
         action: message_count_for(page, action)
         for action in [
-            "GET_CURRENT_VIDEO_SUMMARY",
+            "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS",
             "GET_VIDEO_KNOWLEDGE",
             "SEARCH_CURRENT_VIDEO_SEGMENTS",
             "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
@@ -997,11 +998,11 @@ def run_selection_save_blocks_operations_flow(page):
     page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕").get_by_role("button", name="用于视频助手").click()
     expect(page.get_by_role("button", name="保存中...")).to_be_visible()
     expect(page.locator("textarea")).to_be_disabled()
-    expect(page.get_by_role("button", name="读取摘要")).to_be_disabled()
+    expect(page.get_by_role("button", name="生成摘要与亮点")).to_be_disabled()
     expect(page.get_by_role("button", name="刷新节点")).to_be_disabled()
     expect(page.get_by_role("button", name="确认跳转")).to_be_disabled()
 
-    page.get_by_role("button", name="读取摘要").evaluate("(button) => button.click()")
+    page.get_by_role("button", name="生成摘要与亮点").evaluate("(button) => button.click()")
     page.get_by_role("button", name="刷新节点").evaluate("(button) => button.click()")
     page.get_by_role("button", name="提问").evaluate("(button) => button.click()")
     page.get_by_role("button", name="确认跳转").evaluate("(button) => button.click()")
@@ -1091,11 +1092,376 @@ def run_search_backend_failure_flow(page):
     assert_no_horizontal_overflow(page)
 
 
+def summary_highlights_section(page):
+    return page.locator(".bdc-assistant-section-primary").filter(has_text="摘要与亮点").first
+
+
+def open_selected_summary_assistant(page, query=""):
+    page.route("**/*", route_mock)
+    suffix = f"&{query}" if query else ""
+    page.goto(f"{MOCK_URL}?subtitleCached=1&savedSource=current{suffix}")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+    assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 0
+    page.get_by_text("展开助手").click()
+    section = summary_highlights_section(page)
+    expect(section).to_be_visible()
+    expect(section.get_by_text("等待时间和费用由你配置的 AI 服务决定。", exact=False)).to_be_visible()
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    expect(page.get_by_text("B站字幕").first).to_be_visible()
+    page.wait_for_function(
+        """() => (window.__assistantMockMessages || []).some(
+            (message) => message.action === "GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE"
+        )"""
+    )
+    assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 0
+    return section
+
+
+def run_summary_highlights_success_flow(page, highlight_count):
+    section = open_selected_summary_assistant(page, f"highlightCount={highlight_count}")
+    expect(section.get_by_text("可在这里手动生成摘要与亮点；打开面板不会自动发送正文。")).to_be_visible()
+    assert message_count_for(page, "GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE") >= 1
+
+    section.get_by_role("button", name="生成摘要与亮点").click()
+    expect(section.get_by_text("页内助手使用一次完整正文请求生成合并结果", exact=False)).to_be_visible()
+    expect(section.get_by_text("先确认当前主要文本来源。")).to_be_visible()
+    cards = section.locator(".bdc-assistant-candidate-card")
+    expect(cards).to_have_count(highlight_count)
+    generate_message = last_message_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    assert generate_message["params"].get("requestId")
+    assert generate_message["params"].get("selectedSourceIdentityKey")
+
+    initial_position = page.evaluate("window.__assistantMockPlaybackPosition()")
+    cards.first.get_by_role("button", name="预览跳转").click()
+    expect(section.get_by_text("确认跳转前预览")).to_be_visible()
+    assert page.evaluate("window.__assistantMockPlaybackPosition()") == initial_position
+    section.get_by_role("button", name="确认跳转", exact=True).click()
+    expect(section.get_by_text("已跳到亮点位置，可返回原位置。")).to_be_visible()
+    assert page.evaluate("window.__assistantMockPlaybackPosition()") == 0
+    jump_message = last_message_for(page, "REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP")
+    for field in ["cacheKey", "requestId", "generatedAt", "model", "highlightId"]:
+        assert jump_message["params"].get(field) is not None, f"highlight jump missing {field} binding"
+
+    section.get_by_role("button", name="返回原位置", exact=True).click()
+    expect(section.get_by_text("已返回原位置。")).to_be_visible()
+    assert page.evaluate("window.__assistantMockPlaybackPosition()") == initial_position
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_summary_cache_restore_flow(page, authorization_off=False):
+    query = "cachedSummary=1"
+    if authorization_off:
+        query += "&summaryDisabled=1"
+    section = open_selected_summary_assistant(page, query)
+    expect(section.get_by_text("页内助手使用一次完整正文请求生成合并结果", exact=False)).to_be_visible()
+    assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 0
+    expect(section.locator(".bdc-assistant-candidate-card")).to_have_count(4)
+    if authorization_off:
+        expect(section.get_by_text("此前生成", exact=True)).to_be_visible()
+        expect(section.get_by_text("关闭授权后仍可查看，但不能重新生成。", exact=False)).to_be_visible()
+        expect(section.get_by_role("button", name="重新生成")).to_be_disabled()
+    else:
+        expect(section.get_by_text("本地缓存", exact=True)).to_be_visible()
+        expect(section.get_by_role("button", name="重新生成")).to_be_enabled()
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_summary_live_config_disable_flow(page):
+    section = open_selected_summary_assistant(page, "cachedSummary=1")
+    expect(section.get_by_text("页内助手使用一次完整正文请求生成合并结果", exact=False)).to_be_visible()
+    page.evaluate("window.__assistantMockEmitUserConfigChange('disable')")
+    expect(section.get_by_text("此前生成", exact=True)).to_be_visible()
+    expect(section.get_by_role("button", name="重新生成")).to_be_disabled()
+    assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 0
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_summary_live_config_model_change_flow(page):
+    section = open_selected_summary_assistant(page)
+    page.evaluate("window.__assistantMockDeferNextProtectedAction('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    section.get_by_role("button", name="生成摘要与亮点").click()
+    expect(section.get_by_text("正在生成摘要、关键要点和视频亮点，请稍等。")).to_be_visible()
+    page.wait_for_function("window.__assistantMockPendingProtectedResponseCount() === 1")
+    generation_message = last_message_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+
+    page.evaluate("window.__assistantMockEmitUserConfigChange('model')")
+    page.wait_for_function("(window.__assistantMockMessages || []).some(message => message.action === 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    cancel_message = last_message_for(page, "CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    assert cancel_message["params"]["requestId"] == generation_message["params"]["requestId"]
+    assert cancel_message["params"]["selectedSourceIdentityKey"] == generation_message["params"]["selectedSourceIdentityKey"]
+    page.evaluate("window.__assistantMockResolveProtectedResponses()")
+    page.wait_for_timeout(50)
+    expect(section.get_by_text("页内助手使用一次完整正文请求生成合并结果 1", exact=False)).to_have_count(0)
+    assert page.evaluate("window.__assistantMockSummaryCache()") is None
+
+    section.get_by_role("button", name="生成摘要与亮点").click()
+    expect(section.get_by_text("页内助手使用一次完整正文请求生成合并结果 1", exact=False)).to_be_visible()
+    assert page.evaluate("window.__assistantMockSummaryCache().model") == "mock-model-v2"
+    assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 2
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_summary_live_config_model_change_after_ready_flow(page):
+    section = open_selected_summary_assistant(page, "cachedSummary=1")
+    old_text = "页内助手使用一次完整正文请求生成合并结果 1。"
+    expect(section.get_by_text(old_text)).to_be_visible()
+    page.evaluate("window.__assistantMockEmitUserConfigChange('model')")
+    expect(section.get_by_text("此前生成", exact=True)).to_be_visible()
+    expect(section.get_by_text(old_text)).to_be_visible()
+    section.get_by_role("button", name="重新生成").click()
+    expect(section.get_by_text("页内助手使用一次完整正文请求生成合并结果 2", exact=False)).to_be_visible()
+    assert page.evaluate("window.__assistantMockSummaryCache().model") == "mock-model-v2"
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_summary_terminal_state_flow(page, state):
+    query_by_state = {
+        "disabled": "summaryDisabled=1",
+        "unconfigured": "summaryUnconfigured=1",
+        "no_text": "summaryState=no_text",
+        "invalid": "summaryState=invalid",
+        "error": "summaryState=error",
+    }
+    expected_by_state = {
+        "disabled": "当前视频 AI 助手未开启，本次没有发送正文。",
+        "unconfigured": "AI 服务尚未配置完整，本次没有发送正文。",
+        "no_text": "当前没有可用的主要正文，无法生成摘要与亮点。",
+        "invalid": "模型返回的摘要与亮点没有通过校验，旧结果不会被替换。",
+        "error": "摘要与亮点生成失败，旧结果不会被替换。",
+    }
+    section = open_selected_summary_assistant(page, query_by_state[state])
+    if state in {"disabled", "unconfigured"}:
+        expect(section.get_by_role("button", name="生成摘要与亮点")).to_be_disabled()
+    else:
+        section.get_by_role("button", name="生成摘要与亮点").click()
+        assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 1
+    expect(section.get_by_text(expected_by_state[state])).to_be_visible()
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_summary_cancel_after_source_change_flow(page):
+    section = open_selected_summary_assistant(page)
+    page.evaluate("window.__assistantMockDeferNextProtectedAction('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    section.get_by_role("button", name="生成摘要与亮点").click()
+    expect(section.get_by_text("正在生成摘要、关键要点和视频亮点，请稍等。")).to_be_visible()
+    page.wait_for_function("window.__assistantMockPendingProtectedResponseCount() === 1")
+    generate_message = last_message_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    old_request_id = generate_message["params"]["requestId"]
+    old_source = generate_message["params"]["selectedSourceIdentityKey"]
+
+    page.evaluate("window.__assistantMockSwitchToPart(2)")
+    expect(page.get_by_text("第 2 / 2 P", exact=True)).to_be_visible()
+    page.get_by_role("button", name="取消生成").click()
+    cancel_message = last_message_for(page, "CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    assert cancel_message["params"]["requestId"] == old_request_id
+    assert cancel_message["params"]["selectedSourceIdentityKey"] == old_source
+    page.evaluate("window.__assistantMockResolveProtectedResponses()")
+    expect(page.get_by_text("页内助手使用一次完整正文请求生成合并结果", exact=False)).to_have_count(0)
+    assert page.evaluate("window.__assistantMockSummaryCache()") is None
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_summary_late_old_source_response_after_selection_change_flow(page):
+    section = open_selected_summary_assistant(page)
+    page.evaluate("window.__assistantMockDeferNextProtectedAction('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    section.get_by_role("button", name="生成摘要与亮点").click()
+    expect(section.get_by_text("正在生成摘要、关键要点和视频亮点，请稍等。")).to_be_visible()
+    page.wait_for_function("window.__assistantMockPendingProtectedResponseCount() === 1")
+    generate_message = last_message_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    old_request_id = generate_message["params"]["requestId"]
+    old_source = generate_message["params"]["selectedSourceIdentityKey"]
+    b_text = "页内助手使用一次完整正文请求生成合并结果 7。"
+    late_a_text = "页内助手使用一次完整正文请求生成合并结果 8。"
+
+    evidence_reads_before = message_count_for(page, "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE")
+    page.evaluate("window.__assistantMockReplaceSubtitleSource('b')")
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    page.wait_for_function(
+        """(before) => (window.__assistantMockMessages || []).filter(
+            (message) => message.action === "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE"
+        ).length > before""",
+        arg=evidence_reads_before,
+    )
+    new_source = page.evaluate("window.__assistantMockCurrentSourceIdentityKey()")
+    page.evaluate("window.__assistantMockSeedSummaryCacheForCurrentSource(7)")
+    page.evaluate(
+        "(sourceIdentityKey) => window.__assistantMockSelectSourceIdentityForCurrentPart(sourceIdentityKey)",
+        new_source,
+    )
+    page.evaluate("window.__assistantMockResolveProtectedResponses()")
+    page.wait_for_function("window.__assistantMockSummaryCacheForCurrentSource() !== null")
+    expect(section.get_by_text(b_text)).to_be_visible()
+
+    assert message_count_for(page, "CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 0
+    assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 1
+    assert page.evaluate("(source) => window.__assistantMockSummaryCacheForSource(source).requestId", old_source) == old_request_id
+    assert page.evaluate("window.__assistantMockSummaryCacheForCurrentSource().requestId") != old_request_id
+    expect(section.get_by_text(late_a_text)).to_have_count(0)
+    expect(section.get_by_text(b_text)).to_be_visible()
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_summary_preview_replacement_race_flow(page):
+    section = open_selected_summary_assistant(page, "cachedSummary=1")
+    expect(section.locator(".bdc-assistant-candidate-card")).to_have_count(4)
+    initial_position = page.evaluate("window.__assistantMockPlaybackPosition()")
+    section.locator(".bdc-assistant-candidate-card").first.get_by_role("button", name="预览跳转").click()
+    expect(section.get_by_text("确认跳转前预览")).to_be_visible()
+    page.evaluate("window.__assistantMockReplaceSummaryGeneration()")
+    section.get_by_role("button", name="确认跳转", exact=True).click()
+    expect(section.get_by_text("亮点结果或页面状态已变化，请重新预览后再试。")).to_be_visible()
+    expect(section.get_by_role("button", name="返回原位置", exact=True)).to_have_count(0)
+    assert page.evaluate("window.__assistantMockPlaybackPosition()") == initial_position
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_summary_prior_refresh_failure_flow(page, failure):
+    query = "cachedSummary=1&summaryState=invalid" if failure == "invalid" else "cachedSummary=1&summaryReject=1"
+    expected = (
+        "模型返回的摘要与亮点没有通过校验，旧结果不会被替换。"
+        if failure == "invalid"
+        else "摘要与亮点生成失败，请确认当前视频页仍然打开后重试。"
+    )
+    section = open_selected_summary_assistant(page, query)
+    old_text = "页内助手使用一次完整正文请求生成合并结果 1。"
+    expect(section.get_by_text(old_text)).to_be_visible()
+    section.get_by_role("button", name="重新生成").click()
+    expect(section.get_by_text(expected)).to_be_visible()
+    expect(section.get_by_text(old_text)).to_be_visible()
+    expect(section.get_by_text("此前生成", exact=True)).to_be_visible()
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_summary_prior_cancel_flow(page):
+    section = open_selected_summary_assistant(page, "cachedSummary=1")
+    old_text = "页内助手使用一次完整正文请求生成合并结果 1。"
+    page.evaluate("window.__assistantMockDeferNextProtectedAction('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    section.get_by_role("button", name="重新生成").click()
+    expect(section.get_by_text("正在生成摘要、关键要点和视频亮点，请稍等。")).to_be_visible()
+    expect(section.get_by_text(old_text)).to_be_visible()
+    expect(section.get_by_text("此前生成", exact=True)).to_be_visible()
+    page.get_by_role("button", name="取消生成").click()
+    expect(section.get_by_text("本次生成已取消，此前结果保持不变。")).to_be_visible()
+    expect(section.get_by_text(old_text)).to_be_visible()
+    page.evaluate("window.__assistantMockResolveProtectedResponses()")
+    expect(section.get_by_text(old_text)).to_be_visible()
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_summary_prior_cancel_after_source_selection_change_flow(page):
+    section = open_selected_summary_assistant(page, "cachedSummary=1")
+    old_text = "页内助手使用一次完整正文请求生成合并结果 1。"
+    b_text = "页内助手使用一次完整正文请求生成合并结果 7。"
+    expect(section.get_by_text(old_text)).to_be_visible()
+    page.evaluate("window.__assistantMockDeferNextProtectedAction('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    section.get_by_role("button", name="重新生成").click()
+    expect(section.get_by_text("正在生成摘要、关键要点和视频亮点，请稍等。")).to_be_visible()
+    expect(section.get_by_text(old_text)).to_be_visible()
+    expect(section.get_by_text("此前生成", exact=True)).to_be_visible()
+    page.wait_for_function("window.__assistantMockPendingProtectedResponseCount() === 1")
+    generation_message = last_message_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    old_request_id = generation_message["params"]["requestId"]
+    old_source = generation_message["params"]["selectedSourceIdentityKey"]
+    evidence_reads_before = message_count_for(page, "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE")
+    page.evaluate("window.__assistantMockReplaceSubtitleSource('b')")
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    page.wait_for_function(
+        """(before) => (window.__assistantMockMessages || []).filter(
+            (message) => message.action === "GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE"
+        ).length > before""",
+        arg=evidence_reads_before,
+    )
+    new_source = page.evaluate("window.__assistantMockCurrentSourceIdentityKey()")
+    page.evaluate("window.__assistantMockSeedSummaryCacheForCurrentSource(7)")
+
+    page.evaluate(
+        "(sourceIdentityKey) => window.__assistantMockSelectSourceIdentityForCurrentPart(sourceIdentityKey)",
+        new_source,
+    )
+    expect(section.get_by_text(old_text)).to_have_count(0)
+    page.get_by_role("button", name="取消生成").click()
+    page.wait_for_function("(window.__assistantMockMessages || []).some(message => message.action === 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    cancel_message = last_message_for(page, "CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    assert cancel_message["params"]["requestId"] == old_request_id
+    assert cancel_message["params"]["selectedSourceIdentityKey"] == old_source
+    assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 1
+    expect(section.get_by_text(b_text)).to_be_visible()
+
+    page.evaluate("window.__assistantMockResolveProtectedResponses()")
+    page.wait_for_function("window.__assistantMockSummaryCacheForCurrentSource() !== null")
+    assert page.evaluate("window.__assistantMockSummaryCacheForCurrentSource().requestId") != old_request_id
+    expect(section.get_by_text(old_text)).to_have_count(0)
+    expect(section.get_by_text(b_text)).to_be_visible()
+    assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 1
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_summary_runtime_only_reopen_flow(page):
+    section = open_selected_summary_assistant(page)
+    section.get_by_role("button", name="生成摘要与亮点").click()
+    runtime_text = "页内助手使用一次完整正文请求生成合并结果 1。"
+    expect(section.get_by_text(runtime_text)).to_be_visible()
+    page.evaluate("window.__assistantMockDropSummaryCache()")
+    cache_reads = message_count_for(page, "GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE")
+    page.get_by_role("button", name="收起").click()
+    page.get_by_text("展开助手").click()
+    page.wait_for_function(
+        """(previous) => (window.__assistantMockMessages || []).filter(
+            (message) => message.action === "GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE"
+        ).length > previous""",
+        arg=cache_reads,
+    )
+    section = summary_highlights_section(page)
+    expect(section.get_by_text(runtime_text)).to_be_visible()
+    expect(section.get_by_text("可在这里手动生成摘要与亮点；打开面板不会自动发送正文。")).to_have_count(0)
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
 def main():
     build_player_monitor_bundle()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         try:
+            summary_cases = [
+                ("success-desktop", {"width": 1280, "height": 820}, False, lambda page: run_summary_highlights_success_flow(page, 4)),
+                ("success-mobile", {"width": 390, "height": 760}, True, lambda page: run_summary_highlights_success_flow(page, 8)),
+                ("cache-restore", {"width": 1280, "height": 820}, False, lambda page: run_summary_cache_restore_flow(page)),
+                ("authorization-off-cache", {"width": 1280, "height": 820}, False, lambda page: run_summary_cache_restore_flow(page, authorization_off=True)),
+                ("live-disable-cache", {"width": 1280, "height": 820}, False, run_summary_live_config_disable_flow),
+                ("live-model-change", {"width": 1280, "height": 820}, False, run_summary_live_config_model_change_flow),
+                ("live-model-ready-cache", {"width": 1280, "height": 820}, False, run_summary_live_config_model_change_after_ready_flow),
+                ("cancel-source-change", {"width": 1280, "height": 820}, False, run_summary_cancel_after_source_change_flow),
+                ("late-old-source-selection-change", {"width": 1280, "height": 820}, False, run_summary_late_old_source_response_after_selection_change_flow),
+                ("preview-replacement", {"width": 1280, "height": 820}, False, run_summary_preview_replacement_race_flow),
+                ("prior-invalid", {"width": 1280, "height": 820}, False, lambda page: run_summary_prior_refresh_failure_flow(page, "invalid")),
+                ("prior-network-error", {"width": 1280, "height": 820}, False, lambda page: run_summary_prior_refresh_failure_flow(page, "network")),
+                ("prior-cancel", {"width": 1280, "height": 820}, False, run_summary_prior_cancel_flow),
+                ("prior-cancel-source-change", {"width": 1280, "height": 820}, False, run_summary_prior_cancel_after_source_selection_change_flow),
+                ("runtime-only-reopen", {"width": 1280, "height": 820}, False, run_summary_runtime_only_reopen_flow),
+            ]
+            summary_cases.extend(
+                (f"state-{state}", {"width": 1280, "height": 820}, False, lambda page, value=state: run_summary_terminal_state_flow(page, value))
+                for state in ["disabled", "unconfigured", "no_text", "invalid", "error"]
+            )
+            for label, viewport, is_mobile, runner in summary_cases:
+                summary_page, summary_errors = new_checked_page(browser, viewport=viewport, is_mobile=is_mobile)
+                runner(summary_page)
+                assert not summary_errors, f"{label}:\n" + "\n".join(summary_errors)
+                summary_page.close()
+
             deferred_storage, deferred_storage_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
             run_deferred_storage_flow(deferred_storage)
             assert not deferred_storage_errors, "\n".join(deferred_storage_errors)
@@ -1266,7 +1632,7 @@ def main():
             assert not mobile_errors, "\n".join(mobile_errors)
             mobile.close()
 
-            print("current-video primary-text real UI QA passed: missing-title identity shielding, late jump/return invalidation across history-only/part/video/selection/newer operations, delayed player replacement rebind, same-element reuse, removed/zero-duration replacement recovery, deferred and rejected storage readiness, live local-settings/clear-all selection invalidation with late-response rejection, collect/detect navigation epoch isolation, controlled jump/return failures, serialized save/readback rollback, save-pending operation gates, save-time part/video context switch isolation, missing saved source, single-source fallback, desktop/mobile source selection, no automatic full-text request, search no-candidate/backend-failure states, search/jump/return, no raw visible leak, no overflow, no console errors")
+            print("current-video primary-text real UI QA passed: in-page combined summary/key-points/highlights, 4/8 highlights, cache-only restore, authorization-off/live-disabled prior result, live model-change cancellation and exact-model cache refresh, failed-refresh old-result preservation, runtime-only reopen preservation, disabled/unconfigured/no-text/generating-cancel/invalid/error states, source-change cancellation, preview replacement rejection, preview/confirm/return, no legacy summary action, responsive no-overflow/no-console/raw-copy checks, plus existing primary-text and timestamp race coverage")
         finally:
             browser.close()
 

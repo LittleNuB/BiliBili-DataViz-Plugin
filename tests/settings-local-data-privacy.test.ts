@@ -35,6 +35,7 @@ test('settings local data cards expose natural Chinese summaries only', () => {
     '观看历史',
     '收藏与智能索引',
     '当前视频字幕缓存',
+    '当前视频摘要与亮点缓存',
     '动态账单',
   ]);
   assert.match(cards.map(card => card.value).join('\n'), /128 条/);
@@ -71,6 +72,7 @@ test('settings local data operation messages stay bounded to counts', () => {
       historyRecords: 128,
       favoriteItems: 24,
       currentVideoSubtitleSegments: 42,
+      currentVideoSummaryHighlightParts: 2,
       dynamicBillItems: 6,
       localSettings: true,
     },
@@ -109,6 +111,7 @@ test('local data categories expose the shared lifecycle contract', () => {
     'history',
     'favorites',
     'currentVideoSubtitles',
+    'currentVideoSummaryHighlights',
     'dynamicBill',
     'blindBoxDrawHistory',
     'localSettings',
@@ -125,7 +128,7 @@ test('registered categories collect usage, clear independently, and read back th
   const categories = createRegisteredLocalDataCategories(dependencies);
   const usageBefore = await Promise.all(categories.map(category => category.collectUsage()));
 
-  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 1, 9, 2, 3]);
+  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 1, 1, 9, 2, 3]);
   assert.ok(usageBefore.every(usage => usage.usageBytes > 0));
   assert.equal(usageBefore[2].details?.currentVideoSubtitleSources, 1);
   assert.equal(usageBefore[2].details?.currentVideoSubtitleSegments, 1);
@@ -166,6 +169,9 @@ test('registered categories collect usage, clear independently, and read back th
     if (category.id === 'currentVideoSubtitles') {
       const localSettings = categories.find(entry => entry.id === 'localSettings');
       assert.equal((await localSettings?.collectUsage())?.count, 3, 'subtitle clear must preserve source choices');
+    }
+    if (category.id === 'currentVideoSummaryHighlights') {
+      assert.equal(clearResult.cleared.currentVideoSummaryHighlightParts, 1);
     }
     const readback = await category.readAfterClear();
     assert.equal(readback.count, 0, category.label);
@@ -247,7 +253,8 @@ test('SET-013-A keeps the existing clear-all production transaction', async () =
 
   assert.match(source, /db\.transaction\(\s*'rw',\s*db\.tables/);
   assert.match(source, /chrome\.storage\.local\.clear\(\)/);
-  assert.match(source, /runCurrentVideoTranscriptClearCoordinator\(\s*async\s*\(\)\s*=>\s*\r?\n\s*coordinateBlindBoxDrawHistoryClear/);
+  assert.match(source, /runCurrentVideoTranscriptClearCoordinator\(\s*async\s*\(\)\s*=>\s*\r?\n\s*runCurrentVideoSummaryHighlightsClearCoordinator/);
+  assert.match(source, /coordinateBlindBoxDrawHistoryClear/);
   assert.doesNotMatch(source, /clearRegisteredLocalDataCategories/);
 });
 
@@ -283,6 +290,11 @@ function makeSummary(): LocalDataPrivacySummary {
       usageBytes: 8192,
       lastUpdatedAt: 1_718_000_000_000,
     },
+    currentVideoSummaryHighlights: {
+      cachedPartCount: 2,
+      usageBytes: 2048,
+      latestGeneratedAt: 1_718_000_000_000,
+    },
     dynamicBill: {
       activeFollowedCreatorCount: 12,
       followedVideoUpdateCount: 8,
@@ -315,6 +327,7 @@ function createRegistryDependencies(): LocalDataCategoryRegistryDependencies {
     'smartFavoriteIndex',
     'currentVideoTranscriptSources',
     'currentVideoTranscriptSegments',
+    'currentVideoSummaryHighlights',
     'followedCreators',
     'followedVideoUpdates',
     'dynamicBillItems',
@@ -365,6 +378,17 @@ function registryRow(name: keyof LocalDataCategoryRegistryDependencies['tables']
       id: name,
       segmentId: 'transcript:settings:1',
       sourceIdentityKey: 'primary-text:bilibili_subtitle:BV1Settings:101:1:zh-cn:hash',
+    };
+  }
+  if (name === 'currentVideoSummaryHighlights') {
+    return {
+      id: name,
+      cacheKey: 'summary-highlight-cache',
+      sourceIdentityKey: 'primary-text:bilibili_subtitle:BV1Settings:101:1:zh-cn:hash',
+      model: 'test-model',
+      generatedAt: 1_718_000_000_000,
+      lastAccessedAt: 1_718_000_000_000,
+      serializedBytes: 256,
     };
   }
   return { id: name, value: `row-${name}` };

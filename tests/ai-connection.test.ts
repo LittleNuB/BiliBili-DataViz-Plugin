@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { testAiConnection } from '../src/background/ai/openai-compatible.ts';
+import { chatJson, testAiConnection } from '../src/background/ai/openai-compatible.ts';
 
 test('AI connection test sends only a minimal health-check payload', async (t) => {
   const originalFetch = globalThis.fetch;
@@ -55,4 +55,63 @@ test('AI connection test requires an API key before network access', async (t) =
     /AI_API_KEY_MISSING/,
   );
   assert.equal(called, false);
+});
+
+test('chat request accepts an external abort signal without changing existing callers', async (t) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_input, init) => new Promise((_resolve, reject) => {
+    const signal = init?.signal;
+    assert.ok(signal);
+    signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
+  })) as typeof fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const controller = new AbortController();
+  const request = chatJson(
+    { baseURL: 'https://api.test', apiKey: 'test-key', chatModel: 'test-model' },
+    [{ role: 'user', content: '只用于匿名中止测试。' }],
+    { signal: controller.signal },
+  );
+  controller.abort();
+
+  await assert.rejects(request, /AI_REQUEST_ABORTED/);
+});
+
+test('chat request keeps the external abort signal through response body parsing', async (t) => {
+  const originalFetch = globalThis.fetch;
+  let bodyReadStarted!: () => void;
+  const started = new Promise<void>(resolve => { bodyReadStarted = resolve; });
+  globalThis.fetch = (async (_input, init) => {
+    const requestSignal = init?.signal;
+    assert.ok(requestSignal);
+    return {
+      ok: true,
+      json: async () => {
+        bodyReadStarted();
+        return await new Promise((_resolve, reject) => {
+          requestSignal.addEventListener(
+            'abort',
+            () => reject(new DOMException('aborted', 'AbortError')),
+            { once: true },
+          );
+        });
+      },
+    } as Response;
+  }) as typeof fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const controller = new AbortController();
+  const request = chatJson(
+    { baseURL: 'https://api.test', apiKey: 'test-key', chatModel: 'test-model' },
+    [{ role: 'user', content: '只用于响应正文中止测试。' }],
+    { signal: controller.signal },
+  );
+  await started;
+  controller.abort();
+
+  await assert.rejects(request, /AI_REQUEST_ABORTED/);
 });

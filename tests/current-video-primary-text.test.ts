@@ -246,6 +246,28 @@ test('full text request guard isolates cancel, retry, clear, and late results', 
   });
 });
 
+test('full text request guard settlement cannot remove a newer replacement target', () => {
+  const first = envelope('req-settle-first', 'turn-1', 'same target line');
+  const replacement = envelope('req-settle-replacement', 'turn-1', 'same target line');
+  const guard = new CurrentVideoFullTextRequestGuard();
+
+  guard.start(first);
+  guard.start(replacement);
+  assert.equal(guard.canCommit(first).reason, 'replaced');
+  assert.equal(guard.canCommit(replacement).ok, true);
+
+  guard.settle(first);
+  assert.equal(guard.canCommit(replacement).ok, true);
+
+  guard.cancel(replacement.requestId);
+  assert.equal(guard.canCommit(replacement).reason, 'invalidated');
+  guard.settle(replacement);
+  assert.equal(guard.canCommit(replacement).reason, 'wrong_target');
+
+  guard.cancel('already-settled-request');
+  assert.equal(guard.canCommit(replacement).reason, 'wrong_target');
+});
+
 function sourceOption(
   source: 'bilibili_subtitle' | 'local_transcript',
   bvid: string,

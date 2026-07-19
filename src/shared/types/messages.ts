@@ -41,7 +41,7 @@ import type {
   CurrentVideoTimestampReturnResponse,
 } from './current-video-segment-retrieval';
 import type { CurrentVideoRelatedFavoritesResponse } from './current-video-related-favorites';
-import type { CurrentVideoSummaryResult } from './current-video-summary';
+import type { CurrentVideoSummaryHighlightsResult } from './current-video-summary';
 import type { VideoKnowledgeResult } from './video-knowledge';
 import type { HistoryTailProbeReport } from './history-tail-probe';
 import type { HistorySyncCursorSnapshot, HistorySyncMode } from './history-sync';
@@ -68,6 +68,7 @@ export type RequestAction =
   | 'TEST_AI_CONNECTION'
   | 'GET_LOCAL_DATA_PRIVACY_SUMMARY'
   | 'CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE'
+  | 'CLEAR_CURRENT_VIDEO_SUMMARY_HIGHLIGHT_CACHE'
   | 'REBUILD_SMART_FAVORITE_INDEX'
   | 'CLEAR_ALL_LOCAL_DATA'
   | 'EXPORT_DATA'
@@ -78,11 +79,14 @@ export type RequestAction =
   | 'SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION'
   | 'PROBE_CURRENT_VIDEO_SUBTITLE_SOURCE'
   | 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE'
-  | 'GET_CURRENT_VIDEO_SUMMARY'
+  | 'GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE'
+  | 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS'
+  | 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS'
   | 'GET_VIDEO_KNOWLEDGE'
   | 'SEARCH_CURRENT_VIDEO_SEGMENTS'
   | 'GET_CURRENT_VIDEO_RELATED_FAVORITES'
   | 'REQUEST_CURRENT_VIDEO_SEGMENT_JUMP'
+  | 'REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP'
   | 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP'
   | 'CONSUME_CURRENT_VIDEO_TIMESTAMP_OPERATION_LEASE'
   | 'GET_SMART_FAVORITES'
@@ -210,7 +214,7 @@ export type SmartFavoritePathResponse = BiliVizResponse<SmartFavoriteResult[]>;
 export type CurrentVideoContextResponse = BiliVizResponse<CurrentVideoContextResult>;
 export type CurrentVideoSubtitleSourceResponse = BiliVizResponse<CurrentVideoSubtitleSourceState>;
 export type CurrentVideoTranscriptEvidenceResponse = BiliVizResponse<CurrentVideoTranscriptEvidenceState>;
-export type CurrentVideoSummaryResponse = BiliVizResponse<CurrentVideoSummaryResult>;
+export type CurrentVideoSummaryHighlightsResponse = BiliVizResponse<CurrentVideoSummaryHighlightsResult>;
 export type VideoKnowledgeResponse = BiliVizResponse<VideoKnowledgeResult>;
 export type CurrentVideoSegmentRetrievalResponse = BiliVizResponse<CurrentVideoSegmentRetrievalResult>;
 export type CurrentVideoRelatedFavoritesMessageResponse = BiliVizResponse<CurrentVideoRelatedFavoritesResponse>;

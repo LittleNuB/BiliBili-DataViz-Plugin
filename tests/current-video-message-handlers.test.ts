@@ -13,7 +13,7 @@ import type {
   CurrentVideoTimestampOperationLeaseConsumeResult,
   CurrentVideoTimestampReturnResponse,
 } from '../src/shared/types/current-video-segment-retrieval.ts';
-import type { CurrentVideoSummaryResult } from '../src/shared/types/current-video-summary.ts';
+import type { CurrentVideoSummaryHighlightsResult } from '../src/shared/types/current-video-summary.ts';
 import type { VideoKnowledgeResult } from '../src/shared/types/video-knowledge.ts';
 import {
   CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
@@ -348,6 +348,18 @@ test('handler ignores late no-context updates without overwriting the current vi
   assert.equal(freshContextRequests, 0);
 });
 
+test('legacy bounded current-video summary route is not runtime reachable', async () => {
+  resetChromeHarness();
+
+  const response = await sendRequest({
+    action: 'GET_CURRENT_VIDEO_SUMMARY' as BiliVizRequest['action'],
+    params: {},
+  }, 18_603, 'https://www.bilibili.com/video/BV1LegacySummary9');
+
+  assert.equal(response.success, false);
+  assert.match(response.error ?? '', /Unknown action/);
+});
+
 test('background full-text handlers fail closed while primary text selection readiness is false', async () => {
   resetChromeHarness();
   await resetTranscriptDb();
@@ -377,8 +389,8 @@ test('background full-text handlers fail closed while primary text selection rea
   }, tabId, context.url);
 
   const readinessParams = { primaryTextSelectionsReady: false };
-  const summary = await sendRequest<CurrentVideoSummaryResult>({
-    action: 'GET_CURRENT_VIDEO_SUMMARY',
+  const summaryHighlights = await sendRequest<CurrentVideoSummaryHighlightsResult>({
+    action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
     params: readinessParams,
   }, tabId, context.url);
   const knowledge = await sendRequest<VideoKnowledgeResult>({
@@ -402,10 +414,10 @@ test('background full-text handlers fail closed while primary text selection rea
     },
   }, tabId, context.url);
 
-  assert.equal(summary.success, true);
-  assert.equal(summary.data?.status, 'cancelled');
-  assert.match(summary.data?.summary ?? '', /主要文本来源/);
-  assert.equal(summary.data?.sourceTier, null);
+  assert.equal(summaryHighlights.success, true);
+  assert.equal(summaryHighlights.data?.status, 'cancelled');
+  assert.match(summaryHighlights.data?.message ?? '', /主要文本来源/);
+  assert.equal(summaryHighlights.data?.highlights.length, 0);
 
   assert.equal(knowledge.success, true);
   assert.equal(knowledge.data?.nodes.length, 0);
@@ -458,8 +470,8 @@ test('background full-text handlers fail closed when the readiness marker is mis
     payload: context,
   }, tabId, context.url);
 
-  const summary = await sendRequest<CurrentVideoSummaryResult>({
-    action: 'GET_CURRENT_VIDEO_SUMMARY',
+  const summaryHighlights = await sendRequest<CurrentVideoSummaryHighlightsResult>({
+    action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
     params: {},
   }, tabId, context.url);
   const knowledge = await sendRequest<VideoKnowledgeResult>({
@@ -478,13 +490,13 @@ test('background full-text handlers fail closed when the readiness marker is mis
       confirmed: true,
     },
   }, tabId, context.url);
-  const malformed = await sendRequest<CurrentVideoSummaryResult>({
-    action: 'GET_CURRENT_VIDEO_SUMMARY',
+  const malformed = await sendRequest<CurrentVideoSummaryHighlightsResult>({
+    action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
     params: { primaryTextSelectionsReady: 'true' },
   }, tabId, context.url);
 
-  assert.equal(summary.data?.status, 'cancelled');
-  assert.equal(summary.data?.sourceTier, null);
+  assert.equal(summaryHighlights.data?.status, 'cancelled');
+  assert.equal(summaryHighlights.data?.highlights.length, 0);
   assert.equal(knowledge.data?.nodes.length, 0);
   assert.equal(knowledge.data?.sourceState.transcriptEvidence, false);
   assert.equal(search.data?.status, 'no_evidence');
@@ -500,6 +512,527 @@ test('background full-text handlers fail closed when the readiness marker is mis
   const sourceAfter = await transcriptSource(evidence.sourceRecord.identityKey);
   assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
   assert.equal(storageReadCount('userConfig'), 0);
+});
+
+test('UPDATE_CONFIG disables and aborts an in-flight combined generation through handleRequest', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  await db.currentVideoSummaryHighlights.clear();
+  const tabId = 18_608;
+  const context = handlerVideoContext('BV1ConfigDisable', 4808);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'config-disable-source',
+    '这一行正文用于验证关闭授权会取消正在生成的摘要与亮点。',
+  );
+  const sourceIdentityKey = evidence.sourceRecord.identityKey;
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 8_800 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const terminal of ['resolve', 'reject'] as const) {
+      await db.currentVideoSummaryHighlights.clear();
+      await sendRequest<void>({
+        action: 'UPDATE_CONFIG',
+        params: {
+          ai: {
+            baseURL: 'https://example.invalid',
+            apiKey: 'handler-test-key',
+            chatModel: 'handler-test-model',
+          },
+          assistant: { currentVideoAiAssistantEnabled: true },
+        },
+      }, tabId, context.url);
+
+      let resolveFetch!: (response: Response) => void;
+      let rejectFetch!: (error: Error) => void;
+      let markFetchStarted!: () => void;
+      let outboundSignal: AbortSignal | null = null;
+      const fetchStarted = new Promise<void>(resolve => { markFetchStarted = resolve; });
+      const deferredFetch = new Promise<Response>((resolve, reject) => {
+        resolveFetch = resolve;
+        rejectFetch = reject;
+      });
+      globalThis.fetch = ((_input, init) => {
+        outboundSignal = init?.signal as AbortSignal | null;
+        markFetchStarted();
+        return deferredFetch;
+      }) as typeof fetch;
+
+      const generation = sendRequest<CurrentVideoSummaryHighlightsResult>({
+        action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+        params: {
+          requestId: `handler-config-disable-${terminal}`,
+          primaryTextSelectionsReady: true,
+          selectedSourceIdentityKey: sourceIdentityKey,
+        },
+      }, tabId, context.url);
+      await fetchStarted;
+
+      await sendRequest<void>({
+        action: 'UPDATE_CONFIG',
+        params: { assistant: { currentVideoAiAssistantEnabled: false } },
+      }, tabId, context.url);
+      assert.equal(outboundSignal?.aborted, true);
+
+      if (terminal === 'resolve') {
+        resolveFetch(new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(handlerSummaryHighlightsAiOutput()) } }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } }));
+      } else {
+        rejectFetch(new Error('late handler network rejection'));
+      }
+      const response = await generation;
+      assert.equal(response.success, true);
+      assert.equal(response.data?.status, 'cancelled');
+      assert.equal(await db.currentVideoSummaryHighlights.count(), 0);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('UPDATE_CONFIG model change aborts in-flight combined generation and preserves exact-model cache', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  await db.currentVideoSummaryHighlights.clear();
+  const tabId = 18_615;
+  const context = handlerVideoContext('BV1ConfigModelChange', 4815);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'config-model-source',
+    'old model output must not persist after the model changes during generation',
+  );
+  const sourceIdentityKey = evidence.sourceRecord.identityKey;
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 8_815 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+  await sendRequest<void>({
+    action: 'UPDATE_CONFIG',
+    params: {
+      ai: {
+        baseURL: 'https://example.invalid',
+        apiKey: 'handler-test-key',
+        chatModel: 'handler-old-model',
+      },
+      assistant: { currentVideoAiAssistantEnabled: true },
+    },
+  }, tabId, context.url);
+
+  const originalFetch = globalThis.fetch;
+  let resolveOldFetch!: (response: Response) => void;
+  let markOldFetchStarted!: () => void;
+  let outboundSignal: AbortSignal | null = null;
+  let fetchCalls = 0;
+  const oldFetchStarted = new Promise<void>(resolve => { markOldFetchStarted = resolve; });
+  const deferredOldFetch = new Promise<Response>((resolve) => {
+    resolveOldFetch = resolve;
+  });
+  try {
+    globalThis.fetch = ((_input, init) => {
+      fetchCalls += 1;
+      if (fetchCalls === 1) {
+        outboundSignal = init?.signal as AbortSignal | null;
+        markOldFetchStarted();
+        return deferredOldFetch;
+      }
+      return Promise.resolve(new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify(handlerSummaryHighlightsAiOutput()) } }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    }) as typeof fetch;
+
+    const oldGeneration = sendRequest<CurrentVideoSummaryHighlightsResult>({
+      action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+      params: {
+        requestId: 'handler-old-model-request',
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+    await oldFetchStarted;
+
+    await sendRequest<void>({
+      action: 'UPDATE_CONFIG',
+      params: {
+        ai: {
+          baseURL: 'https://example.invalid',
+          apiKey: 'handler-test-key',
+          chatModel: 'handler-new-model',
+        },
+        assistant: { currentVideoAiAssistantEnabled: true },
+      },
+    }, tabId, context.url);
+    assert.equal(outboundSignal?.aborted, true);
+
+    resolveOldFetch(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify(handlerSummaryHighlightsAiOutput()) } }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const oldResponse = await oldGeneration;
+    assert.equal(oldResponse.success, true);
+    assert.equal(oldResponse.data?.status, 'cancelled');
+    assert.equal(await db.currentVideoSummaryHighlights.count(), 0);
+
+    const newResponse = await sendRequest<CurrentVideoSummaryHighlightsResult>({
+      action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+      params: {
+        requestId: 'handler-new-model-request',
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+
+    assert.equal(newResponse.success, true);
+    assert.equal(newResponse.data?.status, 'ready');
+    assert.equal(newResponse.data?.model, 'handler-new-model');
+    assert.equal(fetchCalls, 2);
+    const cachedRows = await db.currentVideoSummaryHighlights.toArray();
+    assert.equal(cachedRows.length, 1);
+    assert.equal(cachedRows[0]?.model, 'handler-new-model');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('combined generation cancellation during preflight makes zero network calls', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  await db.currentVideoSummaryHighlights.clear();
+  const tabId = 18_616;
+  const context = handlerVideoContext('BV1PreflightCancel', 4816);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'preflight-cancel-source',
+    'preflight cancellation must stop before any outbound summary request',
+  );
+  const sourceIdentityKey = evidence.sourceRecord.identityKey;
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 8_816 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+  await sendRequest<void>({
+    action: 'UPDATE_CONFIG',
+    params: {
+      ai: {
+        baseURL: 'https://example.invalid',
+        apiKey: 'handler-test-key',
+        chatModel: 'handler-test-model',
+      },
+      assistant: { currentVideoAiAssistantEnabled: true },
+    },
+  }, tabId, context.url);
+
+  const requestId = 'handler-preflight-cancel-request';
+  installGuardTestHook('before_segment_body_read', async () => {
+    await sendRequest<void>({
+      action: 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+      params: {
+        requestId,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+  });
+
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  try {
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify(handlerSummaryHighlightsAiOutput()) } }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+
+    const response = await sendRequest<CurrentVideoSummaryHighlightsResult>({
+      action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+      params: {
+        requestId,
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+
+    assert.equal(response.success, true);
+    assert.equal(response.data?.status, 'cancelled');
+    assert.equal(fetchCalls, 0);
+    assert.equal(await db.currentVideoSummaryHighlights.count(), 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('late exact cancel for an older same-source generation does not abort the newer request', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  await db.currentVideoSummaryHighlights.clear();
+  const tabId = 18_619;
+  const context = handlerVideoContext('BV1LateExactCancel', 4819);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'late-exact-cancel-source',
+    'newer same-source generation must survive an older exact cancel',
+  );
+  const sourceIdentityKey = evidence.sourceRecord.identityKey;
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 8_819 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+  await sendRequest<void>({
+    action: 'UPDATE_CONFIG',
+    params: {
+      ai: {
+        baseURL: 'https://example.invalid',
+        apiKey: 'handler-test-key',
+        chatModel: 'handler-test-model',
+      },
+      assistant: { currentVideoAiAssistantEnabled: true },
+    },
+  }, tabId, context.url);
+
+  const originalFetch = globalThis.fetch;
+  const fetchRecords: Array<{
+    signal: AbortSignal | null;
+    resolve: (response: Response) => void;
+    reject: (error: Error) => void;
+  }> = [];
+  const fetchWaiters: Array<{ count: number; resolve: () => void }> = [];
+  const waitForFetchCount = async (count: number): Promise<void> => {
+    if (fetchRecords.length >= count) return;
+    await new Promise<void>(resolve => fetchWaiters.push({ count, resolve }));
+  };
+  const notifyFetchWaiters = () => {
+    for (const waiter of [...fetchWaiters]) {
+      if (fetchRecords.length < waiter.count) continue;
+      fetchWaiters.splice(fetchWaiters.indexOf(waiter), 1);
+      waiter.resolve();
+    }
+  };
+  const response = () => new Response(JSON.stringify({
+    choices: [{ message: { content: JSON.stringify(handlerSummaryHighlightsAiOutput()) } }],
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  try {
+    globalThis.fetch = ((_input, init) => {
+      const signal = init?.signal ?? null;
+      let resolveFetch!: (value: Response) => void;
+      let rejectFetch!: (error: Error) => void;
+      const promise = new Promise<Response>((resolve, reject) => {
+        resolveFetch = resolve;
+        rejectFetch = reject;
+      });
+      fetchRecords.push({
+        signal,
+        resolve: resolveFetch,
+        reject: rejectFetch,
+      });
+      if (signal?.aborted) {
+        rejectFetch(new Error('MOCK_FETCH_ABORTED'));
+      } else {
+        signal?.addEventListener('abort', () => rejectFetch(new Error('MOCK_FETCH_ABORTED')), { once: true });
+      }
+      notifyFetchWaiters();
+      return promise;
+    }) as typeof fetch;
+
+    const firstGeneration = sendRequest<CurrentVideoSummaryHighlightsResult>({
+      action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+      params: {
+        requestId: 'handler-late-exact-cancel-a1',
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+    await waitForFetchCount(1);
+
+    const secondGeneration = sendRequest<CurrentVideoSummaryHighlightsResult>({
+      action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+      params: {
+        requestId: 'handler-late-exact-cancel-a2',
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+    await waitForFetchCount(2);
+
+    assert.equal(fetchRecords[0]?.signal?.aborted, true);
+    await sendRequest<void>({
+      action: 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+      params: {
+        requestId: 'handler-late-exact-cancel-a1',
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+    assert.equal(fetchRecords[1]?.signal?.aborted, false);
+
+    fetchRecords[1]?.resolve(response());
+    const secondResponse = await secondGeneration;
+    const firstResponse = await firstGeneration;
+
+    assert.equal(firstResponse.success, true);
+    assert.equal(firstResponse.data?.status, 'cancelled');
+    assert.equal(secondResponse.success, true);
+    assert.equal(secondResponse.data?.status, 'ready');
+    assert.equal(secondResponse.data?.requestId, 'handler-late-exact-cancel-a2');
+    const cachedRows = await db.currentVideoSummaryHighlights.toArray();
+    assert.equal(cachedRows.length, 1);
+    assert.equal(cachedRows[0]?.requestAudit.requestId, 'handler-late-exact-cancel-a2');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('combined generation disable during preflight makes zero network calls', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  await db.currentVideoSummaryHighlights.clear();
+  const tabId = 18_617;
+  const context = handlerVideoContext('BV1PreflightDisable', 4817);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'preflight-disable-source',
+    'preflight disable must stop before any outbound summary request',
+  );
+  const sourceIdentityKey = evidence.sourceRecord.identityKey;
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 8_817 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+  await sendRequest<void>({
+    action: 'UPDATE_CONFIG',
+    params: {
+      ai: {
+        baseURL: 'https://example.invalid',
+        apiKey: 'handler-test-key',
+        chatModel: 'handler-test-model',
+      },
+      assistant: { currentVideoAiAssistantEnabled: true },
+    },
+  }, tabId, context.url);
+
+  installGuardTestHook('before_segment_body_read', async () => {
+    await sendRequest<void>({
+      action: 'UPDATE_CONFIG',
+      params: { assistant: { currentVideoAiAssistantEnabled: false } },
+    }, tabId, context.url);
+  });
+
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  try {
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify(handlerSummaryHighlightsAiOutput()) } }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+
+    const response = await sendRequest<CurrentVideoSummaryHighlightsResult>({
+      action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+      params: {
+        requestId: 'handler-preflight-disable-request',
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+
+    assert.equal(response.success, true);
+    assert.equal(response.data?.ai.status, 'disabled');
+    assert.equal(response.data?.canGenerate, false);
+    assert.equal(fetchCalls, 0);
+    assert.equal(await db.currentVideoSummaryHighlights.count(), 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('combined generation rejects a late result after subtitle cache clear and does not repopulate cache', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  await db.currentVideoSummaryHighlights.clear();
+  const tabId = 18_618;
+  const context = handlerVideoContext('BV1LateClear', 4818);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'late-clear-source',
+    'late subtitle cache clear must prevent derived summary cache repopulation',
+  );
+  const sourceIdentityKey = evidence.sourceRecord.identityKey;
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 8_818 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+  await sendRequest<void>({
+    action: 'UPDATE_CONFIG',
+    params: {
+      ai: {
+        baseURL: 'https://example.invalid',
+        apiKey: 'handler-test-key',
+        chatModel: 'handler-test-model',
+      },
+      assistant: { currentVideoAiAssistantEnabled: true },
+    },
+  }, tabId, context.url);
+
+  const originalFetch = globalThis.fetch;
+  let resolveFetch!: (response: Response) => void;
+  let markFetchStarted!: () => void;
+  const fetchStarted = new Promise<void>(resolve => { markFetchStarted = resolve; });
+  const deferredFetch = new Promise<Response>((resolve) => {
+    resolveFetch = resolve;
+  });
+  try {
+    globalThis.fetch = ((_input, _init) => {
+      markFetchStarted();
+      return deferredFetch;
+    }) as typeof fetch;
+
+    const generation = sendRequest<CurrentVideoSummaryHighlightsResult>({
+      action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
+      params: {
+        requestId: 'handler-late-clear-request',
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+    await fetchStarted;
+
+    await sendRequest({
+      action: 'CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE',
+      params: {},
+    }, tabId, context.url);
+    resolveFetch(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify(handlerSummaryHighlightsAiOutput()) } }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    const response = await generation;
+    assert.equal(response.success, true);
+    assert.equal(response.data?.status, 'cancelled');
+    assert.equal(await db.currentVideoTranscriptSegments.count(), 0);
+    assert.equal(await db.currentVideoSummaryHighlights.count(), 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('background keeps an exact missing saved V1 selection inactive without touching active V2', async () => {
@@ -539,10 +1072,6 @@ test('background keeps an exact missing saved V1 selection inactive without touc
     primaryTextSelectionsReady: true,
     selectedSourceIdentityKey: missingV1Key,
   };
-  const summary = await sendRequest<CurrentVideoSummaryResult>({
-    action: 'GET_CURRENT_VIDEO_SUMMARY',
-    params: selectedParams,
-  }, tabId, context.url);
   const knowledge = await sendRequest<VideoKnowledgeResult>({
     action: 'GET_VIDEO_KNOWLEDGE',
     params: selectedParams,
@@ -564,9 +1093,6 @@ test('background keeps an exact missing saved V1 selection inactive without touc
     },
   }, tabId, context.url);
 
-  assert.notEqual(summary.data?.sourceTier, 'transcript_summary');
-  assert.equal(summary.data?.evidence.some(item => item.source === 'transcript'), false);
-  assert.equal(summary.data?.timestampRanges.length, 0);
   assert.equal(knowledge.data?.sourceState.transcriptEvidence, false);
   assert.equal(knowledge.data?.nodes.some(node => node.source === 'transcript'), false);
   assert.equal(search.data?.status, 'no_evidence');
@@ -614,10 +1140,6 @@ test('background does not authorize active V2 when readiness is true without an 
   }, tabId, context.url);
 
   const readyWithoutSource = { primaryTextSelectionsReady: true };
-  const summary = await sendRequest<CurrentVideoSummaryResult>({
-    action: 'GET_CURRENT_VIDEO_SUMMARY',
-    params: readyWithoutSource,
-  }, tabId, context.url);
   const knowledge = await sendRequest<VideoKnowledgeResult>({
     action: 'GET_VIDEO_KNOWLEDGE',
     params: readyWithoutSource,
@@ -639,9 +1161,6 @@ test('background does not authorize active V2 when readiness is true without an 
     },
   }, tabId, context.url);
 
-  assert.notEqual(summary.data?.sourceTier, 'transcript_summary');
-  assert.equal(summary.data?.evidence.some(item => item.source === 'transcript'), false);
-  assert.equal(summary.data?.timestampRanges.length, 0);
   assert.equal(knowledge.data?.sourceState.transcriptEvidence, false);
   assert.equal(knowledge.data?.nodes.some(node => node.source === 'transcript'), false);
   assert.equal(search.data?.status, 'no_evidence');
@@ -688,10 +1207,6 @@ test('protected handlers re-read persisted primary text authorization before tou
       primaryTextSelectionsReady: true,
       selectedSourceIdentityKey: evidence.sourceRecord.sourceIdentityKey,
     };
-    const summary = await sendRequest<CurrentVideoSummaryResult>({
-      action: 'GET_CURRENT_VIDEO_SUMMARY',
-      params: selectedParams,
-    }, tabId, context.url);
     const knowledge = await sendRequest<VideoKnowledgeResult>({
       action: 'GET_VIDEO_KNOWLEDGE',
       params: selectedParams,
@@ -708,13 +1223,11 @@ test('protected handlers re-read persisted primary text authorization before tou
 
     assert.equal(response.data?.status, 'no_evidence');
     assert.equal(response.data?.candidates.length, 0);
-    assert.equal(summary.data?.status, 'cancelled');
-    assert.equal(summary.data?.sourceTier, null);
     assert.equal(knowledge.data?.nodes.length, 0);
     assert.equal(knowledge.data?.sourceState.transcriptEvidence, false);
     assert.equal(jump.data?.ok, false);
     assert.equal(jump.data?.targetSeconds, null);
-    assert.ok(storageReadCount(CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY) >= 4);
+    assert.ok(storageReadCount(CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY) >= 3);
     const sourceAfter = await transcriptSource(evidence.sourceRecord.identityKey);
     assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
   });
@@ -1021,7 +1534,7 @@ test('protected actions require current-source confirmation after service-worker
     /重新检测字幕/,
   );
 
-  for (const action of ['summary', 'knowledge', 'search', 'jump'] as const) {
+  for (const action of ['knowledge', 'search', 'jump'] as const) {
     const response = await invokeProtectedHandlerAction(action, tabId, context, sourceIdentityKey);
     assertProtectedActionBlocked(action, response);
   }
@@ -1049,7 +1562,7 @@ test('protected actions require current-source confirmation after service-worker
 });
 
 test('protected handlers drop in-flight work when the exact source changes before evidence binding', async () => {
-  const actions = ['summary', 'knowledge', 'search', 'jump'] as const;
+  const actions = ['knowledge', 'search', 'jump'] as const;
   for (const [index, action] of actions.entries()) {
     resetChromeHarness();
     await resetTranscriptDb();
@@ -1171,6 +1684,17 @@ test('protected handlers block after transcript cache is cleared between binding
   setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 12_000 }]);
   await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
   await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+  await sendRequest<void>({
+    action: 'UPDATE_CONFIG',
+    params: {
+      ai: {
+        baseURL: 'https://example.invalid',
+        apiKey: 'handler-test-key',
+        chatModel: 'handler-test-model',
+      },
+      assistant: { currentVideoAiAssistantEnabled: true },
+    },
+  }, tabId, context.url);
   installGuardTestHook('before_segment_body_read', async () => {
     await sendRequest({
       action: 'CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE',
@@ -1178,18 +1702,18 @@ test('protected handlers block after transcript cache is cleared between binding
     }, tabId, context.url);
   });
 
-  const summary = await sendRequest<CurrentVideoSummaryResult>({
-    action: 'GET_CURRENT_VIDEO_SUMMARY',
+  const summaryHighlights = await sendRequest<CurrentVideoSummaryHighlightsResult>({
+    action: 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS',
     params: {
+      requestId: 'handler-guard-clear-combined',
       primaryTextSelectionsReady: true,
       selectedSourceIdentityKey: evidence.sourceRecord.sourceIdentityKey,
     },
   }, tabId, context.url);
 
-  assert.equal(summary.success, true);
-  assert.equal(summary.data?.status, 'cancelled');
-  assert.equal(summary.data?.sourceTier, null);
-  assert.equal(summary.data?.evidence.some(item => item.source === 'transcript'), false);
+  assert.equal(summaryHighlights.success, true);
+  assert.equal(summaryHighlights.data?.status, 'cancelled');
+  assert.equal(summaryHighlights.data?.highlights.length, 0);
   assert.equal(await db.currentVideoTranscriptSegments.count(), 0);
 });
 
@@ -1411,6 +1935,26 @@ function handlerVideoContext(bvid: string, cid: number, page = 1): CurrentVideoC
   };
 }
 
+function handlerSummaryHighlightsAiOutput() {
+  return {
+    summarySentences: [
+      { text: '本段说明关闭授权时必须取消请求。', evidenceLineNumbers: [1] },
+      { text: '取消后的结果不得写入本地缓存。', evidenceLineNumbers: [1] },
+    ],
+    keyPoints: [
+      { text: '先启动生成请求。', evidenceLineNumbers: [1] },
+      { text: '再关闭完整文本授权。', evidenceLineNumbers: [1] },
+      { text: '最后确认缓存为空。', evidenceLineNumbers: [1] },
+    ],
+    highlights: [
+      { title: '启动请求', description: '开始发送一次完整正文请求。', startSeconds: 2, endSeconds: 3, evidenceLineNumbers: [1] },
+      { title: '关闭授权', description: '设置更新会使请求失效。', startSeconds: 3, endSeconds: 4, evidenceLineNumbers: [1] },
+      { title: '中止网络', description: '旧请求的网络信号被中止。', startSeconds: 4, endSeconds: 5, evidenceLineNumbers: [1] },
+      { title: '拒绝写入', description: '迟到结果不会进入本地缓存。', startSeconds: 5, endSeconds: 6, evidenceLineNumbers: [1] },
+    ],
+  };
+}
+
 async function seedHandlerTranscript(
   context: CurrentVideoContext,
   tabId: number,
@@ -1476,7 +2020,7 @@ async function searchWithExactSource(
   }, tabId, context.url);
 }
 
-type ProtectedHandlerAction = 'summary' | 'knowledge' | 'search' | 'jump';
+type ProtectedHandlerAction = 'knowledge' | 'search' | 'jump';
 type GuardTestPhase =
   | 'before_active_source_check'
   | 'before_evidence_bind'
@@ -1495,12 +2039,6 @@ async function invokeProtectedHandlerAction(
     primaryTextSelectionsReady: true,
     selectedSourceIdentityKey: sourceIdentityKey,
   };
-  if (action === 'summary') {
-    return await sendRequest<CurrentVideoSummaryResult>({
-      action: 'GET_CURRENT_VIDEO_SUMMARY',
-      params,
-    }, tabId, context.url);
-  }
   if (action === 'knowledge') {
     return await sendRequest<VideoKnowledgeResult>({
       action: 'GET_VIDEO_KNOWLEDGE',
@@ -1532,13 +2070,6 @@ function assertProtectedActionBlocked(
   response: BiliVizResponse<unknown>,
 ): void {
   assert.equal(response.success, true);
-  if (action === 'summary') {
-    const data = response.data as CurrentVideoSummaryResult;
-    assert.equal(data.status, 'cancelled');
-    assert.equal(data.sourceTier, null);
-    assert.equal(data.evidence.some(item => item.source === 'transcript'), false);
-    return;
-  }
   if (action === 'knowledge') {
     const data = response.data as VideoKnowledgeResult;
     assert.equal(data.nodes.length, 0);

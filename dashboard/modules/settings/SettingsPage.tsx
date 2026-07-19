@@ -37,6 +37,7 @@ type BusyState =
   | 'test'
   | 'local-refresh'
   | 'subtitle-clear'
+  | 'summary-highlight-clear'
   | 'index-rebuild'
   | 'pause-restore'
   | 'clear-all';
@@ -216,6 +217,21 @@ export function SettingsPage() {
     setError('');
     try {
       const result = await requestSW<LocalDataOperationResult>('CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE');
+      setNotice(buildLocalDataOperationMessage(result));
+      await refreshLocalData();
+    } catch (err) {
+      setLocalDataError(formatLocalDataError(err));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function clearSummaryHighlightCache() {
+    setBusy('summary-highlight-clear');
+    setNotice('');
+    setError('');
+    try {
+      const result = await requestSW<LocalDataOperationResult>('CLEAR_CURRENT_VIDEO_SUMMARY_HIGHLIGHT_CACHE');
       setNotice(buildLocalDataOperationMessage(result));
       await refreshLocalData();
     } catch (err) {
@@ -458,6 +474,7 @@ export function SettingsPage() {
             <DataStat label="待索引收藏" value={localData.favorites.pendingIndexItems} />
             <DataStat label="索引失败" value={localData.favorites.failedIndexItems} />
             <DataStat label="过期字幕片段" value={localData.currentVideoSubtitles.staleSegmentCount} />
+            <DataStat label="摘要亮点缓存" value={localData.currentVideoSummaryHighlights.cachedPartCount} />
           </div>
         )}
 
@@ -480,6 +497,14 @@ export function SettingsPage() {
             disabled={!!busy || !localData || localData.currentVideoSubtitles.segmentCount === 0}
           >
             {busy === 'subtitle-clear' ? '清理中...' : '清理字幕缓存'}
+          </button>
+          <button
+            type="button"
+            className="settings-action"
+            onClick={clearSummaryHighlightCache}
+            disabled={!!busy || !localData || localData.currentVideoSummaryHighlights.cachedPartCount === 0}
+          >
+            {busy === 'summary-highlight-clear' ? '清理中...' : '清理摘要亮点缓存'}
           </button>
           <button
             type="button"

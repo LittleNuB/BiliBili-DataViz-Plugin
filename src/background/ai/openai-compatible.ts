@@ -13,11 +13,16 @@ interface ChatResponse {
   }>;
 }
 
+export interface ChatJsonOptions {
+  signal?: AbortSignal;
+}
+
 const AI_REQUEST_TIMEOUT_MS = 60_000;
 
 export async function chatJson<T>(
   config: AiConfig,
   messages: ChatMessage[],
+  options: ChatJsonOptions = {},
 ): Promise<T> {
   if (!config.apiKey.trim()) {
     throw new Error('AI_API_KEY_MISSING');
@@ -25,11 +30,16 @@ export async function chatJson<T>(
 
   const endpoint = `${config.baseURL.trim().replace(/\/+$/, '')}/chat/completions`;
   const controller = new AbortController();
+  const abortFromCaller = () => controller.abort();
+  if (options.signal?.aborted) {
+    controller.abort();
+  } else {
+    options.signal?.addEventListener('abort', abortFromCaller, { once: true });
+  }
   const timer = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
-  let response: Response;
 
   try {
-    response = await fetch(endpoint, {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${config.apiKey.trim()}`,
@@ -43,22 +53,22 @@ export async function chatJson<T>(
       }),
       signal: controller.signal,
     });
+    if (!response.ok) {
+      throw new Error(`AI_REQUEST_FAILED_${response.status}`);
+    }
+
+    const json: ChatResponse = await response.json();
+    const content = json.choices?.[0]?.message?.content ?? '';
+    return parseJsonContent<T>(content);
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('AI_REQUEST_TIMEOUT');
+      throw new Error(options.signal?.aborted ? 'AI_REQUEST_ABORTED' : 'AI_REQUEST_TIMEOUT');
     }
     throw error;
   } finally {
     clearTimeout(timer);
+    options.signal?.removeEventListener('abort', abortFromCaller);
   }
-
-  if (!response.ok) {
-    throw new Error(`AI_REQUEST_FAILED_${response.status}`);
-  }
-
-  const json: ChatResponse = await response.json();
-  const content = json.choices?.[0]?.message?.content ?? '';
-  return parseJsonContent<T>(content);
 }
 
 export async function testAiConnection(config: AiConfig): Promise<AiConnectionTestResult> {

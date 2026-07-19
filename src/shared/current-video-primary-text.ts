@@ -364,12 +364,14 @@ export class CurrentVideoFullTextRequestGuard {
   private readonly invalidated = new Set<string>();
 
   start(envelope: CurrentVideoFullTextRequestEnvelope): void {
-    this.activeByTarget.set(requestTargetKey(envelope), envelope.requestId);
+    this.activeByTarget.set(currentVideoFullTextRequestTargetKey(envelope), envelope.requestId);
     this.invalidated.delete(envelope.requestId);
   }
 
   cancel(requestId: string): void {
-    this.invalidated.add(requestId);
+    if (Array.from(this.activeByTarget.values()).includes(requestId)) {
+      this.invalidated.add(requestId);
+    }
   }
 
   retry(previous: CurrentVideoFullTextRequestEnvelope, next: CurrentVideoFullTextRequestEnvelope): void {
@@ -386,6 +388,14 @@ export class CurrentVideoFullTextRequestGuard {
     }
   }
 
+  settle(envelope: CurrentVideoFullTextRequestEnvelope): void {
+    const targetKey = currentVideoFullTextRequestTargetKey(envelope);
+    if (this.activeByTarget.get(targetKey) === envelope.requestId) {
+      this.activeByTarget.delete(targetKey);
+    }
+    this.invalidated.delete(envelope.requestId);
+  }
+
   canCommit(
     envelope: CurrentVideoFullTextRequestEnvelope,
     currentIdentity?: Pick<CurrentVideoTextSourceIdentity, 'sourceIdentityKey'> | null,
@@ -394,7 +404,7 @@ export class CurrentVideoFullTextRequestGuard {
       return { ok: false, current: false, reason: 'invalidated' };
     }
 
-    const active = this.activeByTarget.get(requestTargetKey(envelope));
+    const active = this.activeByTarget.get(currentVideoFullTextRequestTargetKey(envelope));
     if (!active) {
       return { ok: false, current: false, reason: 'wrong_target' };
     }
@@ -408,7 +418,9 @@ export class CurrentVideoFullTextRequestGuard {
   }
 }
 
-function requestTargetKey(envelope: CurrentVideoFullTextRequestEnvelope): string {
+export function currentVideoFullTextRequestTargetKey(
+  envelope: CurrentVideoFullTextRequestEnvelope,
+): string {
   return [
     envelope.operation,
     envelope.video.bvid,
