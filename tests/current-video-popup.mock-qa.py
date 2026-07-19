@@ -327,6 +327,56 @@ def run_authorization_off_cache_restore(page):
     assert_clean_page(page)
 
 
+def run_live_config_disable_after_ready(page):
+    page.route("**/*", route_popup)
+    page.goto(f"{POPUP_URL}?cachedSummary=1")
+    expect(page.get_by_text("已读取本地缓存的摘要与亮点。")).to_be_visible()
+    page.evaluate("window.__popupMockEmitUserConfigChange('disable')")
+    expect(page.get_by_text("此前生成", exact=True)).to_be_visible()
+    expect(page.get_by_role("button", name="暂不可生成")).to_be_disabled()
+    assert len(messages_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")) == 0
+    assert_clean_page(page)
+
+
+def run_live_config_model_change_during_generation(page):
+    page.route("**/*", route_popup)
+    page.goto(POPUP_URL)
+    expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
+    page.evaluate("window.__popupMockDeferNextResponse('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    page.get_by_role("button", name="生成摘要与亮点").click()
+    page.wait_for_function("window.__popupMockPendingResponseCount('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS') === 1")
+    generation_message = last_message_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    page.evaluate("window.__popupMockEmitUserConfigChange('model')")
+    page.wait_for_function("(window.__popupMockMessages || []).some(message => message.action === 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    cancel_message = last_message_for(page, "CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    assert cancel_message["params"]["requestId"] == generation_message["params"]["requestId"]
+    assert cancel_message["params"]["selectedSourceIdentityKey"] == generation_message["params"]["selectedSourceIdentityKey"]
+    page.evaluate("window.__popupMockResolveResponses('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    page.wait_for_timeout(50)
+    expect(page.get_by_text("手动生成已使用精确的当前正文来源。")).to_have_count(0)
+    assert page.evaluate("window.__popupMockSummaryCache()") is None
+
+    page.get_by_role("button", name="生成摘要与亮点").click()
+    expect(page.get_by_text("较新的手动生成结果 2", exact=False)).to_be_visible()
+    assert page.evaluate("window.__popupMockSummaryCache().model") == "mock-model-v2"
+    assert len(messages_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")) == 2
+    assert_clean_page(page)
+
+
+def run_live_config_model_change_after_ready(page):
+    page.route("**/*", route_popup)
+    page.goto(f"{POPUP_URL}?cachedSummary=1")
+    old_text = "手动生成已使用精确的当前正文来源。"
+    expect(page.get_by_text(old_text)).to_be_visible()
+    page.evaluate("window.__popupMockEmitUserConfigChange('model')")
+    expect(page.get_by_text("此前生成", exact=True)).to_be_visible()
+    expect(page.get_by_text(old_text)).to_be_visible()
+    page.get_by_role("button", name="重新生成摘要与亮点").click()
+    page.wait_for_function("window.__popupMockSummaryCache()?.model === 'mock-model-v2'")
+    expect(page.get_by_text(old_text)).to_be_visible()
+    assert_clean_page(page)
+
+
 def run_highlight_preview_replacement_race(page):
     page.route("**/*", route_popup)
     page.goto(f"{POPUP_URL}?cachedSummary=1")
@@ -588,6 +638,21 @@ def main():
             assert not authorization_off_cache_errors, "\n".join(authorization_off_cache_errors)
             authorization_off_cache.close()
 
+            live_disable, live_disable_errors = new_checked_page(browser)
+            run_live_config_disable_after_ready(live_disable)
+            assert not live_disable_errors, "\n".join(live_disable_errors)
+            live_disable.close()
+
+            live_model, live_model_errors = new_checked_page(browser)
+            run_live_config_model_change_during_generation(live_model)
+            assert not live_model_errors, "\n".join(live_model_errors)
+            live_model.close()
+
+            live_model_ready, live_model_ready_errors = new_checked_page(browser)
+            run_live_config_model_change_after_ready(live_model_ready)
+            assert not live_model_ready_errors, "\n".join(live_model_ready_errors)
+            live_model_ready.close()
+
             highlight_replacement, highlight_replacement_errors = new_checked_page(browser)
             run_highlight_preview_replacement_race(highlight_replacement)
             assert not highlight_replacement_errors, "\n".join(highlight_replacement_errors)
@@ -648,7 +713,7 @@ def main():
             assert not desktop_errors, "\n".join(desktop_errors)
             desktop.close()
 
-            print("current-video popup real UI QA passed: combined summary/key-points/highlights, open/reprobe no generation, no-click disabled/unconfigured entry, cache restore and authorization-off prior result, failed-refresh old-result preservation, exact source-change cancel with late-response rejection, no-text/generating/error/invalid states, 4-8 highlights, preview/confirm/return and replacement rejection, responsive no-overflow/no-console/raw-copy checks")
+            print("current-video popup real UI QA passed: combined summary/key-points/highlights, open/reprobe no generation, no-click disabled/unconfigured entry, cache restore and authorization-off/live-disabled prior result, live model-change cancellation and exact-model cache refresh, failed-refresh old-result preservation, exact source-change cancel with late-response rejection, no-text/generating/error/invalid states, 4-8 highlights, preview/confirm/return and replacement rejection, responsive no-overflow/no-console/raw-copy checks")
         finally:
             browser.close()
 

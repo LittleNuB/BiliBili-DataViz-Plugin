@@ -40,8 +40,18 @@ import {
 import { loadConfig } from './storage/config-store.ts';
 
 const summaryHighlightsRequestGuard = new CurrentVideoFullTextRequestGuard();
+const preflightRequests = new Map<string, PreflightSummaryHighlightsRequest>();
+const preflightRequestBySource = new Map<string, string>();
 const activeNetworkRequests = new Map<string, ActiveSummaryHighlightsNetworkRequest>();
 const activeNetworkRequestByTarget = new Map<string, string>();
+let configGeneration = 0;
+
+interface PreflightSummaryHighlightsRequest {
+  requestId: string;
+  sourceIdentityKey: string | null;
+  cancelled: boolean;
+  configGeneration: number;
+}
 
 interface ActiveSummaryHighlightsNetworkRequest {
   requestId: string;
@@ -56,8 +66,11 @@ export interface GenerateCurrentVideoSummaryHighlightsOptions {
   transcriptSegments: CurrentVideoTranscriptSegment[];
   now?: number;
   requestId?: string;
+  configGeneration?: number;
   currentIdentity?: Pick<CurrentVideoTextSourceIdentity, 'sourceIdentityKey'> | null;
   resolveCurrentIdentity?: () => Promise<Pick<CurrentVideoTextSourceIdentity, 'sourceIdentityKey'> | null>;
+  resolveLiveConfig?: () => Promise<UserConfig>;
+  sourceDataStillCurrent?: () => boolean;
   authorizationStillEnabled?: () => Promise<boolean>;
 }
 
@@ -154,6 +167,16 @@ export async function generateCurrentVideoSummaryHighlights(
   }
 
   const clearState = getCurrentVideoSummaryHighlightsClearState();
+  const liveConfig = await resolveLiveConfigSafely(options, config);
+  if (!liveConfig.assistant.currentVideoAiAssistantEnabled) {
+    return disabledCurrentVideoSummaryHighlights(title, normalizedModel(liveConfig), textSize, Date.now());
+  }
+  if (!aiConfigured(liveConfig)) {
+    return notConfiguredCurrentVideoSummaryHighlights(title, normalizedModel(liveConfig), textSize, Date.now());
+  }
+  if (!summaryHighlightsRequestStillValidSync(envelope, clearState.generation, options, false)) {
+    return cancelledResult(title, model, textSize);
+  }
   summaryHighlightsRequestGuard.start(envelope);
   const networkRequest = registerSummaryHighlightsNetworkRequest(envelope);
   try {
@@ -161,7 +184,7 @@ export async function generateCurrentVideoSummaryHighlights(
     try {
       const payload = buildCurrentVideoSummaryHighlightsAiPayload(envelope);
       aiOutput = await requestCurrentVideoSummaryHighlightsAi(
-        config.ai,
+        liveConfig.ai,
         payload,
         options.chat ?? chatJson,
         { signal: networkRequest.controller.signal },
@@ -221,7 +244,7 @@ export async function generateCurrentVideoSummaryHighlights(
       result,
     }, {
       expectedClearGeneration: clearState.generation,
-      canWrite: () => summaryHighlightsRequestGuard.canCommit(envelope).ok
+      canWrite: () => summaryHighlightsRequestStillValidSync(envelope, clearState.generation, options)
         && !networkRequest.controller.signal.aborted,
     });
     if (cacheResult.rejectedReason === 'cleared' || cacheResult.rejectedReason === 'invalidated') {
@@ -241,11 +264,18 @@ export async function generateCurrentVideoSummaryHighlights(
 }
 
 export function cancelCurrentVideoSummaryHighlightsRequest(requestId: string): void {
+  const preflight = preflightRequests.get(requestId);
+  if (preflight) {
+    preflight.cancelled = true;
+  }
   summaryHighlightsRequestGuard.cancel(requestId);
   activeNetworkRequests.get(requestId)?.controller.abort();
 }
 
 export function cancelCurrentVideoSummaryHighlightsForSource(sourceIdentityKey: string): void {
+  for (const preflight of preflightRequests.values()) {
+    if (preflight.sourceIdentityKey === sourceIdentityKey) preflight.cancelled = true;
+  }
   summaryHighlightsRequestGuard.clearPrimaryText({ sourceIdentityKey });
   for (const request of activeNetworkRequests.values()) {
     if (request.sourceIdentityKey === sourceIdentityKey) request.controller.abort();
@@ -253,10 +283,65 @@ export function cancelCurrentVideoSummaryHighlightsForSource(sourceIdentityKey: 
 }
 
 export function invalidateCurrentVideoSummaryHighlightsAuthorization(): void {
+  for (const preflight of preflightRequests.values()) {
+    preflight.cancelled = true;
+  }
   for (const request of activeNetworkRequests.values()) {
     summaryHighlightsRequestGuard.cancel(request.requestId);
     request.controller.abort();
   }
+}
+
+export function invalidateCurrentVideoSummaryHighlightsConfig(): void {
+  configGeneration += 1;
+  invalidateCurrentVideoSummaryHighlightsAuthorization();
+}
+
+export function getCurrentVideoSummaryHighlightsConfigGeneration(): number {
+  return configGeneration;
+}
+
+export function canUseCurrentVideoSummaryHighlightsConfigGeneration(
+  generation: number | null | undefined,
+): boolean {
+  return generation === configGeneration;
+}
+
+export function registerCurrentVideoSummaryHighlightsPreflightRequest(input: {
+  requestId: string;
+  sourceIdentityKey?: string | null;
+}): { requestId: string; configGeneration: number } {
+  const requestId = input.requestId.trim();
+  const sourceIdentityKey = input.sourceIdentityKey?.trim() || null;
+  if (!requestId) {
+    return { requestId, configGeneration };
+  }
+  if (sourceIdentityKey) {
+    const previousRequestId = preflightRequestBySource.get(sourceIdentityKey);
+    if (previousRequestId && previousRequestId !== requestId) {
+      const previous = preflightRequests.get(previousRequestId);
+      if (previous) previous.cancelled = true;
+    }
+    cancelActiveSummaryHighlightsNetworkRequestsForSource(sourceIdentityKey);
+    preflightRequestBySource.set(sourceIdentityKey, requestId);
+  }
+  preflightRequests.set(requestId, {
+    requestId,
+    sourceIdentityKey,
+    cancelled: false,
+    configGeneration,
+  });
+  return { requestId, configGeneration };
+}
+
+export function settleCurrentVideoSummaryHighlightsPreflightRequest(requestId: string | null | undefined): void {
+  const normalizedRequestId = requestId?.trim();
+  if (!normalizedRequestId) return;
+  const preflight = preflightRequests.get(normalizedRequestId);
+  if (preflight?.sourceIdentityKey && preflightRequestBySource.get(preflight.sourceIdentityKey) === normalizedRequestId) {
+    preflightRequestBySource.delete(preflight.sourceIdentityKey);
+  }
+  preflightRequests.delete(normalizedRequestId);
 }
 
 export function currentVideoSummaryHighlightsTitle(context: CurrentVideoContextResult | null): string {
@@ -291,6 +376,14 @@ function registerSummaryHighlightsNetworkRequest(
   return request;
 }
 
+function cancelActiveSummaryHighlightsNetworkRequestsForSource(sourceIdentityKey: string): void {
+  for (const request of activeNetworkRequests.values()) {
+    if (request.sourceIdentityKey !== sourceIdentityKey) continue;
+    summaryHighlightsRequestGuard.cancel(request.requestId);
+    request.controller.abort();
+  }
+}
+
 function settleSummaryHighlightsNetworkRequest(
   envelope: ReturnType<typeof buildCurrentVideoFullTextRequestEnvelope>,
   request: ActiveSummaryHighlightsNetworkRequest,
@@ -315,8 +408,7 @@ async function summaryHighlightsRequestStillValid(
   expectedClearGeneration: number,
   options: GenerateCurrentVideoSummaryHighlightsOptions,
 ): Promise<boolean> {
-  if (!summaryHighlightsRequestGuard.canCommit(envelope).ok) return false;
-  if (!canUseCurrentVideoSummaryHighlightsClearGeneration(expectedClearGeneration)) return false;
+  if (!summaryHighlightsRequestStillValidSync(envelope, expectedClearGeneration, options)) return false;
   if (!options.authorizationStillEnabled) return true;
   try {
     if (await options.authorizationStillEnabled()) return true;
@@ -327,6 +419,25 @@ async function summaryHighlightsRequestStillValid(
   return false;
 }
 
+function summaryHighlightsRequestStillValidSync(
+  envelope: ReturnType<typeof buildCurrentVideoFullTextRequestEnvelope>,
+  expectedClearGeneration: number,
+  options: GenerateCurrentVideoSummaryHighlightsOptions,
+  requireActiveRequest = true,
+): boolean {
+  if (preflightRequests.get(envelope.requestId)?.cancelled) return false;
+  if (requireActiveRequest && !summaryHighlightsRequestGuard.canCommit(envelope).ok) return false;
+  if (!canUseCurrentVideoSummaryHighlightsClearGeneration(expectedClearGeneration)) return false;
+  if (
+    options.configGeneration !== undefined
+    && !canUseCurrentVideoSummaryHighlightsConfigGeneration(options.configGeneration)
+  ) {
+    return false;
+  }
+  if (options.sourceDataStillCurrent && !options.sourceDataStillCurrent()) return false;
+  return true;
+}
+
 async function resolveCurrentIdentitySafely(
   options: GenerateCurrentVideoSummaryHighlightsOptions,
 ): Promise<Pick<CurrentVideoTextSourceIdentity, 'sourceIdentityKey'> | null> {
@@ -335,6 +446,24 @@ async function resolveCurrentIdentitySafely(
     return await options.resolveCurrentIdentity();
   } catch {
     return null;
+  }
+}
+
+async function resolveLiveConfigSafely(
+  options: GenerateCurrentVideoSummaryHighlightsOptions,
+  fallback: UserConfig,
+): Promise<UserConfig> {
+  if (!options.resolveLiveConfig) return fallback;
+  try {
+    return await options.resolveLiveConfig();
+  } catch {
+    return {
+      ...fallback,
+      assistant: {
+        ...fallback.assistant,
+        currentVideoAiAssistantEnabled: false,
+      },
+    };
   }
 }
 

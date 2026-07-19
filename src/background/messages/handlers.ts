@@ -15,7 +15,7 @@ import type {
   CurrentVideoTimestampReturnResponse,
 } from '../../shared/types/current-video-segment-retrieval';
 import type { CurrentVideoRelatedFavoritesResponse } from '../../shared/types/current-video-related-favorites';
-import type { CurrentVideoSummaryHighlightsResult, CurrentVideoSummaryResult } from '../../shared/types/current-video-summary';
+import type { CurrentVideoSummaryHighlightsResult } from '../../shared/types/current-video-summary';
 import type { VideoKnowledgeResult } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import type { SmartIndexResult } from '../../shared/types/favorite';
@@ -35,17 +35,21 @@ import {
 } from '../storage/config-store';
 import { db } from '../storage/db';
 import type { UserConfig } from '../../shared/types/config';
-import { generateCurrentVideoSummary } from '../current-video-summary';
 import {
   approximateSizeFromContext,
   cancelCurrentVideoSummaryHighlightsForSource,
   cancelCurrentVideoSummaryHighlightsRequest,
+  canUseCurrentVideoSummaryHighlightsConfigGeneration,
   currentVideoSummaryHighlightsTitle,
   generateCurrentVideoSummaryHighlights,
-  invalidateCurrentVideoSummaryHighlightsAuthorization,
+  getCurrentVideoSummaryHighlightsConfigGeneration,
+  invalidateCurrentVideoSummaryHighlightsConfig,
   readCachedCurrentVideoSummaryHighlights,
+  registerCurrentVideoSummaryHighlightsPreflightRequest,
+  settleCurrentVideoSummaryHighlightsPreflightRequest,
 } from '../current-video-summary-highlights';
 import {
+  cancelledCurrentVideoSummaryHighlights,
   currentVideoSummaryHighlightBindingMatchesRecord,
   disabledCurrentVideoSummaryHighlights,
   noTextCurrentVideoSummaryHighlights,
@@ -64,7 +68,6 @@ import {
   rewriteCurrentVideoSegmentQuery,
   searchCurrentVideoSegments,
 } from '../../shared/current-video-segment-retrieval';
-import { cancelledCurrentVideoSummary } from '../../shared/current-video-summary';
 import { searchCurrentVideoSegmentsWithAiRerank } from '../current-video-segment-rerank';
 import {
   buildCurrentVideoRelatedFavoritesHint,
@@ -461,11 +464,8 @@ export async function handleRequest<T>(
       const previousConfig = await loadConfig();
       await saveConfig(request.params as Partial<UserConfig>);
       const nextConfig = await loadConfig();
-      if (
-        previousConfig.assistant.currentVideoAiAssistantEnabled
-        && !nextConfig.assistant.currentVideoAiAssistantEnabled
-      ) {
-        invalidateCurrentVideoSummaryHighlightsAuthorization();
+      if (currentVideoSummaryHighlightsConfigChanged(previousConfig, nextConfig)) {
+        invalidateCurrentVideoSummaryHighlightsConfig();
       }
       return { success: true };
     }
@@ -559,20 +559,6 @@ export async function handleRequest<T>(
       return { success: true, data: await probeSubtitleSourceForActiveTab(request.params, requestTabId) as T };
     case 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE':
       return { success: true, data: await getTranscriptEvidenceForActiveTab(request.params, requestTabId) as T };
-    case 'GET_CURRENT_VIDEO_SUMMARY': {
-      if (!primaryTextSelectionsReady(request.params)) {
-        return { success: true, data: primaryTextSelectionNotReadySummary() as T };
-      }
-      const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
-      if (!lookup.primaryTextAuthorized) {
-        return { success: true, data: primaryTextSelectionNotReadySummary() as T };
-      }
-      const transcriptSegments = await getAuthorizedCurrentVideoTranscriptSegments(lookup);
-      if (!transcriptSegments) {
-        return { success: true, data: primaryTextSelectionNotReadySummary() as T };
-      }
-      return { success: true, data: await generateCurrentVideoSummary(lookup.context, { transcriptSegments }) as T };
-    }
     case 'GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE': {
       if (!primaryTextSelectionsReady(request.params)) {
         return { success: true, data: primaryTextSelectionNotReadySummaryHighlights() as T };
@@ -587,6 +573,18 @@ export async function handleRequest<T>(
       };
     }
     case 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS': {
+      const requestId = optionalStringParam(request.params?.requestId) ?? undefined;
+      const sourceIdentityKey = selectedSourceIdentityKey(request.params);
+      const preflight = requestId
+        ? registerCurrentVideoSummaryHighlightsPreflightRequest({
+            requestId,
+            sourceIdentityKey,
+          })
+        : {
+            requestId: null,
+            configGeneration: getCurrentVideoSummaryHighlightsConfigGeneration(),
+          };
+      try {
       if (!primaryTextSelectionsReady(request.params)) {
         return { success: true, data: primaryTextSelectionNotReadySummaryHighlights() as T };
       }
@@ -605,20 +603,50 @@ export async function handleRequest<T>(
       }
       const transcriptSegments = await getAuthorizedCurrentVideoTranscriptSegments(lookup);
       if (!transcriptSegments) {
+        if (!currentVideoSummaryHighlightsSourceDataStillCurrent(lookup)) {
+          return { success: true, data: cancelledCurrentVideoSummaryHighlights(
+            title,
+            config.ai.chatModel.trim() || null,
+            textSize,
+          ) as T };
+        }
         return { success: true, data: noTextCurrentVideoSummaryHighlights(title, config.ai.chatModel.trim() || null, textSize) as T };
+      }
+      const liveConfig = await loadConfig();
+      if (!liveConfig.assistant.currentVideoAiAssistantEnabled) {
+        return { success: true, data: disabledCurrentVideoSummaryHighlights(title, liveConfig.ai.chatModel.trim() || null, textSize) as T };
+      }
+      if (!currentVideoAiConfigComplete(liveConfig)) {
+        return { success: true, data: notConfiguredCurrentVideoSummaryHighlights(title, liveConfig.ai.chatModel.trim() || null, textSize) as T };
+      }
+      if (
+        !canUseCurrentVideoSummaryHighlightsConfigGeneration(preflight.configGeneration)
+        || !currentVideoSummaryHighlightsSourceDataStillCurrent(lookup)
+      ) {
+        return { success: true, data: cancelledCurrentVideoSummaryHighlights(
+          title,
+          liveConfig.ai.chatModel.trim() || null,
+          textSize,
+        ) as T };
       }
       return {
         success: true,
         data: await generateCurrentVideoSummaryHighlights(lookup.context, {
-          config,
-          requestId: optionalStringParam(request.params?.requestId) ?? undefined,
+          config: liveConfig,
+          configGeneration: preflight.configGeneration,
+          requestId,
           transcriptSegments,
+          resolveLiveConfig: loadConfig,
           resolveCurrentIdentity: () => resolveCurrentVideoSummaryHighlightCommitIdentity(request.params, requestTabId),
+          sourceDataStillCurrent: () => currentVideoSummaryHighlightsSourceDataStillCurrent(lookup),
           authorizationStillEnabled: async () => (
             await loadConfig()
           ).assistant.currentVideoAiAssistantEnabled,
         }) as T,
       };
+      } finally {
+        settleCurrentVideoSummaryHighlightsPreflightRequest(requestId);
+      }
     }
     case 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS': {
       const requestId = optionalStringParam(request.params?.requestId);
@@ -1686,23 +1714,6 @@ function primaryTextSelectionsReady(params: Record<string, unknown> | undefined)
   return params?.primaryTextSelectionsReady === true;
 }
 
-function primaryTextSelectionNotReadySummary(now = Date.now()): CurrentVideoSummaryResult {
-  return {
-    ...cancelledCurrentVideoSummary(null, now),
-    title: '主要文本来源尚未就绪',
-    summary: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
-    missingSources: ['主要文本来源选择'],
-    limitations: ['读取完成前不会使用当前可见字幕正文，也不会请求 AI。'],
-    nextQuestions: [],
-    ai: {
-      status: 'not_requested',
-      model: null,
-      error: null,
-      note: '主要文本来源选择尚未读取完成，因此没有请求 AI。',
-    },
-  };
-}
-
 function primaryTextSelectionNotReadySummaryHighlights(now = Date.now()): CurrentVideoSummaryHighlightsResult {
   return {
     status: 'cancelled',
@@ -1902,6 +1913,32 @@ function currentVideoPrimaryTextGuardEpochsCurrent(
 ): boolean {
   return canUseCurrentVideoPrimaryTextSelectionGeneration(guard.selectionGeneration)
     && canUseCurrentVideoTranscriptClearGeneration(guard.transcriptClearGeneration);
+}
+
+function currentVideoSummaryHighlightsSourceDataStillCurrent(
+  lookup: Pick<CurrentVideoContextLookupResult, 'primaryTextGuard'>,
+): boolean {
+  const guard = lookup.primaryTextGuard;
+  return Boolean(guard && canUseCurrentVideoTranscriptClearGeneration(guard.transcriptClearGeneration));
+}
+
+function currentVideoSummaryHighlightsConfigChanged(
+  previousConfig: UserConfig,
+  nextConfig: UserConfig,
+): boolean {
+  return previousConfig.assistant.currentVideoAiAssistantEnabled
+    !== nextConfig.assistant.currentVideoAiAssistantEnabled
+    || previousConfig.ai.baseURL.trim() !== nextConfig.ai.baseURL.trim()
+    || previousConfig.ai.apiKey.trim() !== nextConfig.ai.apiKey.trim()
+    || previousConfig.ai.chatModel.trim() !== nextConfig.ai.chatModel.trim();
+}
+
+function currentVideoAiConfigComplete(config: UserConfig): boolean {
+  return Boolean(
+    config.ai.baseURL.trim()
+    && config.ai.chatModel.trim()
+    && config.ai.apiKey.trim(),
+  );
 }
 
 function currentVideoPrimaryTextGuardMatchesContext(

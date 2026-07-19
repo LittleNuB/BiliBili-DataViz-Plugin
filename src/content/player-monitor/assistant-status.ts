@@ -52,6 +52,7 @@ import {
 
 const CARD_ID = 'bdc-current-video-assistant';
 const STYLE_ID = 'bdc-current-video-assistant-style';
+const USER_CONFIG_STORAGE_KEY = 'userConfig';
 
 const RAW_FIELD_PATTERN = new RegExp(
   `\\b(?:${[
@@ -2815,29 +2816,41 @@ function ensurePrimaryTextSelectionStorageListener(): void {
   if (!storageChanges?.addListener) return;
 
   storageChanges.addListener((changes, areaName) => {
-    if (
-      areaName !== 'local'
-      || !Object.prototype.hasOwnProperty.call(
-        changes,
-        CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
-      )
-    ) {
-      return;
+    if (areaName !== 'local') return;
+    const selectionChanged = Object.prototype.hasOwnProperty.call(
+      changes,
+      CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
+    );
+    const configChanged = Object.prototype.hasOwnProperty.call(changes, USER_CONFIG_STORAGE_KEY)
+      && currentVideoSummaryConfigRelevantChange(
+        changes[USER_CONFIG_STORAGE_KEY]?.oldValue,
+        changes[USER_CONFIG_STORAGE_KEY]?.newValue,
+      );
+
+    if (selectionChanged) {
+      const change = changes[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY];
+      const selections = normalizeCurrentVideoPrimaryTextSelections(change?.newValue);
+      primaryTextSelectionsLoadRequestId += 1;
+      primaryTextSelectionsRevision += 1;
+      replacePrimaryTextSelections(selections);
+      primaryTextSelectionsLoaded = true;
+      primaryTextSelectionsLoading = false;
+      primaryTextSelectionsReadFailed = false;
+      primaryTextSelectionSaveFailedPartKeys.clear();
+      invalidatePrimaryTextDependentAssistantState();
+      if (assistantState.context) {
+        updateAssistantContext(assistantState.context);
+        renderAssistantShell();
+        if (assistantState.expanded) void restoreCurrentVideoSummaryHighlightsFromPage();
+      }
     }
-    const change = changes[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY];
-    const selections = normalizeCurrentVideoPrimaryTextSelections(change?.newValue);
-    primaryTextSelectionsLoadRequestId += 1;
-    primaryTextSelectionsRevision += 1;
-    replacePrimaryTextSelections(selections);
-    primaryTextSelectionsLoaded = true;
-    primaryTextSelectionsLoading = false;
-    primaryTextSelectionsReadFailed = false;
-    primaryTextSelectionSaveFailedPartKeys.clear();
-    invalidatePrimaryTextDependentAssistantState();
-    if (assistantState.context) {
-      updateAssistantContext(assistantState.context);
-      renderAssistantShell();
-      if (assistantState.expanded) void restoreCurrentVideoSummaryHighlightsFromPage();
+
+    if (configChanged) {
+      invalidateSummaryHighlightsForLiveConfigChange(changes[USER_CONFIG_STORAGE_KEY]?.newValue);
+      if (assistantState.context) {
+        renderAssistantShell();
+        if (assistantState.expanded) void restoreCurrentVideoSummaryHighlightsFromPage();
+      }
     }
   });
   primaryTextSelectionStorageListenerRegistered = true;
@@ -2888,6 +2901,100 @@ function invalidatePrimaryTextDependentAssistantState(): void {
   assistantState.subtitleRefreshing = false;
   assistantState.subtitleStatus = null;
   assistantState.primaryTextStatus = null;
+}
+
+function invalidateSummaryHighlightsForLiveConfigChange(userConfig: unknown): void {
+  const activeRequest = assistantState.summaryActiveRequest;
+  const visibleSummary = assistantState.summaryContextKey === assistantState.contextKey
+    ? assistantState.summary
+    : null;
+  const fallbackSummary = activeRequest?.contextKey === assistantState.contextKey
+    ? activeRequest.previousReady
+    : null;
+  const retained = currentVideoSummaryAfterLiveConfigChange(
+    visibleSummary ?? fallbackSummary,
+    userConfig,
+  );
+
+  if (activeRequest) {
+    assistantState.summaryActiveRequest = null;
+    void sendRuntimeRequest('CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS', activeRequest.params).catch(() => undefined);
+  }
+  assistantState.summaryRequestId += 1;
+  assistantState.summaryLoading = false;
+  assistantState.summaryCacheLoading = false;
+  assistantState.summaryError = null;
+  assistantState.summary = retained;
+  assistantState.summaryContextKey = retained ? assistantState.contextKey : '';
+  assistantState.summaryHighlightPreview = null;
+  assistantState.summaryHighlightJumpStatus = null;
+  assistantState.summaryHighlightJumpLoading = false;
+  assistantState.summaryHighlightReturnAvailable = false;
+  assistantState.summaryHighlightReturnLoading = false;
+  assistantState.summaryHighlightTimestampRequestId += 1;
+}
+
+function currentVideoSummaryAfterLiveConfigChange(
+  summary: CurrentVideoSummaryHighlightsResult | null,
+  userConfig: unknown,
+): CurrentVideoSummaryHighlightsResult | null {
+  if (summary?.status !== 'ready') return null;
+  const gate = currentVideoSummaryGenerationGate(userConfig);
+  return {
+    ...asPriorGeneratedCurrentVideoSummaryHighlights(summary),
+    canGenerate: gate.canGenerate,
+    generationBlockedMessage: gate.blockedMessage,
+  };
+}
+
+function currentVideoSummaryConfigRelevantChange(oldValue: unknown, newValue: unknown): boolean {
+  const oldGate = currentVideoSummaryGenerationGate(oldValue);
+  const newGate = currentVideoSummaryGenerationGate(newValue);
+  return oldGate.enabled !== newGate.enabled
+    || oldGate.configured !== newGate.configured
+    || oldGate.baseURL !== newGate.baseURL
+    || oldGate.apiKey !== newGate.apiKey
+    || oldGate.chatModel !== newGate.chatModel;
+}
+
+function currentVideoSummaryGenerationGate(value: unknown): {
+  enabled: boolean;
+  configured: boolean;
+  baseURL: string;
+  apiKey: string;
+  chatModel: string;
+  canGenerate: boolean;
+  blockedMessage: string | null;
+} {
+  const config = isPlainRecord(value) ? value : {};
+  const assistant = isPlainRecord(config.assistant) ? config.assistant : {};
+  const ai = isPlainRecord(config.ai) ? config.ai : {};
+  const enabled = assistant.currentVideoAiAssistantEnabled === true;
+  const baseURL = stringValue(ai.baseURL);
+  const apiKey = stringValue(ai.apiKey);
+  const chatModel = stringValue(ai.chatModel);
+  const configured = Boolean(baseURL && apiKey && chatModel);
+  return {
+    enabled,
+    configured,
+    baseURL,
+    apiKey,
+    chatModel,
+    canGenerate: enabled && configured,
+    blockedMessage: !enabled
+      ? '要生成或刷新，请先在设置中开启“当前视频 AI 助手”。'
+      : configured
+        ? null
+        : '要生成或刷新，请先完成 AI 服务配置。',
+  };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 interface SegmentTimestampOperationSnapshot {

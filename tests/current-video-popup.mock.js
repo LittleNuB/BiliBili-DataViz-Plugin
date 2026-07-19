@@ -8,6 +8,7 @@
   let page = 1;
   let title = params.get('missingTitle') === '1' ? null : 'Popup 授权 Mock 视频';
   const storageKey = 'currentVideoPrimaryTextSelections';
+  const userConfigKey = 'userConfig';
   const sourceV2 = `primary-text:bilibili_subtitle:${baseBvid}:9201:1:zh-cn:popup-source-v2`;
   const sourceV1 = `primary-text:bilibili_subtitle:${baseBvid}:9201:1:zh-cn:popup-source-v1`;
   const storage = {};
@@ -23,6 +24,11 @@
   if (params.get('savedV1') === '1') {
     storage[storageKey] = { [`${baseBvid}:9201:1`]: sourceV1 };
   }
+  storage[userConfigKey] = userConfig({
+    enabled: params.get('summaryDisabled') !== '1',
+    configured: params.get('summaryUnconfigured') !== '1',
+    chatModel: 'mock-model',
+  });
 
   function currentSourceIdentityKey() {
     if (cid === null) return null;
@@ -49,9 +55,62 @@
     return new Promise((resolve) => pendingResponses.push({ action, response, resolve }));
   }
 
-  function emitStorageChange(oldValue, newValue) {
-    const changes = { [storageKey]: { oldValue, newValue } };
+  function emitStorageChange(key, oldValue, newValue) {
+    const changes = { [key]: { oldValue, newValue } };
     for (const listener of storageChangeListeners) listener(changes, 'local');
+  }
+
+  function userConfig({ enabled, configured, chatModel }) {
+    return {
+      ai: {
+        baseURL: configured ? 'https://example.invalid' : '',
+        apiKey: configured ? 'mock-key' : '',
+        chatModel,
+      },
+      assistant: {
+        currentVideoAiAssistantEnabled: enabled,
+        smartFavoritesQaAiEnabled: false,
+      },
+    };
+  }
+
+  function currentUserConfig() {
+    return storage[userConfigKey] || userConfig({ enabled: false, configured: false, chatModel: 'mock-model' });
+  }
+
+  function currentChatModel() {
+    const model = String(currentUserConfig().ai?.chatModel || '').trim();
+    return model || 'mock-model';
+  }
+
+  function currentSummaryState() {
+    const config = currentUserConfig();
+    if (config.assistant?.currentVideoAiAssistantEnabled !== true) return 'disabled';
+    if (!String(config.ai?.baseURL || '').trim() || !String(config.ai?.apiKey || '').trim() || !String(config.ai?.chatModel || '').trim()) {
+      return 'unconfigured';
+    }
+    return params.get('summaryState') || 'ready';
+  }
+
+  function withLiveConfigCacheState(result) {
+    const state = currentSummaryState();
+    if (state === 'disabled') {
+      return {
+        ...result,
+        priorGenerated: true,
+        canGenerate: false,
+        generationBlockedMessage: '要生成或刷新，请先在设置中开启“当前视频 AI 助手”。',
+      };
+    }
+    if (state === 'unconfigured') {
+      return {
+        ...result,
+        priorGenerated: true,
+        canGenerate: false,
+        generationBlockedMessage: '要生成或刷新，请先完成 AI 服务配置。',
+      };
+    }
+    return result;
   }
 
   function transcriptEvidence() {
@@ -134,6 +193,7 @@
   }
 
   function summaryResult(authorized, sequence, options = {}) {
+    const model = currentChatModel();
     const highlightCount = Math.max(4, Math.min(8, Number(params.get('highlightCount') || options.highlightCount || 4)));
     const highlights = Array.from({ length: highlightCount }, (_, index) => {
       const startSeconds = index * 8;
@@ -172,7 +232,7 @@
         generationBlockedMessage: null,
       };
     }
-    if (!options.cacheHit && (options.status === 'disabled' || params.get('summaryDisabled') === '1')) {
+    if (!options.cacheHit && options.status === 'disabled') {
       return {
         status: 'error',
         title: 'Popup 授权 Mock 视频',
@@ -183,9 +243,9 @@
         keyPoints: [],
         highlights: [],
         limitations: ['开启开关本身不会发送正文，仍需再次点击生成。'],
-        ai: { status: 'disabled', model: 'mock-model', error: null, note: '请在设置中开启“当前视频 AI 助手”后，再手动生成。' },
+        ai: { status: 'disabled', model, error: null, note: '请在设置中开启“当前视频 AI 助手”后，再手动生成。' },
         generatedAt: Date.now(),
-        model: 'mock-model',
+        model,
         cacheKey: null,
         cacheHit: false,
         current: true,
@@ -195,7 +255,7 @@
         generationBlockedMessage: '要生成或刷新，请先在设置中开启“当前视频 AI 助手”。',
       };
     }
-    if (!options.cacheHit && (options.status === 'unconfigured' || params.get('summaryUnconfigured') === '1')) {
+    if (!options.cacheHit && options.status === 'unconfigured') {
       return {
         status: 'error',
         title: 'Popup 授权 Mock 视频',
@@ -206,9 +266,9 @@
         keyPoints: [],
         highlights: [],
         limitations: ['配置完成后需要再次点击生成；不会自动补发。'],
-        ai: { status: 'not_configured', model: 'mock-model', error: null, note: '请先配置服务地址、模型和 API Key。' },
+        ai: { status: 'not_configured', model, error: null, note: '请先配置服务地址、模型和 API Key。' },
         generatedAt: Date.now(),
-        model: 'mock-model',
+        model,
         cacheKey: null,
         cacheHit: false,
         current: true,
@@ -229,9 +289,9 @@
         keyPoints: [],
         highlights: [],
         limitations: ['请稍后重试。'],
-        ai: { status: 'invalid_output', model: 'mock-model', error: 'invalid', note: '已拒绝本次结果。' },
+        ai: { status: 'invalid_output', model, error: 'invalid', note: '已拒绝本次结果。' },
         generatedAt: Date.now(),
-        model: 'mock-model',
+        model,
         cacheKey: null,
         cacheHit: false,
         current: true,
@@ -252,9 +312,9 @@
         keyPoints: [],
         highlights: [],
         limitations: ['本次失败不会写入缓存，也不会生成推测时间戳。'],
-        ai: { status: 'failed', model: 'mock-model', error: 'mock-error', note: '请确认 AI 设置可用后再重试。' },
+        ai: { status: 'failed', model, error: 'mock-error', note: '请确认 AI 设置可用后再重试。' },
         generatedAt: Date.now(),
-        model: 'mock-model',
+        model,
         cacheKey: null,
         cacheHit: false,
         current: true,
@@ -275,9 +335,9 @@
         keyPoints: [],
         highlights: [],
         limitations: ['如需更新，请重新点击生成。'],
-        ai: { status: 'cancelled', model: 'mock-model', error: null, note: '本次生成已取消。' },
+        ai: { status: 'cancelled', model, error: null, note: '本次生成已取消。' },
         generatedAt: Date.now(),
-        model: 'mock-model',
+        model,
         cacheKey: null,
         cacheHit: false,
         current: true,
@@ -287,7 +347,7 @@
         generationBlockedMessage: null,
       };
     }
-    const priorGenerated = options.cacheHit === true && params.get('summaryDisabled') === '1';
+    const priorGenerated = options.priorGenerated === true;
     return {
       status: 'ready',
       title: 'Popup 授权 Mock 视频',
@@ -310,9 +370,9 @@
       ],
       highlights,
       limitations: ['摘要区不展示正文摘录；亮点时间只来自已校验的当前正文行。'],
-      ai: { status: 'generated', model: 'mock-model', error: null, note: options.cacheHit ? '已从本地缓存读取。' : '已完成模型生成并通过本地校验。' },
+      ai: { status: 'generated', model, error: null, note: options.cacheHit ? '已从本地缓存读取。' : '已完成模型生成并通过本地校验。' },
       generatedAt: Date.now(),
-      model: 'mock-model',
+      model,
       cacheKey: 'mock-summary-highlight-cache',
       cacheHit: options.cacheHit === true,
       current: true,
@@ -476,7 +536,20 @@
     } else {
       newValue = oldValue === undefined ? undefined : { ...oldValue };
     }
-    emitStorageChange(oldValue, newValue);
+    emitStorageChange(storageKey, oldValue, newValue);
+  };
+  window.__popupMockEmitUserConfigChange = (mode = 'disable') => {
+    const oldValue = storage[userConfigKey];
+    const currentModel = currentChatModel();
+    const newValue = mode === 'model'
+      ? userConfig({ enabled: true, configured: true, chatModel: `${currentModel}-v2` })
+      : mode === 'unconfigured'
+        ? userConfig({ enabled: true, configured: false, chatModel: currentModel })
+        : mode === 'enable'
+          ? userConfig({ enabled: true, configured: true, chatModel: currentModel })
+          : userConfig({ enabled: false, configured: true, chatModel: currentModel });
+    storage[userConfigKey] = newValue;
+    emitStorageChange(userConfigKey, oldValue, newValue);
   };
   window.__popupMockSwitchContext = () => {
     bvid = 'BV1PopupNext7';
@@ -516,17 +589,22 @@
           case 'GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE':
             return maybeDeferResponse(message.action, () => {
               if (params.get('cachedSummary') === '1' && !summaryCacheResult) {
-                summaryCacheResult = summaryResult(authorized, nextActionSequence(message.action), { cacheHit: true });
+                summaryCacheResult = summaryResult(authorized, nextActionSequence(message.action), {
+                  cacheHit: true,
+                  priorGenerated: ['disabled', 'unconfigured'].includes(currentSummaryState()),
+                });
               }
-              const cacheMissStatus = params.get('summaryDisabled') === '1'
-                ? 'disabled'
-                : params.get('summaryUnconfigured') === '1'
-                  ? 'unconfigured'
-                  : null;
+              const state = currentSummaryState();
+              const cacheMissStatus = state === 'ready' ? null : state;
+              const matchingCache = params.get('cachedSummary') === '1'
+                && summaryCacheResult
+                && summaryCacheResult.model === currentChatModel()
+                ? withLiveConfigCacheState(summaryCacheResult)
+                : null;
               return {
                 success: true,
-                data: params.get('cachedSummary') === '1'
-                  ? summaryCacheResult
+                data: matchingCache
+                  ? matchingCache
                   : cacheMissStatus
                     ? summaryResult(
                       authorized,
@@ -569,11 +647,16 @@
                   data: summaryResult(true, sequence, { status: 'cancelled', requestId }),
                 };
               }
+              const state = currentSummaryState();
               const data = summaryResult(
                 params.get('summaryNoText') === '1' ? true : authorized,
                 sequence,
                 {
-                  status: params.get('summaryNoText') === '1' ? 'no_text' : undefined,
+                  status: params.get('summaryNoText') === '1'
+                    ? 'no_text'
+                    : state === 'ready'
+                      ? undefined
+                      : state,
                   requestId,
                 },
               );

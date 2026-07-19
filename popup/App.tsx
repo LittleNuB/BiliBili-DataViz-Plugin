@@ -61,6 +61,8 @@ interface PopupActiveSummaryHighlightsRequest {
   previousReady: CurrentVideoSummaryHighlightsResult | null;
 }
 
+const USER_CONFIG_STORAGE_KEY = 'userConfig';
+
 function popupCurrentVideoContextKey(context: CurrentVideoContextResult | null): string {
   if (!context) return 'no_context:pending';
   if (context.kind !== 'video') return `no_context:${context.pageType}:${context.reason}`;
@@ -90,6 +92,69 @@ function popupTranscriptEvidenceMatchesContext(
     && evidence.page === context.currentPart.page;
 }
 
+function popupSummaryAfterLiveConfigChange(
+  summary: CurrentVideoSummaryHighlightsResult | null,
+  userConfig: unknown,
+): CurrentVideoSummaryHighlightsResult | null {
+  if (summary?.status !== 'ready') return null;
+  const gate = popupSummaryGenerationGate(userConfig);
+  return {
+    ...asPriorGeneratedCurrentVideoSummaryHighlights(summary),
+    canGenerate: gate.canGenerate,
+    generationBlockedMessage: gate.blockedMessage,
+  };
+}
+
+function popupSummaryConfigRelevantChange(oldValue: unknown, newValue: unknown): boolean {
+  const oldGate = popupSummaryGenerationGate(oldValue);
+  const newGate = popupSummaryGenerationGate(newValue);
+  return oldGate.enabled !== newGate.enabled
+    || oldGate.configured !== newGate.configured
+    || oldGate.baseURL !== newGate.baseURL
+    || oldGate.apiKey !== newGate.apiKey
+    || oldGate.chatModel !== newGate.chatModel;
+}
+
+function popupSummaryGenerationGate(value: unknown): {
+  enabled: boolean;
+  configured: boolean;
+  baseURL: string;
+  apiKey: string;
+  chatModel: string;
+  canGenerate: boolean;
+  blockedMessage: string | null;
+} {
+  const config = isPopupRecord(value) ? value : {};
+  const assistant = isPopupRecord(config.assistant) ? config.assistant : {};
+  const ai = isPopupRecord(config.ai) ? config.ai : {};
+  const enabled = assistant.currentVideoAiAssistantEnabled === true;
+  const baseURL = popupString(ai.baseURL);
+  const apiKey = popupString(ai.apiKey);
+  const chatModel = popupString(ai.chatModel);
+  const configured = Boolean(baseURL && apiKey && chatModel);
+  return {
+    enabled,
+    configured,
+    baseURL,
+    apiKey,
+    chatModel,
+    canGenerate: enabled && configured,
+    blockedMessage: !enabled
+      ? '要生成或刷新，请先在设置中开启“当前视频 AI 助手”。'
+      : configured
+        ? null
+        : '要生成或刷新，请先完成 AI 服务配置。',
+  };
+}
+
+function isPopupRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function popupString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 export function App() {
   const [currentVideoContext, setCurrentVideoContext] = useState<CurrentVideoContextResult | null>(null);
   const [currentVideoSummary, setCurrentVideoSummary] = useState<CurrentVideoSummaryHighlightsResult | null>(null);
@@ -105,6 +170,7 @@ export function App() {
   const [tailProbeLoading, setTailProbeLoading] = useState(false);
   const [tailProbeError, setTailProbeError] = useState<string | null>(null);
   const currentVideoContextRef = useRef<CurrentVideoContextResult | null>(null);
+  const currentVideoSummaryRef = useRef<CurrentVideoSummaryHighlightsResult | null>(null);
   const currentVideoContextKeyRef = useRef(popupCurrentVideoContextKey(null));
   const primaryTextSelectionRevisionRef = useRef(0);
   const currentVideoOperationRevisionRef = useRef(0);
@@ -116,6 +182,7 @@ export function App() {
   const subtitleReprobeActiveRef = useRef(false);
 
   currentVideoContextRef.current = currentVideoContext;
+  currentVideoSummaryRef.current = currentVideoSummary;
   currentVideoContextKeyRef.current = popupCurrentVideoContextKey(currentVideoContext);
 
   useEffect(() => {
@@ -127,16 +194,27 @@ export function App() {
       changes: Record<string, chrome.storage.StorageChange>,
       areaName: string,
     ) => {
-      if (
-        areaName !== 'local'
-        || !Object.prototype.hasOwnProperty.call(
-          changes,
-          CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
-        )
-      ) {
+      if (areaName !== 'local') {
         return;
       }
-      invalidateCurrentVideoOperations({ selectionChanged: true });
+      const selectionChanged = Object.prototype.hasOwnProperty.call(
+        changes,
+        CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
+      );
+      const configChanged = Object.prototype.hasOwnProperty.call(changes, USER_CONFIG_STORAGE_KEY)
+        && popupSummaryConfigRelevantChange(
+          changes[USER_CONFIG_STORAGE_KEY]?.oldValue,
+          changes[USER_CONFIG_STORAGE_KEY]?.newValue,
+        );
+      if (!selectionChanged && !configChanged) return;
+      invalidateCurrentVideoOperations({
+        selectionChanged,
+        configChanged,
+        userConfig: changes[USER_CONFIG_STORAGE_KEY]?.newValue,
+      });
+      if (configChanged) {
+        void restoreCurrentVideoSummaryCache(currentVideoContextRef.current);
+      }
     };
     storageChanges?.addListener?.(handleStorageChange);
     return () => {
@@ -412,10 +490,27 @@ export function App() {
 
   function invalidateCurrentVideoOperations({
     selectionChanged = false,
-  }: { selectionChanged?: boolean } = {}): void {
+    configChanged = false,
+    userConfig = null,
+  }: {
+    selectionChanged?: boolean;
+    configChanged?: boolean;
+    userConfig?: unknown;
+  } = {}): void {
     if (selectionChanged) {
       primaryTextSelectionRevisionRef.current += 1;
       setPrimaryTextSelectionRevision(primaryTextSelectionRevisionRef.current);
+    }
+    const retainedSummary = configChanged
+      ? popupSummaryAfterLiveConfigChange(
+          currentVideoSummaryRef.current ?? activeSummaryRequestRef.current?.previousReady ?? null,
+          userConfig,
+        )
+      : null;
+    const activeSummaryRequest = activeSummaryRequestRef.current;
+    if (configChanged && activeSummaryRequest) {
+      activeSummaryRequestRef.current = null;
+      void requestSW('CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS', activeSummaryRequest.params).catch(() => null);
     }
     currentVideoOperationRevisionRef.current += 1;
     setCurrentVideoOperationRevision(currentVideoOperationRevisionRef.current);
@@ -426,7 +521,7 @@ export function App() {
     if (!activeSummaryRequestRef.current) setSummaryLoading(false);
     setKnowledgeLoading(false);
     setSubtitleProbeLoading(false);
-    setCurrentVideoSummary(null);
+    setCurrentVideoSummary(retainedSummary);
     setVideoKnowledge(null);
     setSubtitleProbeStatus(null);
     setCurrentVideoActionError(null);

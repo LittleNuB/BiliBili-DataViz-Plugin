@@ -41,7 +41,7 @@ import type {
   CurrentVideoTimestampReturnResponse,
 } from './current-video-segment-retrieval';
 import type { CurrentVideoRelatedFavoritesResponse } from './current-video-related-favorites';
-import type { CurrentVideoSummaryHighlightsResult, CurrentVideoSummaryResult } from './current-video-summary';
+import type { CurrentVideoSummaryHighlightsResult } from './current-video-summary';
 import type { VideoKnowledgeResult } from './video-knowledge';
 import type { HistoryTailProbeReport } from './history-tail-probe';
 import type { HistorySyncCursorSnapshot, HistorySyncMode } from './history-sync';
@@ -79,7 +79,6 @@ export type RequestAction =
   | 'SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION'
   | 'PROBE_CURRENT_VIDEO_SUBTITLE_SOURCE'
   | 'GET_CURRENT_VIDEO_TRANSCRIPT_EVIDENCE'
-  | 'GET_CURRENT_VIDEO_SUMMARY'
   | 'GET_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE'
   | 'GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS'
   | 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS'
@@ -215,7 +214,6 @@ export type SmartFavoritePathResponse = BiliVizResponse<SmartFavoriteResult[]>;
 export type CurrentVideoContextResponse = BiliVizResponse<CurrentVideoContextResult>;
 export type CurrentVideoSubtitleSourceResponse = BiliVizResponse<CurrentVideoSubtitleSourceState>;
 export type CurrentVideoTranscriptEvidenceResponse = BiliVizResponse<CurrentVideoTranscriptEvidenceState>;
-export type CurrentVideoSummaryResponse = BiliVizResponse<CurrentVideoSummaryResult>;
 export type CurrentVideoSummaryHighlightsResponse = BiliVizResponse<CurrentVideoSummaryHighlightsResult>;
 export type VideoKnowledgeResponse = BiliVizResponse<VideoKnowledgeResult>;
 export type CurrentVideoSegmentRetrievalResponse = BiliVizResponse<CurrentVideoSegmentRetrievalResult>;

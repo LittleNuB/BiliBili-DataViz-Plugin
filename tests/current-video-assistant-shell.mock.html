@@ -67,6 +67,7 @@
         document.title = "   ";
       }
       const primaryTextSelectionStorageKey = "currentVideoPrimaryTextSelections";
+      const userConfigStorageKey = "userConfig";
       const baseMockCid = 2202;
       let mockPrimaryCid = baseMockCid;
       let mockCid = mockPrimaryCid;
@@ -124,6 +125,11 @@
       if (Object.keys(initialPrimaryTextSelections).length > 0) {
         extensionStorage[primaryTextSelectionStorageKey] = initialPrimaryTextSelections;
       }
+      extensionStorage[userConfigStorageKey] = userConfig({
+        enabled: mockParams.get("summaryDisabled") !== "1",
+        configured: mockParams.get("summaryUnconfigured") !== "1",
+        chatModel: "mock-model",
+      });
 
       window.__INITIAL_STATE__ = {
         videoData: {
@@ -285,7 +291,61 @@
         };
       }
 
+      function userConfig({ enabled, configured, chatModel }) {
+        return {
+          ai: {
+            baseURL: configured ? "https://example.invalid" : "",
+            apiKey: configured ? "mock-key" : "",
+            chatModel,
+          },
+          assistant: {
+            currentVideoAiAssistantEnabled: enabled,
+            smartFavoritesQaAiEnabled: false,
+          },
+        };
+      }
+
+      function currentUserConfig() {
+        return extensionStorage[userConfigStorageKey] || userConfig({
+          enabled: false,
+          configured: false,
+          chatModel: "mock-model",
+        });
+      }
+
+      function currentChatModel() {
+        const model = String(currentUserConfig().ai?.chatModel || "").trim();
+        return model || "mock-model";
+      }
+
+      function currentSummaryState() {
+        const config = currentUserConfig();
+        if (config.assistant?.currentVideoAiAssistantEnabled !== true) return "disabled";
+        if (!String(config.ai?.baseURL || "").trim()
+          || !String(config.ai?.apiKey || "").trim()
+          || !String(config.ai?.chatModel || "").trim()) {
+          return "unconfigured";
+        }
+        return mockParams.get("summaryState") || "ready";
+      }
+
+      function withLiveConfigCacheState(result) {
+        const state = currentSummaryState();
+        if (state === "disabled" || state === "unconfigured") {
+          return {
+            ...result,
+            priorGenerated: true,
+            canGenerate: false,
+            generationBlockedMessage: state === "disabled"
+              ? "瑕侀噸鏂扮敓鎴愶紝璇峰厛鍦ㄨ缃腑寮€鍚€滃綋鍓嶈棰?AI 鍔╂墜鈥濄€?"
+              : "瑕侀噸鏂扮敓鎴愶紝璇峰厛瀹屾垚 AI 鏈嶅姟閰嶇疆銆?",
+          };
+        }
+        return result;
+      }
+
       function summaryHighlightsResult(options = {}) {
+        const model = currentChatModel();
         const textSize = { lineCount: 12, charCount: 360, utf8Bytes: 720 };
         const generatedAt = options.generatedAt || 10_000 + summaryGeneration;
         const requestId = options.requestId || `mock-page-summary-${summaryGeneration}`;
@@ -298,7 +358,7 @@
           highlights: [],
           limitations: [],
           generatedAt,
-          model: "mock-model",
+          model,
           cacheKey: null,
           cacheHit: false,
           current: true,
@@ -323,7 +383,7 @@
             status: "no_text",
             message: "当前没有可用的主要正文，无法生成摘要与亮点。",
             limitations: ["请先检测并选择主要文本来源。"],
-            ai: { status: "not_requested", model: "mock-model", error: null, note: "本次没有请求 AI。" },
+            ai: { status: "not_requested", model, error: null, note: "本次没有请求 AI。" },
           };
         }
         if (state === "disabled") {
@@ -332,7 +392,7 @@
             status: "error",
             message: "当前视频 AI 助手未开启，本次没有发送正文。",
             limitations: ["开启后仍需再次点击生成。"],
-            ai: { status: "disabled", model: "mock-model", error: null, note: "请先在设置中开启当前视频 AI 助手。" },
+            ai: { status: "disabled", model, error: null, note: "请先在设置中开启当前视频 AI 助手。" },
             canGenerate: false,
             generationBlockedMessage: "要生成或刷新，请先在设置中开启“当前视频 AI 助手”。",
           };
@@ -343,7 +403,7 @@
             status: "error",
             message: "AI 服务尚未配置完整，本次没有发送正文。",
             limitations: ["配置完成后需要再次点击生成。"],
-            ai: { status: "not_configured", model: "mock-model", error: null, note: "请先完成 AI 服务配置。" },
+            ai: { status: "not_configured", model, error: null, note: "请先完成 AI 服务配置。" },
             canGenerate: false,
             generationBlockedMessage: "要生成或刷新，请先完成 AI 服务配置。",
           };
@@ -354,7 +414,7 @@
             status: "invalid_output",
             message: "模型返回的摘要与亮点没有通过校验，旧结果不会被替换。",
             limitations: ["请稍后重试。"],
-            ai: { status: "invalid_output", model: "mock-model", error: "invalid", note: "已拒绝本次结果。" },
+            ai: { status: "invalid_output", model, error: "invalid", note: "已拒绝本次结果。" },
           };
         }
         if (state === "error") {
@@ -363,7 +423,7 @@
             status: "error",
             message: "摘要与亮点生成失败，旧结果不会被替换。",
             limitations: ["本次失败不会写入本地结果。"],
-            ai: { status: "failed", model: "mock-model", error: "mock-error", note: "请检查 AI 设置后重试。" },
+            ai: { status: "failed", model, error: "mock-error", note: "请检查 AI 设置后重试。" },
           };
         }
         if (state === "cancelled") {
@@ -372,7 +432,7 @@
             status: "cancelled",
             message: "本次生成已取消，未写入新的摘要与亮点。",
             limitations: ["此前结果不会被替换。"],
-            ai: { status: "cancelled", model: "mock-model", error: null, note: "已取消本次生成。" },
+            ai: { status: "cancelled", model, error: null, note: "已取消本次生成。" },
           };
         }
 
@@ -412,7 +472,7 @@
           ],
           highlights,
           limitations: ["摘要区不展示正文摘录；亮点时间只来自已校验的当前正文行。"],
-          ai: { status: "generated", model: "mock-model", error: null, note: options.cacheHit ? "已从本地缓存读取。" : "已完成生成并通过校验。" },
+          ai: { status: "generated", model, error: null, note: options.cacheHit ? "已从本地缓存读取。" : "已完成生成并通过校验。" },
           cacheKey: "mock-page-summary-cache",
           cacheHit: options.cacheHit === true,
           requestId,
@@ -428,15 +488,13 @@
         summaryGeneration = 1;
         summaryCacheResult = summaryHighlightsResult({
           cacheHit: true,
-          priorGenerated: mockParams.get("summaryDisabled") === "1",
+          priorGenerated: ["disabled", "unconfigured"].includes(currentSummaryState()),
         });
         summaryCacheSourceIdentityKey = subtitleSourceIdentityKey();
       }
 
       function summaryStateFromParams() {
-        if (mockParams.get("summaryDisabled") === "1") return "disabled";
-        if (mockParams.get("summaryUnconfigured") === "1") return "unconfigured";
-        return mockParams.get("summaryState") || "ready";
+        return currentSummaryState();
       }
 
       function summaryRequestAuthorized(params) {
@@ -451,8 +509,10 @@
         if (!summaryRequestAuthorized(params)) {
           return summaryHighlightsResult({ state: "no_text" });
         }
-        if (summaryCacheResult && summaryCacheSourceIdentityKey === params.selectedSourceIdentityKey) {
-          return summaryCacheResult;
+        if (summaryCacheResult
+          && summaryCacheSourceIdentityKey === params.selectedSourceIdentityKey
+          && summaryCacheResult.model === currentChatModel()) {
+          return withLiveConfigCacheState(summaryCacheResult);
         }
         const state = summaryStateFromParams();
         if (state === "disabled" || state === "unconfigured") {
@@ -1039,6 +1099,19 @@
         extensionStorage[primaryTextSelectionStorageKey] = newValue;
         emitPrimaryTextStorageChange(oldValue, newValue);
       };
+      window.__assistantMockEmitUserConfigChange = (mode = "disable") => {
+        const oldValue = extensionStorage[userConfigStorageKey];
+        const currentModel = currentChatModel();
+        const newValue = mode === "model"
+          ? userConfig({ enabled: true, configured: true, chatModel: `${currentModel}-v2` })
+          : mode === "unconfigured"
+            ? userConfig({ enabled: true, configured: false, chatModel: currentModel })
+            : mode === "enable"
+              ? userConfig({ enabled: true, configured: true, chatModel: currentModel })
+              : userConfig({ enabled: false, configured: true, chatModel: currentModel });
+        extensionStorage[userConfigStorageKey] = newValue;
+        emitUserConfigStorageChange(oldValue, newValue);
+      };
       window.__assistantMockSwitchToPart = (page) => {
         mockPage = Number(page) === 2 ? 2 : 1;
         mockCid = mockPage === 2 ? 3303 : mockPrimaryCid;
@@ -1430,11 +1503,23 @@
         return Boolean(values && Object.prototype.hasOwnProperty.call(values, primaryTextSelectionStorageKey));
       }
 
-      function emitPrimaryTextStorageChange(oldValue, newValue) {
+      function writesUserConfig(values) {
+        return Boolean(values && Object.prototype.hasOwnProperty.call(values, userConfigStorageKey));
+      }
+
+      function emitStorageChange(key, oldValue, newValue) {
         const changes = {
-          [primaryTextSelectionStorageKey]: { oldValue, newValue },
+          [key]: { oldValue, newValue },
         };
         for (const listener of storageChangeListeners) listener(changes, "local");
+      }
+
+      function emitPrimaryTextStorageChange(oldValue, newValue) {
+        emitStorageChange(primaryTextSelectionStorageKey, oldValue, newValue);
+      }
+
+      function emitUserConfigStorageChange(oldValue, newValue) {
+        emitStorageChange(userConfigStorageKey, oldValue, newValue);
       }
 
       function maybeDeferProtectedResponse(action, response) {
@@ -1611,9 +1696,13 @@
                 });
               }
               const oldValue = extensionStorage[primaryTextSelectionStorageKey];
+              const oldUserConfig = extensionStorage[userConfigStorageKey];
               Object.assign(extensionStorage, values || {});
               if (writesPrimaryTextSelection(values)) {
                 emitPrimaryTextStorageChange(oldValue, extensionStorage[primaryTextSelectionStorageKey]);
+              }
+              if (writesUserConfig(values)) {
+                emitUserConfigStorageChange(oldUserConfig, extensionStorage[userConfigStorageKey]);
               }
               return Promise.resolve();
             },
@@ -1623,6 +1712,9 @@
                 delete extensionStorage[key];
                 if (key === primaryTextSelectionStorageKey) {
                   emitPrimaryTextStorageChange(oldValue, undefined);
+                }
+                if (key === userConfigStorageKey) {
+                  emitUserConfigStorageChange(oldValue, undefined);
                 }
               }
               return Promise.resolve();

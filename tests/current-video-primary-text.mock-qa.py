@@ -1168,6 +1168,57 @@ def run_summary_cache_restore_flow(page, authorization_off=False):
     assert_no_horizontal_overflow(page)
 
 
+def run_summary_live_config_disable_flow(page):
+    section = open_selected_summary_assistant(page, "cachedSummary=1")
+    expect(section.get_by_text("页内助手使用一次完整正文请求生成合并结果", exact=False)).to_be_visible()
+    page.evaluate("window.__assistantMockEmitUserConfigChange('disable')")
+    expect(section.get_by_text("此前生成", exact=True)).to_be_visible()
+    expect(section.get_by_role("button", name="重新生成")).to_be_disabled()
+    assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 0
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_summary_live_config_model_change_flow(page):
+    section = open_selected_summary_assistant(page)
+    page.evaluate("window.__assistantMockDeferNextProtectedAction('GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    section.get_by_role("button", name="生成摘要与亮点").click()
+    expect(section.get_by_text("正在生成摘要、关键要点和视频亮点，请稍等。")).to_be_visible()
+    page.wait_for_function("window.__assistantMockPendingProtectedResponseCount() === 1")
+    generation_message = last_message_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+
+    page.evaluate("window.__assistantMockEmitUserConfigChange('model')")
+    page.wait_for_function("(window.__assistantMockMessages || []).some(message => message.action === 'CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS')")
+    cancel_message = last_message_for(page, "CANCEL_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS")
+    assert cancel_message["params"]["requestId"] == generation_message["params"]["requestId"]
+    assert cancel_message["params"]["selectedSourceIdentityKey"] == generation_message["params"]["selectedSourceIdentityKey"]
+    page.evaluate("window.__assistantMockResolveProtectedResponses()")
+    page.wait_for_timeout(50)
+    expect(section.get_by_text("页内助手使用一次完整正文请求生成合并结果 1", exact=False)).to_have_count(0)
+    assert page.evaluate("window.__assistantMockSummaryCache()") is None
+
+    section.get_by_role("button", name="生成摘要与亮点").click()
+    expect(section.get_by_text("页内助手使用一次完整正文请求生成合并结果 1", exact=False)).to_be_visible()
+    assert page.evaluate("window.__assistantMockSummaryCache().model") == "mock-model-v2"
+    assert message_count_for(page, "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS") == 2
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_summary_live_config_model_change_after_ready_flow(page):
+    section = open_selected_summary_assistant(page, "cachedSummary=1")
+    old_text = "页内助手使用一次完整正文请求生成合并结果 1。"
+    expect(section.get_by_text(old_text)).to_be_visible()
+    page.evaluate("window.__assistantMockEmitUserConfigChange('model')")
+    expect(section.get_by_text("此前生成", exact=True)).to_be_visible()
+    expect(section.get_by_text(old_text)).to_be_visible()
+    section.get_by_role("button", name="重新生成").click()
+    expect(section.get_by_text("页内助手使用一次完整正文请求生成合并结果 2", exact=False)).to_be_visible()
+    assert page.evaluate("window.__assistantMockSummaryCache().model") == "mock-model-v2"
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
 def run_summary_terminal_state_flow(page, state):
     query_by_state = {
         "disabled": "summaryDisabled=1",
@@ -1299,6 +1350,9 @@ def main():
                 ("success-mobile", {"width": 390, "height": 760}, True, lambda page: run_summary_highlights_success_flow(page, 8)),
                 ("cache-restore", {"width": 1280, "height": 820}, False, lambda page: run_summary_cache_restore_flow(page)),
                 ("authorization-off-cache", {"width": 1280, "height": 820}, False, lambda page: run_summary_cache_restore_flow(page, authorization_off=True)),
+                ("live-disable-cache", {"width": 1280, "height": 820}, False, run_summary_live_config_disable_flow),
+                ("live-model-change", {"width": 1280, "height": 820}, False, run_summary_live_config_model_change_flow),
+                ("live-model-ready-cache", {"width": 1280, "height": 820}, False, run_summary_live_config_model_change_after_ready_flow),
                 ("cancel-source-change", {"width": 1280, "height": 820}, False, run_summary_cancel_after_source_change_flow),
                 ("preview-replacement", {"width": 1280, "height": 820}, False, run_summary_preview_replacement_race_flow),
                 ("prior-invalid", {"width": 1280, "height": 820}, False, lambda page: run_summary_prior_refresh_failure_flow(page, "invalid")),
@@ -1486,7 +1540,7 @@ def main():
             assert not mobile_errors, "\n".join(mobile_errors)
             mobile.close()
 
-            print("current-video primary-text real UI QA passed: in-page combined summary/key-points/highlights, 4/8 highlights, cache-only restore, authorization-off prior result, failed-refresh old-result preservation, runtime-only reopen preservation, disabled/unconfigured/no-text/generating-cancel/invalid/error states, source-change cancellation, preview replacement rejection, preview/confirm/return, no legacy summary action, responsive no-overflow/no-console/raw-copy checks, plus existing primary-text and timestamp race coverage")
+            print("current-video primary-text real UI QA passed: in-page combined summary/key-points/highlights, 4/8 highlights, cache-only restore, authorization-off/live-disabled prior result, live model-change cancellation and exact-model cache refresh, failed-refresh old-result preservation, runtime-only reopen preservation, disabled/unconfigured/no-text/generating-cancel/invalid/error states, source-change cancellation, preview replacement rejection, preview/confirm/return, no legacy summary action, responsive no-overflow/no-console/raw-copy checks, plus existing primary-text and timestamp race coverage")
         finally:
             browser.close()
 
