@@ -30,6 +30,7 @@ FORBIDDEN_ASSISTANT_IDENTITY_TERMS = [
     "CID",
     "BV1ShellMock9",
     "BV1OtherMock8",
+    "BV1RawLeak99",
     "2202",
     "3303",
     "4404",
@@ -37,7 +38,7 @@ FORBIDDEN_ASSISTANT_IDENTITY_TERMS = [
 FULL_TEXT_OR_SEARCH_ACTIONS = {
     "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS",
     "GET_VIDEO_KNOWLEDGE",
-    "SEARCH_CURRENT_VIDEO_SEGMENTS",
+    "ASK_CURRENT_VIDEO_FULL_TEXT",
 }
 
 
@@ -185,18 +186,21 @@ def run_flow(page):
     page.get_by_role("button", name="提问").click()
     expect(page.get_by_text("回答：有证据")).to_be_visible()
     expect(page.get_by_text("引用片段", exact=True)).to_be_visible()
-    search_message = last_message_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS")
+    assert page.locator(".bdc-assistant-answer-card").evaluate(
+        "answer => Boolean(answer.compareDocumentPosition(document.querySelector('.bdc-assistant-citation-title')) & Node.DOCUMENT_POSITION_FOLLOWING)"
+    )
+    search_message = last_message_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT")
     assert search_message["params"].get("selectedSourceIdentityKey"), "selected source key was not sent with search"
 
     page.get_by_role("button", name="预览跳转").first.click()
     expect(page.get_by_text("确认跳转前预览")).to_be_visible()
     page.get_by_role("button", name="确认跳转").click()
-    expect(page.get_by_text("返回原位置")).to_be_visible()
-    jump_message = last_message_for(page, "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP")
+    expect(page.get_by_role("button", name="返回原位置")).to_be_visible()
+    jump_message = last_message_for(page, "REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP")
     assert jump_message["params"].get("selectedSourceIdentityKey"), "selected source key was not sent with jump"
 
     page.get_by_role("button", name="返回原位置").click()
-    expect(page.get_by_text("已返回")).to_be_visible()
+    expect(page.get_by_text("已返回 0:12")).to_be_visible()
 
     assert_clean_visible_text(page)
     assert_no_horizontal_overflow(page)
@@ -222,7 +226,7 @@ def open_subtitle_tab(page, query="subtitleCached=1&sourceVersion=v2"):
 def run_subtitle_single_source_flow(page):
     assistant = open_subtitle_tab(page)
     assert "GET_CURRENT_VIDEO_SUBTITLE_VIEW_SOURCES" in message_actions(page)
-    assert message_count_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS") == 0
+    assert message_count_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT") == 0
     expect(assistant.get_by_text("正在查看：B站字幕").first).to_be_visible()
     expect(assistant.get_by_text("本地转录")).to_have_count(0)
     expect(assistant.get_by_role("radiogroup", name="字幕查看来源")).to_have_count(0)
@@ -266,7 +270,7 @@ def run_subtitle_single_source_flow(page):
     assistant.get_by_role("button", name="查找").click()
     expect(assistant.get_by_text("找到 1 处匹配。")).to_be_visible()
     expect(assistant.locator(".bdc-assistant-subtitle-result").filter(has_text="开场介绍子代理和当前视频助手。").first).to_be_visible()
-    assert message_count_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS") == 0
+    assert message_count_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT") == 0
 
     search.fill("tool use")
     assistant.get_by_role("button", name="查找").click()
@@ -315,7 +319,7 @@ def run_subtitle_single_source_flow(page):
     actions = message_actions(page)
     assert "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS" not in actions
     assert "GET_VIDEO_KNOWLEDGE" not in actions
-    assert message_count_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS") == 0
+    assert message_count_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT") == 0
     assert_clean_visible_text(page)
     assert_no_horizontal_overflow(page)
 
@@ -408,7 +412,7 @@ def run_missing_selection_flow(page):
     saved_v1_key = saved_keys[0]
 
     page.evaluate("window.__assistantMockReplaceSubtitleSource()")
-    search_count_before = message_count_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS")
+    search_count_before = message_count_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT")
     page.get_by_role("button", name="重新检测字幕").first.click()
     page.wait_for_function(
         """(expected) => [...(window.__assistantMockMessages || [])].reverse().some(
@@ -422,7 +426,7 @@ def run_missing_selection_flow(page):
     select_assistant_tab(page, "问答")
     expect(page.locator("textarea")).to_be_disabled()
     expect(page.get_by_role("button", name="提问")).to_be_disabled()
-    assert message_count_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS") == search_count_before
+    assert message_count_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT") == search_count_before
 
     assert_clean_visible_text(page)
     assert_no_horizontal_overflow(page)
@@ -460,8 +464,8 @@ def run_deferred_storage_flow(page):
     counts_before = {
         action: message_count_for(page, action)
         for action in [
-            "SEARCH_CURRENT_VIDEO_SEGMENTS",
-            "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
+            "ASK_CURRENT_VIDEO_FULL_TEXT",
+            "REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP",
         ]
     }
     page.get_by_role("button", name="提问").evaluate("(button) => button.click()")
@@ -490,7 +494,7 @@ def run_deferred_storage_flow(page):
     assert not refresh_message["params"].get("selectedSourceIdentityKey")
 
     page.get_by_role("button", name="提问").evaluate("(button) => button.click()")
-    assert message_count_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS") == counts_before["SEARCH_CURRENT_VIDEO_SEGMENTS"]
+    assert message_count_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT") == counts_before["ASK_CURRENT_VIDEO_FULL_TEXT"]
     assert_clean_visible_text(page)
     assert_no_horizontal_overflow(page)
 
@@ -510,13 +514,13 @@ def run_single_v2_without_saved_selection_flow(page):
     page.locator("textarea").fill("subagent 在哪里")
     page.get_by_role("button", name="提问").click()
     expect(page.get_by_text("回答：有证据")).to_be_visible()
-    search_message = last_message_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS")
+    search_message = last_message_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT")
     assert search_message["params"].get("primaryTextSelectionsReady") is True
     assert search_message["params"].get("selectedSourceIdentityKey") == current_v2_key
 
     page.get_by_role("button", name="预览跳转").first.click()
     page.get_by_role("button", name="确认跳转").click()
-    jump_message = last_message_for(page, "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP")
+    jump_message = last_message_for(page, "REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP")
     assert jump_message["params"].get("primaryTextSelectionsReady") is True
     assert jump_message["params"].get("selectedSourceIdentityKey") == current_v2_key
 
@@ -535,8 +539,8 @@ def run_rejected_storage_single_v2_flow(page):
     expect(page.locator("textarea")).to_be_disabled()
 
     blocked_actions = [
-        "SEARCH_CURRENT_VIDEO_SEGMENTS",
-        "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
+        "ASK_CURRENT_VIDEO_FULL_TEXT",
+        "REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP",
     ]
     counts_before_reject = {action: message_count_for(page, action) for action in blocked_actions}
     page.get_by_role("button", name="重新检测字幕").first.evaluate("(button) => button.click()")
@@ -595,7 +599,7 @@ def run_rejected_storage_single_v2_flow(page):
     page.locator("textarea").fill("subagent 在哪里")
     page.get_by_role("button", name="提问").click()
     expect(page.get_by_text("回答：有证据")).to_be_visible()
-    search_message = last_message_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS")
+    search_message = last_message_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT")
     assert search_message["params"].get("primaryTextSelectionsReady") is True
     assert search_message["params"].get("selectedSourceIdentityKey") == current_v2_key
 
@@ -620,8 +624,8 @@ def run_loaded_selection_save_failure_flow(page):
     expect(page.get_by_role("button", name="确认跳转")).to_be_visible()
 
     blocked_actions = [
-        "SEARCH_CURRENT_VIDEO_SEGMENTS",
-        "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
+        "ASK_CURRENT_VIDEO_FULL_TEXT",
+        "REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP",
     ]
 
     page.evaluate("window.__assistantMockRejectNextPrimaryTextStorageSet()")
@@ -666,7 +670,7 @@ def run_loaded_storage_change_invalidation_flow(page):
     expect(page.get_by_text("已用于当前视频助手").first).to_be_visible()
     select_assistant_tab(page, "问答")
     page.locator("textarea").fill("清理竞态")
-    page.evaluate("window.__assistantMockDeferNextProtectedAction('SEARCH_CURRENT_VIDEO_SEGMENTS')")
+    page.evaluate("window.__assistantMockDeferNextProtectedAction('ASK_CURRENT_VIDEO_FULL_TEXT')")
     page.get_by_role("button", name="提问").click()
     page.evaluate("window.__assistantMockClearPrimaryTextSelectionsForClearAll()")
     page.evaluate("window.__assistantMockResolveProtectedResponses()")
@@ -675,7 +679,7 @@ def run_loaded_storage_change_invalidation_flow(page):
 
     page.get_by_role("button", name="提问").click()
     expect(page.get_by_text("回答：有证据")).to_be_visible()
-    search_message = last_message_for(page, "SEARCH_CURRENT_VIDEO_SEGMENTS")
+    search_message = last_message_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT")
     assert search_message["params"].get("primaryTextSelectionsReady") is True
     assert search_message["params"].get("selectedSourceIdentityKey") == current_source_key
     assert search_message["params"].get("selectedSourceIdentityKey") != old_source_key
@@ -761,7 +765,7 @@ def start_newer_timestamp_jump(page):
     expect(page.get_by_text("回答：有证据")).to_be_visible()
     page.get_by_role("button", name="预览跳转").first.click()
     page.get_by_role("button", name="确认跳转").click()
-    expect(assistant.get_by_text("可返回 0:30")).to_be_visible()
+    expect(assistant.get_by_text("已跳到引用位置，可返回原位置。")).to_be_visible()
     expect(assistant.get_by_role("button", name="返回原位置")).to_be_visible()
 
 
@@ -775,11 +779,11 @@ def run_late_assistant_timestamp_flow(page, operation, invalidation, newer=False
         page.get_by_role("button", name="返回原位置").click()
         expect(page.get_by_text("正在返回原位置...")).to_be_visible()
     else:
-        page.evaluate("window.__assistantMockDeferNextProtectedAction('REQUEST_CURRENT_VIDEO_SEGMENT_JUMP')")
+        page.evaluate("window.__assistantMockDeferNextProtectedAction('REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP')")
         page.get_by_role("button", name="确认跳转").click()
         expect(page.get_by_text("正在确认跳转...")).to_be_visible()
-        expect(page.get_by_role("button", name="收起预览")).to_be_disabled()
-        expect(page.get_by_role("button", name="取消")).to_be_disabled()
+        expect(page.get_by_role("button", name="已预览")).to_be_disabled()
+        expect(page.get_by_role("button", name="正在跳转...")).to_be_disabled()
 
     if invalidation == "part":
         page.evaluate("window.__assistantMockSwitchToPart(2)")
@@ -802,7 +806,7 @@ def run_late_assistant_timestamp_flow(page, operation, invalidation, newer=False
     expect(page.get_by_text("正在确认跳转...")).to_have_count(0)
     expect(page.get_by_text("正在返回原位置...")).to_have_count(0)
     if newer:
-        expect(assistant.get_by_text("可返回 0:30")).to_be_visible()
+        expect(assistant.get_by_text("已跳到引用位置，可返回原位置。")).to_be_visible()
         expect(assistant.get_by_role("button", name="返回原位置")).to_be_visible()
         expect(assistant.get_by_text("已返回 0:12")).to_have_count(0)
     else:
@@ -1151,8 +1155,8 @@ def run_selection_save_blocks_operations_flow(page):
     counts_before = {
         action: message_count_for(page, action)
         for action in [
-            "SEARCH_CURRENT_VIDEO_SEGMENTS",
-            "REQUEST_CURRENT_VIDEO_SEGMENT_JUMP",
+            "ASK_CURRENT_VIDEO_FULL_TEXT",
+            "REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP",
         ]
     }
     page.locator(".bdc-assistant-source-card").filter(has_text="B站字幕").get_by_role("button", name="用于视频助手").click()
@@ -1230,7 +1234,7 @@ def run_search_no_candidate_flow(page):
     select_assistant_tab(page, "问答")
     page.locator("textarea").fill("没有候选")
     page.get_by_role("button", name="提问").click()
-    expect(page.get_by_text("没有。在当前已缓存的字幕正文或本地节点里，没有找到能回答这个问题的证据。")).to_be_visible()
+    expect(page.get_by_text("当前视频文本没有足够内容回答这个问题。")).to_be_visible()
     expect(page.get_by_role("button", name="预览跳转")).to_have_count(0)
     assert_clean_visible_text(page)
     assert_no_horizontal_overflow(page)
@@ -1245,7 +1249,51 @@ def run_search_backend_failure_flow(page):
     select_assistant_tab(page, "问答")
     page.locator("textarea").fill("后台失败")
     page.get_by_role("button", name="提问").click()
-    expect(page.get_by_text("回答失败：请确认当前 B 站视频页仍然打开，并稍后重试。")).to_be_visible()
+    expect(page.get_by_text("回答失败，问题已保留。请确认当前视频页和 AI 设置后重试。")).to_be_visible()
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_full_text_context_too_long_flow(page):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+    page.get_by_text("展开助手").click()
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    select_assistant_tab(page, "问答")
+    question = "正文过长时请完整回答"
+    page.locator("textarea").fill(question)
+    page.get_by_role("button", name="提问").click()
+    expect(page.get_by_text("状态：正文过长")).to_be_visible()
+    expect(page.get_by_text("系统不会截断或分段发送", exact=False)).to_be_visible()
+    expect(page.locator("textarea")).to_have_value(question)
+    expect(page.get_by_role("button", name="重试本题")).to_be_visible()
+    first_ask = last_message_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT")
+    page.locator("textarea").fill("这是编辑后的新问题")
+    page.get_by_role("button", name="重试本题").click()
+    expect(page.get_by_text("状态：正文过长")).to_be_visible()
+    retry_ask = last_message_for(page, "ASK_CURRENT_VIDEO_FULL_TEXT")
+    assert retry_ask["params"]["requestId"] != first_ask["params"]["requestId"]
+    assert retry_ask["params"]["turnId"] == first_ask["params"]["turnId"]
+    assert retry_ask["params"]["question"] == question
+    expect(page.locator("textarea")).to_have_value(question)
+    expect(page.get_by_role("button", name="预览跳转")).to_have_count(0)
+    assert_clean_visible_text(page)
+    assert_no_horizontal_overflow(page)
+
+
+def run_full_text_raw_identity_copy_flow(page):
+    page.route("**/*", route_mock)
+    page.goto(f"{MOCK_URL}?subtitleCached=1&sourceVersion=v2")
+    expect(page.locator("#bdc-current-video-assistant")).to_be_visible()
+    page.get_by_text("展开助手").click()
+    page.get_by_role("button", name="重新检测字幕").first.click()
+    select_assistant_tab(page, "问答")
+    page.locator("textarea").fill("subagent 原始身份泄漏")
+    page.get_by_role("button", name="提问").click()
+    expect(page.get_by_text("回答：有证据")).to_be_visible()
+    expect(page.get_by_text("内部信息已隐藏", exact=False).first).to_be_visible()
+    expect(page.get_by_text("视频编号已隐藏", exact=False).first).to_be_visible()
     assert_clean_visible_text(page)
     assert_no_horizontal_overflow(page)
 
@@ -1871,6 +1919,16 @@ def main():
             run_search_backend_failure_flow(backend_failure)
             assert not backend_failure_errors, "\n".join(backend_failure_errors)
             backend_failure.close()
+
+            too_long, too_long_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_full_text_context_too_long_flow(too_long)
+            assert not too_long_errors, "\n".join(too_long_errors)
+            too_long.close()
+
+            raw_identity, raw_identity_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
+            run_full_text_raw_identity_copy_flow(raw_identity)
+            assert not raw_identity_errors, "\n".join(raw_identity_errors)
+            raw_identity.close()
 
             subtitle_desktop, subtitle_desktop_errors = new_checked_page(browser, viewport={"width": 1280, "height": 820})
             run_subtitle_single_source_flow(subtitle_desktop)

@@ -18,6 +18,7 @@
   const pendingResponses = [];
   const actionSequence = new Map();
   const cancelledSummaryRequestIds = new Set();
+  const cancelledFullTextQaRequestIds = new Set();
   let summaryCacheResult = null;
   let summaryCacheSourceIdentityKey = null;
   let summaryReplacementSequence = 100;
@@ -493,6 +494,110 @@
     };
   }
 
+  function fullTextQaResult(request, authorized) {
+    const requestId = String(request?.requestId || 'popup-qa-request');
+    const turnId = String(request?.turnId || 'popup-qa-turn');
+    const question = String(request?.question || '').trim();
+    const sourceLabel = authorized ? 'B站字幕' : null;
+    const common = {
+      requestId,
+      turnId,
+      question,
+      title: title || '当前视频',
+      partTitle: page > 1 ? `第 ${page} P` : null,
+      sourceLabel,
+      textSize: { lineCount: authorized ? 2 : 0, charCount: authorized ? 34 : null, utf8Bytes: authorized ? 96 : 0 },
+      answerEvidenceLineNumbers: [],
+      citations: [],
+      limitations: [],
+      generatedAt: Date.now(),
+      canRetry: true,
+    };
+    if (cancelledFullTextQaRequestIds.has(requestId)) {
+      return {
+        ...common,
+        status: 'cancelled',
+        answer: '',
+        message: '本次回答已取消，问题已保留，可重新提交。',
+        ai: { status: 'cancelled', model: currentChatModel(), note: '本次请求已取消。', errorCode: null },
+      };
+    }
+    const state = currentSummaryState();
+    if (state === 'disabled') {
+      return {
+        ...common,
+        status: 'disabled',
+        answer: '',
+        message: '当前视频 AI 助手已关闭，问题已保留。开启后可重新提交。',
+        ai: { status: 'disabled', model: currentChatModel(), note: '当前功能未开启。', errorCode: null },
+      };
+    }
+    if (state === 'unconfigured') {
+      return {
+        ...common,
+        status: 'not_configured',
+        answer: '',
+        message: 'AI 服务尚未配置完成，问题已保留。完成设置后可重新提交。',
+        ai: { status: 'not_configured', model: currentChatModel(), note: 'AI 服务未配置。', errorCode: null },
+      };
+    }
+    if (!authorized || params.get('qaNoText') === '1') {
+      return {
+        ...common,
+        status: 'no_text',
+        answer: '',
+        message: '当前分 P 没有可用的主要文本，无法回答。问题已保留。',
+        ai: { status: 'failed', model: currentChatModel(), note: '当前主要文本不可用。', errorCode: 'no_text' },
+      };
+    }
+    if (params.get('qaContextTooLong') === '1') {
+      return {
+        ...common,
+        status: 'context_too_long',
+        answer: '',
+        message: '当前正文过长，所选模型没有接受本次完整请求；系统不会截断或分段发送。问题已保留，可更换模型后重试。',
+        ai: { status: 'context_too_long', model: currentChatModel(), note: '完整正文未被所选模型接受。', errorCode: 'context_too_long' },
+      };
+    }
+    if (params.get('qaUnsupported') === '1') {
+      return {
+        ...common,
+        status: 'unsupported',
+        answer: '当前视频文本没有足够内容回答这个问题。',
+        message: '当前视频文本没有足够内容支持回答。',
+        limitations: ['没有使用标题、简介、通用知识或其他视频内容补答。'],
+        ai: { status: 'unsupported', model: currentChatModel(), note: '当前正文依据不足。', errorCode: null },
+        canRetry: false,
+      };
+    }
+    const citationId = `popup-qa-citation-${requestId}`;
+    const rawVisibleCopy = params.get('qaRawVisibleCopy') === '1';
+    return {
+      ...common,
+      status: 'ready',
+      answer: rawVisibleCopy
+        ? 'document is not defined; fallback transcript confidence sourceHash=popup-secret segmentId=segment-secret subtitle_url=https://secret.invalid bvid=BV1RawLeak99 CID=9201 独立 BV1RawLeak99'
+        : `回答：${question}。作者先说明约束，再用当前视频中的示例给出结论。`,
+      answerEvidenceLineNumbers: [1, 2],
+      citations: [{
+        id: citationId,
+        evidenceLineNumbers: [1, 2],
+        evidenceText: rawVisibleCopy
+          ? 'fallback transcript confidence sourceHash=popup-secret segmentId=segment-secret subtitle_url=https://secret.invalid bvid=BV1RawLeak99 CID=9201 独立 BV1RawLeak99'
+          : '作者先说明约束条件，随后通过当前视频中的示例验证结论。',
+        startSeconds: 4,
+        endSeconds: 8,
+        timeRangeLabel: '0:04-0:08',
+        sourceLabel: 'B站字幕',
+        binding: { requestId, turnId, citationId },
+      }],
+      message: '回答已基于当前分 P 的完整主要文本生成。',
+      limitations: ['回答和引用只基于当前分 P 本次提交的完整主要文本。'],
+      ai: { status: 'generated', model: currentChatModel(), note: '回答已生成。', errorCode: null },
+      canRetry: false,
+    };
+  }
+
   function storageGet(keys) {
     if (params.get('rejectStorage') === '1') {
       return Promise.reject(new Error('MOCK_POPUP_PRIMARY_TEXT_STORAGE_READ_FAILED'));
@@ -702,6 +807,51 @@
                 nextActionSequence(message.action),
               ),
             });
+          case 'ASK_CURRENT_VIDEO_FULL_TEXT':
+            if (params.get('qaReject') === '1') {
+              return Promise.reject(new Error('MOCK_POPUP_QA_NETWORK_FAILURE'));
+            }
+            return maybeDeferResponse(message.action, () => ({
+              success: true,
+              data: fullTextQaResult(message.params, authorized),
+            }));
+          case 'CANCEL_CURRENT_VIDEO_FULL_TEXT_QA': {
+            const requestId = String(message.params?.requestId || '');
+            if (requestId) cancelledFullTextQaRequestIds.add(requestId);
+            return Promise.resolve({ success: true, data: { cancelled: Boolean(requestId) } });
+          }
+          case 'REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP': {
+            const allowed = authorized
+              && message.params?.confirmed === true
+              && String(message.params?.requestId || '').length > 0
+              && String(message.params?.turnId || '').length > 0
+              && String(message.params?.citationId || '').startsWith('popup-qa-citation-');
+            if (params.get('rawJumpFailure') === '1') {
+              return maybeDeferResponse(message.action, { success: true, data: {
+                ok: false,
+                message: 'document is not defined; sourceHash=popup-source-v2',
+                candidateId: String(message.params?.citationId || ''),
+                targetSeconds: null,
+                targetTimeLabel: null,
+                returnPointSeconds: null,
+                sourceLabel: null,
+                confidence: null,
+              } });
+            }
+            returnAvailable = allowed;
+            return maybeDeferResponse(message.action, { success: true, data: {
+              ok: allowed,
+              message: params.get('rawJumpSuccess') === '1'
+                ? 'document is not defined; BVID CID sourceHash segmentId subtitle_url'
+                : (allowed ? '已跳到 0:04，可返回 0:12。' : '引用结果已变化，请重新提交问题。'),
+              candidateId: String(message.params?.citationId || ''),
+              targetSeconds: allowed ? 4 : null,
+              targetTimeLabel: allowed ? '0:04' : null,
+              returnPointSeconds: allowed ? 12 : null,
+              sourceLabel: allowed ? '当前视频文本' : null,
+              confidence: allowed ? 1 : null,
+            } });
+          }
           case 'SEARCH_CURRENT_VIDEO_SEGMENTS':
             return maybeDeferResponse(message.action, {
               success: true,

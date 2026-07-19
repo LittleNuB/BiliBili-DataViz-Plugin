@@ -21,6 +21,7 @@ import type {
 } from '../../shared/current-video-subtitle-view.ts';
 import type { CurrentVideoRelatedFavoritesResponse } from '../../shared/types/current-video-related-favorites';
 import type { CurrentVideoSummaryHighlightsResult } from '../../shared/types/current-video-summary';
+import type { CurrentVideoFullTextQaResult } from '../../shared/types/current-video-full-text-qa';
 import type { VideoKnowledgeResult } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import type { SmartIndexResult } from '../../shared/types/favorite';
@@ -53,6 +54,20 @@ import {
   registerCurrentVideoSummaryHighlightsPreflightRequest,
   settleCurrentVideoSummaryHighlightsPreflightRequest,
 } from '../current-video-summary-highlights';
+import {
+  bindCurrentVideoFullTextQaPreflightPart,
+  cancelCurrentVideoFullTextQaForSource,
+  cancelCurrentVideoFullTextQaForScope,
+  cancelCurrentVideoFullTextQaRequest,
+  generateCurrentVideoFullTextQa,
+  getCurrentVideoFullTextQaCitation,
+  invalidateCurrentVideoFullTextQaConfig,
+  invalidateCurrentVideoFullTextQaPart,
+  invalidateCurrentVideoFullTextQaSources,
+  registerCurrentVideoFullTextQaPreflightRequest,
+  settleCurrentVideoFullTextQaPreflightRequest,
+  unavailableCurrentVideoFullTextQa,
+} from '../current-video-full-text-qa';
 import {
   cancelledCurrentVideoSummaryHighlights,
   currentVideoSummaryHighlightBindingMatchesRecord,
@@ -247,6 +262,7 @@ type CurrentVideoPrimaryTextGuardTestPhase =
   | 'before_evidence_bind'
   | 'before_segment_body_read'
   | 'after_segment_body_read'
+  | 'before_full_text_qa_network'
   | 'before_timestamp_message';
 
 export function setupMessageHandlers(): void {
@@ -477,6 +493,7 @@ export async function handleRequest<T>(
       const nextConfig = await loadConfig();
       if (currentVideoSummaryHighlightsConfigChanged(previousConfig, nextConfig)) {
         invalidateCurrentVideoSummaryHighlightsConfig();
+        invalidateCurrentVideoFullTextQaConfig();
       }
       return { success: true };
     }
@@ -541,29 +558,35 @@ export async function handleRequest<T>(
     case 'GET_LOCAL_DATA_PRIVACY_SUMMARY':
       return { success: true, data: await getLocalDataPrivacySummary() as T };
     case 'CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE':
+      invalidateCurrentVideoFullTextQaSources();
       return { success: true, data: await clearCurrentVideoSubtitleCache() as T };
     case 'CLEAR_CURRENT_VIDEO_SUMMARY_HIGHLIGHT_CACHE':
       return { success: true, data: await clearCurrentVideoSummaryHighlightCache() as T };
     case 'REBUILD_SMART_FAVORITE_INDEX':
       return { success: true, data: await rebuildSmartFavoriteIndex(request.params) as T };
     case 'CLEAR_ALL_LOCAL_DATA':
+      invalidateCurrentVideoFullTextQaSources();
       return { success: true, data: await clearAllLocalData(request.params?.confirmation) as T };
     case 'GET_CURRENT_VIDEO_CONTEXT':
       return { success: true, data: await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(request.params), requestTabId) as T };
     case 'SAVE_CURRENT_VIDEO_PRIMARY_TEXT_SELECTION': {
+      const bvid = requireStringParam(request.params?.bvid, 'bvid');
       const cid = requirePositiveIntegerParam(request.params?.cid, 'cid');
       const page = requirePositiveIntegerParam(request.params?.page, 'page');
+      if (requestTabId) cancelCurrentVideoFullTextQaForScope(`tab-${requestTabId}`);
+      const saved = await saveCurrentVideoPrimaryTextSelection({
+        bvid,
+        cid,
+        page,
+        selectedSourceIdentityKey: requireStringParam(
+          request.params?.selectedSourceIdentityKey,
+          'selectedSourceIdentityKey',
+        ),
+      });
+      invalidateCurrentVideoFullTextQaPart({ bvid, cid, page });
       return {
         success: true,
-        data: await saveCurrentVideoPrimaryTextSelection({
-          bvid: requireStringParam(request.params?.bvid, 'bvid'),
-          cid,
-          page,
-          selectedSourceIdentityKey: requireStringParam(
-            request.params?.selectedSourceIdentityKey,
-            'selectedSourceIdentityKey',
-          ),
-        }) as T,
+        data: saved as T,
       };
     }
     case 'PROBE_CURRENT_VIDEO_SUBTITLE_SOURCE':
@@ -671,6 +694,120 @@ export async function handleRequest<T>(
       }
       return { success: true, data: { cancelled: true } as T };
     }
+    case 'ASK_CURRENT_VIDEO_FULL_TEXT': {
+      const requestId = requireStringParam(request.params?.requestId, 'requestId');
+      const turnId = requireStringParam(request.params?.turnId, 'turnId');
+      const question = requireStringParam(request.params?.question, 'question');
+      const sourceIdentityKey = selectedSourceIdentityKey(request.params);
+      const preflight = registerCurrentVideoFullTextQaPreflightRequest({
+        requestId,
+        turnId,
+        sourceIdentityKey,
+        requestScopeId: requestTabId ? `tab-${requestTabId}` : null,
+        bvid: optionalStringParam(request.params?.bvid),
+        cid: optionalPositiveIntegerParam(request.params?.cid),
+        page: optionalPositiveIntegerParam(request.params?.page),
+      });
+      try {
+        if (!primaryTextSelectionsReady(request.params)) {
+          return {
+            success: true,
+            data: unavailableCurrentVideoFullTextQa({
+              status: 'no_text',
+              requestId,
+              turnId,
+              question,
+              message: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+            }) as T,
+          };
+        }
+        const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
+        if (!lookup.primaryTextAuthorized || !lookup.primaryTextGuard) {
+          return {
+            success: true,
+            data: unavailableCurrentVideoFullTextQa({
+              status: 'no_text',
+              requestId,
+              turnId,
+              question,
+              title: lookup.context.kind === 'video' ? lookup.context.title : null,
+              partTitle: lookup.context.kind === 'video' ? lookup.context.currentPart.title : null,
+              message: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+            }) as T,
+          };
+        }
+        if (!bindCurrentVideoFullTextQaPreflightPart(requestId, {
+          bvid: lookup.primaryTextGuard.bvid,
+          cid: lookup.primaryTextGuard.cid,
+          page: lookup.primaryTextGuard.page,
+          requestScopeId: lookup.tab?.id ? `tab-${lookup.tab.id}` : null,
+        })) {
+          return {
+            success: true,
+            data: unavailableCurrentVideoFullTextQa({
+              status: 'cancelled',
+              requestId,
+              turnId,
+              question,
+              title: lookup.context.kind === 'video' ? lookup.context.title : null,
+              partTitle: lookup.context.kind === 'video' ? lookup.context.currentPart.title : null,
+              message: '本次回答已取消，问题已保留。',
+            }) as T,
+          };
+        }
+        const transcriptSegments = await getAuthorizedCurrentVideoTranscriptSegments(lookup);
+        if (!transcriptSegments) {
+          const cancelled = !currentVideoSummaryHighlightsSourceDataStillCurrent(lookup);
+          return {
+            success: true,
+            data: unavailableCurrentVideoFullTextQa({
+              status: cancelled ? 'cancelled' : 'no_text',
+              requestId,
+              turnId,
+              question,
+              title: lookup.context.kind === 'video' ? lookup.context.title : null,
+              partTitle: lookup.context.kind === 'video' ? lookup.context.currentPart.title : null,
+              message: cancelled
+                ? '当前主要文本已变化，本次回答已取消，问题已保留。'
+                : '当前分 P 没有可用的主要文本，无法回答。问题已保留。',
+            }) as T,
+          };
+        }
+        await currentVideoPrimaryTextGuardTestHook('before_full_text_qa_network');
+        const config = await loadConfig();
+        return {
+          success: true,
+          data: await generateCurrentVideoFullTextQa(lookup.context, {
+            requestId,
+            turnId,
+            question,
+            transcriptSegments,
+            config,
+            configGeneration: preflight.configGeneration,
+            resolveLiveConfig: loadConfig,
+            resolveCurrentIdentity: () => resolveCurrentVideoSummaryHighlightCommitIdentity(request.params, requestTabId),
+            sourceDataStillCurrent: () => currentVideoSummaryHighlightsSourceDataStillCurrent(lookup),
+            authorizationStillEnabled: async () => {
+              const liveConfig = await loadConfig();
+              return liveConfig.assistant.currentVideoAiAssistantEnabled
+                && await currentVideoPrimaryTextGuardStillAuthorized(lookup);
+            },
+          }) as T,
+        };
+      } finally {
+        settleCurrentVideoFullTextQaPreflightRequest(requestId);
+      }
+    }
+    case 'CANCEL_CURRENT_VIDEO_FULL_TEXT_QA': {
+      const requestId = optionalStringParam(request.params?.requestId);
+      if (requestId) {
+        cancelCurrentVideoFullTextQaRequest(requestId);
+      } else {
+        const sourceIdentityKey = selectedSourceIdentityKey(request.params);
+        if (sourceIdentityKey) cancelCurrentVideoFullTextQaForSource(sourceIdentityKey);
+      }
+      return { success: true, data: { cancelled: true } as T };
+    }
     case 'GET_VIDEO_KNOWLEDGE': {
       if (!primaryTextSelectionsReady(request.params)) {
         return { success: true, data: primaryTextSelectionNotReadyKnowledge() as T };
@@ -721,6 +858,8 @@ export async function handleRequest<T>(
       return { success: true, data: await requestCurrentVideoSegmentJump(request.params, requestTabId) as T };
     case 'REQUEST_CURRENT_VIDEO_HIGHLIGHT_JUMP':
       return { success: true, data: await requestCurrentVideoHighlightJump(request.params, requestTabId) as T };
+    case 'REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP':
+      return { success: true, data: await requestCurrentVideoQaCitationJump(request.params, requestTabId) as T };
     case 'REQUEST_CURRENT_VIDEO_SUBTITLE_JUMP':
       return { success: true, data: await requestCurrentVideoSubtitleJump(request.params, requestTabId) as T };
     case 'RETURN_CURRENT_VIDEO_SEGMENT_JUMP':
@@ -1359,6 +1498,129 @@ async function requestCurrentVideoHighlightJump(
   } catch {
     return blockedTimestampJumpResponse(
       highlightId,
+      'player_unavailable',
+      formatTimestampJumpFailureReason('player_unavailable'),
+    );
+  } finally {
+    retireCurrentVideoTimestampOperationLease(operationLeaseId);
+  }
+}
+
+async function requestCurrentVideoQaCitationJump(
+  params: Record<string, unknown> | undefined,
+  requestTabId: number | null,
+): Promise<CurrentVideoTimestampJumpResponse> {
+  const requestId = requireStringParam(params?.requestId, 'requestId');
+  const turnId = requireStringParam(params?.turnId, 'turnId');
+  const citationId = requireStringParam(params?.citationId ?? params?.candidateId, 'citationId');
+  if (params?.confirmed !== true) {
+    return blockedTimestampJumpResponse(
+      citationId,
+      'confirmation_required',
+      formatTimestampJumpFailureReason('confirmation_required'),
+    );
+  }
+  if (!primaryTextSelectionsReady(params)) {
+    return blockedTimestampJumpResponse(citationId, 'no_context', PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE);
+  }
+
+  const lookup = await getCurrentVideoContextLookupWithSelection(params, requestTabId);
+  if (!lookup.primaryTextAuthorized || !lookup.primaryTextGuard) {
+    return blockedTimestampJumpResponse(citationId, 'no_context', PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE);
+  }
+  const tabId = lookup.tab?.id ?? 0;
+  const context = lookup.context;
+  if (
+    !lookup.tab?.url
+    || tabId <= 0
+    || !isBilibiliVideoUrl(lookup.tab.url)
+    || context.kind !== 'video'
+  ) {
+    return blockedTimestampJumpResponse(
+      citationId,
+      'no_context',
+      formatTimestampJumpFailureReason('no_context'),
+    );
+  }
+
+  const operationGuard = lookup.primaryTextGuard;
+  let record = getCurrentVideoFullTextQaCitation({
+    requestId,
+    turnId,
+    citationId,
+    sourceIdentityKey: operationGuard.sourceIdentityKey,
+  });
+  if (
+    !record
+    || record.bvid !== context.bvid
+    || record.cid !== context.cid
+    || record.page !== context.currentPart.page
+  ) {
+    return blockedTimestampJumpResponse(
+      citationId,
+      'candidate_not_found',
+      '当前引用已过期，请重新提交问题后再跳转。',
+    );
+  }
+
+  await currentVideoPrimaryTextGuardTestHook('before_timestamp_message');
+  if (!await currentVideoPrimaryTextGuardStillAuthorized(lookup)) {
+    return blockedTimestampJumpResponse(citationId, 'no_context', PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE);
+  }
+  record = getCurrentVideoFullTextQaCitation({
+    requestId,
+    turnId,
+    citationId,
+    sourceIdentityKey: operationGuard.sourceIdentityKey,
+  });
+  if (
+    !record
+    || record.bvid !== context.bvid
+    || record.cid !== context.cid
+    || record.page !== context.currentPart.page
+  ) {
+    return blockedTimestampJumpResponse(
+      citationId,
+      'candidate_not_found',
+      '当前引用已过期，请重新提交问题后再跳转。',
+    );
+  }
+  const operationLeaseId = issueCurrentVideoTimestampOperationLease({
+    tabId,
+    operationKind: 'jump',
+    bvid: operationGuard.bvid,
+    cid: operationGuard.cid,
+    page: operationGuard.page,
+    sourceIdentityKey: operationGuard.sourceIdentityKey,
+    selectionGeneration: operationGuard.selectionGeneration,
+    transcriptClearGeneration: operationGuard.transcriptClearGeneration,
+  });
+
+  try {
+    return await chrome.tabs.sendMessage(tabId, {
+      action: 'CURRENT_VIDEO_TIMESTAMP_JUMP',
+      payload: {
+        candidateId: citationId,
+        confirmed: true,
+        contextBvid: context.bvid,
+        contextCid: context.cid,
+        contextPage: context.currentPart.page,
+        contextUrl: context.url,
+        contextCollectedAt: context.collectedAt,
+        targetSeconds: record.citation.startSeconds,
+        targetTimeLabel: formatTimestampLabel(record.citation.startSeconds),
+        sourceLabel: '引用片段',
+        confidence: 1,
+        confidenceLabel: '高',
+        evidencePreview: record.citation.evidenceText,
+        sourceIdentityKey: operationGuard.sourceIdentityKey,
+        operationLeaseId,
+        returnAuthorizationKind: 'primary_text',
+      },
+    }) as CurrentVideoTimestampJumpResponse;
+  } catch {
+    return blockedTimestampJumpResponse(
+      citationId,
       'player_unavailable',
       formatTimestampJumpFailureReason('player_unavailable'),
     );
@@ -2501,6 +2763,11 @@ function timestampOperationKind(value: unknown): CurrentVideoTimestampOperationK
 
 function optionalStringParam(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function optionalPositiveIntegerParam(value: unknown): number | undefined {
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric > 0 ? numeric : undefined;
 }
 
 function normalizeAiConfigParam(value: unknown): UserConfig['ai'] {

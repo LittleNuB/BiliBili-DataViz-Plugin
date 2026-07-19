@@ -14,6 +14,7 @@ import type {
   CurrentVideoTimestampReturnResponse,
 } from '../src/shared/types/current-video-segment-retrieval.ts';
 import type { CurrentVideoSummaryHighlightsResult } from '../src/shared/types/current-video-summary.ts';
+import type { CurrentVideoFullTextQaResult } from '../src/shared/types/current-video-full-text-qa.ts';
 import type { CurrentVideoSubtitleViewSourcesResult } from '../src/shared/current-video-subtitle-view.ts';
 import type { VideoKnowledgeResult } from '../src/shared/types/video-knowledge.ts';
 import {
@@ -513,6 +514,281 @@ test('background full-text handlers fail closed when the readiness marker is mis
   const sourceAfter = await transcriptSource(evidence.sourceRecord.identityKey);
   assert.equal(sourceAfter?.lastAccessedAt, sourceBefore?.lastAccessedAt);
   assert.equal(storageReadCount('userConfig'), 0);
+});
+
+test('handler full-text QA sends every authorized line and explicit cancellation aborts the matching attempt', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_625;
+  const context = handlerVideoContext('BV1HandlerFullQa', 4825);
+  const evidence = normalizeBilibiliTranscriptEvidence(
+    {
+      body: [
+        { from: 2, to: 7, content: '第一行说明当前视频的问题背景。' },
+        { from: 7, to: 12, content: '第二行给出当前视频的方法。' },
+      ],
+    },
+    {
+      bvid: context.bvid,
+      cid: context.cid as number,
+      page: context.currentPart.page,
+      language: 'zh-CN',
+      sourceType: 'bilibili_player_wbi_v2',
+      trackId: 'handler-full-qa',
+      trackUrlHost: 'aisubtitle.hdslb.com',
+      fetchedAt: 12_500,
+    },
+  );
+  const owner = retainTemporaryTranscriptOwnerForContextSnapshot(context, tabId);
+  assert.ok(owner);
+  await upsertCurrentVideoTranscriptEvidence(evidence, { temporaryOwner: owner });
+  const sourceIdentityKey = evidence.sourceRecord.sourceIdentityKey!;
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 8_825 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+  await sendRequest<void>({
+    action: 'UPDATE_CONFIG',
+    params: {
+      ai: {
+        baseURL: 'https://example.invalid',
+        apiKey: 'handler-test-key',
+        chatModel: 'handler-test-model',
+      },
+      assistant: { currentVideoAiAssistantEnabled: true },
+    },
+  }, tabId, context.url);
+
+  const originalFetch = globalThis.fetch;
+  try {
+    let outboundPayload: { textLines?: unknown[]; question?: string } | null = null;
+    globalThis.fetch = (async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      outboundPayload = JSON.parse(body.messages[1]!.content) as typeof outboundPayload;
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({
+          supported: true,
+          answerPoints: [{
+            text: '作者先说明问题背景，再给出处理方法。',
+            evidenceLineNumbers: [1, 2],
+          }],
+          citations: [{ evidenceLineNumbers: [1, 2] }],
+        }) } }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+
+    const answered = await sendRequest<CurrentVideoFullTextQaResult>({
+      action: 'ASK_CURRENT_VIDEO_FULL_TEXT' as BiliVizRequest['action'],
+      params: {
+        requestId: 'handler-full-qa-request',
+        turnId: 'handler-full-qa-turn',
+        question: '作者提出了什么方法？',
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+
+    assert.equal(answered.success, true);
+    assert.equal(answered.data?.status, 'ready');
+    assert.equal(answered.data?.requestId, 'handler-full-qa-request');
+    assert.equal(answered.data?.turnId, 'handler-full-qa-turn');
+    assert.equal(outboundPayload?.question, '作者提出了什么方法？');
+    assert.equal(outboundPayload?.textLines?.length, 2);
+    assert.equal(answered.data?.citations[0]?.evidenceText, '第一行说明当前视频的问题背景。 第二行给出当前视频的方法。');
+
+    let markFetchStarted!: () => void;
+    let rejectFetch!: (error: Error) => void;
+    let outboundSignal: AbortSignal | null = null;
+    const fetchStarted = new Promise<void>(resolve => { markFetchStarted = resolve; });
+    globalThis.fetch = ((_input, init) => {
+      outboundSignal = init?.signal as AbortSignal | null;
+      markFetchStarted();
+      return new Promise<Response>((_resolve, reject) => {
+        rejectFetch = reject;
+        outboundSignal?.addEventListener('abort', () => reject(new Error('MOCK_QA_ABORTED')), { once: true });
+      });
+    }) as typeof fetch;
+
+    const pending = sendRequest<CurrentVideoFullTextQaResult>({
+      action: 'ASK_CURRENT_VIDEO_FULL_TEXT' as BiliVizRequest['action'],
+      params: {
+        requestId: 'handler-full-qa-cancel-request',
+        turnId: 'handler-full-qa-cancel-turn',
+        question: '取消这次问题。',
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+    await fetchStarted;
+    await sendRequest<void>({
+      action: 'CANCEL_CURRENT_VIDEO_FULL_TEXT_QA' as BiliVizRequest['action'],
+      params: { requestId: 'handler-full-qa-cancel-request' },
+    }, tabId, context.url);
+    assert.equal(outboundSignal?.aborted, true);
+    rejectFetch(new Error('late duplicate rejection'));
+    const cancelled = await pending;
+    assert.equal(cancelled.success, true);
+    assert.equal(cancelled.data?.status, 'cancelled');
+    assert.equal(cancelled.data?.question, '取消这次问题。');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('handler blocks an old full-text citation when a retry replaces its turn during jump revalidation', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_626;
+  const context = handlerVideoContext('BV1HandlerQaRetryJump', 4826);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'handler-qa-retry-jump',
+    '这一行正文用于验证重试替换后旧引用不能继续跳转。',
+  );
+  const sourceIdentityKey = evidence.sourceRecord.sourceIdentityKey!;
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 8_826 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+  await sendRequest<void>({
+    action: 'UPDATE_CONFIG',
+    params: {
+      ai: {
+        baseURL: 'https://example.invalid',
+        apiKey: 'handler-test-key',
+        chatModel: 'handler-test-model',
+      },
+      assistant: { currentVideoAiAssistantEnabled: true },
+    },
+  }, tabId, context.url);
+
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({
+        supported: true,
+        answerPoints: [{ text: '当前回答有正文支持。', evidenceLineNumbers: [1] }],
+        citations: [{ evidenceLineNumbers: [1] }],
+      }) } }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+
+    const first = await sendRequest<CurrentVideoFullTextQaResult>({
+      action: 'ASK_CURRENT_VIDEO_FULL_TEXT' as BiliVizRequest['action'],
+      params: {
+        requestId: 'handler-qa-jump-old',
+        turnId: 'handler-qa-jump-turn',
+        question: '这段正文说明了什么？',
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+    const citation = first.data?.citations[0];
+    assert.ok(citation);
+
+    let contentMessageCount = 0;
+    setTabMessageHandler(tabId, () => {
+      contentMessageCount += 1;
+      return blockedTimestampJumpMock(citation.id);
+    });
+    installGuardTestHook('before_timestamp_message', async () => {
+      const retry = await sendRequest<CurrentVideoFullTextQaResult>({
+        action: 'ASK_CURRENT_VIDEO_FULL_TEXT' as BiliVizRequest['action'],
+        params: {
+          requestId: 'handler-qa-jump-retry',
+          turnId: 'handler-qa-jump-turn',
+          question: '这段正文说明了什么？',
+          primaryTextSelectionsReady: true,
+          selectedSourceIdentityKey: sourceIdentityKey,
+        },
+      }, tabId, context.url);
+      assert.equal(retry.data?.status, 'ready');
+    });
+
+    const jump = await sendRequest<CurrentVideoTimestampJumpResponse>({
+      action: 'REQUEST_CURRENT_VIDEO_QA_CITATION_JUMP' as BiliVizRequest['action'],
+      params: {
+        ...citation.binding,
+        confirmed: true,
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    }, tabId, context.url);
+
+    assert.equal(jump.success, true);
+    assert.equal(jump.data?.ok, false);
+    assert.match(jump.data?.message ?? '', /引用已过期/);
+    assert.equal(contentMessageCount, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('popup full-text QA revalidates the persisted source immediately before starting the network request', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_627;
+  const context = handlerVideoContext('BV1PopupQaSourceRace', 4827);
+  const evidence = await seedHandlerTranscript(
+    context,
+    tabId,
+    'popup-qa-source-race',
+    '这一行正文不应在来源选择变化后继续发送。',
+  );
+  const sourceIdentityKey = evidence.sourceRecord.sourceIdentityKey!;
+  storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+    [handlerPartKey(context)]: sourceIdentityKey,
+  };
+  setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 8_827 }]);
+  await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+  await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+  await sendRequest<void>({
+    action: 'UPDATE_CONFIG',
+    params: {
+      ai: {
+        baseURL: 'https://example.invalid',
+        apiKey: 'handler-test-key',
+        chatModel: 'handler-test-model',
+      },
+      assistant: { currentVideoAiAssistantEnabled: true },
+    },
+  }, tabId, context.url);
+
+  let fetchCalls = 0;
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error('NETWORK_MUST_NOT_START');
+    }) as typeof fetch;
+    installGuardTestHook('before_full_text_qa_network', async () => {
+      storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+        [handlerPartKey(context)]: 'replacement-source-identity',
+      };
+    });
+
+    const response = await sendPopupRequest<CurrentVideoFullTextQaResult>({
+      action: 'ASK_CURRENT_VIDEO_FULL_TEXT' as BiliVizRequest['action'],
+      params: {
+        requestId: 'popup-source-race-request',
+        turnId: 'popup-source-race-turn',
+        question: '这段正文说明了什么？',
+        primaryTextSelectionsReady: true,
+        selectedSourceIdentityKey: sourceIdentityKey,
+      },
+    });
+
+    assert.equal(response.success, true);
+    assert.equal(response.data?.status, 'cancelled');
+    assert.equal(response.data?.question, '这段正文说明了什么？');
+    assert.equal(fetchCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('UPDATE_CONFIG disables and aborts an in-flight combined generation through handleRequest', async () => {
@@ -2199,6 +2475,7 @@ type GuardTestPhase =
   | 'before_evidence_bind'
   | 'before_segment_body_read'
   | 'after_segment_body_read'
+  | 'before_full_text_qa_network'
   | 'before_timestamp_message';
 
 async function invokeProtectedHandlerAction(
@@ -2436,6 +2713,21 @@ async function sendRequest<T>(
   senderUrl: string,
 ): Promise<BiliVizResponse<T>> {
   return await sendRuntimeMessage<BiliVizResponse<T>>(request, tabId, senderUrl);
+}
+
+async function sendPopupRequest<T>(request: BiliVizRequest): Promise<BiliVizResponse<T>> {
+  const listener = runtimeListeners[0];
+  assert.ok(listener, 'message handler was not registered');
+  return await new Promise<BiliVizResponse<T>>((resolve, reject) => {
+    let settled = false;
+    const keepOpen = listener(request, {}, (response) => {
+      settled = true;
+      resolve(response as BiliVizResponse<T>);
+    });
+    if (keepOpen !== true && !settled) {
+      reject(new Error('Fake popup runtime listener did not respond synchronously or keep the channel open'));
+    }
+  });
 }
 
 async function sendRuntimeMessage<T>(
