@@ -1,5 +1,7 @@
 let activeHistorySyncController: AbortController | null = null;
 let activeHistoryDataOperation: 'sync' | 'clear' | null = null;
+let activeHistoryPlayerEventWrites = 0;
+const historyPlayerEventIdleWaiters = new Set<() => void>();
 
 export function runHistorySyncDataOperation<T>(operation: () => Promise<T>): Promise<T> {
   return runExclusiveHistoryDataOperation('sync', operation);
@@ -7,6 +9,24 @@ export function runHistorySyncDataOperation<T>(operation: () => Promise<T>): Pro
 
 export function runHistoryClearDataOperation<T>(operation: () => Promise<T>): Promise<T> {
   return runExclusiveHistoryDataOperation('clear', operation);
+}
+
+export function runHistoryPlayerEventDataOperation(
+  operation: () => Promise<void>,
+): Promise<boolean> {
+  if (activeHistoryDataOperation === 'clear') return Promise.resolve(false);
+
+  activeHistoryPlayerEventWrites++;
+  return Promise.resolve()
+    .then(operation)
+    .then(() => true)
+    .finally(() => {
+      activeHistoryPlayerEventWrites--;
+      if (activeHistoryPlayerEventWrites === 0) {
+        for (const resolve of historyPlayerEventIdleWaiters) resolve();
+        historyPlayerEventIdleWaiters.clear();
+      }
+    });
 }
 
 export function hasActiveHistoryDataOperation(): boolean {
@@ -43,11 +63,19 @@ function runExclusiveHistoryDataOperation<T>(
   }
   activeHistoryDataOperation = kind;
   return Promise.resolve()
-    .then(operation)
+    .then(async () => {
+      if (kind === 'clear') await waitForHistoryPlayerEventWrites();
+      return operation();
+    })
     .finally(() => {
       if (activeHistoryDataOperation === kind) {
         activeHistoryDataOperation = null;
       }
     });
+}
+
+function waitForHistoryPlayerEventWrites(): Promise<void> {
+  if (activeHistoryPlayerEventWrites === 0) return Promise.resolve();
+  return new Promise(resolve => historyPlayerEventIdleWaiters.add(resolve));
 }
 

@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   hasActiveHistoryDataOperation,
   runHistoryClearDataOperation,
+  runHistoryPlayerEventDataOperation,
   runHistorySyncDataOperation,
 } from '../src/background/sync/sync-control.ts';
 
@@ -68,6 +69,48 @@ test('history data operation gate is released after a failed operation', async (
   );
   await runHistoryClearDataOperation(async () => undefined);
   assert.equal(hasActiveHistoryDataOperation(), false);
+});
+
+test('history clear waits for a player event write that already started', async () => {
+  const eventStarted = deferred<void>();
+  const releaseEvent = deferred<void>();
+  const eventWrite = runHistoryPlayerEventDataOperation(async () => {
+    eventStarted.resolve();
+    await releaseEvent.promise;
+  });
+  await eventStarted.promise;
+
+  let clearRan = false;
+  const clearing = runHistoryClearDataOperation(async () => {
+    clearRan = true;
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(clearRan, false);
+
+  releaseEvent.resolve();
+  assert.equal(await eventWrite, true);
+  await clearing;
+  assert.equal(clearRan, true);
+});
+
+test('player event writes are suppressed for the full history clear window', async () => {
+  const clearStarted = deferred<void>();
+  const releaseClear = deferred<void>();
+  const clearing = runHistoryClearDataOperation(async () => {
+    clearStarted.resolve();
+    await releaseClear.promise;
+  });
+  await clearStarted.promise;
+
+  let eventRan = false;
+  const written = await runHistoryPlayerEventDataOperation(async () => {
+    eventRan = true;
+  });
+  assert.equal(written, false);
+  assert.equal(eventRan, false);
+
+  releaseClear.resolve();
+  await clearing;
 });
 
 function deferred<T>() {

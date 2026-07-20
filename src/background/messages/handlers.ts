@@ -142,6 +142,7 @@ import {
   abortCurrentHistorySync,
   hasActiveHistoryDataOperation,
   hasActiveHistorySyncAbortScope,
+  runHistoryPlayerEventDataOperation,
 } from '../sync/sync-control';
 import { syncFavorites } from '../favorites/sync';
 import { probeFavoriteFolderGap } from '../favorites/folder-gap-probe';
@@ -397,34 +398,38 @@ async function handleContentMessage(
     }
     case 'PLAYER_HEARTBEAT': {
       const p = msg.payload as PlayerHeartbeatPayload;
-      await db.playerEvents.add({
-        bvid: p.bvid,
-        cid: p.cid,
-        eventType: 'heartbeat',
-        timestamp: Date.now(),
-        currentTime: p.currentTime,
-        duration: p.duration,
-        playbackRate: p.playbackRate ?? 1,
-        tabId,
+      await runHistoryPlayerEventDataOperation(async () => {
+        await db.playerEvents.add({
+          bvid: p.bvid,
+          cid: p.cid,
+          eventType: 'heartbeat',
+          timestamp: Date.now(),
+          currentTime: p.currentTime,
+          duration: p.duration,
+          playbackRate: p.playbackRate ?? 1,
+          tabId,
+        });
+        await markConsumedFromPlayerEvent(p);
       });
-      await markConsumedFromPlayerEvent(p);
       break;
     }
     case 'PLAYER_ACTION': {
       const p = msg.payload as PlayerActionPayload;
-      await db.playerEvents.add({
-        bvid: p.bvid,
-        cid: p.cid,
-        eventType: p.action,
-        timestamp: Date.now(),
-        currentTime: p.currentTime,
-        duration: p.duration,
-        playbackRate: p.playbackRate ?? 1,
-        seekFrom: p.seekFrom,
-        seekTo: p.seekTo,
-        tabId,
+      await runHistoryPlayerEventDataOperation(async () => {
+        await db.playerEvents.add({
+          bvid: p.bvid,
+          cid: p.cid,
+          eventType: p.action,
+          timestamp: Date.now(),
+          currentTime: p.currentTime,
+          duration: p.duration,
+          playbackRate: p.playbackRate ?? 1,
+          seekFrom: p.seekFrom,
+          seekTo: p.seekTo,
+          tabId,
+        });
+        await markConsumedFromPlayerEvent(p);
       });
-      await markConsumedFromPlayerEvent(p);
       break;
     }
     case 'PAGE_NAVIGATION':

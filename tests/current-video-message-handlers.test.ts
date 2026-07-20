@@ -44,6 +44,11 @@ const storageValues: Record<string, unknown> = {};
 const storageGetCounts = new Map<string, number>();
 let rejectPrimaryTextSelectionStorageReads = false;
 let primaryTextSelectionStorageGetGate: Promise<void> | null = null;
+let storageRemoveGate: {
+  key: string;
+  reached: () => void;
+  release: Promise<void>;
+} | null = null;
 
 installChromeFake();
 const {
@@ -850,6 +855,77 @@ test('handler clear paths prevent a preflight request from restoring QA sessions
         await db.currentVideoQaSessions.clear();
       }
     });
+  }
+});
+
+test('clear all suppresses a heartbeat after history readback while later categories are clearing', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  await Promise.all([
+    db.watchHistory.clear(),
+    db.playerEvents.clear(),
+    db.dailyAggregates.clear(),
+    db.favoriteFolders.clear(),
+  ]);
+  await db.playerEvents.add({
+    bvid: 'BV1BeforeClearHeartbeat',
+    cid: 7_301,
+    eventType: 'heartbeat',
+    timestamp: 1,
+    currentTime: 30,
+    duration: 120,
+    playbackRate: 1,
+    tabId: 18_650,
+  });
+  await db.favoriteFolders.add({
+    mediaId: 7_301,
+    title: '清理顺序测试收藏夹',
+    mediaCount: 0,
+    syncedAt: 1,
+  });
+
+  const laterCategoryReached = deferred<void>();
+  const releaseLaterCategory = deferred<void>();
+  storageRemoveGate = {
+    key: 'dynamicBillSyncState',
+    reached: () => laterCategoryReached.resolve(),
+    release: releaseLaterCategory.promise,
+  };
+
+  const tabId = 18_650;
+  const senderUrl = 'https://www.bilibili.com/video/BV1DuringClearHeartbeat';
+  const clearing = sendRequest<{ status: string }>({
+    action: 'CLEAR_ALL_LOCAL_DATA',
+    params: { confirmation: '清理本地数据' },
+  }, tabId, senderUrl);
+
+  try {
+    await laterCategoryReached.promise;
+    assert.equal(await db.favoriteFolders.count(), 0);
+    assert.equal(await db.playerEvents.count(), 0);
+
+    const heartbeat = await sendContentMessage({
+      action: 'PLAYER_HEARTBEAT',
+      payload: {
+        bvid: 'BV1DuringClearHeartbeat',
+        cid: 7_302,
+        currentTime: 45,
+        duration: 120,
+        playbackRate: 1,
+      },
+    }, tabId, senderUrl);
+    assert.equal(heartbeat.success, true);
+    assert.equal(await db.playerEvents.count(), 0);
+
+    releaseLaterCategory.resolve();
+    const clearResult = await clearing;
+    assert.equal(clearResult.success, true);
+    assert.equal(clearResult.data?.status, 'completed');
+    assert.equal(await db.playerEvents.count(), 0);
+  } finally {
+    releaseLaterCategory.resolve();
+    storageRemoveGate = null;
+    await clearing.catch(() => undefined);
   }
 });
 
@@ -3186,11 +3262,16 @@ function installChromeFake(): void {
           Object.assign(storageValues, values);
           return Promise.resolve();
         },
-        remove(keys: string | string[]) {
-          for (const key of Array.isArray(keys) ? keys : [keys]) {
+        async remove(keys: string | string[]) {
+          const normalizedKeys = Array.isArray(keys) ? keys : [keys];
+          const gate = storageRemoveGate;
+          if (gate && normalizedKeys.includes(gate.key)) {
+            gate.reached();
+            await gate.release;
+          }
+          for (const key of normalizedKeys) {
             delete storageValues[key];
           }
-          return Promise.resolve();
         },
         clear() {
           for (const key of Object.keys(storageValues)) {
@@ -3215,6 +3296,7 @@ function resetChromeHarness(): void {
   storageGetCounts.clear();
   rejectPrimaryTextSelectionStorageReads = false;
   primaryTextSelectionStorageGetGate = null;
+  storageRemoveGate = null;
 }
 
 function setTabs(nextTabs: FakeTab[]): void {
@@ -3325,6 +3407,16 @@ function readsStorageKey(
   if (Array.isArray(keys)) return keys.includes(expectedKey);
   if (keys && typeof keys === 'object') return expectedKey in keys;
   return true;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function qaSessionNearByteLimit(sessionId: string): CurrentVideoQaSessionRecord {
