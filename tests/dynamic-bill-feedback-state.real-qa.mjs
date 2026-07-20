@@ -643,11 +643,24 @@ function fixtureScript() {
 
   function localDataSummary(state) {
     const now = Date.now();
+    const dynamicBillCount = state.item ? 1 : 0;
     return {
       checkedAt: now,
+      categories: [
+        { id: 'history', label: '观看历史', count: 0, usageBytes: 0 },
+        { id: 'favorites', label: '收藏与智能索引', count: 0, usageBytes: 0 },
+        { id: 'currentVideoSubtitles', label: 'B站字幕正文', count: 0, usageBytes: 0 },
+        { id: 'currentVideoSummaryHighlights', label: '摘要与亮点', count: 0, usageBytes: 0 },
+        { id: 'currentVideoQaSessions', label: '问答会话', count: 0, usageBytes: 0 },
+        { id: 'dynamicBill', label: '动态账单', count: dynamicBillCount, usageBytes: 256 },
+        { id: 'blindBoxDrawHistory', label: '盲盒抽取记录', count: 0, usageBytes: 0 },
+        { id: 'localSettings', label: '本地 AI 设置', count: 1, usageBytes: 128 },
+      ],
       history: { totalRecords: 0, oldestViewAt: null, newestViewAt: null, lastSyncedAt: null, syncing: false, backfillComplete: false },
       favorites: { folderCount: 0, reportedItems: 0, storedItems: 0, indexedItems: 0, failedIndexItems: 0, pendingIndexItems: 0, incompleteFolders: 0, syncComplete: true, lastSyncedAt: null, lastIndexedAt: null },
-      currentVideoSubtitles: { sourceCount: 0, segmentCount: 0, staleSegmentCount: 0, cachedVideoCount: 0, lastUpdatedAt: null },
+      currentVideoSubtitles: { sourceCount: 0, sourceIdentityCount: 0, segmentCount: 0, staleSegmentCount: 0, cachedVideoCount: 0, usageBytes: 0, lastUpdatedAt: null },
+      currentVideoSummaryHighlights: { cachedPartCount: 0, usageBytes: 0, latestGeneratedAt: null },
+      currentVideoQaSessions: { sessionCount: 0, usageBytes: 0, latestUsedAt: null },
       dynamicBill: {
         activeFollowedCreatorCount: 1,
         followedVideoUpdateCount: 1,
@@ -667,6 +680,7 @@ function fixtureScript() {
         lastSyncedAt: now,
         syncStatus: 'success',
       },
+      blindBoxDrawHistory: { recentDrawCount: 0, maxRecentDraws: 50, usageBytes: 0, lastUpdatedAt: null },
     };
   }
 
@@ -769,6 +783,9 @@ function fixtureScript() {
         break;
       case 'GET_CONFIG':
         data = config;
+        break;
+      case 'GET_CONFIG_SNAPSHOT':
+        data = { config, revision: 'qa-config-revision' };
         break;
       case 'GET_DYNAMIC_BILL_OVERVIEW':
         data = {
