@@ -162,7 +162,7 @@ export async function getActiveDynamicBillCreatorPauses(now = Date.now()): Promi
   await ensureDynamicBill013Migration();
   await finalizeExpiredDynamicBillFeedbackActions(now);
   await db.dynamicBillCreatorPauses.where('expiresAt').belowOrEqual(now).delete();
-  return db.dynamicBillCreatorPauses.where('expiresAt').above(now).toArray();
+  return readActiveDynamicBillCreatorPauses(now);
 }
 
 export async function getDynamicBillActiveCreatorPauseViews(now = Date.now()): Promise<DynamicBillCreatorPauseView[]> {
@@ -546,7 +546,6 @@ export async function getDynamicBillItems(options: {
   status?: DynamicBillStatus;
 } = {}): Promise<DynamicBillItem[]> {
   await ensureDynamicBill013Migration();
-  await finalizeExpiredDynamicBillFeedbackActions();
   let items = options.column
     ? await db.dynamicBillItems.where('column').equals(options.column).toArray()
     : await db.dynamicBillItems.toArray();
@@ -822,7 +821,10 @@ export function getDynamicBillLocalDataCategoryRegistration(): LocalDataCategory
 
 export async function getDynamicBillLocalDataPrivacySummary(): Promise<LocalDataPrivacySummary['dynamicBill']> {
   await ensureDynamicBill013Migration();
-  const activeCreatorPauses = await getDynamicBillActiveCreatorPauseViews();
+  const now = Date.now();
+  const activeCreatorPauses = (await readActiveDynamicBillCreatorPauses(now))
+    .sort((a, b) => a.expiresAt - b.expiresAt || a.creatorMid - b.creatorMid)
+    .map(pause => toCreatorPauseView(pause, now));
   const [
     creators,
     updatesCount,
@@ -1051,14 +1053,12 @@ export async function getDynamicSyncState(): Promise<DynamicSyncState> {
     ...(result[DYNAMIC_SYNC_STATE_KEY] ?? {}),
   };
   if (isStaleSyncState(state)) {
-    const failedState: DynamicSyncState = {
+    return {
       ...state,
       status: 'failed',
       lastFinishedAt: Date.now(),
       lastError: 'SYNC_STALE_TIMEOUT',
     };
-    await setDynamicSyncState(failedState);
-    return failedState;
   }
   return state;
 }
@@ -1072,6 +1072,13 @@ function isStaleSyncState(state: DynamicSyncState): boolean {
   return state.status === 'syncing'
     && state.lastStartedAt > 0
     && Date.now() - state.lastStartedAt > DYNAMIC_SYNC_STALE_TIMEOUT_MS;
+}
+
+async function readActiveDynamicBillCreatorPauses(
+  now: number,
+): Promise<DynamicBillCreatorPauseRecord[]> {
+  await ensureDynamicBill013Migration();
+  return db.dynamicBillCreatorPauses.where('expiresAt').above(now).toArray();
 }
 
 async function finalizeDynamicBillFeedbackAction(

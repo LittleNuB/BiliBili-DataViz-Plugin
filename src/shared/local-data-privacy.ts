@@ -81,9 +81,11 @@ export function buildLocalDataSummaryCards(summary: LocalDataPrivacySummary): Lo
       detail: summary.history.totalRecords > 0
         ? `覆盖 ${formatLocalDate(summary.history.oldestViewAt, 'seconds')} 至 ${formatLocalDate(summary.history.newestViewAt, 'seconds')}`
         : '还没有本地观看记录。',
-      meta: summary.history.syncing
-        ? `正在同步观看历史；占用 ${formatBytes(historyUsage?.usageBytes ?? 0)}`
-        : `占用 ${formatBytes(historyUsage?.usageBytes ?? 0)}；最近同步：${formatLocalDate(summary.history.lastSyncedAt, 'milliseconds')}`,
+      meta: [
+        `占用 ${formatBytes(historyUsage?.usageBytes ?? 0)}`,
+        `最近同步：${formatLocalDate(summary.history.lastSyncedAt, 'milliseconds')}`,
+        summary.history.syncing ? '正在同步观看历史' : '',
+      ].filter(Boolean).join('；'),
     },
     {
       id: 'favorites',

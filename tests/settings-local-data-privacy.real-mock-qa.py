@@ -154,6 +154,7 @@ def run_browser_qa() -> None:
             exported = json.dumps(diagnostic, ensure_ascii=False)
             assert_no_forbidden_text(exported, FORBIDDEN_EXPORT_TERMS, "diagnostic export")
 
+            assert_history_syncing_keeps_recent_time(page)
             assert_independent_category_clears(page)
             assert_metadata_only_category_clears(page)
             assert_clear_all_success(page)
@@ -268,6 +269,19 @@ def assert_independent_category_clears(page: Page) -> None:
             raise AssertionError(f"Production Settings did not request clear for {category_id}")
 
     expect(cards.filter(has_text="盲盒抽取记录").first.get_by_text("3 条")).to_be_visible()
+
+
+def assert_history_syncing_keeps_recent_time(page: Page) -> None:
+    page.evaluate("window.__BiliBillSettingsRealMockQa.reset({historySyncing: true})")
+    page.reload(wait_until="networkidle")
+    wait_for_settings(page)
+    history_card = page.locator(".settings-data-card").filter(has_text="观看历史").first
+    expect(history_card.locator("small")).to_contain_text("最近同步：")
+    expect(history_card.locator("small")).to_contain_text("正在同步观看历史")
+
+    page.evaluate("window.__BiliBillSettingsRealMockQa.reset()")
+    page.reload(wait_until="networkidle")
+    wait_for_settings(page)
 
 
 def assert_paused_creator_restore(page: Page) -> None:
@@ -550,6 +564,7 @@ CHROME_MOCK_SCRIPT = r"""
       failSummaryAfterClearAll: false,
       failNextSummary: false,
       metadataOnlyCategories: false,
+      historySyncing: false,
     };
   }
 
@@ -596,7 +611,7 @@ CHROME_MOCK_SCRIPT = r"""
         oldestViewAt: 1700000000,
         newestViewAt: 1718000000,
         lastSyncedAt: FIXED_NOW,
-        syncing: false,
+        syncing: state.historySyncing === true,
         backfillComplete: true,
       },
       favorites: {

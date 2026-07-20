@@ -26,6 +26,7 @@ import {
 } from './sync-control';
 import { abortableDelay } from '../utils/abortable-delay';
 import { markDynamicBillItemsConsumedByHistoryRecords } from '../storage/dynamic-bill-repo';
+import { runDynamicBillDataOperation } from '../dynamic-bill/operation-control';
 import { executeHistorySync } from './history-sync-executor';
 
 export interface BackfillResult extends Omit<HistorySyncProgress, 'syncing' | 'startedAt' | 'updatedAt'> {}
@@ -101,7 +102,9 @@ async function runHistorySyncUnlocked(
       updateDeviceTypes: updateDeviceTypesFromHistory,
       fetchVideoInfo: batchFetchVideoInfo,
       insertRecords: bulkInsert,
-      afterInsert: markDynamicBillItemsConsumedByHistoryRecords,
+      afterInsert: records => runDynamicBillDataOperation(
+        () => markDynamicBillItemsConsumedByHistoryRecords(records),
+      ),
       writeProgress,
       delay: abortableDelay,
     },

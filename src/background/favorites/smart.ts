@@ -7,10 +7,13 @@ import type {
   SmartFavoriteTreeNode,
   SmartIndexResult,
 } from '../../shared/types/favorite';
+import type { SmartFavoriteIndexRebuildResult } from '../../shared/types/local-data-privacy';
 import { normalizeFavoriteFoldersWithDiagnostics } from '../../shared/favorite-sync-diagnostics.ts';
 import { summarizeSmartFavoriteIndexCoverage } from '../../shared/smart-favorite-coverage.ts';
 import { loadConfig } from '../storage/config-store.ts';
 import {
+  clearSmartFavoriteIndex,
+  countFavoriteItems,
   getFavoriteFolders,
   getFavoriteItems,
   getSmartFavoriteIndexMap,
@@ -23,6 +26,7 @@ import {
   expandFavoriteSearchTerms,
   UNCATEGORIZED_PATH,
 } from './taxonomy.ts';
+import { runFavoriteDataOperation } from './operation-control.ts';
 
 interface AiFavoriteIndexResponse {
   path?: unknown;
@@ -61,10 +65,20 @@ export interface SmartFavoriteIndexOptions {
   failedOnly?: boolean;
 }
 
-export async function buildSmartFavoriteIndex(
+export function buildSmartFavoriteIndex(
   maxItems = DEFAULT_INDEX_LIMIT,
   options: SmartFavoriteIndexOptions = {},
   deps: SmartFavoriteIndexDeps = defaultSmartFavoriteIndexDeps,
+): Promise<SmartIndexResult> {
+  return runFavoriteDataOperation(
+    () => buildSmartFavoriteIndexExclusive(maxItems, options, deps),
+  );
+}
+
+async function buildSmartFavoriteIndexExclusive(
+  maxItems: number,
+  options: SmartFavoriteIndexOptions,
+  deps: SmartFavoriteIndexDeps,
 ): Promise<SmartIndexResult> {
   const config = await deps.loadConfig();
   const items = await deps.getFavoriteItems();
@@ -141,6 +155,43 @@ export async function buildSmartFavoriteIndex(
   }
 
   return result;
+}
+
+export function rebuildSmartFavoriteIndex(
+  batchSize: number,
+): Promise<SmartFavoriteIndexRebuildResult> {
+  const effectiveBatchSize = Number.isFinite(batchSize)
+    ? Math.max(1, Math.min(Math.floor(batchSize), 100))
+    : 25;
+  return runFavoriteDataOperation(async () => {
+    const totalItems = await countFavoriteItems();
+    const clearedIndexes = await clearSmartFavoriteIndex();
+    const result: SmartIndexResult = {
+      processed: 0,
+      indexed: 0,
+      failed: 0,
+      skipped: 0,
+      notes: [],
+    };
+    let guard = Math.ceil(totalItems / effectiveBatchSize) + 2;
+
+    while (result.processed < totalItems && guard-- > 0) {
+      const batch = await buildSmartFavoriteIndexExclusive(
+        effectiveBatchSize,
+        { includeFailed: false },
+        defaultSmartFavoriteIndexDeps,
+      );
+      mergeSmartIndexResult(result, batch);
+      if (batch.processed === 0) break;
+    }
+
+    return {
+      totalItems,
+      clearedIndexes,
+      ...result,
+      completedAt: Date.now(),
+    };
+  });
 }
 
 function shouldProcessCandidate(
@@ -257,6 +308,14 @@ function mergeNotes(target: string[], incoming: string[]): void {
       target.push(note);
     }
   }
+}
+
+function mergeSmartIndexResult(target: SmartIndexResult, batch: SmartIndexResult): void {
+  target.processed += batch.processed;
+  target.indexed += batch.indexed;
+  target.failed += batch.failed;
+  target.skipped += batch.skipped;
+  mergeNotes(target.notes, batch.notes);
 }
 
 async function rewriteQuery(

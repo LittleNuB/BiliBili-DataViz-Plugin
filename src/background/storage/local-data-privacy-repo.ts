@@ -13,6 +13,7 @@ import type {
 } from '../../shared/types/local-data-privacy.ts';
 import { ensureDynamicBill013Migration } from '../dynamic-bill/migration.ts';
 import { runDynamicBillDataOperation } from '../dynamic-bill/operation-control.ts';
+import { runFavoriteDataOperation } from '../favorites/operation-control.ts';
 import { runHistoryClearDataOperation } from '../sync/sync-control.ts';
 import {
   beginCurrentVideoTranscriptClearWindow,
@@ -87,18 +88,7 @@ export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySumm
 export async function clearLocalDataCategory(
   id: IndependentlyClearableLocalDataCategoryId,
 ): Promise<LocalDataOperationResult> {
-  const run = async (): Promise<LocalDataOperationResult> => {
-    const category = getRegisteredLocalDataCategory(id);
-    if (!category) throw new Error('LOCAL_DATA_CATEGORY_NOT_FOUND');
-    const lifecycle = await runLocalDataCategoryLifecycle(category);
-    return {
-      operation: 'clear_local_data_category',
-      status: lifecycle.status === 'failure' ? 'partial_failure' : 'completed',
-      completedAt: Date.now(),
-      cleared: mergeClearedCounts([lifecycle]),
-      categoryResults: summarizeLifecycleResults([lifecycle]),
-    };
-  };
+  const run = () => clearLocalDataCategoryExclusive(id);
 
   if (id === 'history') {
     return runHistoryClearDataOperation(async () => {
@@ -106,6 +96,7 @@ export async function clearLocalDataCategory(
       return run();
     });
   }
+  if (id === 'favorites') return runFavoriteDataOperation(run);
   if (id === 'dynamicBill') return runDynamicBillDataOperation(run);
   return run();
 }
@@ -125,16 +116,18 @@ export async function clearCurrentVideoSummaryHighlightCache(): Promise<LocalDat
 }
 
 export async function clearDynamicBillLocalData(): Promise<LocalDataOperationResult> {
-  await ensureDynamicBill013Migration();
-  const result = await clearLocalDataCategory('dynamicBill');
-  if (result.status === 'partial_failure') {
-    throw new Error(DYNAMIC_BILL_LOCAL_DATA_CLEAR_FAILED_MESSAGE);
-  }
+  return runDynamicBillDataOperation(async () => {
+    await ensureDynamicBill013Migration();
+    const result = await clearLocalDataCategoryExclusive('dynamicBill');
+    if (result.status === 'partial_failure') {
+      throw new Error(DYNAMIC_BILL_LOCAL_DATA_CLEAR_FAILED_MESSAGE);
+    }
 
-  return {
-    ...result,
-    operation: 'clear_dynamic_bill_data',
-  };
+    return {
+      ...result,
+      operation: 'clear_dynamic_bill_data',
+    };
+  });
 }
 
 export function clearAllLocalData(confirmation: unknown): Promise<LocalDataOperationResult> {
@@ -142,7 +135,9 @@ export function clearAllLocalData(confirmation: unknown): Promise<LocalDataOpera
     return Promise.reject(new Error('LOCAL_DATA_CLEAR_CONFIRMATION_REQUIRED'));
   }
   return runHistoryClearDataOperation(
-    () => runDynamicBillDataOperation(clearAllLocalDataExclusive),
+    () => runFavoriteDataOperation(
+      () => runDynamicBillDataOperation(clearAllLocalDataExclusive),
+    ),
   );
 }
 
@@ -176,6 +171,21 @@ async function clearAllLocalDataExclusive(): Promise<LocalDataOperationResult> {
     endTranscriptClearWindow();
     endPrimaryTextClearWindow();
   }
+}
+
+async function clearLocalDataCategoryExclusive(
+  id: IndependentlyClearableLocalDataCategoryId,
+): Promise<LocalDataOperationResult> {
+  const category = getRegisteredLocalDataCategory(id);
+  if (!category) throw new Error('LOCAL_DATA_CATEGORY_NOT_FOUND');
+  const lifecycle = await runLocalDataCategoryLifecycle(category);
+  return {
+    operation: 'clear_local_data_category',
+    status: lifecycle.status === 'failure' ? 'partial_failure' : 'completed',
+    completedAt: Date.now(),
+    cleared: mergeClearedCounts([lifecycle]),
+    categoryResults: summarizeLifecycleResults([lifecycle]),
+  };
 }
 
 async function summarizeRegisteredCategories(): Promise<LocalDataPrivacySummary['categories']> {

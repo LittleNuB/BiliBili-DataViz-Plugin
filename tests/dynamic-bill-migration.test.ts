@@ -58,6 +58,7 @@ const sideEffects = {
   storageClear: 0,
 };
 let afterStorageRemove: (() => Promise<void>) | null = null;
+let beforeStorageSet: ((values: Record<string, unknown>) => Promise<void>) | null = null;
 let afterStorageSet: ((values: Record<string, unknown>) => Promise<void>) | null = null;
 let fetchHandler: ((...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>) | null = null;
 
@@ -88,6 +89,7 @@ Object.defineProperty(globalThis, 'chrome', {
         },
         async set(values: Record<string, unknown>) {
           sideEffects.storageSet++;
+          await beforeStorageSet?.(values);
           for (const [key, value] of Object.entries(values)) storageData.set(key, value);
           await afterStorageSet?.(values);
         },
@@ -119,6 +121,7 @@ test.beforeEach(async () => {
   await Dexie.delete(DB_NAME);
   storageData.clear();
   afterStorageRemove = null;
+  beforeStorageSet = null;
   afterStorageSet = null;
   fetchHandler = null;
   resetSideEffects();
@@ -1049,6 +1052,73 @@ test('dynamic bill clear waits for an in-flight generation and removes its gener
   assert.equal(summary.lastGeneratedAt, null);
   assert.equal(await db.dynamicBillItems.count(), 0);
   assert.equal(storageData.has('dynamicBillLastGeneratedAt'), false);
+});
+
+test('dynamic bill clear waits for a message filter write and removes the delayed preference', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const filterWriteReached = deferred<void>();
+  const releaseFilterWrite = deferred<void>();
+  const clearStorageReached = deferred<void>();
+  beforeStorageSet = async values => {
+    if (!Object.hasOwn(values, 'dynamicBillFilterPreference')) return;
+    filterWriteReached.resolve(undefined);
+    await releaseFilterWrite.promise;
+  };
+  afterStorageRemove = async () => {
+    clearStorageReached.resolve(undefined);
+  };
+  const { handleRequest } = await import('../src/background/messages/handlers.ts');
+
+  const filterWrite = handleRequest({
+    action: 'UPDATE_DYNAMIC_BILL_FILTER',
+    params: { status: 'processed' },
+  });
+  await filterWriteReached.promise;
+  let clearSettled = false;
+  const clearing = localDataRepo.clearLocalDataCategory('dynamicBill').finally(() => {
+    clearSettled = true;
+  });
+  const clearReachedBeforeWriteFinished = await Promise.race([
+    clearStorageReached.promise.then(() => true),
+    new Promise<false>(resolve => setTimeout(() => resolve(false), 25)),
+  ]);
+  assert.equal(clearReachedBeforeWriteFinished, false);
+  assert.equal(clearSettled, false);
+
+  releaseFilterWrite.resolve(undefined);
+  const response = await filterWrite;
+  const clearResult = await clearing;
+  await clearStorageReached.promise;
+
+  assert.equal(response.success, true);
+  assert.equal(clearResult.status, 'completed');
+  assert.deepEqual(await dynamicBillRepo.getDynamicBillFilterPreference(), {
+    status: 'active',
+    updatedAt: 0,
+  });
+  assert.equal(storageData.has('dynamicBillFilterPreference'), false);
+});
+
+test('stale dynamic sync state is reported without a read-time storage write', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const storedState = {
+    status: 'syncing',
+    stage: 'dynamic_feed',
+    lastStartedAt: Date.now() - 10 * 60 * 1000,
+    lastFinishedAt: 0,
+    lastSuccessAt: 0,
+  };
+  storageData.set('dynamicBillSyncState', storedState);
+  resetSideEffects();
+
+  const observed = await dynamicBillRepo.getDynamicSyncState();
+
+  assert.equal(observed.status, 'failed');
+  assert.equal(observed.lastError, 'SYNC_STALE_TIMEOUT');
+  assert.equal(sideEffects.storageSet, 0);
+  assert.deepEqual(storageData.get('dynamicBillSyncState'), storedState);
 });
 
 test('dynamic bill sync does not start until clear readback has released its operation gate', async () => {

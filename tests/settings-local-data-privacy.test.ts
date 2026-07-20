@@ -47,6 +47,7 @@ test('settings cards keep recent sync evidence visible in incomplete states', ()
   const summary = makeSummary();
   summary.favorites.incompleteFolders = 2;
   summary.favorites.syncComplete = false;
+  summary.history.syncing = true;
 
   const cards = buildLocalDataSummaryCards(summary);
   const favorites = cards.find(card => card.id === 'favorites');
@@ -54,6 +55,8 @@ test('settings cards keep recent sync evidence visible in incomplete states', ()
 
   assert.match(favorites?.meta ?? '', /最近同步：/);
   assert.match(favorites?.meta ?? '', /2 个收藏夹可能尚未同步完整/);
+  assert.match(cards.find(card => card.id === 'history')?.meta ?? '', /最近同步：/);
+  assert.match(cards.find(card => card.id === 'history')?.meta ?? '', /正在同步观看历史/);
   assert.match(dynamicBill?.meta ?? '', /最近生成：/);
   assert.match(dynamicBill?.meta ?? '', /最近同步：/);
   assertCleanUserCopy([favorites?.meta ?? '', dynamicBill?.meta ?? ''].join('\n'));
@@ -417,6 +420,8 @@ test('SET-013-B clear-all production path invokes registered category hooks', as
 
   assert.match(source, /runLocalDataCategoryLifecycles\(categories\)/);
   assert.match(source, /summarizeLifecycleResults\(results\)/);
+  assert.match(source, /id === 'favorites'[\s\S]*?runFavoriteDataOperation/);
+  assert.match(source, /runFavoriteDataOperation\([\s\S]*?clearAllLocalDataExclusive/);
   assert.doesNotMatch(source, /db\.transaction\(\s*'rw',\s*db\.tables/);
   assert.doesNotMatch(source, /chrome\.storage\.local\.clear\(\)/);
   assert.doesNotMatch(source, /coordinateBlindBoxDrawHistoryClear/);

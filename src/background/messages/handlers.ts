@@ -34,8 +34,6 @@ import type {
 } from '../../shared/types/current-video-qa-session';
 import type { VideoKnowledgeResult } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
-import type { SmartIndexResult } from '../../shared/types/favorite';
-import type { SmartFavoriteIndexRebuildResult } from '../../shared/types/local-data-privacy';
 import { normalizePageLimit, runInitialBackfill } from '../sync/initial-backfill';
 import { probeHistoryTailCoverage } from '../sync/history-tail-probe';
 import {
@@ -147,11 +145,18 @@ import {
 } from '../sync/sync-control';
 import { syncFavorites } from '../favorites/sync';
 import { probeFavoriteFolderGap } from '../favorites/folder-gap-probe';
-import { buildSmartFavoriteIndex, getSmartFavoriteOverview, getSmartFavoritesByPath, searchSmartFavorites } from '../favorites/smart';
+import {
+  buildSmartFavoriteIndex,
+  getSmartFavoriteOverview,
+  getSmartFavoritesByPath,
+  rebuildSmartFavoriteIndex,
+  searchSmartFavorites,
+} from '../favorites/smart';
 import { answerSmartFavoriteQuestion } from '../favorites/qa';
 import { buildDynamicBillExplanations } from '../dynamic-bill/ai';
 import { generateDynamicBillItems } from '../dynamic-bill/generator';
 import { ensureDynamicBill013Migration } from '../dynamic-bill/migration';
+import { runDynamicBillDataOperation } from '../dynamic-bill/operation-control';
 import { DYNAMIC_BILL_STRATEGY } from '../dynamic-bill/strategy';
 import { getDynamicOverview, syncDynamicBillUpdates } from '../dynamic-bill/sync';
 import {
@@ -162,10 +167,6 @@ import {
   resolveCurrentVideoTabState,
   type CurrentVideoTabSnapshot,
 } from '../current-video-context-resolver';
-import {
-  clearSmartFavoriteIndex,
-  countFavoriteItems,
-} from '../storage/favorite-repo';
 import {
   clearAllLocalData,
   clearLocalDataCategory,
@@ -249,6 +250,29 @@ const DYNAMIC_BILL_MIGRATION_GATED_ACTIONS = new Set<RequestAction>([
   'RESTORE_DYNAMIC_BILL_CREATOR_REMINDER',
   'OPEN_DYNAMIC_BILL_VIDEO',
   'MARK_DYNAMIC_BILL_ITEM_PROCESSED',
+]);
+const DYNAMIC_BILL_DATA_OPERATION_ACTIONS = new Set<RequestAction>([
+  'GET_CREATOR_DATA',
+  'GET_LOCAL_DATA_PRIVACY_SUMMARY',
+  'GET_DYNAMIC_BILL_OVERVIEW',
+  'BUILD_DYNAMIC_BILL_EXPLANATIONS',
+  'GET_DYNAMIC_BILL_ITEMS',
+  'GET_DYNAMIC_BILL_FILTER',
+  'UPDATE_DYNAMIC_BILL_FILTER',
+  'ADD_DYNAMIC_BILL_FEEDBACK',
+  'GET_DYNAMIC_BILL_FEEDBACK_STATE',
+  'APPLY_DYNAMIC_BILL_CREATOR_LESS_REMINDER',
+  'UNDO_DYNAMIC_BILL_CREATOR_LESS_REMINDER',
+  'DISMISS_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT',
+  'OPEN_DYNAMIC_BILL_CREATOR_REVIEW_PROMPT',
+  'GET_DYNAMIC_BILL_ACTIVE_PAUSES',
+  'RESTORE_DYNAMIC_BILL_CREATOR_REMINDER',
+  'OPEN_DYNAMIC_BILL_VIDEO',
+  'MARK_DYNAMIC_BILL_ITEM_PROCESSED',
+]);
+const DYNAMIC_BILL_SELF_GATED_ACTIONS = new Set<RequestAction>([
+  'SYNC_DYNAMIC_UPDATES',
+  'GENERATE_DYNAMIC_BILL',
 ]);
 const currentVideoContexts = new Map<number, CurrentVideoContextResult>();
 const currentVideoSubtitleProbes = new Map<string, CurrentVideoSubtitleSourceState>();
@@ -450,9 +474,25 @@ export async function handleRequest<T>(
   request: BiliVizRequest,
   requestTabId: number | null = null,
 ): Promise<BiliVizResponse<T>> {
+  if (DYNAMIC_BILL_DATA_OPERATION_ACTIONS.has(request.action)) {
+    return runDynamicBillDataOperation(async () => {
+      await ensureDynamicBill013Migration();
+      return handleRequestExclusive<T>(request, requestTabId);
+    });
+  }
+  if (DYNAMIC_BILL_SELF_GATED_ACTIONS.has(request.action)) {
+    return handleRequestExclusive<T>(request, requestTabId);
+  }
   if (DYNAMIC_BILL_MIGRATION_GATED_ACTIONS.has(request.action)) {
     await ensureDynamicBill013Migration();
   }
+  return handleRequestExclusive<T>(request, requestTabId);
+}
+
+async function handleRequestExclusive<T>(
+  request: BiliVizRequest,
+  requestTabId: number | null,
+): Promise<BiliVizResponse<T>> {
   switch (request.action) {
     case 'GET_QUICK_STATS':
       return { success: true, data: await getQuickStats() as T };
@@ -601,8 +641,10 @@ export async function handleRequest<T>(
       }
       return { success: true, data: await clearLocalDataCategory(categoryId) as T };
     }
-    case 'REBUILD_SMART_FAVORITE_INDEX':
-      return { success: true, data: await rebuildSmartFavoriteIndex(request.params) as T };
+    case 'REBUILD_SMART_FAVORITE_INDEX': {
+      const batchSize = Math.min(normalizePositiveInteger(request.params?.batchSize, 25), 100);
+      return { success: true, data: await rebuildSmartFavoriteIndex(batchSize) as T };
+    }
     case 'CLEAR_ALL_LOCAL_DATA':
       return { success: true, data: await clearAllLocalData(request.params?.confirmation) as T };
     case 'GET_CURRENT_VIDEO_CONTEXT':
@@ -1920,7 +1962,9 @@ async function markConsumedFromPlayerEvent(
   payload: PlayerHeartbeatPayload | PlayerActionPayload,
 ): Promise<void> {
   if (!payload.bvid || !isEffectivePlayerWatch(payload)) return;
-  await markDynamicBillItemsConsumedByBvid(payload.bvid, Date.now());
+  await runDynamicBillDataOperation(
+    () => markDynamicBillItemsConsumedByBvid(payload.bvid, Date.now()),
+  );
 }
 
 async function getCurrentVideoContextForActiveTab(
@@ -3027,47 +3071,6 @@ function normalizeAiConfigParam(value: unknown): UserConfig['ai'] {
     apiKey: typeof raw.apiKey === 'string' ? raw.apiKey : '',
     chatModel: typeof raw.chatModel === 'string' ? raw.chatModel.trim() : '',
   };
-}
-
-async function rebuildSmartFavoriteIndex(
-  params: Record<string, unknown> | undefined,
-): Promise<SmartFavoriteIndexRebuildResult> {
-  const batchSize = Math.min(normalizePositiveInteger(params?.batchSize, 25), 100);
-  const totalItems = await countFavoriteItems();
-  const clearedIndexes = await clearSmartFavoriteIndex();
-  const result: SmartIndexResult = {
-    processed: 0,
-    indexed: 0,
-    failed: 0,
-    skipped: 0,
-    notes: [],
-  };
-  let guard = Math.ceil(totalItems / batchSize) + 2;
-
-  while (result.processed < totalItems && guard-- > 0) {
-    const batch = await buildSmartFavoriteIndex(batchSize, { includeFailed: false });
-    mergeSmartIndexResult(result, batch);
-    if (batch.processed === 0) break;
-  }
-
-  return {
-    totalItems,
-    clearedIndexes,
-    ...result,
-    completedAt: Date.now(),
-  };
-}
-
-function mergeSmartIndexResult(target: SmartIndexResult, batch: SmartIndexResult): void {
-  target.processed += batch.processed;
-  target.indexed += batch.indexed;
-  target.failed += batch.failed;
-  target.skipped += batch.skipped;
-  for (const note of batch.notes) {
-    if (!target.notes.includes(note)) {
-      target.notes.push(note);
-    }
-  }
 }
 
 function videoUrl(bvid: string): string {
