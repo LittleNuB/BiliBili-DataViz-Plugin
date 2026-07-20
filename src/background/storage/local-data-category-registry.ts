@@ -210,7 +210,7 @@ function currentVideoQaSessionsCategory(
   };
   return {
     id: 'currentVideoQaSessions',
-    label: '当前视频问答会话',
+    label: '问答会话',
     includeInClearAll: true,
     collectUsage,
     clear: async () => runCurrentVideoQaSessionClearCoordinator(async () => {
@@ -261,7 +261,7 @@ function currentVideoSummaryHighlightCategory(
   };
   return {
     id: 'currentVideoSummaryHighlights',
-    label: '当前视频摘要与亮点缓存',
+    label: '摘要与亮点',
     includeInClearAll: true,
     collectUsage,
     clear: async () => runCurrentVideoSummaryHighlightsClearCoordinator(async () => {
@@ -314,7 +314,7 @@ function currentVideoSubtitleCategory(
   const collectUsage = () => collectCurrentVideoSubtitleUsage(group.tables);
   return {
     id: 'currentVideoSubtitles',
-    label: '当前视频字幕缓存',
+    label: 'B站字幕正文',
     includeInClearAll: true,
     collectUsage,
     clear: async () => runCurrentVideoTranscriptClearCoordinator(async () => {

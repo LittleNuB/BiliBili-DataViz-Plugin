@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
+  buildLocalDataDiagnosticExport,
   buildLocalDataOperationMessage,
   buildLocalDataSummaryCards,
   buildSmartFavoriteRebuildMessage,
@@ -21,7 +22,10 @@ import {
   type LocalDataCategoryRegistryDependencies,
   type LocalDataCategoryTable,
 } from '../src/background/storage/local-data-category-registry.ts';
-import { BLIND_BOX_DRAW_HISTORY_STORAGE_KEY } from '../src/background/storage/blind-box-draw-history-repo.ts';
+import {
+  BLIND_BOX_DRAW_HISTORY_STORAGE_KEY,
+  BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY,
+} from '../src/background/storage/blind-box-draw-history-repo.ts';
 import { CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY } from '../src/shared/current-video-primary-text-selection.ts';
 import type {
   LocalDataOperationResult,
@@ -34,12 +38,15 @@ test('settings local data cards expose natural Chinese summaries only', () => {
   assert.deepEqual(cards.map(card => card.title), [
     '观看历史',
     '收藏与智能索引',
-    '当前视频字幕缓存',
-    '当前视频摘要与亮点缓存',
-    '当前视频问答会话',
+    'B站字幕正文',
+    '摘要与亮点',
+    '问答会话',
     '动态账单',
+    '盲盒抽取记录',
   ]);
   assert.match(cards.map(card => card.value).join('\n'), /128 条/);
+  assert.equal(cards.find(card => card.id === 'blindBoxDrawHistory')?.value, '2 条');
+  assert.match(cards.find(card => card.id === 'blindBoxDrawHistory')?.detail ?? '', /不提供单独开关或单独清理入口/);
   const copy = JSON.stringify(cards);
   assert.doesNotMatch(copy, /暂停|轮换|动态反馈/);
   assertCleanUserCopy(copy);
@@ -64,7 +71,7 @@ test('settings local data operation messages stay bounded to counts', () => {
       currentVideoSubtitleSegments: 42,
     },
   });
-  assert.equal(subtitleMessage, '已清理当前视频字幕缓存：移除 3 条来源记录和 42 段字幕正文。');
+  assert.equal(subtitleMessage, '已清理B站字幕正文：移除 3 条来源记录和 42 段字幕正文。');
 
   const clearAllMessage = buildLocalDataOperationMessage({
     operation: 'clear_all_local_data',
@@ -76,12 +83,103 @@ test('settings local data operation messages stay bounded to counts', () => {
       currentVideoSummaryHighlightParts: 2,
       currentVideoQaSessions: 1,
       dynamicBillItems: 6,
+      blindBoxDrawHistory: 2,
       localSettings: true,
     },
   } satisfies LocalDataOperationResult);
   assert.match(clearAllMessage, /本地 AI 设置和功能开关也已恢复为默认状态/);
   assert.doesNotMatch(clearAllMessage, /暂停|轮换|动态反馈/);
   assertCleanUserCopy([subtitleMessage, clearAllMessage].join('\n'));
+});
+
+test('settings clear-all partial failure message names failed categories and keeps successes completed', () => {
+  const message = buildLocalDataOperationMessage({
+    operation: 'clear_all_local_data',
+    status: 'partial_failure',
+    completedAt: 1_718_000_000_000,
+    cleared: {
+      historyRecords: 128,
+      currentVideoSubtitleSegments: 42,
+      dynamicBillItems: 6,
+    },
+    categoryResults: {
+      completed: [
+        {
+          id: 'history',
+          label: '观看历史',
+          beforeCount: 128,
+          beforeUsageBytes: 4096,
+          afterCount: 0,
+          afterUsageBytes: 0,
+        },
+        {
+          id: 'currentVideoSubtitles',
+          label: 'B站字幕正文',
+          beforeCount: 3,
+          beforeUsageBytes: 8192,
+          afterCount: 0,
+          afterUsageBytes: 0,
+        },
+        {
+          id: 'dynamicBill',
+          label: '动态账单',
+          beforeCount: 9,
+          beforeUsageBytes: 2048,
+          afterCount: 0,
+          afterUsageBytes: 0,
+        },
+      ],
+      failed: [
+        {
+          id: 'favorites',
+          label: '收藏与智能索引',
+          message: '收藏与智能索引清理失败，已完成的其他类别不会受影响。',
+        },
+        {
+          id: 'currentVideoQaSessions',
+          label: '问答会话',
+          message: '问答会话已执行清理，但结果回读失败，请刷新后核对。',
+        },
+      ],
+    },
+  });
+
+  assert.match(message, /已完成 3 类数据清理并完成回读/);
+  assert.match(message, /收藏与智能索引、问答会话/);
+  assertCleanUserCopy(message);
+});
+
+test('settings diagnostic export is aggregate-only and does not expose raw records', () => {
+  const diagnostic = buildLocalDataDiagnosticExport(makeSummary());
+  const text = JSON.stringify(diagnostic);
+
+  assert.deepEqual(diagnostic.categories.map(category => category.name), [
+    '观看历史',
+    '收藏与智能索引',
+    'B站字幕正文',
+    '摘要与亮点',
+    '问答会话',
+    '动态账单',
+    '盲盒抽取记录',
+  ]);
+  assert.equal(diagnostic.features.blindBox.recentDrawCount, 2);
+  assert.deepEqual(diagnostic.privacyBoundary.includes, [
+    '本地数据类别名称、数量和占用',
+    '动态账单与盲盒的宽泛状态和必要时间',
+  ]);
+  assert.ok(diagnostic.privacyBoundary.excludes.length > 0);
+  assert.doesNotMatch(text, /完整字幕|完整记录正文|原文片段/);
+  assert.doesNotMatch(text, /Cookie|Key|BVID|CID|transcript|confidence|sourceHash|segmentId|subtitle_url|C:\\|\/Users\//i);
+  assertCleanUserCopy(text);
+});
+
+test('settings local data surface does not advertise unavailable local transcription hooks', async () => {
+  const surface = (await Promise.all([
+    readFile(new URL('../dashboard/modules/settings/SettingsPage.tsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/shared/local-data-privacy.ts', import.meta.url), 'utf8'),
+  ])).join('\n');
+
+  assert.doesNotMatch(surface, /ASR|本地转录|本地转写|转录模型|local_transcript|localTranscript/i);
 });
 
 test('settings dangerous clear scope requires explicit Chinese confirmation', () => {
@@ -258,18 +356,17 @@ test('lifecycle reports a readback failure whenever cleared data remains', async
   }
 });
 
-test('SET-013-A keeps the existing clear-all production transaction', async () => {
+test('SET-013-B clear-all production path invokes registered category hooks', async () => {
   const source = await readFile(
     new URL('../src/background/storage/local-data-privacy-repo.ts', import.meta.url),
     'utf8',
   );
 
-  assert.match(source, /db\.transaction\(\s*'rw',\s*db\.tables/);
-  assert.match(source, /chrome\.storage\.local\.clear\(\)/);
-  assert.match(source, /runCurrentVideoTranscriptClearCoordinator\(\s*async\s*\(\)\s*=>\s*\r?\n\s*runCurrentVideoSummaryHighlightsClearCoordinator/);
-  assert.match(source, /runCurrentVideoSummaryHighlightsClearCoordinator\(\s*async\s*\(\)\s*=>\s*\r?\n\s*runCurrentVideoQaSessionClearCoordinator/);
-  assert.match(source, /coordinateBlindBoxDrawHistoryClear/);
-  assert.doesNotMatch(source, /clearRegisteredLocalDataCategories/);
+  assert.match(source, /runLocalDataCategoryLifecycles\(categories\)/);
+  assert.match(source, /summarizeLifecycleResults\(results\)/);
+  assert.doesNotMatch(source, /db\.transaction\(\s*'rw',\s*db\.tables/);
+  assert.doesNotMatch(source, /chrome\.storage\.local\.clear\(\)/);
+  assert.doesNotMatch(source, /coordinateBlindBoxDrawHistoryClear/);
 });
 
 test('independent QA session clear uses the shared write coordinator', async () => {
@@ -287,6 +384,15 @@ test('independent QA session clear uses the shared write coordinator', async () 
 function makeSummary(): LocalDataPrivacySummary {
   return {
     checkedAt: 1_718_000_000_000,
+    categories: [
+      { id: 'history', label: '观看历史', count: 128, usageBytes: 4096 },
+      { id: 'favorites', label: '收藏与智能索引', count: 24, usageBytes: 2048 },
+      { id: 'currentVideoSubtitles', label: 'B站字幕正文', count: 3, usageBytes: 8192 },
+      { id: 'currentVideoSummaryHighlights', label: '摘要与亮点', count: 2, usageBytes: 2048 },
+      { id: 'currentVideoQaSessions', label: '问答会话', count: 1, usageBytes: 1024 },
+      { id: 'dynamicBill', label: '动态账单', count: 9, usageBytes: 3072 },
+      { id: 'blindBoxDrawHistory', label: '盲盒抽取记录', count: 2, usageBytes: 96 },
+    ],
     history: {
       totalRecords: 128,
       oldestViewAt: 1_700_000_000,
@@ -345,6 +451,12 @@ function makeSummary(): LocalDataPrivacySummary {
       lastSyncedAt: 1_718_000_000_000,
       syncStatus: 'success',
     },
+    blindBoxDrawHistory: {
+      recentDrawCount: 2,
+      maxRecentDraws: 50,
+      usageBytes: 96,
+      lastUpdatedAt: 1_718_000_000_000,
+    },
   };
 }
 
@@ -378,6 +490,7 @@ function createRegistryDependencies(): LocalDataCategoryRegistryDependencies {
     ['lastSyncTime', 100],
     ['dynamicBillSyncState', { status: 'success' }],
     [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY, ['BV1LATEST01', 'BV1LATEST02']],
+    [BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY, 1_718_000_000_000],
     ['userConfig', { assistant: {} }],
     ['floatingPopupWindowId', 7],
     [CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY, {

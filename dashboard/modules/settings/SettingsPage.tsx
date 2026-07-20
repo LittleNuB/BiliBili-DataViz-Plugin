@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { requestSW } from '../../utils/messaging';
 import {
+  buildLocalDataDiagnosticExport,
   buildLocalDataOperationMessage,
   buildLocalDataSummaryCards,
   buildSmartFavoriteRebuildMessage,
@@ -73,6 +74,7 @@ export function SettingsPage() {
   const [lastTest, setLastTest] = useState<AiConnectionTestResult | null>(null);
   const [localData, setLocalData] = useState<LocalDataPrivacySummary | null>(null);
   const [localDataError, setLocalDataError] = useState('');
+  const [diagnosticConfirmVisible, setDiagnosticConfirmVisible] = useState(false);
   const [clearConfirmVisible, setClearConfirmVisible] = useState(false);
   const [clearConfirmText, setClearConfirmText] = useState('');
 
@@ -117,6 +119,9 @@ export function SettingsPage() {
       || dynamicBill.aiExplanationsEnabled !== loadedConfig.dynamicBill.aiExplanationsEnabled;
   }, [assistant, dynamicBill, form, loadedConfig]);
   const localDataCards = localData ? buildLocalDataSummaryCards(localData) : [];
+  const diagnosticPreview = diagnosticConfirmVisible && localData
+    ? buildLocalDataDiagnosticExport(localData)
+    : null;
   const canConfirmClear = clearConfirmText.trim() === LOCAL_DATA_CLEAR_CONFIRMATION;
 
   async function refreshConfig() {
@@ -249,7 +254,7 @@ export function SettingsPage() {
     setError('');
     try {
       await requestSW<CurrentVideoQaSessionsView>('CLEAR_CURRENT_VIDEO_QA_SESSIONS');
-      setNotice('已清理当前视频问答会话。');
+      setNotice('已清理问答会话。');
       await refreshLocalData();
     } catch (err) {
       setLocalDataError(formatLocalDataError(err));
@@ -320,6 +325,31 @@ export function SettingsPage() {
     } finally {
       setBusy('');
     }
+  }
+
+  function exportLocalDataDiagnostics() {
+    setNotice('');
+    setError('');
+    setLocalDataError('');
+    if (!localData) {
+      setLocalDataError('请先读取本地数据摘要。');
+      return;
+    }
+
+    const diagnostic = buildLocalDataDiagnosticExport(localData);
+    const blob = new Blob([JSON.stringify(diagnostic, null, 2)], {
+      type: 'application/json;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `bili-bill-diagnostic-${new Date(localData.checkedAt).toISOString().slice(0, 10)}.json`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    setDiagnosticConfirmVisible(false);
+    setNotice('已导出诊断摘要；文件只包含数量、占用和状态，不包含完整记录、正文、登录凭据、密钥或本地敏感路径。');
   }
 
   function applyConfig(config: Partial<UserConfig>) {
@@ -511,6 +541,22 @@ export function SettingsPage() {
           <button
             type="button"
             className="settings-action"
+            onClick={() => {
+              setNotice('');
+              setError('');
+              setLocalDataError('');
+              setClearConfirmVisible(false);
+              setClearConfirmText('');
+              setDiagnosticConfirmVisible(true);
+            }}
+            disabled={!!busy || !localData}
+            aria-expanded={diagnosticConfirmVisible}
+          >
+            导出诊断摘要
+          </button>
+          <button
+            type="button"
+            className="settings-action"
             onClick={clearSubtitleCache}
             disabled={!!busy || !localData || localData.currentVideoSubtitles.segmentCount === 0}
           >
@@ -543,12 +589,50 @@ export function SettingsPage() {
           <button
             type="button"
             className="settings-action settings-action-danger"
-            onClick={() => setClearConfirmVisible(true)}
+            onClick={() => {
+              setDiagnosticConfirmVisible(false);
+              setClearConfirmVisible(true);
+            }}
             disabled={!!busy}
           >
             清理本地数据
           </button>
         </div>
+
+        {diagnosticPreview && (
+          <div className="settings-diagnostic-box" role="dialog" aria-label="确认导出诊断摘要">
+            <div>
+              <strong>确认导出诊断摘要</strong>
+              <p>诊断文件只会保存到本机，不会自动上传。</p>
+            </div>
+            <div className="settings-diagnostic-scope">
+              <div>
+                <span>包含</span>
+                <ul>
+                  {diagnosticPreview.privacyBoundary.includes.map(item => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+              <div>
+                <span>不包含</span>
+                <ul>
+                  {diagnosticPreview.privacyBoundary.excludes.map(item => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+            </div>
+            <div className="settings-actions">
+              <button type="button" className="settings-action" onClick={exportLocalDataDiagnostics}>
+                确认导出
+              </button>
+              <button
+                type="button"
+                className="settings-action"
+                onClick={() => setDiagnosticConfirmVisible(false)}
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        )}
 
         {clearConfirmVisible && (
           <div className="settings-danger-box">

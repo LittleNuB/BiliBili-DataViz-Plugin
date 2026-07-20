@@ -1,8 +1,16 @@
 import type { DynamicBillCreatorPauseView, DynamicSyncStatus } from './dynamic-bill';
-import type { LocalDataClearedCounts } from '../local-data-category-contract';
+import type { LocalDataCategoryId, LocalDataClearedCounts } from '../local-data-category-contract';
+
+export interface LocalDataCategorySummary {
+  id: LocalDataCategoryId;
+  label: string;
+  count: number;
+  usageBytes: number;
+}
 
 export interface LocalDataPrivacySummary {
   checkedAt: number;
+  categories: LocalDataCategorySummary[];
   history: {
     totalRecords: number;
     oldestViewAt: number | null;
@@ -61,6 +69,12 @@ export interface LocalDataPrivacySummary {
     lastSyncedAt: number | null;
     syncStatus: DynamicSyncStatus;
   };
+  blindBoxDrawHistory: {
+    recentDrawCount: number;
+    maxRecentDraws: number;
+    usageBytes: number;
+    lastUpdatedAt: number | null;
+  };
 }
 
 export type LocalDataOperationKind =
@@ -71,8 +85,24 @@ export type LocalDataOperationKind =
 
 export interface LocalDataOperationResult {
   operation: LocalDataOperationKind;
+  status?: 'completed' | 'partial_failure';
   completedAt: number;
   cleared: LocalDataClearedCounts;
+  categoryResults?: {
+    completed: Array<{
+      id: LocalDataCategoryId;
+      label: string;
+      beforeCount: number;
+      beforeUsageBytes: number;
+      afterCount: number;
+      afterUsageBytes: number;
+    }>;
+    failed: Array<{
+      id: LocalDataCategoryId;
+      label: string;
+      message: string;
+    }>;
+  };
 }
 
 export interface SmartFavoriteIndexRebuildResult {

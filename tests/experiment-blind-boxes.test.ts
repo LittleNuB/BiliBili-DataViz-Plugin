@@ -22,6 +22,7 @@ import {
 import {
   BLIND_BOX_DRAW_HISTORY_LIMIT,
   BLIND_BOX_DRAW_HISTORY_STORAGE_KEY,
+  BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY,
   clearBlindBoxDrawHistory,
   collectBlindBoxDrawHistoryUsage,
   getBlindBoxDrawHistoryEpoch,
@@ -596,6 +597,24 @@ test('blind-box draw history keeps the latest 50 normalized BVIDs and clears wit
   });
 });
 
+test('blind-box lifecycle counts timestamp metadata and does not accept an orphan timestamp as empty', async () => {
+  const storage = createMemoryStorage({
+    [BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY]: NOW_MS,
+  });
+
+  const usage = await collectBlindBoxDrawHistoryUsage(storage);
+  assert.equal(usage.count, 0);
+  assert.ok(usage.usageBytes > 0);
+  assert.equal((await readBlindBoxDrawHistoryAfterClear(storage)).empty, false);
+
+  assert.equal(await clearBlindBoxDrawHistory(storage), 0);
+  assert.deepEqual(await readBlindBoxDrawHistoryAfterClear(storage), {
+    count: 0,
+    usageBytes: 0,
+    empty: true,
+  });
+});
+
 test('overlapping blind-box history records retain both batches in newest-first order', async () => {
   const firstGetStarted = createDeferred<void>();
   const releaseFirstGet = createDeferred<void>();
@@ -758,19 +777,16 @@ test('blind-box history reads and counts wait for prior mutations without deadlo
   await record;
   assert.equal(getCallsBeforeRelease, 1, 'public reads must wait for the pending write');
   assert.deepEqual(await read, ['BV1AFTER001', 'BV1BEFORE001']);
-  assert.deepEqual(await usage, {
-    count: 2,
-    usageBytes: JSON.stringify({
-      [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1AFTER001', 'BV1BEFORE001'],
-    }).length,
-  });
-  assert.deepEqual(await readback, {
-    count: 2,
-    usageBytes: JSON.stringify({
-      [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1AFTER001', 'BV1BEFORE001'],
-    }).length,
-    empty: false,
-  });
+  const expectedListBytes = JSON.stringify({
+    [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1AFTER001', 'BV1BEFORE001'],
+  }).length;
+  const usageResult = await usage;
+  assert.equal(usageResult.count, 2);
+  assert.ok(usageResult.usageBytes > expectedListBytes);
+  const readbackResult = await readback;
+  assert.equal(readbackResult.count, 2);
+  assert.equal(readbackResult.usageBytes, usageResult.usageBytes);
+  assert.equal(readbackResult.empty, false);
 });
 
 test('blind-box draw history is registered for per-category clear and clear-all orchestration', async () => {

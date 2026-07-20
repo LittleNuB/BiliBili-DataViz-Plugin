@@ -1,4 +1,5 @@
 import type {
+  LocalDataCategorySummary,
   LocalDataOperationResult,
   LocalDataPrivacySummary,
   SmartFavoriteIndexRebuildResult,
@@ -7,14 +8,70 @@ import type {
 export const LOCAL_DATA_CLEAR_CONFIRMATION = '清理本地数据';
 
 export interface LocalDataSummaryCard {
-  id: 'history' | 'favorites' | 'subtitles' | 'summaryHighlights' | 'qaSessions' | 'dynamicBill';
+  id:
+    | 'history'
+    | 'favorites'
+    | 'subtitles'
+    | 'summaryHighlights'
+    | 'qaSessions'
+    | 'dynamicBill'
+    | 'blindBoxDrawHistory';
   title: string;
   value: string;
   detail: string;
   meta: string;
 }
 
+export interface LocalDataDiagnosticExport {
+  exportedAt: string;
+  app: {
+    product: 'Bili-Bill';
+    diagnosticSchema: 1;
+  };
+  privacyBoundary: {
+    includes: string[];
+    excludes: string[];
+  };
+  categories: Array<{
+    name: string;
+    count: number;
+    usageBytes: number;
+  }>;
+  features: {
+    currentVideoText: {
+      bilibiliSubtitleSources: number;
+      bilibiliSubtitleSegments: number;
+      cachedVideoParts: number;
+      staleSegments: number;
+    };
+    currentVideoAssistant: {
+      summaryHighlightParts: number;
+      qaSessions: number;
+    };
+    dynamicBill: {
+      billItems: number;
+      pausedCreators: number;
+      explanations: number;
+      lastGeneratedAt: string;
+      lastSyncedAt: string;
+      syncStatus: string;
+    };
+    blindBox: {
+      recentDrawCount: number;
+      maxRecentDraws: number;
+    };
+  };
+}
+
 export function buildLocalDataSummaryCards(summary: LocalDataPrivacySummary): LocalDataSummaryCard[] {
+  const historyUsage = categorySummary(summary, 'history');
+  const favoriteUsage = categorySummary(summary, 'favorites');
+  const subtitleUsage = categorySummary(summary, 'currentVideoSubtitles');
+  const summaryUsage = categorySummary(summary, 'currentVideoSummaryHighlights');
+  const qaUsage = categorySummary(summary, 'currentVideoQaSessions');
+  const dynamicBillUsage = categorySummary(summary, 'dynamicBill');
+  const blindBoxUsage = categorySummary(summary, 'blindBoxDrawHistory');
+
   return [
     {
       id: 'history',
@@ -24,72 +81,74 @@ export function buildLocalDataSummaryCards(summary: LocalDataPrivacySummary): Lo
         ? `覆盖 ${formatLocalDate(summary.history.oldestViewAt, 'seconds')} 至 ${formatLocalDate(summary.history.newestViewAt, 'seconds')}`
         : '还没有本地观看记录。',
       meta: summary.history.syncing
-        ? '正在同步观看历史。'
-        : `最近同步：${formatLocalDate(summary.history.lastSyncedAt, 'milliseconds')}`,
+        ? `正在同步观看历史；占用 ${formatBytes(historyUsage?.usageBytes ?? 0)}`
+        : `占用 ${formatBytes(historyUsage?.usageBytes ?? 0)}；最近同步：${formatLocalDate(summary.history.lastSyncedAt, 'milliseconds')}`,
     },
     {
       id: 'favorites',
       title: '收藏与智能索引',
       value: `${summary.favorites.storedItems} 条`,
-      detail: `B 站报告 ${summary.favorites.reportedItems} 条，本地保存 ${summary.favorites.storedItems} 条，已索引 ${summary.favorites.indexedItems} 条。`,
+      detail: `B站报告 ${summary.favorites.reportedItems} 条，本地保存 ${summary.favorites.storedItems} 条，已索引 ${summary.favorites.indexedItems} 条。`,
       meta: summary.favorites.incompleteFolders > 0
-        ? `有 ${summary.favorites.incompleteFolders} 个收藏夹可能未同步完整。`
-        : `最近同步：${formatLocalDate(summary.favorites.lastSyncedAt, 'milliseconds')}`,
+        ? `占用 ${formatBytes(favoriteUsage?.usageBytes ?? 0)}；有 ${summary.favorites.incompleteFolders} 个收藏夹可能尚未同步完整。`
+        : `占用 ${formatBytes(favoriteUsage?.usageBytes ?? 0)}；最近同步：${formatLocalDate(summary.favorites.lastSyncedAt, 'milliseconds')}`,
     },
     {
       id: 'subtitles',
-      title: '当前视频字幕缓存',
-      value: `${summary.currentVideoSubtitles.sourceIdentityCount} 个来源`,
+      title: 'B站字幕正文',
+      value: `${subtitleUsage?.count ?? summary.currentVideoSubtitles.sourceIdentityCount} 个来源`,
       detail: summary.currentVideoSubtitles.segmentCount > 0
-        ? `已缓存 ${summary.currentVideoSubtitles.cachedVideoCount} 个视频分 P、${summary.currentVideoSubtitles.segmentCount} 段字幕正文。`
+        ? `已缓存 ${summary.currentVideoSubtitles.cachedVideoCount} 个视频分P、${summary.currentVideoSubtitles.segmentCount} 段字幕正文。`
         : '还没有缓存的字幕正文。',
-      meta: `占用 ${formatBytes(summary.currentVideoSubtitles.usageBytes)}；最近缓存：${formatLocalDate(summary.currentVideoSubtitles.lastUpdatedAt, 'milliseconds')}`,
+      meta: `占用 ${formatBytes(subtitleUsage?.usageBytes ?? summary.currentVideoSubtitles.usageBytes)}；最近缓存：${formatLocalDate(summary.currentVideoSubtitles.lastUpdatedAt, 'milliseconds')}`,
     },
     {
       id: 'summaryHighlights',
-      title: '当前视频摘要与亮点缓存',
-      value: `${summary.currentVideoSummaryHighlights.cachedPartCount} 个分 P`,
+      title: '摘要与亮点',
+      value: `${summaryUsage?.count ?? summary.currentVideoSummaryHighlights.cachedPartCount} 个分P`,
       detail: summary.currentVideoSummaryHighlights.cachedPartCount > 0
-        ? '缓存只用于恢复已生成的摘要与亮点，不会自动补发请求。'
+        ? '用于恢复已经生成的摘要与亮点，不会自动补发请求。'
         : '还没有缓存的摘要与亮点结果。',
-      meta: `占用 ${formatBytes(summary.currentVideoSummaryHighlights.usageBytes)}；最近生成：${formatLocalDate(summary.currentVideoSummaryHighlights.latestGeneratedAt, 'milliseconds')}`,
+      meta: `占用 ${formatBytes(summaryUsage?.usageBytes ?? summary.currentVideoSummaryHighlights.usageBytes)}；最近生成：${formatLocalDate(summary.currentVideoSummaryHighlights.latestGeneratedAt, 'milliseconds')}`,
     },
     {
       id: 'qaSessions',
-      title: '当前视频问答会话',
-      value: `${summary.currentVideoQaSessions.sessionCount} 个会话`,
+      title: '问答会话',
+      value: `${qaUsage?.count ?? summary.currentVideoQaSessions.sessionCount} 个会话`,
       detail: summary.currentVideoQaSessions.sessionCount > 0
         ? '仅保存问题、已验证回答、引用和必要来源，不保存完整视频正文。'
-        : '还没有保存的当前视频问答会话。',
-      meta: `占用 ${formatBytes(summary.currentVideoQaSessions.usageBytes)}；最近使用：${formatLocalDate(summary.currentVideoQaSessions.latestUsedAt, 'milliseconds')}`,
+        : '还没有保存的问答会话。',
+      meta: `占用 ${formatBytes(qaUsage?.usageBytes ?? summary.currentVideoQaSessions.usageBytes)}；最近使用：${formatLocalDate(summary.currentVideoQaSessions.latestUsedAt, 'milliseconds')}`,
     },
     {
       id: 'dynamicBill',
       title: '动态账单',
       value: `${summary.dynamicBill.billItemCount} 项`,
-      detail: `关注快照 ${summary.dynamicBill.activeFollowedCreatorCount} 位，最近视频投稿 ${summary.dynamicBill.followedVideoUpdateCount} 条。`,
-      meta: `最近生成：${formatLocalDate(summary.dynamicBill.lastGeneratedAt, 'milliseconds')}`,
+      detail: `关注快照 ${summary.dynamicBill.activeFollowedCreatorCount} 位，近期视频投稿 ${summary.dynamicBill.followedVideoUpdateCount} 条。`,
+      meta: `占用 ${formatBytes(dynamicBillUsage?.usageBytes ?? 0)}；最近生成：${formatLocalDate(summary.dynamicBill.lastGeneratedAt, 'milliseconds')}`,
+    },
+    {
+      id: 'blindBoxDrawHistory',
+      title: '盲盒抽取记录',
+      value: `${blindBoxUsage?.count ?? summary.blindBoxDrawHistory.recentDrawCount} 条`,
+      detail: `只记录最近 ${summary.blindBoxDrawHistory.maxRecentDraws} 次抽取用于减少重复，不提供单独开关或单独清理入口。`,
+      meta: `占用 ${formatBytes(blindBoxUsage?.usageBytes ?? summary.blindBoxDrawHistory.usageBytes)}；最近记录：${formatLocalDate(summary.blindBoxDrawHistory.lastUpdatedAt, 'milliseconds')}`,
     },
   ];
 }
 
 export function buildLocalDataOperationMessage(result: LocalDataOperationResult): string {
-  if (result.operation === 'clear_current_video_subtitle_cache') {
-    const sourceCount = result.cleared.currentVideoSubtitleSources ?? 0;
-    const segmentCount = result.cleared.currentVideoSubtitleSegments ?? 0;
-    return `已清理当前视频字幕缓存：移除 ${sourceCount} 条来源记录和 ${segmentCount} 段字幕正文。`;
-  }
-  if (result.operation === 'clear_current_video_summary_highlight_cache') {
-    const partCount = result.cleared.currentVideoSummaryHighlightParts ?? 0;
-    return `已清理当前视频摘要与亮点缓存：移除 ${partCount} 个分 P 的生成结果。`;
-  }
-  if (result.operation === 'clear_dynamic_bill_data') {
-    return `已清理动态账单本地数据：账单 ${result.cleared.dynamicBillItems ?? 0} 项、解释 ${result.cleared.dynamicBillExplanations ?? 0} 条。`;
-  }
+  const base = buildCompletedOperationMessage(result);
+  if (result.status !== 'partial_failure') return base;
 
+  const failed = result.categoryResults?.failed ?? [];
+  if (failed.length === 0) return base;
+
+  const successfulCount = result.categoryResults?.completed.length ?? 0;
+  const failedNames = failed.map(item => item.label).join('、');
   return [
-    `已清理本地数据：观看历史 ${result.cleared.historyRecords ?? 0} 条、收藏 ${result.cleared.favoriteItems ?? 0} 条、字幕正文 ${result.cleared.currentVideoSubtitleSegments ?? 0} 段、摘要与亮点 ${result.cleared.currentVideoSummaryHighlightParts ?? 0} 个分 P、问答会话 ${result.cleared.currentVideoQaSessions ?? 0} 个、动态账单 ${result.cleared.dynamicBillItems ?? 0} 项、盲盒抽取记录 ${result.cleared.blindBoxDrawHistory ?? 0} 条。`,
-    result.cleared.localSettings ? '本地 AI 设置和功能开关也已恢复为默认状态。' : '',
+    successfulCount > 0 ? `已完成 ${successfulCount} 类数据清理并完成回读。` : '',
+    `以下类别清理失败：${failedNames}。已完成的类别不会回滚，请稍后重试失败类别。`,
   ].filter(Boolean).join(' ');
 }
 
@@ -104,9 +163,62 @@ export function dangerousLocalDataClearScope(): string[] {
   return [
     '观看历史、播放器事件和统计聚合。',
     '收藏夹快照、智能收藏索引和收藏问答本地依据。',
-    '当前视频字幕缓存、摘要与亮点缓存、问答会话、动态账单记录、动态账单反馈和解释、盲盒抽取记录。',
-    '本地 AI 服务设置、API Key 保存状态和功能开关。',
+    'B站字幕正文、摘要与亮点、问答会话、动态账单记录、动态账单反馈和解释、盲盒抽取记录。',
+    '本地 AI 服务设置、密钥保存状态和功能开关。',
   ];
+}
+
+export function buildLocalDataDiagnosticExport(summary: LocalDataPrivacySummary): LocalDataDiagnosticExport {
+  return {
+    exportedAt: new Date(summary.checkedAt).toISOString(),
+    app: {
+      product: 'Bili-Bill',
+      diagnosticSchema: 1,
+    },
+    privacyBoundary: {
+      includes: [
+        '本地数据类别名称、数量和占用',
+        '动态账单与盲盒的宽泛状态和必要时间',
+      ],
+      excludes: [
+        '完整记录或正文',
+        '站点凭据、登录状态和浏览器资料目录',
+        '完整或可恢复的密钥',
+        '原始字幕地址',
+        '本地敏感路径',
+        '视频内部标识、内容哈希和内部字段',
+      ],
+    },
+    categories: summary.categories.map(category => ({
+      name: category.label,
+      count: category.count,
+      usageBytes: category.usageBytes,
+    })),
+    features: {
+      currentVideoText: {
+        bilibiliSubtitleSources: summary.currentVideoSubtitles.sourceIdentityCount,
+        bilibiliSubtitleSegments: summary.currentVideoSubtitles.segmentCount,
+        cachedVideoParts: summary.currentVideoSubtitles.cachedVideoCount,
+        staleSegments: summary.currentVideoSubtitles.staleSegmentCount,
+      },
+      currentVideoAssistant: {
+        summaryHighlightParts: summary.currentVideoSummaryHighlights.cachedPartCount,
+        qaSessions: summary.currentVideoQaSessions.sessionCount,
+      },
+      dynamicBill: {
+        billItems: summary.dynamicBill.billItemCount,
+        pausedCreators: summary.dynamicBill.creatorPauseCount,
+        explanations: summary.dynamicBill.explanationCount,
+        lastGeneratedAt: formatDiagnosticDate(summary.dynamicBill.lastGeneratedAt),
+        lastSyncedAt: formatDiagnosticDate(summary.dynamicBill.lastSyncedAt),
+        syncStatus: dynamicSyncStatusLabel(summary.dynamicBill.syncStatus),
+      },
+      blindBox: {
+        recentDrawCount: summary.blindBoxDrawHistory.recentDrawCount,
+        maxRecentDraws: summary.blindBoxDrawHistory.maxRecentDraws,
+      },
+    },
+  };
 }
 
 export function formatLocalDataError(error: unknown): string {
@@ -118,6 +230,33 @@ export function formatLocalDataError(error: unknown): string {
     return '观看历史正在同步中。请先停止或等待同步结束，再清理本地数据。';
   }
   return '本地数据操作失败，请稍后重试。';
+}
+
+function buildCompletedOperationMessage(result: LocalDataOperationResult): string {
+  if (result.operation === 'clear_current_video_subtitle_cache') {
+    const sourceCount = result.cleared.currentVideoSubtitleSources ?? 0;
+    const segmentCount = result.cleared.currentVideoSubtitleSegments ?? 0;
+    return `已清理B站字幕正文：移除 ${sourceCount} 条来源记录和 ${segmentCount} 段字幕正文。`;
+  }
+  if (result.operation === 'clear_current_video_summary_highlight_cache') {
+    const partCount = result.cleared.currentVideoSummaryHighlightParts ?? 0;
+    return `已清理摘要与亮点：移除 ${partCount} 个分P的生成结果。`;
+  }
+  if (result.operation === 'clear_dynamic_bill_data') {
+    return `已清理动态账单本地数据：账单 ${result.cleared.dynamicBillItems ?? 0} 项、解释 ${result.cleared.dynamicBillExplanations ?? 0} 条。`;
+  }
+
+  return [
+    `已清理本地数据：观看历史 ${result.cleared.historyRecords ?? 0} 条、收藏 ${result.cleared.favoriteItems ?? 0} 条、字幕正文 ${result.cleared.currentVideoSubtitleSegments ?? 0} 段、摘要与亮点 ${result.cleared.currentVideoSummaryHighlightParts ?? 0} 个分P、问答会话 ${result.cleared.currentVideoQaSessions ?? 0} 个、动态账单 ${result.cleared.dynamicBillItems ?? 0} 项、盲盒抽取记录 ${result.cleared.blindBoxDrawHistory ?? 0} 条。`,
+    result.cleared.localSettings ? '本地 AI 设置和功能开关也已恢复为默认状态。' : '',
+  ].filter(Boolean).join(' ');
+}
+
+function categorySummary(
+  summary: LocalDataPrivacySummary,
+  id: LocalDataCategorySummary['id'],
+): LocalDataCategorySummary | null {
+  return summary.categories.find(category => category.id === id) ?? null;
 }
 
 function formatLocalDate(value: number | null, unit: 'milliseconds' | 'seconds'): string {
@@ -133,9 +272,22 @@ function formatLocalDate(value: number | null, unit: 'milliseconds' | 'seconds')
   });
 }
 
+function formatDiagnosticDate(value: number | null): string {
+  if (!value || value <= 0) return '暂无记录';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '暂无记录' : date.toISOString();
+}
+
 function formatBytes(value: number): string {
   const safe = Math.max(0, Math.floor(value));
   if (safe < 1024) return `${safe} B`;
   if (safe < 1024 * 1024) return `${(safe / 1024).toFixed(1)} KB`;
   return `${(safe / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function dynamicSyncStatusLabel(status: string): string {
+  if (status === 'success') return '同步完成';
+  if (status === 'syncing') return '同步中';
+  if (status === 'failed') return '同步失败';
+  return '等待同步';
 }

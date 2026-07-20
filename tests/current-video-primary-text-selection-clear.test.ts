@@ -142,10 +142,10 @@ test('clear all waits for an earlier selection save and removes its completed wr
   assert.equal(storageData.has(KEY), false);
 });
 
-test('clear all rejects a selection save started while clearing is active', async () => {
-  holdStorageClear = deferred<void>();
+test('clear all rejects a selection save started while local settings clear is active', async () => {
+  holdStorageRemove = deferred<void>();
   const clearing = clearAllLocalData(LOCAL_DATA_CLEAR_CONFIRMATION);
-  await storageClearStarted.promise;
+  await storageRemoveStarted.promise;
 
   try {
     await assert.rejects(
@@ -153,7 +153,7 @@ test('clear all rejects a selection save started while clearing is active', asyn
       /PRIMARY_TEXT_SELECTION_CLEAR_IN_PROGRESS/,
     );
   } finally {
-    holdStorageClear.resolve();
+    holdStorageRemove.resolve();
     await clearing;
   }
 

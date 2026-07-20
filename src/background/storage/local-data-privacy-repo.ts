@@ -1,5 +1,10 @@
 import { LOCAL_DATA_CLEAR_CONFIRMATION } from '../../shared/local-data-privacy.ts';
-import { runLocalDataCategoryLifecycle } from '../../shared/local-data-category-contract.ts';
+import {
+  runLocalDataCategoryLifecycle,
+  runLocalDataCategoryLifecycles,
+  type LocalDataCategoryLifecycleResult,
+  type LocalDataClearedCounts,
+} from '../../shared/local-data-category-contract.ts';
 import { DYNAMIC_BILL_LOCAL_DATA_CLEAR_FAILED_MESSAGE } from '../../shared/dynamic-bill-errors.ts';
 import type {
   LocalDataOperationResult,
@@ -8,7 +13,6 @@ import type {
 import { ensureDynamicBill013Migration } from '../dynamic-bill/migration.ts';
 import { clearTemporaryCurrentVideoTranscriptCache } from '../current-video-temporary-transcript-cache.ts';
 import { runCurrentVideoTranscriptClearCoordinator } from '../current-video-transcript-clear-epoch.ts';
-import { runCurrentVideoSummaryHighlightsClearCoordinator } from '../current-video-summary-highlights-clear-epoch.ts';
 import { getDynamicBillActiveCreatorPauseViews, getDynamicSyncState } from './dynamic-bill-repo.ts';
 import { db } from './db.ts';
 import { getRegisteredLocalDataCategories } from './local-data-category-registry.ts';
@@ -18,45 +22,53 @@ import {
   getLastSyncTime,
 } from './config-store.ts';
 import {
-  coordinateBlindBoxDrawHistoryClear,
+  BLIND_BOX_DRAW_HISTORY_LIMIT,
+  getBlindBoxDrawHistoryUpdatedAt,
   getBlindBoxRecentDrawnBvids,
 } from './blind-box-draw-history-repo.ts';
-import { coordinateCurrentVideoPrimaryTextSelectionClear } from './current-video-primary-text-selection-store.ts';
 import {
   clearCurrentVideoSummaryHighlightsCache,
   collectCurrentVideoSummaryHighlightsCacheUsage,
 } from './current-video-summary-highlights-repo.ts';
 import {
+  beginCurrentVideoPrimaryTextSelectionClearWindow,
+} from './current-video-primary-text-selection-store.ts';
+import {
   collectCurrentVideoQaSessionUsage,
-  runCurrentVideoQaSessionClearCoordinator,
 } from './current-video-qa-session-repo.ts';
 
 export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySummary> {
   await ensureDynamicBill013Migration();
   const [
+    categories,
     history,
     favorites,
     currentVideoSubtitles,
     currentVideoSummaryHighlights,
     currentVideoQaSessions,
     dynamicBill,
+    blindBoxDrawHistory,
   ] = await Promise.all([
+    summarizeRegisteredCategories(),
     summarizeHistory(),
     summarizeFavorites(),
     summarizeCurrentVideoSubtitles(),
     summarizeCurrentVideoSummaryHighlights(),
     summarizeCurrentVideoQaSessions(),
     summarizeDynamicBill(),
+    summarizeBlindBoxDrawHistory(),
   ]);
 
   return {
     checkedAt: Date.now(),
+    categories,
     history,
     favorites,
     currentVideoSubtitles,
     currentVideoSummaryHighlights,
     currentVideoQaSessions,
     dynamicBill,
+    blindBoxDrawHistory,
   };
 }
 
@@ -122,29 +134,35 @@ export async function clearAllLocalData(confirmation: unknown): Promise<LocalDat
   if (await getHistorySyncing()) {
     throw new Error('HISTORY_SYNC_IN_PROGRESS');
   }
-  return await coordinateCurrentVideoPrimaryTextSelectionClear(async () =>
-    runCurrentVideoTranscriptClearCoordinator(async () =>
-      runCurrentVideoSummaryHighlightsClearCoordinator(async () =>
-        runCurrentVideoQaSessionClearCoordinator(async () =>
-          coordinateBlindBoxDrawHistoryClear(async recentDrawnBvids => {
-            const counts = await collectClearCounts(recentDrawnBvids.length);
-            await db.transaction('rw', db.tables, async () => {
-              for (const table of db.tables) {
-                await table.clear();
-              }
-            });
-            await chrome.storage.local.clear();
-            clearTemporaryCurrentVideoTranscriptCache();
+  const endPrimaryTextClearWindow = beginCurrentVideoPrimaryTextSelectionClearWindow();
+  try {
+    const categories = getRegisteredLocalDataCategories()
+      .filter(category => category.includeInClearAll);
+    const results = await runLocalDataCategoryLifecycles(categories);
+    const failed = results.filter(result => result.status === 'failure');
+    clearTemporaryCurrentVideoTranscriptCache();
 
-            return {
-              operation: 'clear_all_local_data',
-              completedAt: Date.now(),
-              cleared: {
-                ...counts,
-                localSettings: true,
-              },
-            };
-          })))));
+    return {
+      operation: 'clear_all_local_data',
+      status: failed.length > 0 ? 'partial_failure' : 'completed',
+      completedAt: Date.now(),
+      cleared: mergeClearedCounts(results),
+      categoryResults: summarizeLifecycleResults(results),
+    };
+  } finally {
+    endPrimaryTextClearWindow();
+  }
+}
+
+async function summarizeRegisteredCategories(): Promise<LocalDataPrivacySummary['categories']> {
+  const categories = getRegisteredLocalDataCategories();
+  const usages = await Promise.all(categories.map(category => category.collectUsage()));
+  return categories.map((category, index) => ({
+    id: category.id,
+    label: category.label,
+    count: usages[index]?.count ?? 0,
+    usageBytes: usages[index]?.usageBytes ?? 0,
+  }));
 }
 
 async function summarizeHistory(): Promise<LocalDataPrivacySummary['history']> {
@@ -306,80 +324,62 @@ async function summarizeDynamicBill(): Promise<LocalDataPrivacySummary['dynamicB
   };
 }
 
-async function collectClearCounts(
-  coordinatedBlindBoxDrawHistoryCount?: number,
-): Promise<Required<Omit<LocalDataOperationResult['cleared'], 'localSettings'>>> {
-  const [
-    historyRecords,
-    playerEvents,
-    dailyAggregates,
-    favoriteFolders,
-    favoriteItems,
-    smartFavoriteIndexes,
-    followedCreators,
-    followedVideoUpdates,
-    dynamicBillItems,
-    dynamicBillExplanations,
-    dynamicBillCreatorPauses,
-    dynamicBillFeedbackActions,
-    dynamicBillCreatorFeedbackCounts,
-    dynamicBillCreatorReviewPrompts,
-    dynamicBillRotationRecords,
-    currentVideoSubtitleSources,
-    currentVideoSubtitleSegments,
-    currentVideoSummaryHighlightParts,
-    currentVideoSummaryHighlightBytes,
-    currentVideoQaSessions,
-    currentVideoQaSessionBytes,
-    blindBoxDrawHistory,
-  ] = await Promise.all([
-    db.watchHistory.count(),
-    db.playerEvents.count(),
-    db.dailyAggregates.count(),
-    db.favoriteFolders.count(),
-    db.favoriteItems.count(),
-    db.smartFavoriteIndex.count(),
-    db.followedCreators.count(),
-    db.followedVideoUpdates.count(),
-    db.dynamicBillItems.count(),
-    db.dynamicBillExplanations.count(),
-    db.dynamicBillCreatorPauses.count(),
-    db.dynamicBillFeedbackActions.count(),
-    db.dynamicBillCreatorFeedbackCounts.count(),
-    db.dynamicBillCreatorReviewPrompts.count(),
-    db.dynamicBillRotationRecords.count(),
-    db.currentVideoTranscriptSources.count(),
-    db.currentVideoTranscriptSegments.count(),
-    db.currentVideoSummaryHighlights.count(),
-    db.currentVideoSummaryHighlights.toArray().then(rows => serializedRowsSize(rows)),
-    db.currentVideoQaSessions.count(),
-    db.currentVideoQaSessions.toArray().then(rows => serializedRowsSize(rows)),
-    coordinatedBlindBoxDrawHistoryCount ?? getBlindBoxRecentDrawnBvids().then(bvids => bvids.length),
+async function summarizeBlindBoxDrawHistory(): Promise<LocalDataPrivacySummary['blindBoxDrawHistory']> {
+  const [bvids, updatedAt, usage] = await Promise.all([
+    getBlindBoxRecentDrawnBvids(),
+    getBlindBoxDrawHistoryUpdatedAt(),
+    getRegisteredLocalDataCategories()
+      .find(category => category.id === 'blindBoxDrawHistory')
+      ?.collectUsage(),
   ]);
-
   return {
-    historyRecords,
-    playerEvents,
-    dailyAggregates,
-    favoriteFolders,
-    favoriteItems,
-    smartFavoriteIndexes,
-    followedCreators,
-    followedVideoUpdates,
-    dynamicBillItems,
-    dynamicBillExplanations,
-    dynamicBillCreatorPauses,
-    dynamicBillFeedbackActions,
-    dynamicBillCreatorFeedbackCounts,
-    dynamicBillCreatorReviewPrompts,
-    dynamicBillRotationRecords,
-    currentVideoSubtitleSources,
-    currentVideoSubtitleSegments,
-    currentVideoSummaryHighlightParts,
-    currentVideoSummaryHighlightBytes,
-    currentVideoQaSessions,
-    currentVideoQaSessionBytes,
-    blindBoxDrawHistory,
+    recentDrawCount: bvids.length,
+    maxRecentDraws: BLIND_BOX_DRAW_HISTORY_LIMIT,
+    usageBytes: usage?.usageBytes ?? 0,
+    lastUpdatedAt: updatedAt,
+  };
+}
+
+function mergeClearedCounts(results: LocalDataCategoryLifecycleResult[]): LocalDataClearedCounts {
+  const cleared: LocalDataClearedCounts = {};
+  const mutable = cleared as Record<string, number | boolean | undefined>;
+  for (const result of results) {
+    if (result.status !== 'success') continue;
+    for (const [key, value] of Object.entries(result.clearResult.cleared)) {
+      if (typeof value === 'number') {
+        const previous = mutable[key];
+        mutable[key] = (typeof previous === 'number' ? previous : 0) + value;
+      } else if (typeof value === 'boolean' && value) {
+        mutable[key] = true;
+      }
+    }
+  }
+  return cleared;
+}
+
+function summarizeLifecycleResults(
+  results: LocalDataCategoryLifecycleResult[],
+): NonNullable<LocalDataOperationResult['categoryResults']> {
+  return {
+    completed: results
+      .filter((result): result is Extract<LocalDataCategoryLifecycleResult, { status: 'success' }> =>
+        result.status === 'success')
+      .map(result => ({
+        id: result.id,
+        label: result.label,
+        beforeCount: result.before.count,
+        beforeUsageBytes: result.before.usageBytes,
+        afterCount: result.after.count,
+        afterUsageBytes: result.after.usageBytes,
+      })),
+    failed: results
+      .filter((result): result is Extract<LocalDataCategoryLifecycleResult, { status: 'failure' }> =>
+        result.status === 'failure')
+      .map(result => ({
+        id: result.id,
+        label: result.label,
+        message: result.message,
+      })),
   };
 }
 

@@ -4,6 +4,7 @@ import type {
 } from '../../shared/local-data-category-contract.ts';
 
 export const BLIND_BOX_DRAW_HISTORY_STORAGE_KEY = 'blindBoxRecentDrawnBvids';
+export const BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY = 'blindBoxRecentDrawnAt';
 export const BLIND_BOX_DRAW_HISTORY_LIMIT = 50;
 
 export interface BlindBoxDrawHistoryStorage {
@@ -40,7 +41,10 @@ export async function recordBlindBoxDrawnBvids(
   return enqueueMutation(async () => {
     const current = await readBlindBoxRecentDrawnBvids(storage);
     const next = mergeBlindBoxDrawHistory(current, drawnBvids);
-    await storage.set({ [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: next });
+    await storage.set({
+      [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: next,
+      [BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY]: Date.now(),
+    });
     return next;
   });
 }
@@ -60,7 +64,10 @@ export async function claimBlindBoxDrawHistory<T>(
     const drawnBvids = normalizeBlindBoxDrawHistory(result.drawnBvids);
     if (drawnBvids.length > 0) {
       const next = mergeBlindBoxDrawHistory(current, drawnBvids);
-      await storage.set({ [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: next });
+      await storage.set({
+        [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: next,
+        [BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY]: Date.now(),
+      });
     }
     return result.value;
   });
@@ -80,10 +87,18 @@ export async function coordinateBlindBoxDrawHistoryClear<T>(
 export async function collectBlindBoxDrawHistoryUsage(
   storage: Pick<BlindBoxDrawHistoryStorage, 'get'>,
 ): Promise<LocalDataCategoryUsage> {
-  const bvids = await getBlindBoxRecentDrawnBvids(storage);
+  await mutationTail;
+  const stored = await storage.get([
+    BLIND_BOX_DRAW_HISTORY_STORAGE_KEY,
+    BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY,
+  ]);
+  const bvids = normalizeBlindBoxDrawHistory(stored[BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]);
+  const present = Object.fromEntries(
+    Object.entries(stored).filter(([, value]) => value !== undefined),
+  );
   return {
     count: bvids.length,
-    usageBytes: bvids.length > 0 ? serializedSize({ [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: bvids }) : 0,
+    usageBytes: Object.keys(present).length > 0 ? serializedSize(present) : 0,
   };
 }
 
@@ -91,9 +106,21 @@ export async function clearBlindBoxDrawHistory(
   storage: BlindBoxDrawHistoryReadStorage,
 ): Promise<number> {
   return coordinateBlindBoxDrawHistoryClear(async before => {
-    await storage.remove([BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]);
+    await storage.remove([
+      BLIND_BOX_DRAW_HISTORY_STORAGE_KEY,
+      BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY,
+    ]);
     return before.length;
   }, storage);
+}
+
+export async function getBlindBoxDrawHistoryUpdatedAt(
+  storage: Pick<BlindBoxDrawHistoryStorage, 'get'> = chrome.storage.local,
+): Promise<number | null> {
+  await mutationTail;
+  const stored = await storage.get([BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY]);
+  const value = stored[BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY];
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }
 
 export async function readBlindBoxDrawHistoryAfterClear(
@@ -102,7 +129,7 @@ export async function readBlindBoxDrawHistoryAfterClear(
   const usage = await collectBlindBoxDrawHistoryUsage(storage);
   return {
     ...usage,
-    empty: usage.count === 0,
+    empty: usage.count === 0 && usage.usageBytes === 0,
   };
 }
 
