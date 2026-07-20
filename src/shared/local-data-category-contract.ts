@@ -8,6 +8,30 @@ export type LocalDataCategoryId =
   | 'blindBoxDrawHistory'
   | 'localSettings';
 
+export type IndependentlyClearableLocalDataCategoryId =
+  | 'history'
+  | 'favorites'
+  | 'currentVideoSubtitles'
+  | 'currentVideoSummaryHighlights'
+  | 'currentVideoQaSessions'
+  | 'dynamicBill';
+
+const INDEPENDENTLY_CLEARABLE_LOCAL_DATA_CATEGORY_IDS = new Set<string>([
+  'history',
+  'favorites',
+  'currentVideoSubtitles',
+  'currentVideoSummaryHighlights',
+  'currentVideoQaSessions',
+  'dynamicBill',
+]);
+
+export function isIndependentlyClearableLocalDataCategoryId(
+  value: unknown,
+): value is IndependentlyClearableLocalDataCategoryId {
+  return typeof value === 'string'
+    && INDEPENDENTLY_CLEARABLE_LOCAL_DATA_CATEGORY_IDS.has(value);
+}
+
 export interface LocalDataClearedCounts {
   historyRecords?: number;
   playerEvents?: number;

@@ -581,6 +581,7 @@ button {
 .settings-data-card,
 .settings-data-empty,
 .settings-data-stat,
+.settings-diagnostic-box,
 .settings-danger-box {
   border: 1px solid #333355;
   border-radius: 8px;
@@ -609,6 +610,8 @@ button {
 
 .settings-data-card p,
 .settings-data-card small,
+.settings-diagnostic-box p,
+.settings-diagnostic-box li,
 .settings-danger-box p,
 .settings-danger-box li {
   color: var(--text-secondary);
@@ -692,6 +695,46 @@ button {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.settings-diagnostic-box {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border-color: rgba(143, 221, 246, 0.32);
+  background: rgba(143, 221, 246, 0.06);
+}
+
+.settings-diagnostic-box strong {
+  color: #FFFFFF;
+  font-size: 14px;
+}
+
+.settings-diagnostic-box p {
+  margin: 5px 0 0;
+}
+
+.settings-diagnostic-scope {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-diagnostic-scope > div {
+  min-width: 0;
+}
+
+.settings-diagnostic-scope span {
+  color: #8FDDF6;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.settings-diagnostic-scope ul {
+  display: grid;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding-left: 18px;
 }
 
 .settings-danger-box {
@@ -1844,6 +1887,7 @@ button {
   .settings-form-grid,
   .settings-data-grid,
   .settings-data-subgrid,
+  .settings-diagnostic-scope,
   .settings-toggle-grid {
     grid-template-columns: 1fr;
   }

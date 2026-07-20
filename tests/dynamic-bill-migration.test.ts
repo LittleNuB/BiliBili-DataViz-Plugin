@@ -58,6 +58,8 @@ const sideEffects = {
   storageClear: 0,
 };
 let afterStorageRemove: (() => Promise<void>) | null = null;
+let beforeStorageSet: ((values: Record<string, unknown>) => Promise<void>) | null = null;
+let afterStorageSet: ((values: Record<string, unknown>) => Promise<void>) | null = null;
 let fetchHandler: ((...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>) | null = null;
 
 Object.defineProperty(globalThis, 'chrome', {
@@ -87,7 +89,9 @@ Object.defineProperty(globalThis, 'chrome', {
         },
         async set(values: Record<string, unknown>) {
           sideEffects.storageSet++;
+          await beforeStorageSet?.(values);
           for (const [key, value] of Object.entries(values)) storageData.set(key, value);
+          await afterStorageSet?.(values);
         },
         async remove(keys: string | string[]) {
           sideEffects.storageRemove++;
@@ -117,6 +121,8 @@ test.beforeEach(async () => {
   await Dexie.delete(DB_NAME);
   storageData.clear();
   afterStorageRemove = null;
+  beforeStorageSet = null;
+  afterStorageSet = null;
   fetchHandler = null;
   resetSideEffects();
 });
@@ -152,6 +158,21 @@ test('first 0.13 read migrates a real 0.12 database before returning any bill da
   assert.equal(pauses[0].startedAt, now - 5 * DAY_MS);
   assert.equal(pauses[0].expiresAt, now + 25 * DAY_MS);
   assert.equal(pauses[0].source, 'migration');
+});
+
+test('migration stores a neutral paused creator name when legacy feedback has no name', async () => {
+  const now = Date.now();
+  const feedback = legacyCreatorFeedback(17, now - DAY_MS, 'missing-name');
+  delete feedback.creatorName;
+  delete feedback.label;
+  await seedLegacyDatabase({ feedback: [feedback] });
+
+  await dynamicBillRepo.getDynamicBillItems();
+  const pauses = await db.dynamicBillCreatorPauses.toArray();
+
+  assert.equal(pauses.length, 1);
+  assert.equal(pauses[0].creatorMid, 17);
+  assert.equal(pauses[0].creatorName, '名称暂不可用的 UP 主');
 });
 
 test('failed migration rolls back every table and a later retry completes cleanly', async () => {
@@ -675,6 +696,40 @@ test('generation excludes same-video BVIDs outside the long evidence window with
   assert.equal(result.items[0].evidence.longWindow.watchedCount, 0);
 });
 
+test('an empty Dynamic Bill generation keeps its generated time until Dynamic Bill data is cleared', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+
+  const generated = await generator.generateDynamicBillItems();
+  const beforeClear = await localDataRepo.getLocalDataPrivacySummary();
+  const beforeUsage = beforeClear.categories.find(category => category.id === 'dynamicBill');
+
+  assert.equal(generated.itemCount, 0);
+  assert.deepEqual(generated.items, []);
+  assert.equal(beforeClear.dynamicBill.lastGeneratedAt, generated.generatedAt);
+  assert.deepEqual(beforeUsage && {
+    count: beforeUsage.count,
+    hasUsage: beforeUsage.usageBytes > 0,
+  }, {
+    count: 0,
+    hasUsage: true,
+  });
+
+  const cleared = await localDataRepo.clearDynamicBillLocalData();
+  const afterClear = await localDataRepo.getLocalDataPrivacySummary();
+  const afterUsage = afterClear.categories.find(category => category.id === 'dynamicBill');
+
+  assert.equal(cleared.status, 'completed');
+  assert.equal(afterClear.dynamicBill.lastGeneratedAt, null);
+  assert.deepEqual(afterUsage && {
+    count: afterUsage.count,
+    usageBytes: afterUsage.usageBytes,
+  }, {
+    count: 0,
+    usageBytes: 0,
+  });
+});
+
 test('legacy feedback injected after the marker cannot change candidates, pauses, or settings counts', async () => {
   await seedLegacyDatabase();
   await migration.ensureDynamicBill013Migration();
@@ -867,6 +922,17 @@ test('registered dynamic bill lifecycle uses real Dexie tables and fails closed 
     assert.deepEqual(successfulLifecycle.after, {
       count: 0,
       usageBytes: 0,
+      details: {
+        followedCreators: 0,
+        followedVideoUpdates: 0,
+        dynamicBillItems: 0,
+        dynamicBillExplanations: 0,
+        dynamicBillCreatorPauses: 0,
+        dynamicBillFeedbackActions: 0,
+        dynamicBillCreatorFeedbackCounts: 0,
+        dynamicBillCreatorReviewPrompts: 0,
+        dynamicBillRotationRecords: 0,
+      },
       empty: true,
     });
   }
@@ -920,6 +986,227 @@ test('registered dynamic bill lifecycle uses real Dexie tables and fails closed 
   }
   assert.equal(await db.dynamicBillItems.count(), 1);
   assert.equal(await db.dynamicBillMigrations.count(), 1);
+});
+
+test('dynamic bill clear waits for an in-flight sync and removes every delayed sync write', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const followingStarted = deferred<void>();
+  const followingResponse = deferred<Response>();
+  fetchHandler = input => {
+    const url = input instanceof Request ? input.url : input.toString();
+    if (url.includes('/x/web-interface/nav')) {
+      return Promise.resolve(biliApiResponse({ isLogin: true, mid: 7001 }));
+    }
+    if (url.includes('/x/relation/followings')) {
+      followingStarted.resolve(undefined);
+      return followingResponse.promise;
+    }
+    if (url.includes('/x/polymer/web-dynamic/v1/feed/all')) {
+      return Promise.resolve(biliApiResponse({ items: [], has_more: false, offset: '' }));
+    }
+    return Promise.reject(new Error(`UNEXPECTED_TEST_REQUEST:${url}`));
+  };
+
+  const syncing = dynamicBillSync.syncDynamicBillUpdates();
+  await followingStarted.promise;
+  let clearSettled = false;
+  const clearing = localDataRepo.clearLocalDataCategory('dynamicBill').finally(() => {
+    clearSettled = true;
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(clearSettled, false);
+
+  followingResponse.resolve(biliApiResponse({
+    list: [{ mid: 7001, uname: '延迟同步 UP', mtime: Math.floor(Date.now() / 1000) - DAY_MS / 1000 }],
+    total: 1,
+  }));
+  const syncResult = await syncing;
+  const clearResult = await clearing;
+
+  assert.equal(syncResult.status, 'success');
+  assert.equal(clearResult.status, 'completed');
+  assert.deepEqual(await Promise.all([
+    db.followedCreators.count(),
+    db.followedVideoUpdates.count(),
+    db.dynamicBillItems.count(),
+    db.dynamicBillExplanations.count(),
+  ]), [0, 0, 0, 0]);
+  assert.equal(storageData.has('dynamicBillSyncState'), false);
+  assert.equal(storageData.has('dynamicBillFilterPreference'), false);
+});
+
+test('dynamic bill clear waits for an in-flight generation and removes its generation metadata', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  await seedCurrentCandidate(Date.now(), 708);
+  const generationStorageReached = deferred<void>();
+  const releaseGeneration = deferred<void>();
+  afterStorageSet = async values => {
+    if (!Object.hasOwn(values, 'dynamicBillLastGeneratedAt')) return;
+    generationStorageReached.resolve(undefined);
+    await releaseGeneration.promise;
+  };
+
+  const generation = generator.generateDynamicBillItems();
+  await generationStorageReached.promise;
+  let clearSettled = false;
+  const clearing = localDataRepo.clearLocalDataCategory('dynamicBill').finally(() => {
+    clearSettled = true;
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(clearSettled, false);
+
+  releaseGeneration.resolve(undefined);
+  const generated = await generation;
+  const clearResult = await clearing;
+  const summary = (await localDataRepo.getLocalDataPrivacySummary()).dynamicBill;
+
+  assert.equal(generated.itemCount, 1);
+  assert.equal(clearResult.status, 'completed');
+  assert.equal(summary.lastGeneratedAt, null);
+  assert.equal(await db.dynamicBillItems.count(), 0);
+  assert.equal(storageData.has('dynamicBillLastGeneratedAt'), false);
+});
+
+test('dynamic bill clear waits for a message filter write and removes the delayed preference', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const filterWriteReached = deferred<void>();
+  const releaseFilterWrite = deferred<void>();
+  const clearStorageReached = deferred<void>();
+  beforeStorageSet = async values => {
+    if (!Object.hasOwn(values, 'dynamicBillFilterPreference')) return;
+    filterWriteReached.resolve(undefined);
+    await releaseFilterWrite.promise;
+  };
+  afterStorageRemove = async () => {
+    clearStorageReached.resolve(undefined);
+  };
+  const { handleRequest } = await import('../src/background/messages/handlers.ts');
+
+  const filterWrite = handleRequest({
+    action: 'UPDATE_DYNAMIC_BILL_FILTER',
+    params: { status: 'processed' },
+  });
+  await filterWriteReached.promise;
+  let clearSettled = false;
+  const clearing = localDataRepo.clearLocalDataCategory('dynamicBill').finally(() => {
+    clearSettled = true;
+  });
+  const clearReachedBeforeWriteFinished = await Promise.race([
+    clearStorageReached.promise.then(() => true),
+    new Promise<false>(resolve => setTimeout(() => resolve(false), 25)),
+  ]);
+  assert.equal(clearReachedBeforeWriteFinished, false);
+  assert.equal(clearSettled, false);
+
+  releaseFilterWrite.resolve(undefined);
+  const response = await filterWrite;
+  const clearResult = await clearing;
+  await clearStorageReached.promise;
+
+  assert.equal(response.success, true);
+  assert.equal(clearResult.status, 'completed');
+  assert.deepEqual(await dynamicBillRepo.getDynamicBillFilterPreference(), {
+    status: 'active',
+    updatedAt: 0,
+  });
+  assert.equal(storageData.has('dynamicBillFilterPreference'), false);
+});
+
+test('stale dynamic sync state is reported without a read-time storage write', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const storedState = {
+    status: 'syncing',
+    stage: 'dynamic_feed',
+    lastStartedAt: Date.now() - 10 * 60 * 1000,
+    lastFinishedAt: 0,
+    lastSuccessAt: 0,
+  };
+  storageData.set('dynamicBillSyncState', storedState);
+  resetSideEffects();
+
+  const observed = await dynamicBillRepo.getDynamicSyncState();
+
+  assert.equal(observed.status, 'failed');
+  assert.equal(observed.lastError, 'SYNC_STALE_TIMEOUT');
+  assert.equal(sideEffects.storageSet, 0);
+  assert.deepEqual(storageData.get('dynamicBillSyncState'), storedState);
+});
+
+test('dynamic bill sync does not start until clear readback has released its operation gate', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const clearStorageReached = deferred<void>();
+  const releaseClear = deferred<void>();
+  afterStorageRemove = async () => {
+    clearStorageReached.resolve(undefined);
+    await releaseClear.promise;
+  };
+  fetchHandler = input => {
+    const url = input instanceof Request ? input.url : input.toString();
+    if (url.includes('/x/web-interface/nav')) {
+      return Promise.resolve(biliApiResponse({ isLogin: true, mid: 7002 }));
+    }
+    if (url.includes('/x/relation/followings')) {
+      return Promise.resolve(biliApiResponse({
+        list: [{ mid: 7002, uname: '清理后同步 UP', mtime: Math.floor(Date.now() / 1000) }],
+        total: 1,
+      }));
+    }
+    if (url.includes('/x/polymer/web-dynamic/v1/feed/all')) {
+      return Promise.resolve(biliApiResponse({ items: [], has_more: false, offset: '' }));
+    }
+    return Promise.reject(new Error(`UNEXPECTED_TEST_REQUEST:${url}`));
+  };
+
+  const clearing = localDataRepo.clearLocalDataCategory('dynamicBill');
+  await clearStorageReached.promise;
+  const syncing = dynamicBillSync.syncDynamicBillUpdates();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  assert.equal(sideEffects.fetch, 0);
+
+  releaseClear.resolve(undefined);
+  const clearResult = await clearing;
+  const syncResult = await syncing;
+
+  assert.equal(clearResult.status, 'completed');
+  assert.equal(syncResult.status, 'success');
+  assert.equal(await db.followedCreators.count(), 1);
+  assert.ok(sideEffects.fetch >= 3);
+});
+
+test('independent history and favorites clears use owner hooks, read back zero, and preserve other categories', async () => {
+  await seedLegacyDatabase({ seedUnrelatedRows: true });
+  storageData.set('lastSyncTime', Date.now());
+
+  const historyResult = await localDataRepo.clearLocalDataCategory('history');
+  assert.equal(historyResult.status, 'completed');
+  assert.equal(historyResult.cleared.historyRecords, 1);
+  assert.deepEqual(historyResult.categoryResults?.completed.map(result => ({
+    id: result.id,
+    afterCount: result.afterCount,
+    afterUsageBytes: result.afterUsageBytes,
+  })), [{ id: 'history', afterCount: 0, afterUsageBytes: 0 }]);
+  assert.equal(await db.watchHistory.count(), 0);
+  assert.equal(storageData.has('lastSyncTime'), false);
+  assert.equal(await db.favoriteItems.count(), 1);
+  assert.equal(await db.dynamicBillItems.count(), 1);
+
+  const favoritesResult = await localDataRepo.clearLocalDataCategory('favorites');
+  assert.equal(favoritesResult.status, 'completed');
+  assert.equal(favoritesResult.cleared.favoriteItems, 1);
+  assert.deepEqual(favoritesResult.categoryResults?.completed.map(result => ({
+    id: result.id,
+    afterCount: result.afterCount,
+    afterUsageBytes: result.afterUsageBytes,
+  })), [{ id: 'favorites', afterCount: 0, afterUsageBytes: 0 }]);
+  assert.equal(await db.favoriteItems.count(), 0);
+  assert.equal(await db.dynamicBillItems.count(), 1);
 });
 
 test('clear all leaves every table and local setting untouched when migration fails', async () => {
@@ -1253,6 +1540,13 @@ function aiResponse(content: Record<string, unknown>): Response {
   return new Response(JSON.stringify({
     choices: [{ message: { content: JSON.stringify(content) } }],
   }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function biliApiResponse(data: unknown): Response {
+  return new Response(JSON.stringify({ code: 0, data }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   });

@@ -8,19 +8,19 @@
     :root {
       --pink: #fb7299;
       --blue: #00a1d6;
-      --mint: #14b8a6;
-      --bg: #f5f7fb;
-      --panel: #222244;
-      --panel-strong: #1a1a2e;
-      --border: #333355;
-      --muted: #a0a0b0;
-      --danger: #ff6b6b;
+      --green: #16a34a;
+      --ink: #1f2937;
+      --muted: #667085;
+      --line: #d6dce8;
+      --soft: #f6f8fb;
+      --panel: #ffffff;
+      --danger: #dc2626;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: var(--bg);
-      color: #fff;
+      background: var(--soft);
+      color: var(--ink);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Arial, sans-serif;
     }
     main {
@@ -28,13 +28,13 @@
       gap: 14px;
       max-width: 1120px;
       margin: 0 auto;
-      padding: 22px;
+      padding: 20px;
     }
     .panel {
       display: grid;
       gap: 14px;
       padding: 16px;
-      border: 1px solid var(--border);
+      border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--panel);
     }
@@ -46,23 +46,28 @@
     }
     h1,
     h2,
+    h3,
     p {
       margin: 0;
     }
+    h1 { font-size: 28px; }
+    h2 { font-size: 20px; }
+    h3 { font-size: 16px; }
     p,
     small,
-    li {
+    li,
+    .pause-meta {
       color: var(--muted);
       font-size: 13px;
-      line-height: 1.6;
+      line-height: 1.55;
     }
     .pill {
       flex: none;
       padding: 5px 9px;
-      border: 1px solid rgba(20, 184, 166, 0.32);
+      border: 1px solid rgba(22, 163, 74, 0.28);
       border-radius: 999px;
-      color: #a8fff0;
-      background: rgba(20, 184, 166, 0.12);
+      color: #0f7a36;
+      background: rgba(22, 163, 74, 0.1);
       font-size: 12px;
       font-weight: 800;
     }
@@ -73,30 +78,33 @@
     }
     .card,
     .stat,
+    .diagnostic-box,
     .danger-box,
-    .notice {
-      border: 1px solid var(--border);
+    .notice,
+    .pause-item {
+      border: 1px solid var(--line);
       border-radius: 8px;
-      background: var(--panel-strong);
+      background: #fff;
     }
     .card {
       display: grid;
       gap: 6px;
-      min-height: 138px;
+      min-height: 134px;
       padding: 12px;
     }
     .card span,
     .stat span {
-      color: #8fddf6;
+      color: #096b8f;
       font-size: 12px;
       font-weight: 800;
     }
     .card strong {
       font-size: 22px;
+      line-height: 1.15;
     }
     .stat-grid {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 8px;
     }
     .stat {
@@ -114,10 +122,10 @@
     button {
       min-height: 36px;
       padding: 0 12px;
-      border: 1px solid #3b3b62;
+      border: 1px solid #c3ccda;
       border-radius: 7px;
-      color: #d8d8e8;
-      background: var(--panel-strong);
+      color: #243041;
+      background: #fff;
       cursor: pointer;
       font: inherit;
       font-size: 13px;
@@ -129,9 +137,9 @@
       background: var(--blue);
     }
     button.danger {
-      border-color: rgba(255, 107, 107, 0.48);
+      border-color: rgba(220, 38, 38, 0.5);
       color: #fff;
-      background: rgba(255, 107, 107, 0.2);
+      background: var(--danger);
     }
     button:disabled {
       cursor: not-allowed;
@@ -140,44 +148,84 @@
     .notice {
       display: none;
       padding: 11px 12px;
-      border-color: rgba(20, 184, 166, 0.34);
-      color: #c7fff5;
-      background: rgba(20, 184, 166, 0.12);
+      border-color: rgba(22, 163, 74, 0.28);
+      color: #0b6130;
+      background: rgba(22, 163, 74, 0.1);
       font-size: 13px;
     }
     .notice.show {
+      display: block;
+    }
+    .pause-list {
+      display: grid;
+      gap: 8px;
+    }
+    .pause-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 11px 12px;
+    }
+    .pause-item.hidden {
+      display: none;
+    }
+    .pause-empty {
+      display: none;
+      padding: 12px;
+      color: var(--muted);
+    }
+    .pause-empty.show {
       display: block;
     }
     .danger-box {
       display: none;
       gap: 12px;
       padding: 14px;
-      border-color: rgba(255, 107, 107, 0.36);
-      background: rgba(255, 107, 107, 0.08);
+      border-color: rgba(220, 38, 38, 0.3);
+      background: #fff7f7;
     }
     .danger-box.show {
       display: grid;
     }
     .danger-box strong {
-      color: #ffd0d0;
+      color: #991b1b;
+    }
+    .diagnostic-box {
+      display: none;
+      gap: 12px;
+      padding: 14px;
+      border-color: rgba(2, 132, 199, 0.3);
+      background: #f0f9ff;
+    }
+    .diagnostic-box.show {
+      display: grid;
+    }
+    .diagnostic-box strong {
+      color: #075985;
+    }
+    .diagnostic-scope {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
     }
     label {
       display: grid;
       gap: 6px;
-      color: #fff;
+      color: var(--ink);
       font-size: 12px;
       font-weight: 800;
     }
     input {
       min-height: 38px;
       padding: 8px 10px;
-      border: 1px solid #3b3b62;
+      border: 1px solid #c3ccda;
       border-radius: 7px;
-      color: #fff;
-      background: #18182b;
+      color: var(--ink);
+      background: #fff;
       font: inherit;
     }
-    @media (max-width: 900px) {
+    @media (max-width: 980px) {
       .grid,
       .stat-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -187,11 +235,13 @@
       main {
         padding: 12px;
       }
-      .head {
+      .head,
+      .pause-item {
         display: grid;
       }
       .grid,
-      .stat-grid {
+      .stat-grid,
+      .diagnostic-scope {
         grid-template-columns: 1fr;
       }
     }
@@ -203,7 +253,7 @@
       <div class="head">
         <div>
           <h1>设置</h1>
-          <p>AI 与本地数据。这里展示本地数据摘要，并提供缓存清理、索引重建和危险清理入口。</p>
+          <p>AI 服务、功能开关和本地数据管理集中在这里。</p>
         </div>
         <span class="pill">状态已读取</span>
       </div>
@@ -213,36 +263,54 @@
       <div class="head">
         <div>
           <h2>本地数据与隐私管理</h2>
-          <p>这里只展示数量、覆盖范围和最近时间，不展示完整记录、敏感标识或本地文件路径。</p>
+          <p>这里只展示数量、占用和最近时间，不展示完整记录、敏感标识或本地文件路径。</p>
         </div>
       </div>
 
       <div id="notice" class="notice" role="status"></div>
 
       <div class="grid">
-        <article class="card">
+        <article class="card" data-card="history">
           <span>观看历史</span>
           <strong id="history-count">128 条</strong>
-          <p>覆盖 2026/05/20 10:30 至 2026/06/19 09:10</p>
-          <small>最近同步：2026/06/19 09:15</small>
+          <p id="history-detail">覆盖 2026/05/20 10:30 至 2026/06/19 09:10</p>
+          <small id="history-time">占用 4.0 KB；最近同步：2026/06/19 09:15</small>
         </article>
-        <article class="card">
+        <article class="card" data-card="favorites">
           <span>收藏与智能索引</span>
           <strong id="favorite-count">24 条</strong>
-          <p id="favorite-detail">B 站报告 28 条，本地保存 24 条，已索引 21 条。</p>
-          <small>最近同步：2026/06/18 22:10</small>
+          <p id="favorite-detail">B站报告 28 条，本地保存 24 条，已索引 21 条。</p>
+          <small id="favorite-time">占用 2.0 KB；最近同步：2026/06/18 22:10</small>
         </article>
-        <article class="card">
-          <span>当前视频字幕缓存</span>
-          <strong id="subtitle-count">42 段</strong>
-          <p id="subtitle-detail">已缓存 2 个视频的字幕正文证据。</p>
-          <small id="subtitle-time">最近缓存：2026/06/19 08:40</small>
+        <article class="card" data-card="subtitles">
+          <span>B站字幕正文</span>
+          <strong id="subtitle-count">3 个来源</strong>
+          <p id="subtitle-detail">已缓存 2 个视频分P、42 段字幕正文。</p>
+          <small id="subtitle-time">占用 8.0 KB；最近缓存：2026/06/19 08:40</small>
         </article>
-        <article class="card">
+        <article class="card" data-card="summary">
+          <span>摘要与亮点</span>
+          <strong id="summary-count">2 个分P</strong>
+          <p id="summary-detail">用于恢复已经生成的摘要与亮点，不会自动补发请求。</p>
+          <small id="summary-time">占用 2.0 KB；最近生成：2026/06/19 08:55</small>
+        </article>
+        <article class="card" data-card="qa">
+          <span>问答会话</span>
+          <strong id="qa-count">1 个会话</strong>
+          <p id="qa-detail">仅保存问题、已验证回答、引用和必要来源，不保存完整视频正文。</p>
+          <small id="qa-time">占用 1.0 KB；最近使用：2026/06/19 09:00</small>
+        </article>
+        <article class="card" data-card="dynamic">
           <span>动态账单</span>
           <strong id="dynamic-count">6 项</strong>
-          <p>关注快照 12 位，近期待处理视频 8 条。</p>
-          <small>最近生成：2026/06/19 09:05</small>
+          <p id="dynamic-detail">关注快照 12 位，近期视频投稿 8 条。</p>
+          <small id="dynamic-time">占用 3.0 KB；最近生成：2026/06/19 09:05</small>
+        </article>
+        <article class="card" data-card="blind-box">
+          <span>盲盒抽取记录</span>
+          <strong id="blind-count">2 条</strong>
+          <p>只记录最近 50 次抽取用于减少重复，不提供单独开关或单独清理入口。</p>
+          <small>占用 96 B；最近记录：2026/06/19 09:08</small>
         </article>
       </div>
 
@@ -250,14 +318,69 @@
         <div class="stat"><span>待索引收藏</span><strong id="pending-index">2</strong></div>
         <div class="stat"><span>索引失败</span><strong id="failed-index">1</strong></div>
         <div class="stat"><span>过期字幕片段</span><strong id="stale-subtitle">4</strong></div>
-        <div class="stat"><span>动态反馈</span><strong id="dynamic-feedback">3</strong></div>
+        <div class="stat"><span>摘要亮点缓存</span><strong id="summary-stat">2</strong></div>
+        <div class="stat"><span>问答会话</span><strong id="qa-stat">1</strong></div>
+      </div>
+
+      <div class="pause-list" data-testid="settings-dynamic-bill-pauses">
+        <h3>动态账单暂停提醒</h3>
+        <article class="pause-item" data-pause-item>
+          <div>
+            <strong>罗翔说刑法</strong>
+            <div class="pause-meta">约 4 天后自动恢复；到期时间 2026/06/23 08:00</div>
+          </div>
+          <button type="button" data-restore-pause>恢复提醒</button>
+        </article>
+        <article class="pause-item" data-pause-item>
+          <div>
+            <strong>科技观察员</strong>
+            <div class="pause-meta">即将自动恢复；到期时间 2026/06/19 18:00</div>
+          </div>
+          <button type="button" data-restore-pause>恢复提醒</button>
+        </article>
+        <div id="pause-empty" class="pause-empty">当前没有暂停提醒的 UP。</div>
       </div>
 
       <div class="actions">
         <button id="refresh" type="button">刷新状态</button>
+        <button id="diagnostic" type="button">导出诊断摘要</button>
+        <button id="clear-history" type="button">清理观看历史</button>
+        <button id="clear-favorites" type="button">清理收藏与索引</button>
         <button id="clear-subtitles" type="button">清理字幕缓存</button>
+        <button id="clear-summary" type="button">清理摘要亮点缓存</button>
+        <button id="clear-qa" type="button">清理问答会话</button>
+        <button id="clear-dynamic" type="button">清理动态账单</button>
         <button id="rebuild-index" class="primary" type="button">重建智能收藏索引</button>
+        <button id="partial-failure" type="button">模拟部分失败</button>
         <button id="show-danger" class="danger" type="button">清理本地数据</button>
+      </div>
+
+      <div id="diagnostic-box" class="diagnostic-box" role="dialog" aria-label="确认导出诊断摘要">
+        <div>
+          <strong>确认导出诊断摘要</strong>
+          <p>诊断文件只会保存到本机，不会自动上传。</p>
+        </div>
+        <div class="diagnostic-scope">
+          <div>
+            <strong>包含</strong>
+            <ul>
+              <li>本地数据类别名称、数量和占用</li>
+              <li>动态账单与盲盒的宽泛状态和必要时间</li>
+            </ul>
+          </div>
+          <div>
+            <strong>不包含</strong>
+            <ul>
+              <li>完整记录或正文</li>
+              <li>登录凭据、密钥或本地敏感路径</li>
+              <li>原始字幕地址、视频内部标识或内容哈希</li>
+            </ul>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="confirm-diagnostic" type="button">确认导出</button>
+          <button id="cancel-diagnostic" type="button">取消</button>
+        </div>
       </div>
 
       <div id="danger-box" class="danger-box">
@@ -268,8 +391,8 @@
         <ul>
           <li>观看历史、播放器事件和统计聚合。</li>
           <li>收藏夹快照、智能收藏索引和收藏问答本地依据。</li>
-          <li>当前视频字幕缓存、动态账单记录、动态账单反馈和解释。</li>
-          <li>本地 AI 服务设置、API Key 保存状态和功能开关。</li>
+          <li>B站字幕正文、摘要与亮点、问答会话、动态账单记录和盲盒抽取记录。</li>
+          <li>本地 AI 服务设置、密钥保存状态和功能开关。</li>
         </ul>
         <label>
           输入“清理本地数据”确认
@@ -285,34 +408,139 @@
 
   <script>
     const notice = document.getElementById('notice');
+    const diagnosticBox = document.getElementById('diagnostic-box');
     const dangerBox = document.getElementById('danger-box');
     const confirmText = document.getElementById('confirm-text');
     const confirmClear = document.getElementById('confirm-clear');
+
+    if (new URLSearchParams(window.location.search).get('pauses') === 'empty') {
+      for (const item of document.querySelectorAll('[data-pause-item]')) {
+        item.classList.add('hidden');
+      }
+      document.getElementById('pause-empty').classList.add('show');
+    }
 
     function showNotice(text) {
       notice.textContent = text;
       notice.classList.add('show');
     }
 
+    function zero(id, text) {
+      document.getElementById(id).textContent = text;
+    }
+
     document.getElementById('refresh').addEventListener('click', () => {
       showNotice('本地数据状态已刷新。');
     });
 
+    document.getElementById('diagnostic').addEventListener('click', () => {
+      diagnosticBox.classList.add('show');
+    });
+
+    document.getElementById('cancel-diagnostic').addEventListener('click', () => {
+      diagnosticBox.classList.remove('show');
+    });
+
+    document.getElementById('confirm-diagnostic').addEventListener('click', () => {
+      window.__lastDiagnosticExport = {
+        '导出时间': '2026-06-19T01:15:00.000Z',
+        '应用': { '产品': 'Bili-Bill', '诊断格式版本': 1 },
+        '隐私边界': {
+          '包含': ['本地数据类别名称、数量和占用', '动态账单与盲盒的宽泛状态和必要时间'],
+          '不包含': ['完整记录或正文', '登录凭据和浏览器资料目录', '完整或可恢复的密钥', '原始字幕地址', '本地敏感路径', '视频内部标识和内容哈希']
+        },
+        '本地数据类别': [
+          { '类别': '观看历史', '数量': 128, '占用字节': 4096 },
+          { '类别': '收藏与智能索引', '数量': 24, '占用字节': 2048 },
+          { '类别': 'B站字幕正文', '数量': 3, '占用字节': 8192 },
+          { '类别': '摘要与亮点', '数量': 2, '占用字节': 2048 },
+          { '类别': '问答会话', '数量': 1, '占用字节': 1024 },
+          { '类别': '动态账单', '数量': 9, '占用字节': 3072 },
+          { '类别': '盲盒抽取记录', '数量': 2, '占用字节': 96 },
+          { '类别': '本地 AI 设置', '数量': 3, '占用字节': 512 }
+        ],
+        '功能状态': {
+          '当前视频文本': { 'B站字幕来源': 3, 'B站字幕片段': 42, '已缓存视频分P': 3, '过期片段': 4 },
+          '当前视频助手': { '摘要与亮点分P': 2, '问答会话': 1 },
+          '动态账单': { '账单项': 6, '暂停中的UP主': 2, '解释': 1, '最近生成': '2026-06-19T01:15:00.000Z', '最近同步': '2026-06-19T01:10:00.000Z', '同步状态': '同步完成' },
+          '视频盲盒': { '最近抽取': 2, '最多保留': 50 }
+        }
+      };
+      diagnosticBox.classList.remove('show');
+      showNotice('已导出诊断摘要；文件只包含数量、占用和状态，不包含完整记录、正文、登录凭据、密钥或本地敏感路径。');
+    });
+
+    document.getElementById('clear-history').addEventListener('click', () => {
+      zero('history-count', '0 条');
+      zero('history-detail', '还没有本地观看记录。');
+      zero('history-time', '占用 0 B；最近同步：暂无记录');
+      document.getElementById('clear-history').disabled = true;
+      showNotice('已清理观看历史：清理前共 128 项本地数据，回读后为 0。');
+    });
+
+    document.getElementById('clear-favorites').addEventListener('click', () => {
+      zero('favorite-count', '0 条');
+      zero('favorite-detail', 'B站报告 0 条，本地保存 0 条，已索引 0 条。');
+      zero('favorite-time', '占用 0 B；最近同步：暂无记录');
+      zero('pending-index', '0');
+      zero('failed-index', '0');
+      document.getElementById('clear-favorites').disabled = true;
+      document.getElementById('rebuild-index').disabled = true;
+      showNotice('已清理收藏与智能索引：清理前共 28 项本地数据，回读后为 0。');
+    });
+
     document.getElementById('clear-subtitles').addEventListener('click', () => {
-      document.getElementById('subtitle-count').textContent = '0 段';
-      document.getElementById('subtitle-detail').textContent = '还没有缓存的字幕正文。';
-      document.getElementById('subtitle-time').textContent = '最近缓存：暂无记录';
-      document.getElementById('stale-subtitle').textContent = '0';
+      zero('subtitle-count', '0 个来源');
+      zero('subtitle-detail', '还没有缓存的字幕正文。');
+      zero('subtitle-time', '占用 0 B；最近缓存：暂无记录');
+      zero('stale-subtitle', '0');
       document.getElementById('clear-subtitles').disabled = true;
-      showNotice('已清理当前视频字幕缓存：移除 3 条来源记录和 42 段字幕正文。');
+      showNotice('已清理B站字幕正文：移除 3 条来源记录和 42 段字幕正文。');
+    });
+
+    document.getElementById('clear-summary').addEventListener('click', () => {
+      zero('summary-count', '0 个分P');
+      zero('summary-detail', '还没有缓存的摘要与亮点结果。');
+      zero('summary-time', '占用 0 B；最近生成：暂无记录');
+      zero('summary-stat', '0');
+      showNotice('已清理摘要与亮点：移除 2 个分P的生成结果。');
+    });
+
+    document.getElementById('clear-qa').addEventListener('click', () => {
+      zero('qa-count', '0 个会话');
+      zero('qa-detail', '还没有保存的问答会话。');
+      zero('qa-time', '占用 0 B；最近使用：暂无记录');
+      zero('qa-stat', '0');
+      showNotice('已清理问答会话。');
+    });
+
+    document.getElementById('clear-dynamic').addEventListener('click', () => {
+      zero('dynamic-count', '0 项');
+      zero('dynamic-detail', '关注快照 0 位，近期视频投稿 0 条。');
+      zero('dynamic-time', '占用 0 B；最近生成：暂无记录');
+      document.getElementById('clear-dynamic').disabled = true;
+      showNotice('已清理动态账单：清理前共 9 项本地数据，回读后为 0。');
     });
 
     document.getElementById('rebuild-index').addEventListener('click', () => {
-      document.getElementById('favorite-detail').textContent = 'B 站报告 28 条，本地保存 24 条，已索引 24 条。';
-      document.getElementById('pending-index').textContent = '0';
-      document.getElementById('failed-index').textContent = '0';
+      zero('favorite-detail', 'B站报告 28 条，本地保存 24 条，已索引 24 条。');
+      zero('pending-index', '0');
+      zero('failed-index', '0');
       showNotice('智能收藏索引已重新生成：本地收藏 24 条，处理 24 条，成功 24 条，失败 0 条，跳过 0 条。');
     });
+
+    document.getElementById('partial-failure').addEventListener('click', () => {
+      showNotice('已完成 3 类数据清理并完成回读。以下类别清理失败：收藏与智能索引、问答会话。已完成的类别不会回滚，请稍后重试失败类别。');
+    });
+
+    for (const button of document.querySelectorAll('[data-restore-pause]')) {
+      button.addEventListener('click', () => {
+        const item = button.closest('[data-pause-item]');
+        const name = item.querySelector('strong').textContent;
+        item.classList.add('hidden');
+        showNotice(`已恢复「${name}」的动态账单提醒；这不会修改 B 站关注关系。`);
+      });
+    }
 
     document.getElementById('show-danger').addEventListener('click', () => {
       dangerBox.classList.add('show');
@@ -330,15 +558,21 @@
     });
 
     confirmClear.addEventListener('click', () => {
-      document.getElementById('history-count').textContent = '0 条';
-      document.getElementById('favorite-count').textContent = '0 条';
-      document.getElementById('dynamic-count').textContent = '0 项';
-      document.getElementById('favorite-detail').textContent = 'B 站报告 0 条，本地保存 0 条，已索引 0 条。';
-      document.getElementById('pending-index').textContent = '0';
-      document.getElementById('failed-index').textContent = '0';
-      document.getElementById('dynamic-feedback').textContent = '0';
+      zero('history-count', '0 条');
+      zero('favorite-count', '0 条');
+      zero('subtitle-count', '0 个来源');
+      zero('summary-count', '0 个分P');
+      zero('qa-count', '0 个会话');
+      zero('dynamic-count', '0 项');
+      zero('blind-count', '0 条');
+      zero('favorite-detail', 'B站报告 0 条，本地保存 0 条，已索引 0 条。');
+      zero('pending-index', '0');
+      zero('failed-index', '0');
+      zero('stale-subtitle', '0');
+      zero('summary-stat', '0');
+      zero('qa-stat', '0');
       dangerBox.classList.remove('show');
-      showNotice('已清理本地数据：观看历史 128 条、收藏 24 条、字幕正文 0 段、动态账单 6 项。本地 AI 设置和功能开关也已恢复为默认状态。');
+      showNotice('已清理本地数据：观看历史 128 条、收藏 24 条、字幕正文 42 段、摘要与亮点 2 个分P、问答会话 1 个、动态账单 6 项、盲盒抽取记录 2 条。本地 AI 设置和功能开关也已恢复为默认状态。');
     });
   </script>
 </body>

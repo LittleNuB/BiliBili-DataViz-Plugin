@@ -12,8 +12,13 @@ import {
 } from '../storage/favorite-repo';
 import { assessFavoriteSyncCompleteness } from './sync-audit';
 import { persistFavoriteSyncData } from './sync-persistence';
+import { runFavoriteDataOperation } from './operation-control';
 
-export async function syncFavorites(): Promise<FavoriteSyncResult> {
+export function syncFavorites(): Promise<FavoriteSyncResult> {
+  return runFavoriteDataOperation(syncFavoritesExclusive);
+}
+
+async function syncFavoritesExclusive(): Promise<FavoriteSyncResult> {
   const [previousFolderCount, previousItemCount] = await Promise.all([
     countFavoriteFolders(),
     countFavoriteItems(),

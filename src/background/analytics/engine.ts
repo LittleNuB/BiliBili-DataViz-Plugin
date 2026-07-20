@@ -10,6 +10,7 @@ import { getExperimentData } from './suggestions';
 import { db } from '../storage/db';
 import { upsertAggregate } from '../storage/aggregate-repo';
 import { getRecordsByDateRange } from '../storage/watch-history-repo';
+import { runHistoryAggregateDataOperation } from '../sync/sync-control';
 
 interface AggregateComputeRange {
   oldestFetchedAt?: number | null;
@@ -22,7 +23,15 @@ export { getCreatorData } from './creator';
 export { getBehaviorData } from './behavior';
 export { getExperimentData } from './suggestions';
 
-export async function computeDailyAggregate(forDate?: string): Promise<DailyAggregate> {
+export async function computeDailyAggregate(forDate?: string): Promise<DailyAggregate | null> {
+  let result: DailyAggregate | null = null;
+  await runHistoryAggregateDataOperation(async () => {
+    result = await computeDailyAggregateInsideHistoryGate(forDate);
+  });
+  return result;
+}
+
+async function computeDailyAggregateInsideHistoryGate(forDate?: string): Promise<DailyAggregate> {
   const date = forDate ?? dateKey();
   const aggregate = await aggregateDay(date);
 
@@ -31,6 +40,7 @@ export async function computeDailyAggregate(forDate?: string): Promise<DailyAggr
   const score = await computeAndStoreScore(date, records, [aggregate]);
   aggregate.efficiencyScore = score;
 
+  await historyAggregateTestHook('before_daily_aggregate_write');
   await upsertAggregate(aggregate);
   console.log(`[BiliViz] Computed daily aggregate for ${date}: ${aggregate.videoCount} videos, score=${score}`);
 
@@ -38,20 +48,31 @@ export async function computeDailyAggregate(forDate?: string): Promise<DailyAggr
 }
 
 export async function computeStoredHistoryAggregates(range?: AggregateComputeRange): Promise<void> {
-  const records = range?.oldestFetchedAt && range.newestFetchedAt
-    ? await getRecordsByDateRange(
-      dateKey(new Date(range.oldestFetchedAt * 1000)),
-      dateKey(new Date(range.newestFetchedAt * 1000)),
-    )
-    : await db.watchHistory.toArray();
-  const dates = new Set(records.map(r => dateKey(new Date(r.viewAt * 1000))));
+  await runHistoryAggregateDataOperation(async () => {
+    const records = range?.oldestFetchedAt && range.newestFetchedAt
+      ? await getRecordsByDateRange(
+        dateKey(new Date(range.oldestFetchedAt * 1000)),
+        dateKey(new Date(range.newestFetchedAt * 1000)),
+      )
+      : await db.watchHistory.toArray();
+    const dates = new Set(records.map(r => dateKey(new Date(r.viewAt * 1000))));
 
-  if (dates.size === 0) {
-    await computeDailyAggregate();
-    return;
-  }
+    if (dates.size === 0) {
+      await computeDailyAggregateInsideHistoryGate();
+      return;
+    }
 
-  for (const date of dates) {
-    await computeDailyAggregate(date);
-  }
+    for (const date of dates) {
+      await computeDailyAggregateInsideHistoryGate(date);
+    }
+  });
+}
+
+type HistoryAggregateTestPhase = 'before_daily_aggregate_write';
+
+async function historyAggregateTestHook(phase: HistoryAggregateTestPhase): Promise<void> {
+  const hook = (globalThis as typeof globalThis & {
+    __biliBillHistoryAggregateTestHook__?: (phase: HistoryAggregateTestPhase) => Promise<void>;
+  }).__biliBillHistoryAggregateTestHook__;
+  if (hook) await hook(phase);
 }

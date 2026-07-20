@@ -19,9 +19,14 @@ import {
   normalizeHistoryPageLimit,
 } from '../../shared/history-sync-core';
 import type { HistorySyncMode, HistorySyncProgress } from '../../shared/types/history-sync';
-import { beginHistorySyncAbortScope, endHistorySyncAbortScope } from './sync-control';
+import {
+  beginHistorySyncAbortScope,
+  endHistorySyncAbortScope,
+  runHistorySyncDataOperation,
+} from './sync-control';
 import { abortableDelay } from '../utils/abortable-delay';
 import { markDynamicBillItemsConsumedByHistoryRecords } from '../storage/dynamic-bill-repo';
+import { runDynamicBillDataOperation } from '../dynamic-bill/operation-control';
 import { executeHistorySync } from './history-sync-executor';
 
 export interface BackfillResult extends Omit<HistorySyncProgress, 'syncing' | 'startedAt' | 'updatedAt'> {}
@@ -30,10 +35,18 @@ export interface HistorySyncOptions {
   maxPages?: number;
 }
 
-export async function runInitialBackfill(
+export function runInitialBackfill(
   mode: HistorySyncMode = 'full',
   force = false,
   options: HistorySyncOptions = {},
+): Promise<BackfillResult> {
+  return runHistorySyncDataOperation(() => runInitialBackfillExclusive(mode, force, options));
+}
+
+async function runInitialBackfillExclusive(
+  mode: HistorySyncMode,
+  force: boolean,
+  options: HistorySyncOptions,
 ): Promise<BackfillResult> {
   const startingAt = Date.now();
   if (await getHistorySyncing()) {
@@ -89,7 +102,9 @@ async function runHistorySyncUnlocked(
       updateDeviceTypes: updateDeviceTypesFromHistory,
       fetchVideoInfo: batchFetchVideoInfo,
       insertRecords: bulkInsert,
-      afterInsert: markDynamicBillItemsConsumedByHistoryRecords,
+      afterInsert: records => runDynamicBillDataOperation(
+        () => markDynamicBillItemsConsumedByHistoryRecords(records),
+      ),
       writeProgress,
       delay: abortableDelay,
     },

@@ -44,10 +44,27 @@ const storageValues: Record<string, unknown> = {};
 const storageGetCounts = new Map<string, number>();
 let rejectPrimaryTextSelectionStorageReads = false;
 let primaryTextSelectionStorageGetGate: Promise<void> | null = null;
+let storageRemoveGate: {
+  key: string;
+  reached: () => void;
+  release: Promise<void>;
+} | null = null;
+let storageSetGate: {
+  key: string;
+  reached: () => void;
+  release: Promise<void>;
+} | null = null;
+let storageGetGate: {
+  key: string;
+  reached: () => void;
+  release: Promise<void>;
+} | null = null;
 
 installChromeFake();
 const {
   clearTemporaryCurrentVideoTranscriptCache,
+  computeDailyAggregate,
+  computeStoredHistoryAggregates,
   db,
   getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys,
   getTemporaryCurrentVideoTranscriptSegments,
@@ -846,6 +863,530 @@ test('handler clear paths prevent a preflight request from restoring QA sessions
         assert.equal(fetchCalls, 0);
         assert.equal(await db.currentVideoQaSessions.count(), 0);
       } finally {
+        globalThis.fetch = originalFetch;
+        await db.currentVideoQaSessions.clear();
+      }
+    });
+  }
+});
+
+test('clear all suppresses a heartbeat after history readback while later categories are clearing', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  await Promise.all([
+    db.watchHistory.clear(),
+    db.playerEvents.clear(),
+    db.dailyAggregates.clear(),
+    db.favoriteFolders.clear(),
+  ]);
+  await db.playerEvents.add({
+    bvid: 'BV1BeforeClearHeartbeat',
+    cid: 7_301,
+    eventType: 'heartbeat',
+    timestamp: 1,
+    currentTime: 30,
+    duration: 120,
+    playbackRate: 1,
+    tabId: 18_650,
+  });
+  await db.favoriteFolders.add({
+    mediaId: 7_301,
+    title: '清理顺序测试收藏夹',
+    mediaCount: 0,
+    syncedAt: 1,
+  });
+
+  const laterCategoryReached = deferred<void>();
+  const releaseLaterCategory = deferred<void>();
+  storageRemoveGate = {
+    key: 'dynamicBillSyncState',
+    reached: () => laterCategoryReached.resolve(),
+    release: releaseLaterCategory.promise,
+  };
+
+  const tabId = 18_650;
+  const senderUrl = 'https://www.bilibili.com/video/BV1DuringClearHeartbeat';
+  const clearing = sendRequest<{ status: string }>({
+    action: 'CLEAR_ALL_LOCAL_DATA',
+    params: { confirmation: '清理本地数据' },
+  }, tabId, senderUrl);
+
+  try {
+    await laterCategoryReached.promise;
+    assert.equal(await db.favoriteFolders.count(), 0);
+    assert.equal(await db.playerEvents.count(), 0);
+
+    const heartbeat = await sendContentMessage({
+      action: 'PLAYER_HEARTBEAT',
+      payload: {
+        bvid: 'BV1DuringClearHeartbeat',
+        cid: 7_302,
+        currentTime: 45,
+        duration: 120,
+        playbackRate: 1,
+      },
+    }, tabId, senderUrl);
+    assert.equal(heartbeat.success, true);
+    assert.equal(await db.playerEvents.count(), 0);
+
+    releaseLaterCategory.resolve();
+    const clearResult = await clearing;
+    assert.equal(clearResult.success, true);
+    assert.equal(clearResult.data?.status, 'completed');
+    assert.equal(await db.playerEvents.count(), 0);
+  } finally {
+    releaseLaterCategory.resolve();
+    storageRemoveGate = null;
+    await clearing.catch(() => undefined);
+  }
+});
+
+test('history-only clear waits for stored-history aggregation and removes its final write', async () => {
+  resetChromeHarness();
+  await Promise.all([
+    db.watchHistory.clear(),
+    db.playerEvents.clear(),
+    db.dailyAggregates.clear(),
+  ]);
+  const aggregateWriteReached = deferred<void>();
+  const releaseAggregateWrite = deferred<void>();
+  installHistoryAggregateTestHook(async () => {
+    aggregateWriteReached.resolve();
+    await releaseAggregateWrite.promise;
+  });
+
+  const aggregating = computeStoredHistoryAggregates();
+  await aggregateWriteReached.promise;
+  const clearing = sendRequest<{ status: string }>({
+    action: 'CLEAR_LOCAL_DATA_CATEGORY',
+    params: { categoryId: 'history' },
+  }, 18_654, 'https://www.bilibili.com/video/BV1HistoryAggregate');
+  let clearSettled = false;
+  void clearing.then(
+    () => { clearSettled = true; },
+    () => { clearSettled = true; },
+  );
+
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(clearSettled, false);
+
+    releaseAggregateWrite.resolve();
+    await aggregating;
+    const clearResult = await clearing;
+    assert.equal(clearResult.success, true);
+    assert.equal(clearResult.data?.status, 'completed');
+    assert.equal(await db.dailyAggregates.count(), 0);
+  } finally {
+    releaseAggregateWrite.resolve();
+    await Promise.allSettled([aggregating, clearing]);
+  }
+});
+
+test('clear all waits for daily aggregation and removes its final write', async () => {
+  resetChromeHarness();
+  await Promise.all([
+    db.watchHistory.clear(),
+    db.playerEvents.clear(),
+    db.dailyAggregates.clear(),
+  ]);
+  const aggregateWriteReached = deferred<void>();
+  const releaseAggregateWrite = deferred<void>();
+  installHistoryAggregateTestHook(async () => {
+    aggregateWriteReached.resolve();
+    await releaseAggregateWrite.promise;
+  });
+
+  const aggregating = computeDailyAggregate('2026-07-20');
+  await aggregateWriteReached.promise;
+  const clearing = sendRequest<{ status: string }>({
+    action: 'CLEAR_ALL_LOCAL_DATA',
+    params: { confirmation: '清理本地数据' },
+  }, 18_655, 'https://www.bilibili.com/video/BV1DailyAggregate');
+  let clearSettled = false;
+  void clearing.then(
+    () => { clearSettled = true; },
+    () => { clearSettled = true; },
+  );
+
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(clearSettled, false);
+
+    releaseAggregateWrite.resolve();
+    assert.ok(await aggregating);
+    const clearResult = await clearing;
+    assert.equal(clearResult.success, true);
+    assert.equal(clearResult.data?.status, 'completed');
+    assert.equal(await db.dailyAggregates.count(), 0);
+  } finally {
+    releaseAggregateWrite.resolve();
+    await Promise.allSettled([aggregating, clearing]);
+  }
+});
+
+test('clear all waits for an earlier config write and removes its completed value', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const configWriteReached = deferred<void>();
+  const releaseConfigWrite = deferred<void>();
+  storageSetGate = {
+    key: 'userConfig',
+    reached: () => configWriteReached.resolve(),
+    release: releaseConfigWrite.promise,
+  };
+  const laterCategoryReached = deferred<void>();
+  const releaseLaterCategory = deferred<void>();
+  let reachedLaterCategory = false;
+  storageRemoveGate = {
+    key: 'dynamicBillSyncState',
+    reached: () => {
+      reachedLaterCategory = true;
+      laterCategoryReached.resolve();
+    },
+    release: releaseLaterCategory.promise,
+  };
+
+  const tabId = 18_651;
+  const senderUrl = 'https://www.bilibili.com/video/BV1ConfigBeforeClear';
+  const updating = sendRequest<void>({
+    action: 'UPDATE_CONFIG',
+    params: {
+      ai: {
+        baseURL: 'https://example.invalid',
+        apiKey: 'fixture-config-key',
+        chatModel: 'fixture-model',
+      },
+    },
+  }, tabId, senderUrl);
+  await configWriteReached.promise;
+
+  const clearing = sendRequest<{ status: string }>({
+    action: 'CLEAR_ALL_LOCAL_DATA',
+    params: { confirmation: '清理本地数据' },
+  }, tabId, senderUrl);
+
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(reachedLaterCategory, false);
+
+    storageSetGate = null;
+    releaseConfigWrite.resolve();
+    const updateResult = await updating;
+    assert.equal(updateResult.success, true);
+
+    await laterCategoryReached.promise;
+    releaseLaterCategory.resolve();
+    const clearResult = await clearing;
+    assert.equal(clearResult.success, true);
+    assert.equal(clearResult.data?.status, 'completed');
+    assert.equal(storageValues.userConfig, null);
+    const revision = storageValues.userConfigRevision as {
+      token?: string;
+      configPresent?: boolean;
+      mutation?: string;
+    };
+    assert.equal(typeof revision.token, 'string');
+    assert.equal(revision.configPresent, false);
+    assert.equal(revision.mutation, 'clear');
+    assert.doesNotMatch(JSON.stringify(revision), /fixture-config-key/);
+  } finally {
+    storageSetGate = null;
+    storageRemoveGate = null;
+    releaseConfigWrite.resolve();
+    releaseLaterCategory.resolve();
+    await Promise.allSettled([updating, clearing]);
+  }
+});
+
+test('config writes started during clear all are rejected through final readback', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  storageValues.userConfig = {
+    ai: { apiKey: 'fixture-existing-key' },
+  };
+  const laterCategoryReached = deferred<void>();
+  const releaseLaterCategory = deferred<void>();
+  storageRemoveGate = {
+    key: 'dynamicBillSyncState',
+    reached: () => laterCategoryReached.resolve(),
+    release: releaseLaterCategory.promise,
+  };
+
+  const tabId = 18_652;
+  const senderUrl = 'https://www.bilibili.com/video/BV1ConfigDuringClear';
+  const clearing = sendRequest<{ status: string }>({
+    action: 'CLEAR_ALL_LOCAL_DATA',
+    params: { confirmation: '清理本地数据' },
+  }, tabId, senderUrl);
+
+  try {
+    await laterCategoryReached.promise;
+    const updateResult = await sendRequest<void>({
+      action: 'UPDATE_CONFIG',
+      params: {
+        ai: {
+          baseURL: 'https://example.invalid',
+          apiKey: 'fixture-late-key',
+          chatModel: 'fixture-model',
+        },
+      },
+    }, tabId, senderUrl);
+    assert.equal(updateResult.success, false);
+    assert.equal(updateResult.error, 'LOCAL_SETTINGS_CLEAR_IN_PROGRESS');
+
+    releaseLaterCategory.resolve();
+    const clearResult = await clearing;
+    assert.equal(clearResult.success, true);
+    assert.equal(clearResult.data?.status, 'completed');
+    assert.equal(storageValues.userConfig, null);
+  } finally {
+    storageRemoveGate = null;
+    releaseLaterCategory.resolve();
+    await clearing.catch(() => undefined);
+  }
+});
+
+test('concurrent Settings pages serialize UPDATE_CONFIG and reject the stale second save', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_653;
+  const senderUrl = 'https://www.bilibili.com/video/BV1ConcurrentSettings';
+  const snapshotResult = await sendRequest<{
+    config: Record<string, unknown>;
+    revision: string;
+  }>({ action: 'GET_CONFIG_SNAPSHOT' }, tabId, senderUrl);
+  assert.equal(snapshotResult.success, true);
+  assert.ok(snapshotResult.data);
+  const expectedConfig = snapshotResult.data.config;
+  const expectedConfigRevision = snapshotResult.data.revision;
+
+  const [first, second] = await Promise.all([
+    sendRequest<void>({
+      action: 'UPDATE_CONFIG',
+      params: {
+        ai: {
+          baseURL: 'https://example.invalid',
+          apiKey: 'fixture-first-page-key',
+          chatModel: 'fixture-first-page-model',
+        },
+        expectedConfig,
+        expectedConfigRevision,
+      },
+    }, tabId, senderUrl),
+    sendRequest<void>({
+      action: 'UPDATE_CONFIG',
+      params: {
+        ai: {
+          baseURL: 'https://example.invalid',
+          apiKey: 'fixture-second-page-key',
+          chatModel: 'fixture-second-page-model',
+        },
+        expectedConfig,
+        expectedConfigRevision,
+      },
+    }, tabId, senderUrl),
+  ]);
+
+  assert.equal(first.success, true);
+  assert.equal(second.success, false);
+  assert.equal(second.error, 'LOCAL_SETTINGS_STALE_CONFIG');
+  const storedConfig = storageValues.userConfig as { ai?: { apiKey?: string } };
+  assert.equal(storedConfig.ai?.apiKey, 'fixture-first-page-key');
+});
+
+test('UPDATE_CONFIG without an expected snapshot cannot write after a completed clear', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_654;
+  const senderUrl = 'https://www.bilibili.com/video/BV1LegacySettings';
+  const cleared = await sendRequest<{ status: string }>({
+    action: 'CLEAR_ALL_LOCAL_DATA',
+    params: { confirmation: '清理本地数据' },
+  }, tabId, senderUrl);
+  assert.equal(cleared.success, true);
+  assert.equal(cleared.data?.status, 'completed');
+  const revisionBefore = storageValues.userConfigRevision as { token?: string };
+
+  const update = await sendRuntimeMessage<BiliVizResponse<void>>({
+    action: 'UPDATE_CONFIG',
+    params: {
+      ai: {
+        baseURL: 'https://example.invalid',
+        apiKey: 'fixture-legacy-stale-key',
+        chatModel: 'fixture-legacy-model',
+      },
+      assistant: { currentVideoAiAssistantEnabled: true },
+    },
+  }, tabId, senderUrl);
+
+  assert.equal(update.success, false);
+  assert.equal(update.error, 'LOCAL_SETTINGS_STALE_CONFIG');
+  assert.equal(storageValues.userConfig, null);
+  assert.equal((storageValues.userConfigRevision as { token?: string }).token, revisionBefore.token);
+});
+
+test('clear all waits for an earlier config read and prevents normalized config from returning', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  storageValues.userConfig = {
+    ai: {
+      baseURL: 'https://example.invalid',
+      apiKey: 'fixture-read-key',
+      chatModel: 'fixture-model',
+    },
+    assistant: { currentVideoQaAiEnabled: true },
+  };
+  const configReadReached = deferred<void>();
+  const releaseConfigRead = deferred<void>();
+  storageGetGate = {
+    key: 'userConfig',
+    reached: () => configReadReached.resolve(),
+    release: releaseConfigRead.promise,
+  };
+  const laterCategoryReached = deferred<void>();
+  const releaseLaterCategory = deferred<void>();
+  let reachedLaterCategory = false;
+  storageRemoveGate = {
+    key: 'dynamicBillSyncState',
+    reached: () => {
+      reachedLaterCategory = true;
+      laterCategoryReached.resolve();
+    },
+    release: releaseLaterCategory.promise,
+  };
+
+  const tabId = 18_653;
+  const senderUrl = 'https://www.bilibili.com/video/BV1ConfigReadBeforeClear';
+  const reading = sendRequest({ action: 'GET_CONFIG' }, tabId, senderUrl);
+  await configReadReached.promise;
+  const clearing = sendRequest<{ status: string }>({
+    action: 'CLEAR_ALL_LOCAL_DATA',
+    params: { confirmation: '清理本地数据' },
+  }, tabId, senderUrl);
+
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(reachedLaterCategory, false);
+
+    storageGetGate = null;
+    releaseConfigRead.resolve();
+    const readResult = await reading;
+    assert.equal(readResult.success, true);
+
+    await laterCategoryReached.promise;
+    releaseLaterCategory.resolve();
+    const clearResult = await clearing;
+    assert.equal(clearResult.success, true);
+    assert.equal(clearResult.data?.status, 'completed');
+    assert.equal(storageValues.userConfig, null);
+  } finally {
+    storageGetGate = null;
+    storageRemoveGate = null;
+    releaseConfigRead.resolve();
+    releaseLaterCategory.resolve();
+    await Promise.allSettled([reading, clearing]);
+  }
+});
+
+test('rejected clear-all requests do not cancel an in-flight QA turn', async t => {
+  const cases = [
+    {
+      name: 'invalid confirmation',
+      confirmation: '删除本地数据',
+      expectedError: 'LOCAL_DATA_CLEAR_CONFIRMATION_REQUIRED',
+      historySyncing: false,
+    },
+    {
+      name: 'active history sync',
+      confirmation: '清理本地数据',
+      expectedError: 'HISTORY_SYNC_IN_PROGRESS',
+      historySyncing: true,
+    },
+  ] as const;
+
+  for (const [index, currentCase] of cases.entries()) {
+    await t.test(currentCase.name, async () => {
+      resetChromeHarness();
+      await resetTranscriptDb();
+      await db.currentVideoQaSessions.clear();
+      const tabId = 18_646 + index;
+      const context = handlerVideoContext(`BV1QaReject0${index}`, 4_846 + index);
+      const evidence = await seedHandlerTranscript(
+        context,
+        tabId,
+        `handler-qa-rejected-clear-${index}`,
+        '这一行正文用于验证未被接受的清理请求不会中断当前视频问答。',
+      );
+      const sourceIdentityKey = evidence.sourceRecord.sourceIdentityKey!;
+      storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+        [handlerPartKey(context)]: sourceIdentityKey,
+      };
+      setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 8_846 + index }]);
+      await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+      await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+      await sendRequest<void>({
+        action: 'UPDATE_CONFIG',
+        params: {
+          ai: {
+            baseURL: 'https://example.invalid',
+            apiKey: 'handler-test-key',
+            chatModel: 'handler-test-model',
+          },
+          assistant: { currentVideoAiAssistantEnabled: true },
+        },
+      }, tabId, context.url);
+      if (currentCase.historySyncing) {
+        storageValues.historySyncing = true;
+        storageValues.historySyncStartedAt = Date.now();
+      }
+
+      const originalFetch = globalThis.fetch;
+      let fetchCalls = 0;
+      try {
+        globalThis.fetch = (async () => {
+          fetchCalls += 1;
+          return new Response(JSON.stringify({
+            choices: [{ message: { content: JSON.stringify({
+              supported: true,
+              answerPoints: [{ text: '未被接受的清理不会中断这次回答。', evidenceLineNumbers: [1] }],
+              citations: [{ evidenceLineNumbers: [1] }],
+            }) } }],
+          }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }) as typeof fetch;
+        installGuardTestHook('before_full_text_qa_session_write', async () => {
+          const rejected = await sendRequest({
+            action: 'CLEAR_ALL_LOCAL_DATA',
+            params: { confirmation: currentCase.confirmation },
+          }, tabId, context.url);
+          assert.equal(rejected.success, false);
+          assert.equal(rejected.error, currentCase.expectedError);
+          delete storageValues.historySyncing;
+          delete storageValues.historySyncStartedAt;
+        });
+
+        const sessionId = `handler-qa-rejected-clear-session-${index}`;
+        const response = await sendRequest<CurrentVideoFullTextQaResult>({
+          action: 'ASK_CURRENT_VIDEO_FULL_TEXT' as BiliVizRequest['action'],
+          params: {
+            sessionId,
+            requestId: `handler-qa-rejected-clear-request-${index}`,
+            turnId: `handler-qa-rejected-clear-turn-${index}`,
+            question: '这次回答会继续吗？',
+            primaryTextSelectionsReady: true,
+            selectedSourceIdentityKey: sourceIdentityKey,
+          },
+        }, tabId, context.url);
+
+        assert.equal(response.success, true);
+        assert.equal(response.data?.status, 'ready');
+        assert.equal(fetchCalls, 1);
+        const persisted = await db.currentVideoQaSessions.where({ sessionId }).first();
+        assert.equal(persisted?.turns.length, 1);
+        assert.equal(persisted?.turns[0]?.status, 'ready');
+      } finally {
+        delete storageValues.historySyncing;
+        delete storageValues.historySyncStartedAt;
         globalThis.fetch = originalFetch;
         await db.currentVideoQaSessions.clear();
       }
@@ -3075,17 +3616,31 @@ function installChromeFake(): void {
           if (gate && readsStorageKey(keys, CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY)) {
             return gate.then(() => result);
           }
+          const localSettingsGate = storageGetGate;
+          if (localSettingsGate && readsStorageKey(keys, localSettingsGate.key)) {
+            localSettingsGate.reached();
+            return localSettingsGate.release.then(() => result);
+          }
           return Promise.resolve(result);
         },
-        set(values: Record<string, unknown>) {
+        async set(values: Record<string, unknown>) {
+          const gate = storageSetGate;
+          if (gate && Object.hasOwn(values, gate.key)) {
+            gate.reached();
+            await gate.release;
+          }
           Object.assign(storageValues, values);
-          return Promise.resolve();
         },
-        remove(keys: string | string[]) {
-          for (const key of Array.isArray(keys) ? keys : [keys]) {
+        async remove(keys: string | string[]) {
+          const normalizedKeys = Array.isArray(keys) ? keys : [keys];
+          const gate = storageRemoveGate;
+          if (gate && normalizedKeys.includes(gate.key)) {
+            gate.reached();
+            await gate.release;
+          }
+          for (const key of normalizedKeys) {
             delete storageValues[key];
           }
-          return Promise.resolve();
         },
         clear() {
           for (const key of Object.keys(storageValues)) {
@@ -3104,12 +3659,18 @@ function resetChromeHarness(): void {
   delete (globalThis as typeof globalThis & {
     __biliBillCurrentVideoPrimaryTextGuardTestHook__?: unknown;
   }).__biliBillCurrentVideoPrimaryTextGuardTestHook__;
+  delete (globalThis as typeof globalThis & {
+    __biliBillHistoryAggregateTestHook__?: unknown;
+  }).__biliBillHistoryAggregateTestHook__;
   for (const key of Object.keys(storageValues)) {
     delete storageValues[key];
   }
   storageGetCounts.clear();
   rejectPrimaryTextSelectionStorageReads = false;
   primaryTextSelectionStorageGetGate = null;
+  storageRemoveGate = null;
+  storageSetGate = null;
+  storageGetGate = null;
 }
 
 function setTabs(nextTabs: FakeTab[]): void {
@@ -3140,7 +3701,25 @@ async function sendRequest<T>(
   tabId: number,
   senderUrl: string,
 ): Promise<BiliVizResponse<T>> {
-  return await sendRuntimeMessage<BiliVizResponse<T>>(request, tabId, senderUrl);
+  let guardedRequest = request;
+  if (request.action === 'UPDATE_CONFIG'
+      && (!request.params?.expectedConfig
+        || typeof request.params.expectedConfigRevision !== 'string')) {
+    const snapshot = await sendRuntimeMessage<BiliVizResponse<{
+      config: Record<string, unknown>;
+      revision: string;
+    }>>({ action: 'GET_CONFIG_SNAPSHOT' }, tabId, senderUrl);
+    if (!snapshot.success || !snapshot.data) return snapshot as BiliVizResponse<T>;
+    guardedRequest = {
+      ...request,
+      params: {
+        ...(request.params ?? {}),
+        expectedConfig: snapshot.data.config,
+        expectedConfigRevision: snapshot.data.revision,
+      },
+    };
+  }
+  return await sendRuntimeMessage<BiliVizResponse<T>>(guardedRequest, tabId, senderUrl);
 }
 
 async function sendPopupRequest<T>(request: BiliVizRequest): Promise<BiliVizResponse<T>> {
@@ -3222,6 +3801,24 @@ function readsStorageKey(
   return true;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function installHistoryAggregateTestHook(
+  hook: (phase: 'before_daily_aggregate_write') => Promise<void>,
+): void {
+  (globalThis as typeof globalThis & {
+    __biliBillHistoryAggregateTestHook__?: typeof hook;
+  }).__biliBillHistoryAggregateTestHook__ = hook;
+}
+
 function qaSessionNearByteLimit(sessionId: string): CurrentVideoQaSessionRecord {
   const now = 20_000;
   const sizingRecord: CurrentVideoQaSessionRecord = {
@@ -3267,6 +3864,8 @@ function serializedTestBytes(rows: unknown[]): number {
 async function importBundledMessageHandlers(): Promise<{
   setupMessageHandlers: () => void;
   clearTemporaryCurrentVideoTranscriptCache: typeof import('../src/background/current-video-temporary-transcript-cache.ts').clearTemporaryCurrentVideoTranscriptCache;
+  computeDailyAggregate: typeof import('../src/background/analytics/engine.ts').computeDailyAggregate;
+  computeStoredHistoryAggregates: typeof import('../src/background/analytics/engine.ts').computeStoredHistoryAggregates;
   db: typeof import('../src/background/storage/db.ts').db;
   getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys: typeof import('../src/background/storage/current-video-transcript-repo.ts').getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys;
   getTemporaryCurrentVideoTranscriptSegments: typeof import('../src/background/current-video-temporary-transcript-cache.ts').getTemporaryCurrentVideoTranscriptSegments;
@@ -3283,6 +3882,7 @@ async function importBundledMessageHandlers(): Promise<{
     stdin: {
       contents: [
         "export { setupMessageHandlers } from './src/background/messages/handlers.ts';",
+        "export { computeDailyAggregate, computeStoredHistoryAggregates } from './src/background/analytics/engine.ts';",
         "export { clearTemporaryCurrentVideoTranscriptCache, getTemporaryCurrentVideoTranscriptSegments, putTemporaryCurrentVideoTranscriptEvidence } from './src/background/current-video-temporary-transcript-cache.ts';",
         "export { retainTemporaryTranscriptOwnerForContextSnapshot } from './src/background/current-video-transcript-owner.ts';",
         "export { invalidateCurrentVideoFullTextQaSources } from './src/background/current-video-full-text-qa.ts';",

@@ -10,6 +10,7 @@ import {
   getCurrentVideoSummaryHighlightsClearState,
   runCurrentVideoSummaryHighlightsClearCoordinator,
 } from '../current-video-summary-highlights-clear-epoch.ts';
+import type { LocalDataCategoryRegistration } from '../../shared/local-data-category-contract.ts';
 import { db } from './db.ts';
 
 export const CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE_MAX_RECORDS = 50;
@@ -181,6 +182,28 @@ export async function readCurrentVideoSummaryHighlightsAfterClear(): Promise<Cur
   return {
     ...usage,
     empty: usage.count === 0 && usage.usageBytes === 0,
+  };
+}
+
+export function getCurrentVideoSummaryHighlightsLocalDataCategoryRegistration(): LocalDataCategoryRegistration {
+  return {
+    id: 'currentVideoSummaryHighlights',
+    label: '摘要与亮点',
+    includeInClearAll: true,
+    collectUsage: async () => {
+      const usage = await collectCurrentVideoSummaryHighlightsCacheUsage();
+      return {
+        ...usage,
+        details: {
+          currentVideoSummaryHighlightParts: usage.count,
+          currentVideoSummaryHighlightBytes: usage.usageBytes,
+        },
+      };
+    },
+    clear: async () => ({
+      cleared: await clearCurrentVideoSummaryHighlightsCache(),
+    }),
+    readAfterClear: readCurrentVideoSummaryHighlightsAfterClear,
   };
 }
 

@@ -22,9 +22,11 @@ import {
 import {
   BLIND_BOX_DRAW_HISTORY_LIMIT,
   BLIND_BOX_DRAW_HISTORY_STORAGE_KEY,
+  BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY,
   clearBlindBoxDrawHistory,
   collectBlindBoxDrawHistoryUsage,
   getBlindBoxDrawHistoryEpoch,
+  getBlindBoxDrawHistoryLocalDataCategoryRegistration,
   getBlindBoxRecentDrawnBvids,
   mergeBlindBoxDrawHistory,
   normalizeBlindBoxDrawHistory,
@@ -32,11 +34,6 @@ import {
   recordBlindBoxDrawnBvids,
   type BlindBoxDrawHistoryStorage,
 } from '../src/background/storage/blind-box-draw-history-repo.ts';
-import {
-  createRegisteredLocalDataCategories,
-  type LocalDataCategoryRegistryDependencies,
-  type LocalDataCategoryTable,
-} from '../src/background/storage/local-data-category-registry.ts';
 import type {
   ExperimentBlindBox,
   ExperimentRealCandidatePool,
@@ -596,6 +593,24 @@ test('blind-box draw history keeps the latest 50 normalized BVIDs and clears wit
   });
 });
 
+test('blind-box lifecycle counts timestamp metadata and does not accept an orphan timestamp as empty', async () => {
+  const storage = createMemoryStorage({
+    [BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY]: NOW_MS,
+  });
+
+  const usage = await collectBlindBoxDrawHistoryUsage(storage);
+  assert.equal(usage.count, 0);
+  assert.ok(usage.usageBytes > 0);
+  assert.equal((await readBlindBoxDrawHistoryAfterClear(storage)).empty, false);
+
+  assert.equal(await clearBlindBoxDrawHistory(storage), 0);
+  assert.deepEqual(await readBlindBoxDrawHistoryAfterClear(storage), {
+    count: 0,
+    usageBytes: 0,
+    empty: true,
+  });
+});
+
 test('overlapping blind-box history records retain both batches in newest-first order', async () => {
   const firstGetStarted = createDeferred<void>();
   const releaseFirstGet = createDeferred<void>();
@@ -758,27 +773,24 @@ test('blind-box history reads and counts wait for prior mutations without deadlo
   await record;
   assert.equal(getCallsBeforeRelease, 1, 'public reads must wait for the pending write');
   assert.deepEqual(await read, ['BV1AFTER001', 'BV1BEFORE001']);
-  assert.deepEqual(await usage, {
-    count: 2,
-    usageBytes: JSON.stringify({
-      [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1AFTER001', 'BV1BEFORE001'],
-    }).length,
-  });
-  assert.deepEqual(await readback, {
-    count: 2,
-    usageBytes: JSON.stringify({
-      [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1AFTER001', 'BV1BEFORE001'],
-    }).length,
-    empty: false,
-  });
+  const expectedListBytes = JSON.stringify({
+    [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1AFTER001', 'BV1BEFORE001'],
+  }).length;
+  const usageResult = await usage;
+  assert.equal(usageResult.count, 2);
+  assert.ok(usageResult.usageBytes > expectedListBytes);
+  const readbackResult = await readback;
+  assert.equal(readbackResult.count, 2);
+  assert.equal(readbackResult.usageBytes, usageResult.usageBytes);
+  assert.equal(readbackResult.empty, false);
 });
 
 test('blind-box draw history is registered for per-category clear and clear-all orchestration', async () => {
-  const dependencies = createRegistryDependenciesForBlindBox(['BV1LATEST01', 'BV1LATEST02']);
-  const categories = createRegisteredLocalDataCategories(dependencies);
-  const category = categories.find(item => item.id === 'blindBoxDrawHistory');
+  const storage = createMemoryStorage({
+    [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: ['BV1LATEST01', 'BV1LATEST02'],
+  });
+  const category = getBlindBoxDrawHistoryLocalDataCategoryRegistration(storage);
 
-  assert.ok(category);
   assert.equal(category.includeInClearAll, true);
   assert.deepEqual(await category.collectUsage(), {
     count: 2,
@@ -1216,45 +1228,6 @@ function createDeferred<T>(): {
     resolve = currentResolve;
   });
   return { promise, resolve };
-}
-
-function createRegistryDependenciesForBlindBox(bvids: string[]): LocalDataCategoryRegistryDependencies {
-  const tableNames: Array<keyof LocalDataCategoryRegistryDependencies['tables']> = [
-    'watchHistory',
-    'playerEvents',
-    'dailyAggregates',
-    'favoriteFolders',
-    'favoriteItems',
-    'smartFavoriteIndex',
-    'currentVideoTranscriptSources',
-    'currentVideoTranscriptSegments',
-    'followedCreators',
-    'followedVideoUpdates',
-    'dynamicBillItems',
-    'dynamicBillExplanations',
-    'dynamicBillFeedback',
-  ];
-  const tables = Object.fromEntries(
-    tableNames.map(name => [name, memoryTable([{ id: name }])]),
-  ) as LocalDataCategoryRegistryDependencies['tables'];
-  const storage = createMemoryStorage({ [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: bvids });
-
-  return {
-    tables,
-    storage,
-    transaction: async (_tables, operation) => operation(),
-  };
-}
-
-function memoryTable(initialRows: unknown[]): LocalDataCategoryTable {
-  let rows = [...initialRows];
-  return {
-    count: async () => rows.length,
-    toArray: async () => [...rows],
-    clear: async () => {
-      rows = [];
-    },
-  };
 }
 
 function testBvid(index: number): string {

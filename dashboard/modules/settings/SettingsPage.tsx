@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { requestSW } from '../../utils/messaging';
 import {
+  buildLocalDataDiagnosticExport,
   buildLocalDataOperationMessage,
   buildLocalDataSummaryCards,
   buildSmartFavoriteRebuildMessage,
   dangerousLocalDataClearScope,
   formatLocalDataError,
+  hasLocalDataCategoryContent,
   LOCAL_DATA_CLEAR_CONFIRMATION,
 } from '../../../src/shared/local-data-privacy';
 import {
@@ -21,7 +23,13 @@ import type {
   LocalDataPrivacySummary,
   SmartFavoriteIndexRebuildResult,
 } from '../../../src/shared/types/local-data-privacy';
-import type { CurrentVideoQaSessionsView } from '../../../src/shared/types/current-video-qa-session';
+import type { IndependentlyClearableLocalDataCategoryId } from '../../../src/shared/local-data-category-contract';
+import { dynamicBillCreatorDisplayName } from '../../../src/shared/dynamic-bill-creator-name';
+import {
+  settingsConfigRevisionRecord,
+  USER_CONFIG_REVISION_STORAGE_KEY,
+  type SettingsConfigSnapshot,
+} from '../../../src/shared/settings-managed-config';
 import type {
   DynamicBillCreatorPauseView,
   DynamicBillRestoreCreatorReminderResult,
@@ -30,16 +38,22 @@ import {
   formatSettingsError,
   normalizeSettingsUserConfig,
   saveSettingsDraft,
+  settingsManagedConfigMatches,
+  settingsUserConfigFromStorageChange,
 } from './settings-save-state';
+import { downloadLocalDataDiagnostic } from './settings-diagnostic-download';
 
 type BusyState =
   | ''
   | 'save'
   | 'test'
   | 'local-refresh'
+  | 'history-clear'
+  | 'favorites-clear'
   | 'subtitle-clear'
   | 'summary-highlight-clear'
   | 'qa-session-clear'
+  | 'dynamic-bill-clear'
   | 'index-rebuild'
   | 'pause-restore'
   | 'clear-all';
@@ -59,6 +73,7 @@ const DEFAULT_AI_FORM: AiFormState = {
 const DEFAULT_ASSISTANT: AssistantConfig = DEFAULT_CONFIG.assistant;
 
 const DEFAULT_DYNAMIC_BILL: DynamicBillConfig = DEFAULT_CONFIG.dynamicBill;
+const CLEAR_COMPLETED_REFRESH_FAILED_MESSAGE = '清理已完成并完成回读，但页面最新状态刷新失败。请重新打开设置页后核对。';
 
 export function SettingsPage() {
   const [form, setForm] = useState<AiFormState>(DEFAULT_AI_FORM);
@@ -66,6 +81,7 @@ export function SettingsPage() {
   const [assistant, setAssistant] = useState<AssistantConfig>(DEFAULT_ASSISTANT);
   const [dynamicBill, setDynamicBill] = useState<DynamicBillConfig>(DEFAULT_DYNAMIC_BILL);
   const [loadedConfig, setLoadedConfig] = useState<UserConfig | null>(null);
+  const [loadedConfigRevision, setLoadedConfigRevision] = useState<string | null>(null);
   const [busy, setBusy] = useState<BusyState>('');
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
@@ -73,6 +89,7 @@ export function SettingsPage() {
   const [lastTest, setLastTest] = useState<AiConnectionTestResult | null>(null);
   const [localData, setLocalData] = useState<LocalDataPrivacySummary | null>(null);
   const [localDataError, setLocalDataError] = useState('');
+  const [diagnosticConfirmVisible, setDiagnosticConfirmVisible] = useState(false);
   const [clearConfirmVisible, setClearConfirmVisible] = useState(false);
   const [clearConfirmText, setClearConfirmText] = useState('');
 
@@ -90,9 +107,20 @@ export function SettingsPage() {
     ) => {
       if (areaName !== 'local') return;
       const change = changes.userConfig;
-      if (!change?.newValue) return;
-      applyConfig(change.newValue as Partial<UserConfig>);
-      setNotice('');
+      const revision = settingsConfigRevisionRecord(
+        changes[USER_CONFIG_REVISION_STORAGE_KEY]?.newValue,
+      );
+      const changedConfig = settingsUserConfigFromStorageChange(change);
+      if (!changedConfig && !revision) return;
+      if (changedConfig) {
+        applyConfig(changedConfig, revision?.token);
+        setNotice(change?.newValue == null || revision?.mutation === 'clear'
+          ? '本地 AI 设置已清理，当前表单已恢复默认状态。'
+          : '');
+      } else if (revision) {
+        setLoadedConfigRevision(revision.token);
+      }
+      setError('');
       setLastTest(null);
     };
 
@@ -117,30 +145,37 @@ export function SettingsPage() {
       || dynamicBill.aiExplanationsEnabled !== loadedConfig.dynamicBill.aiExplanationsEnabled;
   }, [assistant, dynamicBill, form, loadedConfig]);
   const localDataCards = localData ? buildLocalDataSummaryCards(localData) : [];
+  const diagnosticPreview = diagnosticConfirmVisible && localData
+    ? buildLocalDataDiagnosticExport(localData)
+    : null;
   const canConfirmClear = clearConfirmText.trim() === LOCAL_DATA_CLEAR_CONFIRMATION;
 
-  async function refreshConfig() {
+  async function refreshConfig(): Promise<boolean> {
     setLoading(true);
     setError('');
     try {
-      const config = await requestSW<UserConfig>('GET_CONFIG');
-      applyConfig(config);
+      const snapshot = await requestSW<SettingsConfigSnapshot>('GET_CONFIG_SNAPSHOT');
+      applyConfig(snapshot.config, snapshot.revision);
       setNotice('');
       setLastTest(null);
+      return true;
     } catch (err) {
       setError(formatSettingsError(err));
+      return false;
     } finally {
       setLoading(false);
     }
   }
 
-  async function refreshLocalData() {
-    setLocalDataError('');
+  async function refreshLocalData(options: { preserveError?: boolean } = {}): Promise<boolean> {
+    if (!options.preserveError) setLocalDataError('');
     try {
       const summary = await requestSW<LocalDataPrivacySummary>('GET_LOCAL_DATA_PRIVACY_SUMMARY');
       setLocalData(summary);
+      return true;
     } catch (err) {
-      setLocalDataError(formatLocalDataError(err));
+      if (!options.preserveError) setLocalDataError(formatLocalDataError(err));
+      return false;
     }
   }
 
@@ -149,7 +184,17 @@ export function SettingsPage() {
     setError('');
     setNotice('');
     try {
-      const baseConfig = normalizeSettingsUserConfig(loadedConfig ?? await requestSW<UserConfig>('GET_CONFIG'));
+      const baseSnapshot = await requestSW<SettingsConfigSnapshot>('GET_CONFIG_SNAPSHOT');
+      const baseConfig = normalizeSettingsUserConfig(baseSnapshot.config);
+      if (loadedConfig && (
+        !settingsManagedConfigMatches(loadedConfig, baseConfig)
+        || loadedConfigRevision !== baseSnapshot.revision
+      )) {
+        applyConfig(baseConfig, baseSnapshot.revision);
+        setLastTest(null);
+        setNotice('本地 AI 设置已在其他页面更新，当前表单已刷新。请重新修改后再保存。');
+        return;
+      }
       const result = await saveSettingsDraft(
         {
           persistedConfig: baseConfig,
@@ -165,16 +210,26 @@ export function SettingsPage() {
         {
           persist: async nextConfig => {
             await ensureAiHostPermission(nextConfig.ai.baseURL);
-            await requestSW('UPDATE_CONFIG', {
+            const saved = await requestSW<SettingsConfigSnapshot>('UPDATE_CONFIG', {
               ai: nextConfig.ai,
               assistant: nextConfig.assistant,
               dynamicBill: nextConfig.dynamicBill,
+              expectedConfig: baseConfig,
+              expectedConfigRevision: baseSnapshot.revision,
             });
+            setLoadedConfigRevision(saved.revision);
           },
           applyPersistedConfig: applyConfig,
         },
       );
       if (result.status === 'failure') {
+        if (result.reason === 'stale_config') {
+          const currentSnapshot = await requestSW<SettingsConfigSnapshot>('GET_CONFIG_SNAPSHOT');
+          applyConfig(currentSnapshot.config, currentSnapshot.revision);
+          setLastTest(null);
+          setNotice('本地 AI 设置已在其他页面更新，当前表单已刷新。请重新修改后再保存。');
+          return;
+        }
         setError(result.error);
         return;
       }
@@ -209,53 +264,62 @@ export function SettingsPage() {
     setBusy('local-refresh');
     setNotice('');
     setError('');
-    await refreshLocalData();
+    if (await refreshLocalData()) {
+      setNotice('本地数据状态已刷新。');
+    }
     setBusy('');
   }
 
-  async function clearSubtitleCache() {
-    setBusy('subtitle-clear');
+  async function clearCategory(
+    categoryId: IndependentlyClearableLocalDataCategoryId,
+    busyState: Exclude<BusyState, ''>,
+  ) {
+    setBusy(busyState);
     setNotice('');
     setError('');
+    setLocalDataError('');
     try {
-      const result = await requestSW<LocalDataOperationResult>('CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE');
-      setNotice(buildLocalDataOperationMessage(result));
-      await refreshLocalData();
+      const result = await requestSW<LocalDataOperationResult>('CLEAR_LOCAL_DATA_CATEGORY', {
+        categoryId,
+      });
+      const message = buildLocalDataOperationMessage(result);
+      if (result.status === 'partial_failure') {
+        setLocalDataError(message);
+        await refreshLocalData({ preserveError: true });
+      } else {
+        const refreshed = await refreshLocalData();
+        setNotice(message);
+        if (!refreshed) setLocalDataError(CLEAR_COMPLETED_REFRESH_FAILED_MESSAGE);
+      }
     } catch (err) {
       setLocalDataError(formatLocalDataError(err));
     } finally {
       setBusy('');
     }
+  }
+
+  async function clearHistory() {
+    await clearCategory('history', 'history-clear');
+  }
+
+  async function clearFavorites() {
+    await clearCategory('favorites', 'favorites-clear');
+  }
+
+  async function clearSubtitleCache() {
+    await clearCategory('currentVideoSubtitles', 'subtitle-clear');
   }
 
   async function clearSummaryHighlightCache() {
-    setBusy('summary-highlight-clear');
-    setNotice('');
-    setError('');
-    try {
-      const result = await requestSW<LocalDataOperationResult>('CLEAR_CURRENT_VIDEO_SUMMARY_HIGHLIGHT_CACHE');
-      setNotice(buildLocalDataOperationMessage(result));
-      await refreshLocalData();
-    } catch (err) {
-      setLocalDataError(formatLocalDataError(err));
-    } finally {
-      setBusy('');
-    }
+    await clearCategory('currentVideoSummaryHighlights', 'summary-highlight-clear');
   }
 
   async function clearQaSessions() {
-    setBusy('qa-session-clear');
-    setNotice('');
-    setError('');
-    try {
-      await requestSW<CurrentVideoQaSessionsView>('CLEAR_CURRENT_VIDEO_QA_SESSIONS');
-      setNotice('已清理当前视频问答会话。');
-      await refreshLocalData();
-    } catch (err) {
-      setLocalDataError(formatLocalDataError(err));
-    } finally {
-      setBusy('');
-    }
+    await clearCategory('currentVideoQaSessions', 'qa-session-clear');
+  }
+
+  async function clearDynamicBill() {
+    await clearCategory('dynamicBill', 'dynamic-bill-clear');
   }
 
   async function rebuildSmartFavoriteIndex() {
@@ -288,7 +352,7 @@ export function SettingsPage() {
       );
       await refreshLocalData();
       if (result.status === 'restored') {
-        setNotice(`已恢复「${pause.creatorName || `UP ${pause.creatorMid}`}」的动态账单提醒；这不会修改 B 站关注关系。`);
+        setNotice(`已恢复「${dynamicBillCreatorDisplayName(pause)}」的动态账单提醒；这不会修改 B 站关注关系。`);
       } else if (result.status === 'stale') {
         setNotice('这条暂停提醒已经更新，已刷新列表；请按最新到期时间再恢复。');
       } else {
@@ -305,6 +369,7 @@ export function SettingsPage() {
     setBusy('clear-all');
     setNotice('');
     setError('');
+    setLocalDataError('');
     try {
       const result = await requestSW<LocalDataOperationResult>('CLEAR_ALL_LOCAL_DATA', {
         confirmation: clearConfirmText.trim(),
@@ -312,9 +377,17 @@ export function SettingsPage() {
       const message = buildLocalDataOperationMessage(result);
       setClearConfirmVisible(false);
       setClearConfirmText('');
-      await refreshConfig();
-      await refreshLocalData();
-      setNotice(message);
+      const partialFailure = result.status === 'partial_failure';
+      if (partialFailure) setLocalDataError(message);
+      const configRefreshed = await refreshConfig();
+      const localDataRefreshed = await refreshLocalData({ preserveError: partialFailure });
+      if (!partialFailure) {
+        setNotice(message);
+        if (!configRefreshed || !localDataRefreshed) {
+          setError('');
+          setLocalDataError(CLEAR_COMPLETED_REFRESH_FAILED_MESSAGE);
+        }
+      }
     } catch (err) {
       setLocalDataError(formatLocalDataError(err));
     } finally {
@@ -322,9 +395,30 @@ export function SettingsPage() {
     }
   }
 
-  function applyConfig(config: Partial<UserConfig>) {
+  function exportLocalDataDiagnostics() {
+    setNotice('');
+    setError('');
+    setLocalDataError('');
+    if (!localData) {
+      setLocalDataError('请先读取本地数据摘要。');
+      return;
+    }
+
+    try {
+      const diagnostic = buildLocalDataDiagnosticExport(localData);
+      const date = new Date(localData.checkedAt).toISOString().slice(0, 10);
+      downloadLocalDataDiagnostic(diagnostic, `bili-bill-diagnostic-${date}.json`);
+      setDiagnosticConfirmVisible(false);
+      setNotice('已导出诊断摘要；文件只包含数量、占用和状态，不包含完整记录、正文、登录凭据、密钥或本地敏感路径。');
+    } catch {
+      setLocalDataError('诊断摘要导出失败，请稍后重试。');
+    }
+  }
+
+  function applyConfig(config: Partial<UserConfig>, revision?: string) {
     const normalized = normalizeSettingsUserConfig(config);
     setLoadedConfig(normalized);
+    if (revision !== undefined) setLoadedConfigRevision(revision);
     setForm({
       baseURL: normalized.ai.baseURL,
       chatModel: normalized.ai.chatModel,
@@ -511,8 +605,40 @@ export function SettingsPage() {
           <button
             type="button"
             className="settings-action"
+            onClick={() => {
+              setNotice('');
+              setError('');
+              setLocalDataError('');
+              setClearConfirmVisible(false);
+              setClearConfirmText('');
+              setDiagnosticConfirmVisible(true);
+            }}
+            disabled={!!busy || !localData}
+            aria-expanded={diagnosticConfirmVisible}
+          >
+            导出诊断摘要
+          </button>
+          <button
+            type="button"
+            className="settings-action"
+            onClick={clearHistory}
+            disabled={!!busy || !localData || localData.history.syncing || !hasLocalDataCategoryContent(localData, 'history')}
+          >
+            {busy === 'history-clear' ? '清理中...' : '清理观看历史'}
+          </button>
+          <button
+            type="button"
+            className="settings-action"
+            onClick={clearFavorites}
+            disabled={!!busy || !localData || !hasLocalDataCategoryContent(localData, 'favorites')}
+          >
+            {busy === 'favorites-clear' ? '清理中...' : '清理收藏与索引'}
+          </button>
+          <button
+            type="button"
+            className="settings-action"
             onClick={clearSubtitleCache}
-            disabled={!!busy || !localData || localData.currentVideoSubtitles.segmentCount === 0}
+            disabled={!!busy || !localData || !hasLocalDataCategoryContent(localData, 'currentVideoSubtitles')}
           >
             {busy === 'subtitle-clear' ? '清理中...' : '清理字幕缓存'}
           </button>
@@ -520,7 +646,7 @@ export function SettingsPage() {
             type="button"
             className="settings-action"
             onClick={clearSummaryHighlightCache}
-            disabled={!!busy || !localData || localData.currentVideoSummaryHighlights.cachedPartCount === 0}
+            disabled={!!busy || !localData || !hasLocalDataCategoryContent(localData, 'currentVideoSummaryHighlights')}
           >
             {busy === 'summary-highlight-clear' ? '清理中...' : '清理摘要亮点缓存'}
           </button>
@@ -528,9 +654,17 @@ export function SettingsPage() {
             type="button"
             className="settings-action"
             onClick={clearQaSessions}
-            disabled={!!busy || !localData || localData.currentVideoQaSessions.sessionCount === 0}
+            disabled={!!busy || !localData || !hasLocalDataCategoryContent(localData, 'currentVideoQaSessions')}
           >
             {busy === 'qa-session-clear' ? '清理中...' : '清理问答会话'}
+          </button>
+          <button
+            type="button"
+            className="settings-action"
+            onClick={clearDynamicBill}
+            disabled={!!busy || !localData || !hasLocalDataCategoryContent(localData, 'dynamicBill')}
+          >
+            {busy === 'dynamic-bill-clear' ? '清理中...' : '清理动态账单'}
           </button>
           <button
             type="button"
@@ -543,12 +677,50 @@ export function SettingsPage() {
           <button
             type="button"
             className="settings-action settings-action-danger"
-            onClick={() => setClearConfirmVisible(true)}
+            onClick={() => {
+              setDiagnosticConfirmVisible(false);
+              setClearConfirmVisible(true);
+            }}
             disabled={!!busy}
           >
             清理本地数据
           </button>
         </div>
+
+        {diagnosticPreview && (
+          <div className="settings-diagnostic-box" role="dialog" aria-label="确认导出诊断摘要">
+            <div>
+              <strong>确认导出诊断摘要</strong>
+              <p>诊断文件只会保存到本机，不会自动上传。</p>
+            </div>
+            <div className="settings-diagnostic-scope">
+              <div>
+                <span>包含</span>
+                <ul>
+                  {diagnosticPreview['隐私边界']['包含'].map(item => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+              <div>
+                <span>不包含</span>
+                <ul>
+                  {diagnosticPreview['隐私边界']['不包含'].map(item => <li key={item}>{item}</li>)}
+                </ul>
+              </div>
+            </div>
+            <div className="settings-actions">
+              <button type="button" className="settings-action" onClick={exportLocalDataDiagnostics}>
+                确认导出
+              </button>
+              <button
+                type="button"
+                className="settings-action"
+                onClick={() => setDiagnosticConfirmVisible(false)}
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        )}
 
         {clearConfirmVisible && (
           <div className="settings-danger-box">
@@ -601,7 +773,8 @@ export function SettingsPage() {
         </div>
         <ul className="settings-privacy-list">
           <li>API Key 只保存在本地浏览器扩展存储中，不会提交到 Bili-Bill 服务端。</li>
-          <li>AI 请求只发送当前功能需要的最小证据片段，不上传完整观看历史、完整收藏、完整关注或反馈记录。</li>
+          <li>当前视频 AI 助手只在功能已开启且你主动发起任务时，向已配置的服务发送当前分P的主要文本；长文本会先提示费用和等待风险。</li>
+          <li>智能收藏和动态账单只发送当前任务需要的少量引用或入选事实，不上传完整观看历史、完整收藏、完整关注或反馈记录。</li>
           <li>Bili-Bill 不读取本地登录凭据文件、浏览器用户资料目录、B 站登录状态文件或本地密钥文件。</li>
           <li>动态账单、收藏和当前视频功能不会写回 B 站关注关系、收藏夹或视频数据。</li>
         </ul>
@@ -635,6 +808,7 @@ function DynamicBillPauseList({
           <h4>动态账单暂停提醒</h4>
           <p>这里只恢复 Bili-Bill 本地提醒资格，不修改 B 站关注关系，也不重置少提醒次数。</p>
         </div>
+        <span className="settings-pill">当前暂停 {pauses.length} 位 UP</span>
       </div>
       {pauses.length === 0 ? (
         <div className="settings-data-empty">当前没有暂停提醒的 UP。</div>
@@ -643,7 +817,7 @@ function DynamicBillPauseList({
           {pauses.map(pause => (
             <article className="settings-pause-item" key={pause.creatorMid}>
               <div>
-                <strong>{pause.creatorName || `UP ${pause.creatorMid}`}</strong>
+                <strong>{dynamicBillCreatorDisplayName(pause)}</strong>
                 <span>
                   {pause.remainingDays > 0
                     ? `约 ${pause.remainingDays} 天后自动恢复`

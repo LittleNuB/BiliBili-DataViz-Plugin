@@ -10,6 +10,11 @@ import {
   prepareFavoriteItemRows,
   prepareSmartFavoriteIndexRows,
 } from './favorite-write-prep.ts';
+import type {
+  LocalDataCategoryRegistration,
+  LocalDataCategoryUsage,
+} from '../../shared/local-data-category-contract.ts';
+import type { LocalDataPrivacySummary } from '../../shared/types/local-data-privacy.ts';
 
 export interface FavoriteRepoWriteResult {
   written: number;
@@ -145,6 +150,103 @@ export async function clearSmartFavoriteIndex(): Promise<number> {
   return count;
 }
 
+export function getFavoritesLocalDataCategoryRegistration(): LocalDataCategoryRegistration {
+  return {
+    id: 'favorites',
+    label: '收藏与智能索引',
+    includeInClearAll: true,
+    collectUsage: collectFavoritesLocalDataUsage,
+    clear: async () => {
+      const [favoriteFolders, favoriteItems, smartFavoriteIndexes] = await Promise.all([
+        db.favoriteFolders.count(),
+        db.favoriteItems.count(),
+        db.smartFavoriteIndex.count(),
+      ]);
+      await db.transaction(
+        'rw',
+        db.favoriteFolders,
+        db.favoriteItems,
+        db.smartFavoriteIndex,
+        async () => {
+          await db.favoriteFolders.clear();
+          await db.favoriteItems.clear();
+          await db.smartFavoriteIndex.clear();
+        },
+      );
+      return {
+        cleared: { favoriteFolders, favoriteItems, smartFavoriteIndexes },
+      };
+    },
+    readAfterClear: async () => {
+      const usage = await collectFavoritesLocalDataUsage();
+      return {
+        ...usage,
+        empty: usage.count === 0 && usage.usageBytes === 0,
+      };
+    },
+  };
+}
+
+export async function getFavoritesLocalDataPrivacySummary(): Promise<LocalDataPrivacySummary['favorites']> {
+  const [
+    folders,
+    storedItems,
+    indexedItems,
+    failedIndexItems,
+    lastSyncedFolder,
+    lastSyncedItem,
+    lastIndexedItem,
+  ] = await Promise.all([
+    db.favoriteFolders.toArray(),
+    db.favoriteItems.count(),
+    db.smartFavoriteIndex.where({ status: 'indexed' }).count(),
+    db.smartFavoriteIndex.where({ status: 'failed' }).count(),
+    db.favoriteFolders.orderBy('syncedAt').last(),
+    db.favoriteItems.orderBy('syncedAt').last(),
+    db.smartFavoriteIndex.orderBy('indexedAt').last(),
+  ]);
+  const reportedItems = folders.reduce(
+    (sum, folder) => sum + Math.max(0, Number(folder.mediaCount) || 0),
+    0,
+  );
+  const diagnostics = folders
+    .map(folder => folder.lastSyncDiagnostic)
+    .filter(diagnostic => diagnostic !== undefined);
+  const incompleteFolders = diagnostics
+    .filter(diagnostic => diagnostic.completenessState === 'incomplete')
+    .length;
+
+  return {
+    folderCount: folders.length,
+    reportedItems,
+    storedItems,
+    indexedItems,
+    failedIndexItems,
+    pendingIndexItems: Math.max(0, storedItems - indexedItems - failedIndexItems),
+    incompleteFolders,
+    syncComplete: diagnostics.length > 0 && incompleteFolders === 0,
+    lastSyncedAt: latestTimestamp(lastSyncedFolder?.syncedAt, lastSyncedItem?.syncedAt),
+    lastIndexedAt: normalizePositiveTimestamp(lastIndexedItem?.indexedAt),
+  };
+}
+
+async function collectFavoritesLocalDataUsage(): Promise<LocalDataCategoryUsage> {
+  const [folders, items, indexes] = await Promise.all([
+    db.favoriteFolders.toArray(),
+    db.favoriteItems.toArray(),
+    db.smartFavoriteIndex.toArray(),
+  ]);
+  return {
+    count: folders.length + items.length + indexes.length,
+    usageBytes: serializedRowsSize([...folders, ...items, ...indexes]),
+    details: {
+      favoriteFolders: folders.length,
+      favoriteItems: items.length,
+      smartFavoriteIndexes: indexes.length,
+    },
+  };
+}
+
 async function attachExistingFavoriteFolderIds(folders: FavoriteFolder[]): Promise<FavoriteFolder[]> {
   if (folders.length === 0) return [];
   const mediaIds = folders.map(folder => folder.mediaId);
@@ -154,6 +256,23 @@ async function attachExistingFavoriteFolderIds(folders: FavoriteFolder[]): Promi
     const id = existingByMediaId.get(folder.mediaId);
     return typeof id === 'number' ? { ...folder, id } : folder;
   });
+}
+
+function latestTimestamp(...values: Array<number | null | undefined>): number | null {
+  return normalizePositiveTimestamp(Math.max(0, ...values.map(value => Number(value) || 0)));
+}
+
+function normalizePositiveTimestamp(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function serializedRowsSize(rows: unknown[]): number {
+  return rows.reduce<number>((sum, row) => {
+    const text = JSON.stringify(row ?? null);
+    return sum + (typeof TextEncoder === 'undefined'
+      ? text.length
+      : new TextEncoder().encode(text).byteLength);
+  }, 0);
 }
 
 async function attachExistingFavoriteItemIds(items: FavoriteItem[]): Promise<FavoriteItem[]> {

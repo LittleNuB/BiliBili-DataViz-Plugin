@@ -66,6 +66,18 @@ export function coordinateCurrentVideoPrimaryTextSelectionClear<T>(
   });
 }
 
+export function beginCurrentVideoPrimaryTextSelectionClearWindow(): () => void {
+  let ended = false;
+  beginSelectionMutation();
+  selectionClearDepth += 1;
+  return () => {
+    if (ended) return;
+    ended = true;
+    selectionClearDepth = Math.max(0, selectionClearDepth - 1);
+    endSelectionMutation();
+  };
+}
+
 async function persistCurrentVideoPrimaryTextSelection(
   input: SaveCurrentVideoPrimaryTextSelectionInput,
   storage: CurrentVideoPrimaryTextSelectionStorage,
