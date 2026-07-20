@@ -67,6 +67,7 @@ export type RequestAction =
   | 'SYNC_NOW'
   | 'CANCEL_SYNC'
   | 'GET_CONFIG'
+  | 'GET_CONFIG_SNAPSHOT'
   | 'UPDATE_CONFIG'
   | 'TEST_AI_CONNECTION'
   | 'GET_LOCAL_DATA_PRIVACY_SUMMARY'

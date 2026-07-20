@@ -667,6 +667,12 @@ CHROME_MOCK_SCRIPT = r"""
       updateConfigCount: 0,
       rejectedUpdateConfigCount: 0,
       clearBeforeNextConfigUpdate: false,
+      configRevisionCounter: 0,
+      configRevision: {
+        token: 'qa-config-revision-0',
+        configPresent: true,
+        mutation: 'state',
+      },
       clearedCategories: [],
       restoredCreatorMids: [],
       clearAllCount: 0,
@@ -699,6 +705,15 @@ CHROME_MOCK_SCRIPT = r"""
       && observed.assistant.currentVideoAiAssistantEnabled === current.assistant.currentVideoAiAssistantEnabled
       && observed.assistant.smartFavoritesQaAiEnabled === current.assistant.smartFavoritesQaAiEnabled
       && observed.dynamicBill.aiExplanationsEnabled === current.dynamicBill.aiExplanationsEnabled;
+  }
+
+  function advanceConfigRevision(state, configPresent, mutation) {
+    state.configRevisionCounter += 1;
+    state.configRevision = {
+      token: 'qa-config-revision-' + state.configRevisionCounter,
+      configPresent,
+      mutation,
+    };
   }
 
   function loadState() {
@@ -988,13 +1003,27 @@ CHROME_MOCK_SCRIPT = r"""
         state.configRequestCount += 1;
         data = clone(state.config);
         break;
+      case 'GET_CONFIG_SNAPSHOT':
+        if (state.failNextConfig) {
+          state.failNextConfig = false;
+          saveState(state);
+          return { success: false, error: 'QA_CONFIG_REFRESH_FAILED' };
+        }
+        state.configRequestCount += 1;
+        data = {
+          config: clone(state.config),
+          revision: state.configRevision.token,
+        };
+        break;
       case 'UPDATE_CONFIG':
         if (state.clearBeforeNextConfigUpdate) {
           state.clearBeforeNextConfigUpdate = false;
           state.config = clearedConfig();
+          advanceConfigRevision(state, false, 'clear');
         }
         if (message.params && message.params.expectedConfig
-            && !managedConfigMatches(message.params.expectedConfig, state.config)) {
+            && (!managedConfigMatches(message.params.expectedConfig, state.config)
+              || message.params.expectedConfigRevision !== state.configRevision.token)) {
           state.rejectedUpdateConfigCount += 1;
           saveState(state);
           return { success: false, error: 'LOCAL_SETTINGS_STALE_CONFIG' };
@@ -1015,7 +1044,11 @@ CHROME_MOCK_SCRIPT = r"""
             ...(message.params && message.params.dynamicBill ? message.params.dynamicBill : {}),
           },
         };
-        data = clone(state.config);
+        advanceConfigRevision(state, true, 'save');
+        data = {
+          config: clone(state.config),
+          revision: state.configRevision.token,
+        };
         break;
       case 'GET_LOCAL_DATA_PRIVACY_SUMMARY':
         if (state.failNextSummary) {
@@ -1070,7 +1103,10 @@ CHROME_MOCK_SCRIPT = r"""
           ...(state.clearedCategories || []),
           ...completedIds,
         ])];
-        if (completedIds.includes('localSettings')) state.config = clearedConfig();
+        if (completedIds.includes('localSettings')) {
+          state.config = clearedConfig();
+          advanceConfigRevision(state, false, 'clear');
+        }
         if (state.failSummaryAfterClearAll) {
           state.failNextSummary = true;
           state.failSummaryAfterClearAll = false;
@@ -1188,11 +1224,16 @@ CHROME_MOCK_SCRIPT = r"""
     removeUserConfigExternally(emitChange = true) {
       const state = loadState();
       const oldValue = clone(state.config);
+      const oldRevision = clone(state.configRevision);
       state.config = clearedConfig();
+      advanceConfigRevision(state, false, 'clear');
       saveState(state);
       if (emitChange) {
         for (const listener of storageChangeListeners) {
-          listener({ userConfig: { oldValue, newValue: undefined } }, 'local');
+          listener({
+            userConfig: { oldValue, newValue: undefined },
+            userConfigRevision: { oldValue: oldRevision, newValue: clone(state.configRevision) },
+          }, 'local');
         }
       }
       return clone(state);

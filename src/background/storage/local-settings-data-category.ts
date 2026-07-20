@@ -4,6 +4,7 @@ import type {
 } from '../../shared/local-data-category-contract.ts';
 import { CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY } from '../../shared/current-video-primary-text-selection.ts';
 import { coordinateCurrentVideoPrimaryTextSelectionClear } from './current-video-primary-text-selection-store.ts';
+import { advanceUserConfigRevisionAfterClear } from './config-store.ts';
 import { runLocalSettingsClearDataOperation } from './local-settings-operation-control.ts';
 
 const LOCAL_SETTING_STORAGE_KEYS = [
@@ -20,6 +21,7 @@ export function getLocalSettingsDataCategoryRegistration(): LocalDataCategoryReg
     collectUsage: collectLocalSettingsUsage,
     clear: async () => coordinateCurrentVideoPrimaryTextSelectionClear(
       () => runLocalSettingsClearDataOperation(async () => {
+        await advanceUserConfigRevisionAfterClear();
         await chrome.storage.local.remove(LOCAL_SETTING_STORAGE_KEYS);
         return { cleared: { localSettings: true } };
       }),

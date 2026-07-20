@@ -25,6 +25,11 @@ import type {
 } from '../../../src/shared/types/local-data-privacy';
 import type { IndependentlyClearableLocalDataCategoryId } from '../../../src/shared/local-data-category-contract';
 import { dynamicBillCreatorDisplayName } from '../../../src/shared/dynamic-bill-creator-name';
+import {
+  settingsConfigRevisionRecord,
+  USER_CONFIG_REVISION_STORAGE_KEY,
+  type SettingsConfigSnapshot,
+} from '../../../src/shared/settings-managed-config';
 import type {
   DynamicBillCreatorPauseView,
   DynamicBillRestoreCreatorReminderResult,
@@ -76,6 +81,7 @@ export function SettingsPage() {
   const [assistant, setAssistant] = useState<AssistantConfig>(DEFAULT_ASSISTANT);
   const [dynamicBill, setDynamicBill] = useState<DynamicBillConfig>(DEFAULT_DYNAMIC_BILL);
   const [loadedConfig, setLoadedConfig] = useState<UserConfig | null>(null);
+  const [loadedConfigRevision, setLoadedConfigRevision] = useState<string | null>(null);
   const [busy, setBusy] = useState<BusyState>('');
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
@@ -101,12 +107,22 @@ export function SettingsPage() {
     ) => {
       if (areaName !== 'local') return;
       const change = changes.userConfig;
+      const revision = settingsConfigRevisionRecord(
+        changes[USER_CONFIG_REVISION_STORAGE_KEY]?.newValue,
+      );
       const changedConfig = settingsUserConfigFromStorageChange(change);
-      if (!changedConfig) return;
-      applyConfig(changedConfig);
-      setNotice(change.newValue === undefined
-        ? '本地 AI 设置已清理，当前表单已恢复默认状态。'
-        : '');
+      if (!changedConfig && !revision) return;
+      if (changedConfig) {
+        applyConfig(changedConfig, revision?.token);
+        setNotice(change?.newValue === undefined
+          ? '本地 AI 设置已清理，当前表单已恢复默认状态。'
+          : '');
+      } else if (revision?.mutation === 'clear') {
+        applyConfig(DEFAULT_CONFIG, revision.token);
+        setNotice('本地 AI 设置已清理，当前表单已恢复默认状态。');
+      } else if (revision) {
+        setLoadedConfigRevision(revision.token);
+      }
       setError('');
       setLastTest(null);
     };
@@ -141,8 +157,8 @@ export function SettingsPage() {
     setLoading(true);
     setError('');
     try {
-      const config = await requestSW<UserConfig>('GET_CONFIG');
-      applyConfig(config);
+      const snapshot = await requestSW<SettingsConfigSnapshot>('GET_CONFIG_SNAPSHOT');
+      applyConfig(snapshot.config, snapshot.revision);
       setNotice('');
       setLastTest(null);
       return true;
@@ -171,9 +187,13 @@ export function SettingsPage() {
     setError('');
     setNotice('');
     try {
-      const baseConfig = normalizeSettingsUserConfig(await requestSW<UserConfig>('GET_CONFIG'));
-      if (loadedConfig && !settingsManagedConfigMatches(loadedConfig, baseConfig)) {
-        applyConfig(baseConfig);
+      const baseSnapshot = await requestSW<SettingsConfigSnapshot>('GET_CONFIG_SNAPSHOT');
+      const baseConfig = normalizeSettingsUserConfig(baseSnapshot.config);
+      if (loadedConfig && (
+        !settingsManagedConfigMatches(loadedConfig, baseConfig)
+        || loadedConfigRevision !== baseSnapshot.revision
+      )) {
+        applyConfig(baseConfig, baseSnapshot.revision);
         setLastTest(null);
         setNotice('本地 AI 设置已在其他页面更新，当前表单已刷新。请重新修改后再保存。');
         return;
@@ -193,20 +213,22 @@ export function SettingsPage() {
         {
           persist: async nextConfig => {
             await ensureAiHostPermission(nextConfig.ai.baseURL);
-            await requestSW('UPDATE_CONFIG', {
+            const saved = await requestSW<SettingsConfigSnapshot>('UPDATE_CONFIG', {
               ai: nextConfig.ai,
               assistant: nextConfig.assistant,
               dynamicBill: nextConfig.dynamicBill,
               expectedConfig: baseConfig,
+              expectedConfigRevision: baseSnapshot.revision,
             });
+            setLoadedConfigRevision(saved.revision);
           },
           applyPersistedConfig: applyConfig,
         },
       );
       if (result.status === 'failure') {
         if (result.reason === 'stale_config') {
-          const currentConfig = await requestSW<UserConfig>('GET_CONFIG');
-          applyConfig(currentConfig);
+          const currentSnapshot = await requestSW<SettingsConfigSnapshot>('GET_CONFIG_SNAPSHOT');
+          applyConfig(currentSnapshot.config, currentSnapshot.revision);
           setLastTest(null);
           setNotice('本地 AI 设置已在其他页面更新，当前表单已刷新。请重新修改后再保存。');
           return;
@@ -396,9 +418,10 @@ export function SettingsPage() {
     }
   }
 
-  function applyConfig(config: Partial<UserConfig>) {
+  function applyConfig(config: Partial<UserConfig>, revision?: string) {
     const normalized = normalizeSettingsUserConfig(config);
     setLoadedConfig(normalized);
+    if (revision !== undefined) setLoadedConfigRevision(revision);
     setForm({
       baseURL: normalized.ai.baseURL,
       chatModel: normalized.ai.chatModel,

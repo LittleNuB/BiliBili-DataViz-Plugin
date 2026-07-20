@@ -8,7 +8,10 @@ export function dynamicBillCreatorDisplayName(input: {
     ? input.creatorName.trim().replace(/\s+/g, ' ')
     : '';
   const rawMid = String(input.creatorMid);
-  const identifierLike = name.toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const identifierLike = name
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, '');
   if (!name
     || identifierLike === rawMid
     || identifierLike === `up${rawMid}`

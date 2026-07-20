@@ -43,6 +43,7 @@ import {
   getHistorySyncProgress,
   getBackfillComplete,
   loadConfig,
+  loadConfigSnapshot,
   normalizeUserConfig,
   requestHistorySyncCancel,
   clearOrphanedHistorySyncLock,
@@ -566,22 +567,29 @@ async function handleRequestExclusive<T>(
       return { success: true };
     case 'GET_CONFIG':
       return { success: true, data: await loadConfig() as T };
+    case 'GET_CONFIG_SNAPSHOT':
+      return { success: true, data: await loadConfigSnapshot() as T };
     case 'UPDATE_CONFIG': {
       const {
         expectedConfig: expectedConfigValue,
+        expectedConfigRevision,
         ...configPatch
-      } = (request.params ?? {}) as Partial<UserConfig> & { expectedConfig?: unknown };
+      } = (request.params ?? {}) as Partial<UserConfig> & {
+        expectedConfig?: unknown;
+        expectedConfigRevision?: unknown;
+      };
       const expectedConfig = expectedConfigValue && typeof expectedConfigValue === 'object'
         ? normalizeUserConfig(expectedConfigValue)
         : undefined;
-      const previousConfig = await loadConfig();
-      await saveConfig(configPatch, expectedConfig);
-      const nextConfig = await loadConfig();
-      if (currentVideoSummaryHighlightsConfigChanged(previousConfig, nextConfig)) {
+      const expectation = expectedConfig && typeof expectedConfigRevision === 'string'
+        ? { config: expectedConfig, revision: expectedConfigRevision }
+        : undefined;
+      const saved = await saveConfig(configPatch, expectation);
+      if (currentVideoSummaryHighlightsConfigChanged(saved.previousConfig, saved.snapshot.config)) {
         invalidateCurrentVideoSummaryHighlightsConfig();
         invalidateCurrentVideoFullTextQaConfig();
       }
-      return { success: true };
+      return { success: true, data: saved.snapshot as T };
     }
     case 'EXPORT_DATA': {
       const allRecords = await db.watchHistory.toArray();

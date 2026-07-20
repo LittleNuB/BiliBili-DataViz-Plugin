@@ -115,6 +115,8 @@ test('settings hides missing or identifier-only paused creator names', async () 
     'UP主9527',
     'UP-9527',
     'UP 主 - 9527',
+    '９５２７',
+    'UP 主 ９５２７',
   ]) {
     assert.equal(
       dynamicBillCreatorDisplayName({ creatorMid: 9527, creatorName }),

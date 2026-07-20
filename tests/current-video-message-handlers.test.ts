@@ -1081,6 +1081,15 @@ test('clear all waits for an earlier config write and removes its completed valu
     assert.equal(clearResult.success, true);
     assert.equal(clearResult.data?.status, 'completed');
     assert.equal(storageValues.userConfig, undefined);
+    const revision = storageValues.userConfigRevision as {
+      token?: string;
+      configPresent?: boolean;
+      mutation?: string;
+    };
+    assert.equal(typeof revision.token, 'string');
+    assert.equal(revision.configPresent, false);
+    assert.equal(revision.mutation, 'clear');
+    assert.doesNotMatch(JSON.stringify(revision), /fixture-config-key/);
   } finally {
     storageSetGate = null;
     storageRemoveGate = null;
@@ -1136,6 +1145,54 @@ test('config writes started during clear all are rejected through final readback
     releaseLaterCategory.resolve();
     await clearing.catch(() => undefined);
   }
+});
+
+test('concurrent Settings pages serialize UPDATE_CONFIG and reject the stale second save', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_653;
+  const senderUrl = 'https://www.bilibili.com/video/BV1ConcurrentSettings';
+  const snapshotResult = await sendRequest<{
+    config: Record<string, unknown>;
+    revision: string;
+  }>({ action: 'GET_CONFIG_SNAPSHOT' }, tabId, senderUrl);
+  assert.equal(snapshotResult.success, true);
+  assert.ok(snapshotResult.data);
+  const expectedConfig = snapshotResult.data.config;
+  const expectedConfigRevision = snapshotResult.data.revision;
+
+  const [first, second] = await Promise.all([
+    sendRequest<void>({
+      action: 'UPDATE_CONFIG',
+      params: {
+        ai: {
+          baseURL: 'https://example.invalid',
+          apiKey: 'fixture-first-page-key',
+          chatModel: 'fixture-first-page-model',
+        },
+        expectedConfig,
+        expectedConfigRevision,
+      },
+    }, tabId, senderUrl),
+    sendRequest<void>({
+      action: 'UPDATE_CONFIG',
+      params: {
+        ai: {
+          baseURL: 'https://example.invalid',
+          apiKey: 'fixture-second-page-key',
+          chatModel: 'fixture-second-page-model',
+        },
+        expectedConfig,
+        expectedConfigRevision,
+      },
+    }, tabId, senderUrl),
+  ]);
+
+  assert.equal(first.success, true);
+  assert.equal(second.success, false);
+  assert.equal(second.error, 'LOCAL_SETTINGS_STALE_CONFIG');
+  const storedConfig = storageValues.userConfig as { ai?: { apiKey?: string } };
+  assert.equal(storedConfig.ai?.apiKey, 'fixture-first-page-key');
 });
 
 test('clear all waits for an earlier config read and prevents normalized config from returning', async () => {

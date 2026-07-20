@@ -7,7 +7,9 @@ import {
   type SettingsDraft,
 } from '../dashboard/modules/settings/settings-save-state.ts';
 import {
+  advanceUserConfigRevisionAfterClear,
   loadConfig,
+  loadConfigSnapshot,
   normalizeUserConfig,
   saveConfig,
 } from '../src/background/storage/config-store.ts';
@@ -102,32 +104,52 @@ test('settings save preserves a saved API key when updating feature switches', a
 });
 
 test('settings save rejects a stale expected config after settings were cleared', async () => {
-  const initialConfig = normalizeUserConfig({
-    ai: {
-      baseURL: 'https://api.example.test',
-      apiKey: 'stale-key',
-      chatModel: 'stale-model',
-    },
-    assistant: {
-      currentVideoAiAssistantEnabled: true,
-      smartFavoritesQaAiEnabled: true,
-    },
-    dynamicBill: {
-      aiExplanationsEnabled: true,
-    },
-  });
+  const initialConfig = normalizeUserConfig({});
   const store = installChromeStorageMock({ userConfig: initialConfig });
+  const expected = await loadConfigSnapshot();
   delete store.userConfig;
+  await advanceUserConfigRevisionAfterClear();
 
   await assert.rejects(
     saveConfig({
-      ai: initialConfig.ai,
-      assistant: initialConfig.assistant,
-      dynamicBill: initialConfig.dynamicBill,
-    }, initialConfig),
+      ai: {
+        ...initialConfig.ai,
+        apiKey: 'stale-new-key',
+      },
+      assistant: {
+        ...initialConfig.assistant,
+        currentVideoAiAssistantEnabled: true,
+      },
+    }, expected),
     error => error instanceof Error && error.message === 'LOCAL_SETTINGS_STALE_CONFIG',
   );
   assert.equal(store.userConfig, undefined);
+});
+
+test('concurrent settings pages serialize compare-and-save and reject the stale second page', async () => {
+  const initialConfig = normalizeUserConfig({});
+  const store = installChromeStorageMock({ userConfig: initialConfig });
+  const expected = await loadConfigSnapshot();
+
+  const [first, second] = await Promise.allSettled([
+    saveConfig({
+      ai: { ...initialConfig.ai, apiKey: 'first-page-key' },
+      assistant: initialConfig.assistant,
+      dynamicBill: initialConfig.dynamicBill,
+    }, expected),
+    saveConfig({
+      ai: { ...initialConfig.ai, apiKey: 'second-page-key' },
+      assistant: initialConfig.assistant,
+      dynamicBill: initialConfig.dynamicBill,
+    }, expected),
+  ]);
+
+  assert.equal(first.status, 'fulfilled');
+  assert.equal(second.status, 'rejected');
+  if (second.status === 'rejected') {
+    assert.equal(second.reason instanceof Error && second.reason.message, 'LOCAL_SETTINGS_STALE_CONFIG');
+  }
+  assert.equal((store.userConfig as ReturnType<typeof normalizeUserConfig>).ai.apiKey, 'first-page-key');
 });
 
 test('settings storage removal resets a stale page before a later save', async () => {

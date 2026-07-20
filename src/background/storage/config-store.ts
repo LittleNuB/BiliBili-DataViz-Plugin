@@ -1,6 +1,12 @@
 import { DEFAULT_CONFIG, type UserConfig } from '../../shared/types/config.ts';
 import type { HistorySyncProgress } from '../../shared/types/history-sync.ts';
-import { managedSettingsConfigMatches } from '../../shared/settings-managed-config.ts';
+import {
+  managedSettingsConfigMatches,
+  settingsConfigRevisionRecord,
+  USER_CONFIG_REVISION_STORAGE_KEY,
+  type SettingsConfigRevisionRecord,
+  type SettingsConfigSnapshot,
+} from '../../shared/settings-managed-config.ts';
 import {
   runLocalSettingsWriteOperation,
   tryRunLocalSettingsWriteOperation,
@@ -10,32 +16,59 @@ const CONFIG_KEY = 'userConfig';
 const HISTORY_SYNC_PROGRESS_KEY = 'historySyncProgress';
 const HISTORY_SYNC_CANCEL_KEY = 'historySyncCancelRequested';
 const HISTORY_SYNC_LOCK_TIMEOUT_MS = 30 * 60 * 1000;
+let configStorageTail: Promise<void> = Promise.resolve();
 
 export async function loadConfig(): Promise<UserConfig> {
-  let config = DEFAULT_CONFIG;
+  return (await loadConfigSnapshot()).config;
+}
+
+export async function loadConfigSnapshot(): Promise<SettingsConfigSnapshot> {
+  let snapshot: SettingsConfigSnapshot = { config: DEFAULT_CONFIG, revision: '' };
   await tryRunLocalSettingsWriteOperation(async () => {
-    const result = await chrome.storage.local.get(CONFIG_KEY);
-    if (result[CONFIG_KEY]) {
-      const normalized = normalizeUserConfig(result[CONFIG_KEY]);
-      if (shouldPersistNormalizedConfig(result[CONFIG_KEY], normalized)) {
-        await chrome.storage.local.set({ [CONFIG_KEY]: normalized });
+    await runConfigStorageOperation(async () => {
+      const result = await chrome.storage.local.get([
+        CONFIG_KEY,
+        USER_CONFIG_REVISION_STORAGE_KEY,
+      ]);
+      const configPresent = result[CONFIG_KEY] !== undefined;
+      const config = configPresent ? normalizeUserConfig(result[CONFIG_KEY]) : DEFAULT_CONFIG;
+      const storedRevision = settingsConfigRevisionRecord(result[USER_CONFIG_REVISION_STORAGE_KEY]);
+      const revision = storedRevision?.configPresent === configPresent
+        ? storedRevision
+        : createConfigRevisionRecord(configPresent, 'state');
+      const updates: Record<string, unknown> = {};
+      if (configPresent && shouldPersistNormalizedConfig(result[CONFIG_KEY], config)) {
+        updates[CONFIG_KEY] = config;
       }
-      config = normalized;
-    }
+      if (revision !== storedRevision) {
+        updates[USER_CONFIG_REVISION_STORAGE_KEY] = revision;
+      }
+      if (Object.keys(updates).length > 0) await chrome.storage.local.set(updates);
+      snapshot = { config, revision: revision.token };
+    });
   });
-  return config;
+  return snapshot;
 }
 
 export function saveConfig(
   config: Partial<UserConfig>,
-  expectedConfig?: UserConfig,
-): Promise<void> {
-  return runLocalSettingsWriteOperation(async () => {
-    const result = await chrome.storage.local.get(CONFIG_KEY);
-    const current = result[CONFIG_KEY]
-      ? normalizeUserConfig(result[CONFIG_KEY])
-      : DEFAULT_CONFIG;
-    if (expectedConfig && !managedSettingsConfigMatches(expectedConfig, current)) {
+  expected?: { config: UserConfig; revision: string },
+): Promise<{ previousConfig: UserConfig; snapshot: SettingsConfigSnapshot }> {
+  return runLocalSettingsWriteOperation(async () => runConfigStorageOperation(async () => {
+    const result = await chrome.storage.local.get([
+      CONFIG_KEY,
+      USER_CONFIG_REVISION_STORAGE_KEY,
+    ]);
+    const configPresent = result[CONFIG_KEY] !== undefined;
+    const current = configPresent ? normalizeUserConfig(result[CONFIG_KEY]) : DEFAULT_CONFIG;
+    const storedRevision = settingsConfigRevisionRecord(result[USER_CONFIG_REVISION_STORAGE_KEY]);
+    const currentRevision = storedRevision?.configPresent === configPresent
+      ? storedRevision
+      : createConfigRevisionRecord(configPresent, 'state');
+    if (expected && (
+      expected.revision !== currentRevision.token
+      || !managedSettingsConfigMatches(expected.config, current)
+    )) {
       throw new Error('LOCAL_SETTINGS_STALE_CONFIG');
     }
     const updated = normalizeUserConfig({
@@ -54,8 +87,40 @@ export function saveConfig(
         ...(config.dynamicBill ?? {}),
       },
     });
-    await chrome.storage.local.set({ [CONFIG_KEY]: updated });
+    const nextRevision = createConfigRevisionRecord(true, 'save');
+    await chrome.storage.local.set({
+      [CONFIG_KEY]: updated,
+      [USER_CONFIG_REVISION_STORAGE_KEY]: nextRevision,
+    });
+    return {
+      previousConfig: current,
+      snapshot: { config: updated, revision: nextRevision.token },
+    };
+  }));
+}
+
+export function advanceUserConfigRevisionAfterClear(): Promise<void> {
+  return runConfigStorageOperation(async () => {
+    await chrome.storage.local.set({
+      [USER_CONFIG_REVISION_STORAGE_KEY]: createConfigRevisionRecord(false, 'clear'),
+    });
   });
+}
+
+function runConfigStorageOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = configStorageTail.then(operation);
+  configStorageTail = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+function createConfigRevisionRecord(
+  configPresent: boolean,
+  mutation: SettingsConfigRevisionRecord['mutation'],
+): SettingsConfigRevisionRecord {
+  const token = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  return { token, configPresent, mutation };
 }
 
 export function normalizeUserConfig(value: unknown): UserConfig {
