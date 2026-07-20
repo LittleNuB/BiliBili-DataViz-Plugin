@@ -39,6 +39,7 @@ import { db } from './db';
 
 const DYNAMIC_SYNC_STATE_KEY = 'dynamicBillSyncState';
 const DYNAMIC_BILL_FILTER_KEY = 'dynamicBillFilterPreference';
+const DYNAMIC_BILL_LAST_GENERATED_AT_KEY = 'dynamicBillLastGeneratedAt';
 const DYNAMIC_SYNC_STALE_TIMEOUT_MS = 5 * 60 * 1000;
 export const DYNAMIC_BILL_CREATOR_LESS_REMINDER_UNDO_WINDOW_MS = 8_000;
 const CREATOR_LESS_REMINDER_PAUSE_DAYS = 30;
@@ -522,6 +523,10 @@ export async function replaceAllDynamicBillItems(
     },
   );
 
+  await chrome.storage.local.set({
+    [DYNAMIC_BILL_LAST_GENERATED_AT_KEY]: generatedAt,
+  });
+
   return sortDynamicBillItems(storedItems);
 }
 
@@ -740,6 +745,7 @@ export async function clearDynamicBillStoredState(): Promise<void> {
   await chrome.storage.local.remove([
     DYNAMIC_SYNC_STATE_KEY,
     DYNAMIC_BILL_FILTER_KEY,
+    DYNAMIC_BILL_LAST_GENERATED_AT_KEY,
   ]);
 }
 
@@ -827,6 +833,7 @@ export async function getDynamicBillLocalDataPrivacySummary(): Promise<LocalData
     promptCount,
     rotationRecordCount,
     syncState,
+    generationState,
   ] = await Promise.all([
     db.followedCreators.toArray(),
     db.followedVideoUpdates.count(),
@@ -837,15 +844,20 @@ export async function getDynamicBillLocalDataPrivacySummary(): Promise<LocalData
     db.dynamicBillCreatorReviewPrompts.count(),
     db.dynamicBillRotationRecords.count(),
     getDynamicSyncState(),
+    chrome.storage.local.get(DYNAMIC_BILL_LAST_GENERATED_AT_KEY),
   ]);
   const statusCounts = items.reduce<Record<string, number>>((counts, item) => {
     counts[item.status] = (counts[item.status] ?? 0) + 1;
     return counts;
   }, {});
-  const lastGeneratedAt = items.reduce(
+  const itemLastGeneratedAt = items.reduce(
     (latest, item) => Math.max(latest, item.generatedAt ?? 0),
     0,
   );
+  const storedLastGeneratedAt = normalizeLocalDataTimestamp(
+    generationState[DYNAMIC_BILL_LAST_GENERATED_AT_KEY] as number | undefined,
+  ) ?? 0;
+  const lastGeneratedAt = Math.max(itemLastGeneratedAt, storedLastGeneratedAt);
   return {
     activeFollowedCreatorCount: creators.filter(creator => creator.isActive !== false).length,
     followedVideoUpdateCount: updatesCount,
@@ -890,7 +902,11 @@ async function collectDynamicBillLocalDataUsage(): Promise<LocalDataCategoryUsag
     db.dynamicBillCreatorFeedbackCounts.toArray(),
     db.dynamicBillCreatorReviewPrompts.toArray(),
     db.dynamicBillRotationRecords.toArray(),
-    chrome.storage.local.get([DYNAMIC_SYNC_STATE_KEY, DYNAMIC_BILL_FILTER_KEY]),
+    chrome.storage.local.get([
+      DYNAMIC_SYNC_STATE_KEY,
+      DYNAMIC_BILL_FILTER_KEY,
+      DYNAMIC_BILL_LAST_GENERATED_AT_KEY,
+    ]),
   ]);
   const rows = [
     ...creators,

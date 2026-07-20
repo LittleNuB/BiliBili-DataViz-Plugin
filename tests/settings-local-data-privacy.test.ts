@@ -35,6 +35,7 @@ test('settings local data cards expose natural Chinese summaries only', () => {
     '盲盒抽取记录',
   ]);
   assert.match(cards.map(card => card.value).join('\n'), /128 条/);
+  assert.match(cards.find(card => card.id === 'favorites')?.detail ?? '', /已同步 4 个收藏夹/);
   assert.equal(cards.find(card => card.id === 'blindBoxDrawHistory')?.value, '2 条');
   assert.match(cards.find(card => card.id === 'blindBoxDrawHistory')?.detail ?? '', /不提供单独开关或单独清理入口/);
   const copy = JSON.stringify(cards);
@@ -92,6 +93,9 @@ test('settings page keeps Dynamic Bill storage internals out of ordinary copy', 
 
   assert.doesNotMatch(source, /账单暂停记录|账单轮换记录/);
   assert.doesNotMatch(source, /dynamicBill\.(creatorPauseCount|rotationRecordCount|feedbackCount)/);
+  assert.match(source, /当前暂停 \{pauses\.length\} 位 UP/);
+  assert.match(source, /当前视频 AI 助手只在功能已开启且你主动发起任务时/);
+  assert.doesNotMatch(source, /AI 请求只发送当前功能需要的最小证据片段/);
 });
 
 test('settings page exposes six independently clearable categories and keeps blind-box history count-only', async () => {

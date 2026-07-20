@@ -89,7 +89,7 @@ export function buildLocalDataSummaryCards(summary: LocalDataPrivacySummary): Lo
       id: 'favorites',
       title: '收藏与智能索引',
       value: `${summary.favorites.storedItems} 条`,
-      detail: `B站报告 ${summary.favorites.reportedItems} 条，本地保存 ${summary.favorites.storedItems} 条，已索引 ${summary.favorites.indexedItems} 条。`,
+      detail: `已同步 ${summary.favorites.folderCount} 个收藏夹；B站报告 ${summary.favorites.reportedItems} 条，本地保存 ${summary.favorites.storedItems} 条，已索引 ${summary.favorites.indexedItems} 条。`,
       meta: [
         `占用 ${formatBytes(favoriteUsage?.usageBytes ?? 0)}`,
         `最近同步：${formatLocalDate(summary.favorites.lastSyncedAt, 'milliseconds')}`,

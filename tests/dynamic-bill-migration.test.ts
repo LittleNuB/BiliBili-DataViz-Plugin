@@ -58,6 +58,7 @@ const sideEffects = {
   storageClear: 0,
 };
 let afterStorageRemove: (() => Promise<void>) | null = null;
+let afterStorageSet: ((values: Record<string, unknown>) => Promise<void>) | null = null;
 let fetchHandler: ((...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>) | null = null;
 
 Object.defineProperty(globalThis, 'chrome', {
@@ -88,6 +89,7 @@ Object.defineProperty(globalThis, 'chrome', {
         async set(values: Record<string, unknown>) {
           sideEffects.storageSet++;
           for (const [key, value] of Object.entries(values)) storageData.set(key, value);
+          await afterStorageSet?.(values);
         },
         async remove(keys: string | string[]) {
           sideEffects.storageRemove++;
@@ -117,6 +119,7 @@ test.beforeEach(async () => {
   await Dexie.delete(DB_NAME);
   storageData.clear();
   afterStorageRemove = null;
+  afterStorageSet = null;
   fetchHandler = null;
   resetSideEffects();
 });
@@ -675,6 +678,40 @@ test('generation excludes same-video BVIDs outside the long evidence window with
   assert.equal(result.items[0].evidence.longWindow.watchedCount, 0);
 });
 
+test('an empty Dynamic Bill generation keeps its generated time until Dynamic Bill data is cleared', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+
+  const generated = await generator.generateDynamicBillItems();
+  const beforeClear = await localDataRepo.getLocalDataPrivacySummary();
+  const beforeUsage = beforeClear.categories.find(category => category.id === 'dynamicBill');
+
+  assert.equal(generated.itemCount, 0);
+  assert.deepEqual(generated.items, []);
+  assert.equal(beforeClear.dynamicBill.lastGeneratedAt, generated.generatedAt);
+  assert.deepEqual(beforeUsage && {
+    count: beforeUsage.count,
+    hasUsage: beforeUsage.usageBytes > 0,
+  }, {
+    count: 0,
+    hasUsage: true,
+  });
+
+  const cleared = await localDataRepo.clearDynamicBillLocalData();
+  const afterClear = await localDataRepo.getLocalDataPrivacySummary();
+  const afterUsage = afterClear.categories.find(category => category.id === 'dynamicBill');
+
+  assert.equal(cleared.status, 'completed');
+  assert.equal(afterClear.dynamicBill.lastGeneratedAt, null);
+  assert.deepEqual(afterUsage && {
+    count: afterUsage.count,
+    usageBytes: afterUsage.usageBytes,
+  }, {
+    count: 0,
+    usageBytes: 0,
+  });
+});
+
 test('legacy feedback injected after the marker cannot change candidates, pauses, or settings counts', async () => {
   await seedLegacyDatabase();
   await migration.ensureDynamicBill013Migration();
@@ -979,6 +1016,39 @@ test('dynamic bill clear waits for an in-flight sync and removes every delayed s
   ]), [0, 0, 0, 0]);
   assert.equal(storageData.has('dynamicBillSyncState'), false);
   assert.equal(storageData.has('dynamicBillFilterPreference'), false);
+});
+
+test('dynamic bill clear waits for an in-flight generation and removes its generation metadata', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  await seedCurrentCandidate(Date.now(), 708);
+  const generationStorageReached = deferred<void>();
+  const releaseGeneration = deferred<void>();
+  afterStorageSet = async values => {
+    if (!Object.hasOwn(values, 'dynamicBillLastGeneratedAt')) return;
+    generationStorageReached.resolve(undefined);
+    await releaseGeneration.promise;
+  };
+
+  const generation = generator.generateDynamicBillItems();
+  await generationStorageReached.promise;
+  let clearSettled = false;
+  const clearing = localDataRepo.clearLocalDataCategory('dynamicBill').finally(() => {
+    clearSettled = true;
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(clearSettled, false);
+
+  releaseGeneration.resolve(undefined);
+  const generated = await generation;
+  const clearResult = await clearing;
+  const summary = (await localDataRepo.getLocalDataPrivacySummary()).dynamicBill;
+
+  assert.equal(generated.itemCount, 1);
+  assert.equal(clearResult.status, 'completed');
+  assert.equal(summary.lastGeneratedAt, null);
+  assert.equal(await db.dynamicBillItems.count(), 0);
+  assert.equal(storageData.has('dynamicBillLastGeneratedAt'), false);
 });
 
 test('dynamic bill sync does not start until clear readback has released its operation gate', async () => {

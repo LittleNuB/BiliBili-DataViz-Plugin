@@ -724,7 +724,8 @@ export function SettingsPage() {
         </div>
         <ul className="settings-privacy-list">
           <li>API Key 只保存在本地浏览器扩展存储中，不会提交到 Bili-Bill 服务端。</li>
-          <li>AI 请求只发送当前功能需要的最小证据片段，不上传完整观看历史、完整收藏、完整关注或反馈记录。</li>
+          <li>当前视频 AI 助手只在功能已开启且你主动发起任务时，向已配置的服务发送当前分P的主要文本；长文本会先提示费用和等待风险。</li>
+          <li>智能收藏和动态账单只发送当前任务需要的少量引用或入选事实，不上传完整观看历史、完整收藏、完整关注或反馈记录。</li>
           <li>Bili-Bill 不读取本地登录凭据文件、浏览器用户资料目录、B 站登录状态文件或本地密钥文件。</li>
           <li>动态账单、收藏和当前视频功能不会写回 B 站关注关系、收藏夹或视频数据。</li>
         </ul>
@@ -758,6 +759,7 @@ function DynamicBillPauseList({
           <h4>动态账单暂停提醒</h4>
           <p>这里只恢复 Bili-Bill 本地提醒资格，不修改 B 站关注关系，也不重置少提醒次数。</p>
         </div>
+        <span className="settings-pill">当前暂停 {pauses.length} 位 UP</span>
       </div>
       {pauses.length === 0 ? (
         <div className="settings-data-empty">当前没有暂停提醒的 UP。</div>

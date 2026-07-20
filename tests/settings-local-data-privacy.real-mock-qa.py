@@ -242,6 +242,9 @@ def assert_settings_cards(page: Page) -> None:
     if blind_card.locator("button, input, select, textarea").count() != 0:
         raise AssertionError("Blind-box public card must remain count-only without controls.")
 
+    favorites_card = cards.filter(has_text="收藏与智能索引").first
+    expect(favorites_card.get_by_text("已同步 4 个收藏夹", exact=False)).to_be_visible()
+
 
 def assert_independent_category_clears(page: Page) -> None:
     cases = [
@@ -269,9 +272,11 @@ def assert_independent_category_clears(page: Page) -> None:
 
 def assert_paused_creator_restore(page: Page) -> None:
     pause_list = page.get_by_test_id("settings-dynamic-bill-pauses")
+    expect(pause_list.get_by_text("当前暂停 1 位 UP", exact=True)).to_be_visible()
     expect(pause_list.get_by_text("测试暂停 UP", exact=True)).to_be_visible()
     expect(pause_list.get_by_text("约 12 天后自动恢复", exact=False)).to_be_visible()
     pause_list.get_by_role("button", name="恢复提醒", exact=True).click()
+    expect(pause_list.get_by_text("当前暂停 0 位 UP", exact=True)).to_be_visible()
     expect(pause_list.get_by_text("当前没有暂停提醒的 UP。", exact=True)).to_be_visible()
     expect(page.locator(".settings-alert-success")).to_contain_text("已恢复「测试暂停 UP」的动态账单提醒")
     state = qa_state(page)
