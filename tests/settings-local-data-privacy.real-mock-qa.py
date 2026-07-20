@@ -303,6 +303,41 @@ def assert_paused_creator_restore(page: Page) -> None:
 
 
 def assert_external_config_removal_resets_open_page(page: Page) -> None:
+    page.evaluate("window.__BiliBillSettingsRealMockQa.reset()")
+    page.reload(wait_until="networkidle")
+    wait_for_settings(page)
+
+    stale_smart_toggle = page.locator(".settings-toggle", has_text="智能收藏问答")
+    stale_smart_toggle.click()
+    expect(stale_smart_toggle.locator("input")).to_be_checked()
+    page.evaluate("window.__BiliBillSettingsRealMockQa.removeUserConfigExternally(false)")
+    page.get_by_role("button", name="保存设置", exact=True).click()
+    expect(page.locator(".settings-alert-success")).to_contain_text("已在其他页面更新")
+    state = qa_state(page)
+    if state["updateConfigCount"] != 0 or state["config"]["ai"]["apiKey"] != "":
+        raise AssertionError("A save raced ahead of delayed config-removal delivery")
+    if state["configRequestCount"] < 2:
+        raise AssertionError("Settings did not re-read the current config before saving")
+    assert_config_toggles(page, current_video=False, smart_favorites=False, dynamic_bill=False)
+
+    page.evaluate("window.__BiliBillSettingsRealMockQa.reset()")
+    page.reload(wait_until="networkidle")
+    wait_for_settings(page)
+    racing_smart_toggle = page.locator(".settings-toggle", has_text="智能收藏问答")
+    racing_smart_toggle.click()
+    page.evaluate("window.__BiliBillSettingsRealMockQa.clearBeforeNextConfigUpdate()")
+    page.get_by_role("button", name="保存设置", exact=True).click()
+    expect(page.locator(".settings-alert-success")).to_contain_text("已在其他页面更新")
+    state = qa_state(page)
+    if state["updateConfigCount"] != 0 or state["rejectedUpdateConfigCount"] != 1:
+        raise AssertionError("A completed clear between config read and update was not rejected")
+    if state["config"]["ai"]["apiKey"] != "":
+        raise AssertionError("A rejected stale update restored the cleared API key")
+    assert_config_toggles(page, current_video=False, smart_favorites=False, dynamic_bill=False)
+
+    page.evaluate("window.__BiliBillSettingsRealMockQa.reset()")
+    page.reload(wait_until="networkidle")
+    wait_for_settings(page)
     page.evaluate("window.__BiliBillSettingsRealMockQa.removeUserConfigExternally()")
     assert_config_toggles(page, current_video=False, smart_favorites=False, dynamic_bill=False)
     expect(page.locator(".settings-alert-success")).to_contain_text("当前表单已恢复默认状态")
@@ -630,6 +665,8 @@ CHROME_MOCK_SCRIPT = r"""
       summaryRequestCount: 0,
       configRequestCount: 0,
       updateConfigCount: 0,
+      rejectedUpdateConfigCount: 0,
+      clearBeforeNextConfigUpdate: false,
       clearedCategories: [],
       restoredCreatorMids: [],
       clearAllCount: 0,
@@ -646,11 +683,22 @@ CHROME_MOCK_SCRIPT = r"""
 
   function clearedConfig() {
     const config = initialConfig();
+    config.ai.baseURL = 'https://api.deepseek.com';
     config.ai.apiKey = '';
+    config.ai.chatModel = 'deepseek-v4-flash';
     config.assistant.currentVideoAiAssistantEnabled = false;
     config.assistant.smartFavoritesQaAiEnabled = false;
     config.dynamicBill.aiExplanationsEnabled = false;
     return config;
+  }
+
+  function managedConfigMatches(observed, current) {
+    return observed.ai.baseURL === current.ai.baseURL
+      && observed.ai.chatModel === current.ai.chatModel
+      && observed.ai.apiKey === current.ai.apiKey
+      && observed.assistant.currentVideoAiAssistantEnabled === current.assistant.currentVideoAiAssistantEnabled
+      && observed.assistant.smartFavoritesQaAiEnabled === current.assistant.smartFavoritesQaAiEnabled
+      && observed.dynamicBill.aiExplanationsEnabled === current.dynamicBill.aiExplanationsEnabled;
   }
 
   function loadState() {
@@ -941,6 +989,16 @@ CHROME_MOCK_SCRIPT = r"""
         data = clone(state.config);
         break;
       case 'UPDATE_CONFIG':
+        if (state.clearBeforeNextConfigUpdate) {
+          state.clearBeforeNextConfigUpdate = false;
+          state.config = clearedConfig();
+        }
+        if (message.params && message.params.expectedConfig
+            && !managedConfigMatches(message.params.expectedConfig, state.config)) {
+          state.rejectedUpdateConfigCount += 1;
+          saveState(state);
+          return { success: false, error: 'LOCAL_SETTINGS_STALE_CONFIG' };
+        }
         state.updateConfigCount += 1;
         state.config = {
           ...state.config,
@@ -1127,14 +1185,22 @@ CHROME_MOCK_SCRIPT = r"""
       saveState(state);
       return clone(state);
     },
-    removeUserConfigExternally() {
+    removeUserConfigExternally(emitChange = true) {
       const state = loadState();
       const oldValue = clone(state.config);
       state.config = clearedConfig();
       saveState(state);
-      for (const listener of storageChangeListeners) {
-        listener({ userConfig: { oldValue, newValue: undefined } }, 'local');
+      if (emitChange) {
+        for (const listener of storageChangeListeners) {
+          listener({ userConfig: { oldValue, newValue: undefined } }, 'local');
+        }
       }
+      return clone(state);
+    },
+    clearBeforeNextConfigUpdate() {
+      const state = loadState();
+      state.clearBeforeNextConfigUpdate = true;
+      saveState(state);
       return clone(state);
     },
   };

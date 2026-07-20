@@ -4,6 +4,7 @@ import {
   type DynamicBillConfig,
   type UserConfig,
 } from '../../../src/shared/types/config.ts';
+import { managedSettingsConfigMatches } from '../../../src/shared/settings-managed-config.ts';
 
 export interface SettingsDraft {
   ai: {
@@ -35,6 +36,7 @@ export type SaveSettingsDraftResult =
   }
   | {
     status: 'failure';
+    reason: 'stale_config' | 'persistence_error';
     draft: SettingsDraft;
     persistedConfig: UserConfig;
     error: string;
@@ -51,6 +53,15 @@ export function settingsUserConfigFromStorageChange(
   return normalizeSettingsUserConfig(change.newValue as Partial<UserConfig>);
 }
 
+export function settingsManagedConfigMatches(
+  observed: Partial<UserConfig>,
+  current: Partial<UserConfig>,
+): boolean {
+  const left = normalizeSettingsUserConfig(observed);
+  const right = normalizeSettingsUserConfig(current);
+  return managedSettingsConfigMatches(left, right);
+}
+
 export async function saveSettingsDraft(
   input: SaveSettingsDraftInput,
   dependencies: SaveSettingsDraftDependencies,
@@ -61,7 +72,7 @@ export async function saveSettingsDraft(
     ai: {
       baseURL: input.draft.ai.baseURL.trim(),
       chatModel: input.draft.ai.chatModel.trim(),
-      apiKey: input.draft.ai.apiKeyInput.trim() || input.draft.ai.savedApiKey,
+      apiKey: input.draft.ai.apiKeyInput.trim() || persistedConfig.ai.apiKey,
     },
     assistant: input.draft.assistant,
     dynamicBill: input.draft.dynamicBill,
@@ -72,6 +83,9 @@ export async function saveSettingsDraft(
   } catch (error) {
     return {
       status: 'failure',
+      reason: error instanceof Error && error.message === 'LOCAL_SETTINGS_STALE_CONFIG'
+        ? 'stale_config'
+        : 'persistence_error',
       draft: input.draft,
       persistedConfig,
       error: formatSettingsError(error),
@@ -103,6 +117,9 @@ export function normalizeSettingsUserConfig(config: Partial<UserConfig>): UserCo
 export function formatSettingsError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const retained = '设置未保存，当前输入已保留。';
+  if (message === 'LOCAL_SETTINGS_STALE_CONFIG') {
+    return `${retained} 本地 AI 设置已在其他页面更新，请刷新后重试。`;
+  }
   if (message === 'AI_BASE_URL_INVALID') return `${retained} AI 服务地址格式不正确。`;
   if (message === 'AI_BASE_URL_UNSUPPORTED') return `${retained} AI 服务地址只支持 http 或 https。`;
   if (message === 'AI_HTTP_HOST_UNSUPPORTED') return `${retained} HTTP 服务地址仅限本机调试地址。`;

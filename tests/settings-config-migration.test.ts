@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   saveSettingsDraft,
+  settingsManagedConfigMatches,
   settingsUserConfigFromStorageChange,
   type SettingsDraft,
 } from '../dashboard/modules/settings/settings-save-state.ts';
@@ -100,7 +101,48 @@ test('settings save preserves a saved API key when updating feature switches', a
   assert.equal('videoBlindBoxAiEnabled' in persisted.assistant, false);
 });
 
+test('settings save rejects a stale expected config after settings were cleared', async () => {
+  const initialConfig = normalizeUserConfig({
+    ai: {
+      baseURL: 'https://api.example.test',
+      apiKey: 'stale-key',
+      chatModel: 'stale-model',
+    },
+    assistant: {
+      currentVideoAiAssistantEnabled: true,
+      smartFavoritesQaAiEnabled: true,
+    },
+    dynamicBill: {
+      aiExplanationsEnabled: true,
+    },
+  });
+  const store = installChromeStorageMock({ userConfig: initialConfig });
+  delete store.userConfig;
+
+  await assert.rejects(
+    saveConfig({
+      ai: initialConfig.ai,
+      assistant: initialConfig.assistant,
+      dynamicBill: initialConfig.dynamicBill,
+    }, initialConfig),
+    error => error instanceof Error && error.message === 'LOCAL_SETTINGS_STALE_CONFIG',
+  );
+  assert.equal(store.userConfig, undefined);
+});
+
 test('settings storage removal resets a stale page before a later save', async () => {
+  const staleObservedConfig = normalizeUserConfig({
+    ai: {
+      baseURL: 'https://stale.example.test',
+      apiKey: 'stale-key',
+      chatModel: 'stale-model',
+    },
+    assistant: {
+      currentVideoAiAssistantEnabled: true,
+      smartFavoritesQaAiEnabled: false,
+    },
+    dynamicBill: { aiExplanationsEnabled: true },
+  });
   const clearedConfig = settingsUserConfigFromStorageChange({ newValue: undefined });
   assert.ok(clearedConfig);
   assert.equal(clearedConfig.ai.apiKey, '');
@@ -108,6 +150,8 @@ test('settings storage removal resets a stale page before a later save', async (
   assert.equal(clearedConfig.dynamicBill.aiExplanationsEnabled, false);
   assert.equal(settingsUserConfigFromStorageChange(undefined), null);
   assert.equal(settingsUserConfigFromStorageChange({ newValue: 'invalid' }), null);
+  assert.equal(settingsManagedConfigMatches(staleObservedConfig, clearedConfig), false);
+  assert.equal(settingsManagedConfigMatches(clearedConfig, clearedConfig), true);
 
   let persistedConfig = clearedConfig;
   const result = await saveSettingsDraft(
@@ -118,7 +162,7 @@ test('settings storage removal resets a stale page before a later save', async (
           baseURL: clearedConfig.ai.baseURL,
           chatModel: clearedConfig.ai.chatModel,
           apiKeyInput: '',
-          savedApiKey: clearedConfig.ai.apiKey,
+          savedApiKey: staleObservedConfig.ai.apiKey,
         },
         assistant: {
           ...clearedConfig.assistant,
@@ -173,11 +217,29 @@ test('settings save failure keeps the complete draft and does not apply unpersis
   );
 
   assert.equal(result.status, 'failure');
+  assert.equal(result.reason, 'persistence_error');
   assert.deepEqual(result.draft, draft);
   assert.deepEqual(result.persistedConfig, persistedConfig);
   assert.equal(appliedConfig, persistedConfig);
   assert.match(result.error, /设置未保存，当前输入已保留/);
   assert.doesNotMatch(result.error, /raw persistence failure/);
+});
+
+test('settings save classifies a stale persistence conflict', async () => {
+  const persistedConfig = normalizeUserConfig({});
+  const result = await saveSettingsDraft(
+    { persistedConfig, draft: makeSettingsDraft() },
+    {
+      persist: async () => {
+        throw new Error('LOCAL_SETTINGS_STALE_CONFIG');
+      },
+      applyPersistedConfig: () => undefined,
+    },
+  );
+
+  assert.equal(result.status, 'failure');
+  assert.equal(result.reason, 'stale_config');
+  assert.match(result.error, /本地 AI 设置已在其他页面更新/);
 });
 
 test('settings save success persists and applies the complete draft', async () => {

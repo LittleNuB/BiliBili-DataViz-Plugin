@@ -43,6 +43,7 @@ import {
   getHistorySyncProgress,
   getBackfillComplete,
   loadConfig,
+  normalizeUserConfig,
   requestHistorySyncCancel,
   clearOrphanedHistorySyncLock,
   setDeviceTypeMigrationComplete,
@@ -566,8 +567,15 @@ async function handleRequestExclusive<T>(
     case 'GET_CONFIG':
       return { success: true, data: await loadConfig() as T };
     case 'UPDATE_CONFIG': {
+      const {
+        expectedConfig: expectedConfigValue,
+        ...configPatch
+      } = (request.params ?? {}) as Partial<UserConfig> & { expectedConfig?: unknown };
+      const expectedConfig = expectedConfigValue && typeof expectedConfigValue === 'object'
+        ? normalizeUserConfig(expectedConfigValue)
+        : undefined;
       const previousConfig = await loadConfig();
-      await saveConfig(request.params as Partial<UserConfig>);
+      await saveConfig(configPatch, expectedConfig);
       const nextConfig = await loadConfig();
       if (currentVideoSummaryHighlightsConfigChanged(previousConfig, nextConfig)) {
         invalidateCurrentVideoSummaryHighlightsConfig();

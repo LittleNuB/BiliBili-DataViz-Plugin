@@ -1,5 +1,6 @@
 import { DEFAULT_CONFIG, type UserConfig } from '../../shared/types/config.ts';
 import type { HistorySyncProgress } from '../../shared/types/history-sync.ts';
+import { managedSettingsConfigMatches } from '../../shared/settings-managed-config.ts';
 import {
   runLocalSettingsWriteOperation,
   tryRunLocalSettingsWriteOperation,
@@ -25,9 +26,18 @@ export async function loadConfig(): Promise<UserConfig> {
   return config;
 }
 
-export function saveConfig(config: Partial<UserConfig>): Promise<void> {
+export function saveConfig(
+  config: Partial<UserConfig>,
+  expectedConfig?: UserConfig,
+): Promise<void> {
   return runLocalSettingsWriteOperation(async () => {
-    const current = await loadConfig();
+    const result = await chrome.storage.local.get(CONFIG_KEY);
+    const current = result[CONFIG_KEY]
+      ? normalizeUserConfig(result[CONFIG_KEY])
+      : DEFAULT_CONFIG;
+    if (expectedConfig && !managedSettingsConfigMatches(expectedConfig, current)) {
+      throw new Error('LOCAL_SETTINGS_STALE_CONFIG');
+    }
     const updated = normalizeUserConfig({
       ...current,
       ...config,

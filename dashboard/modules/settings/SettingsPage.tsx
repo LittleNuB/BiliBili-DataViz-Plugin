@@ -33,6 +33,7 @@ import {
   formatSettingsError,
   normalizeSettingsUserConfig,
   saveSettingsDraft,
+  settingsManagedConfigMatches,
   settingsUserConfigFromStorageChange,
 } from './settings-save-state';
 import { downloadLocalDataDiagnostic } from './settings-diagnostic-download';
@@ -170,7 +171,13 @@ export function SettingsPage() {
     setError('');
     setNotice('');
     try {
-      const baseConfig = normalizeSettingsUserConfig(loadedConfig ?? await requestSW<UserConfig>('GET_CONFIG'));
+      const baseConfig = normalizeSettingsUserConfig(await requestSW<UserConfig>('GET_CONFIG'));
+      if (loadedConfig && !settingsManagedConfigMatches(loadedConfig, baseConfig)) {
+        applyConfig(baseConfig);
+        setLastTest(null);
+        setNotice('本地 AI 设置已在其他页面更新，当前表单已刷新。请重新修改后再保存。');
+        return;
+      }
       const result = await saveSettingsDraft(
         {
           persistedConfig: baseConfig,
@@ -190,12 +197,20 @@ export function SettingsPage() {
               ai: nextConfig.ai,
               assistant: nextConfig.assistant,
               dynamicBill: nextConfig.dynamicBill,
+              expectedConfig: baseConfig,
             });
           },
           applyPersistedConfig: applyConfig,
         },
       );
       if (result.status === 'failure') {
+        if (result.reason === 'stale_config') {
+          const currentConfig = await requestSW<UserConfig>('GET_CONFIG');
+          applyConfig(currentConfig);
+          setLastTest(null);
+          setNotice('本地 AI 设置已在其他页面更新，当前表单已刷新。请重新修改后再保存。');
+          return;
+        }
         setError(result.error);
         return;
       }
