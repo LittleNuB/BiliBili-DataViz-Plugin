@@ -1,5 +1,9 @@
 import { DEFAULT_CONFIG, type UserConfig } from '../../shared/types/config.ts';
 import type { HistorySyncProgress } from '../../shared/types/history-sync.ts';
+import {
+  runLocalSettingsWriteOperation,
+  tryRunLocalSettingsWriteOperation,
+} from './local-settings-operation-control.ts';
 
 const CONFIG_KEY = 'userConfig';
 const HISTORY_SYNC_PROGRESS_KEY = 'historySyncProgress';
@@ -7,36 +11,41 @@ const HISTORY_SYNC_CANCEL_KEY = 'historySyncCancelRequested';
 const HISTORY_SYNC_LOCK_TIMEOUT_MS = 30 * 60 * 1000;
 
 export async function loadConfig(): Promise<UserConfig> {
-  const result = await chrome.storage.local.get(CONFIG_KEY);
-  if (result[CONFIG_KEY]) {
-    const normalized = normalizeUserConfig(result[CONFIG_KEY]);
-    if (shouldPersistNormalizedConfig(result[CONFIG_KEY], normalized)) {
-      await chrome.storage.local.set({ [CONFIG_KEY]: normalized });
+  let config = DEFAULT_CONFIG;
+  await tryRunLocalSettingsWriteOperation(async () => {
+    const result = await chrome.storage.local.get(CONFIG_KEY);
+    if (result[CONFIG_KEY]) {
+      const normalized = normalizeUserConfig(result[CONFIG_KEY]);
+      if (shouldPersistNormalizedConfig(result[CONFIG_KEY], normalized)) {
+        await chrome.storage.local.set({ [CONFIG_KEY]: normalized });
+      }
+      config = normalized;
     }
-    return normalized;
-  }
-  return DEFAULT_CONFIG;
+  });
+  return config;
 }
 
-export async function saveConfig(config: Partial<UserConfig>): Promise<void> {
-  const current = await loadConfig();
-  const updated = normalizeUserConfig({
-    ...current,
-    ...config,
-    ai: {
-      ...current.ai,
-      ...(config.ai ?? {}),
-    },
-    assistant: {
-      ...current.assistant,
-      ...(config.assistant ?? {}),
-    },
-    dynamicBill: {
-      ...current.dynamicBill,
-      ...(config.dynamicBill ?? {}),
-    },
+export function saveConfig(config: Partial<UserConfig>): Promise<void> {
+  return runLocalSettingsWriteOperation(async () => {
+    const current = await loadConfig();
+    const updated = normalizeUserConfig({
+      ...current,
+      ...config,
+      ai: {
+        ...current.ai,
+        ...(config.ai ?? {}),
+      },
+      assistant: {
+        ...current.assistant,
+        ...(config.assistant ?? {}),
+      },
+      dynamicBill: {
+        ...current.dynamicBill,
+        ...(config.dynamicBill ?? {}),
+      },
+    });
+    await chrome.storage.local.set({ [CONFIG_KEY]: updated });
   });
-  await chrome.storage.local.set({ [CONFIG_KEY]: updated });
 }
 
 export function normalizeUserConfig(value: unknown): UserConfig {

@@ -4,6 +4,7 @@ import type {
 } from '../../shared/local-data-category-contract.ts';
 import { CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY } from '../../shared/current-video-primary-text-selection.ts';
 import { coordinateCurrentVideoPrimaryTextSelectionClear } from './current-video-primary-text-selection-store.ts';
+import { runLocalSettingsClearDataOperation } from './local-settings-operation-control.ts';
 
 const LOCAL_SETTING_STORAGE_KEYS = [
   'userConfig',
@@ -17,10 +18,12 @@ export function getLocalSettingsDataCategoryRegistration(): LocalDataCategoryReg
     label: '本地 AI 设置',
     includeInClearAll: true,
     collectUsage: collectLocalSettingsUsage,
-    clear: async () => coordinateCurrentVideoPrimaryTextSelectionClear(async () => {
-      await chrome.storage.local.remove(LOCAL_SETTING_STORAGE_KEYS);
-      return { cleared: { localSettings: true } };
-    }),
+    clear: async () => coordinateCurrentVideoPrimaryTextSelectionClear(
+      () => runLocalSettingsClearDataOperation(async () => {
+        await chrome.storage.local.remove(LOCAL_SETTING_STORAGE_KEYS);
+        return { cleared: { localSettings: true } };
+      }),
+    ),
     readAfterClear: async () => {
       const usage = await collectLocalSettingsUsage();
       return {

@@ -24,6 +24,7 @@ import type {
   SmartFavoriteIndexRebuildResult,
 } from '../../../src/shared/types/local-data-privacy';
 import type { IndependentlyClearableLocalDataCategoryId } from '../../../src/shared/local-data-category-contract';
+import { dynamicBillCreatorDisplayName } from '../../../src/shared/dynamic-bill-creator-name';
 import type {
   DynamicBillCreatorPauseView,
   DynamicBillRestoreCreatorReminderResult,
@@ -309,7 +310,7 @@ export function SettingsPage() {
       );
       await refreshLocalData();
       if (result.status === 'restored') {
-        setNotice(`已恢复「${pause.creatorName || `UP ${pause.creatorMid}`}」的动态账单提醒；这不会修改 B 站关注关系。`);
+        setNotice(`已恢复「${dynamicBillCreatorDisplayName(pause)}」的动态账单提醒；这不会修改 B 站关注关系。`);
       } else if (result.status === 'stale') {
         setNotice('这条暂停提醒已经更新，已刷新列表；请按最新到期时间再恢复。');
       } else {
@@ -768,7 +769,7 @@ function DynamicBillPauseList({
           {pauses.map(pause => (
             <article className="settings-pause-item" key={pause.creatorMid}>
               <div>
-                <strong>{pause.creatorName || `UP ${pause.creatorMid}`}</strong>
+                <strong>{dynamicBillCreatorDisplayName(pause)}</strong>
                 <span>
                   {pause.remainingDays > 0
                     ? `约 ${pause.remainingDays} 天后自动恢复`

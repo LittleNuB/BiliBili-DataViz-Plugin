@@ -29,6 +29,7 @@ import {
 import {
   getHistorySyncing,
 } from './config-store.ts';
+import { runLocalSettingsClearDataOperation } from './local-settings-operation-control.ts';
 import {
   BLIND_BOX_DRAW_HISTORY_LIMIT,
   beginBlindBoxDrawHistoryClearWindow,
@@ -136,7 +137,9 @@ export function clearAllLocalData(confirmation: unknown): Promise<LocalDataOpera
   }
   return runHistoryClearDataOperation(
     () => runFavoriteDataOperation(
-      () => runDynamicBillDataOperation(clearAllLocalDataExclusive),
+      () => runDynamicBillDataOperation(
+        () => runLocalSettingsClearDataOperation(clearAllLocalDataExclusive),
+      ),
     ),
   );
 }

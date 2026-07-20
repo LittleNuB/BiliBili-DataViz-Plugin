@@ -49,6 +49,16 @@ let storageRemoveGate: {
   reached: () => void;
   release: Promise<void>;
 } | null = null;
+let storageSetGate: {
+  key: string;
+  reached: () => void;
+  release: Promise<void>;
+} | null = null;
+let storageGetGate: {
+  key: string;
+  reached: () => void;
+  release: Promise<void>;
+} | null = null;
 
 installChromeFake();
 const {
@@ -926,6 +936,182 @@ test('clear all suppresses a heartbeat after history readback while later catego
     releaseLaterCategory.resolve();
     storageRemoveGate = null;
     await clearing.catch(() => undefined);
+  }
+});
+
+test('clear all waits for an earlier config write and removes its completed value', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const configWriteReached = deferred<void>();
+  const releaseConfigWrite = deferred<void>();
+  storageSetGate = {
+    key: 'userConfig',
+    reached: () => configWriteReached.resolve(),
+    release: releaseConfigWrite.promise,
+  };
+  const laterCategoryReached = deferred<void>();
+  const releaseLaterCategory = deferred<void>();
+  let reachedLaterCategory = false;
+  storageRemoveGate = {
+    key: 'dynamicBillSyncState',
+    reached: () => {
+      reachedLaterCategory = true;
+      laterCategoryReached.resolve();
+    },
+    release: releaseLaterCategory.promise,
+  };
+
+  const tabId = 18_651;
+  const senderUrl = 'https://www.bilibili.com/video/BV1ConfigBeforeClear';
+  const updating = sendRequest<void>({
+    action: 'UPDATE_CONFIG',
+    params: {
+      ai: {
+        baseURL: 'https://example.invalid',
+        apiKey: 'fixture-config-key',
+        chatModel: 'fixture-model',
+      },
+    },
+  }, tabId, senderUrl);
+  await configWriteReached.promise;
+
+  const clearing = sendRequest<{ status: string }>({
+    action: 'CLEAR_ALL_LOCAL_DATA',
+    params: { confirmation: '清理本地数据' },
+  }, tabId, senderUrl);
+
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(reachedLaterCategory, false);
+
+    storageSetGate = null;
+    releaseConfigWrite.resolve();
+    const updateResult = await updating;
+    assert.equal(updateResult.success, true);
+
+    await laterCategoryReached.promise;
+    releaseLaterCategory.resolve();
+    const clearResult = await clearing;
+    assert.equal(clearResult.success, true);
+    assert.equal(clearResult.data?.status, 'completed');
+    assert.equal(storageValues.userConfig, undefined);
+  } finally {
+    storageSetGate = null;
+    storageRemoveGate = null;
+    releaseConfigWrite.resolve();
+    releaseLaterCategory.resolve();
+    await Promise.allSettled([updating, clearing]);
+  }
+});
+
+test('config writes started during clear all are rejected through final readback', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  storageValues.userConfig = {
+    ai: { apiKey: 'fixture-existing-key' },
+  };
+  const laterCategoryReached = deferred<void>();
+  const releaseLaterCategory = deferred<void>();
+  storageRemoveGate = {
+    key: 'dynamicBillSyncState',
+    reached: () => laterCategoryReached.resolve(),
+    release: releaseLaterCategory.promise,
+  };
+
+  const tabId = 18_652;
+  const senderUrl = 'https://www.bilibili.com/video/BV1ConfigDuringClear';
+  const clearing = sendRequest<{ status: string }>({
+    action: 'CLEAR_ALL_LOCAL_DATA',
+    params: { confirmation: '清理本地数据' },
+  }, tabId, senderUrl);
+
+  try {
+    await laterCategoryReached.promise;
+    const updateResult = await sendRequest<void>({
+      action: 'UPDATE_CONFIG',
+      params: {
+        ai: {
+          baseURL: 'https://example.invalid',
+          apiKey: 'fixture-late-key',
+          chatModel: 'fixture-model',
+        },
+      },
+    }, tabId, senderUrl);
+    assert.equal(updateResult.success, false);
+    assert.equal(updateResult.error, 'LOCAL_SETTINGS_CLEAR_IN_PROGRESS');
+
+    releaseLaterCategory.resolve();
+    const clearResult = await clearing;
+    assert.equal(clearResult.success, true);
+    assert.equal(clearResult.data?.status, 'completed');
+    assert.equal(storageValues.userConfig, undefined);
+  } finally {
+    storageRemoveGate = null;
+    releaseLaterCategory.resolve();
+    await clearing.catch(() => undefined);
+  }
+});
+
+test('clear all waits for an earlier config read and prevents normalized config from returning', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  storageValues.userConfig = {
+    ai: {
+      baseURL: 'https://example.invalid',
+      apiKey: 'fixture-read-key',
+      chatModel: 'fixture-model',
+    },
+    assistant: { currentVideoQaAiEnabled: true },
+  };
+  const configReadReached = deferred<void>();
+  const releaseConfigRead = deferred<void>();
+  storageGetGate = {
+    key: 'userConfig',
+    reached: () => configReadReached.resolve(),
+    release: releaseConfigRead.promise,
+  };
+  const laterCategoryReached = deferred<void>();
+  const releaseLaterCategory = deferred<void>();
+  let reachedLaterCategory = false;
+  storageRemoveGate = {
+    key: 'dynamicBillSyncState',
+    reached: () => {
+      reachedLaterCategory = true;
+      laterCategoryReached.resolve();
+    },
+    release: releaseLaterCategory.promise,
+  };
+
+  const tabId = 18_653;
+  const senderUrl = 'https://www.bilibili.com/video/BV1ConfigReadBeforeClear';
+  const reading = sendRequest({ action: 'GET_CONFIG' }, tabId, senderUrl);
+  await configReadReached.promise;
+  const clearing = sendRequest<{ status: string }>({
+    action: 'CLEAR_ALL_LOCAL_DATA',
+    params: { confirmation: '清理本地数据' },
+  }, tabId, senderUrl);
+
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(reachedLaterCategory, false);
+
+    storageGetGate = null;
+    releaseConfigRead.resolve();
+    const readResult = await reading;
+    assert.equal(readResult.success, true);
+
+    await laterCategoryReached.promise;
+    releaseLaterCategory.resolve();
+    const clearResult = await clearing;
+    assert.equal(clearResult.success, true);
+    assert.equal(clearResult.data?.status, 'completed');
+    assert.equal(storageValues.userConfig, undefined);
+  } finally {
+    storageGetGate = null;
+    storageRemoveGate = null;
+    releaseConfigRead.resolve();
+    releaseLaterCategory.resolve();
+    await Promise.allSettled([reading, clearing]);
   }
 });
 
@@ -3256,11 +3442,20 @@ function installChromeFake(): void {
           if (gate && readsStorageKey(keys, CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY)) {
             return gate.then(() => result);
           }
+          const localSettingsGate = storageGetGate;
+          if (localSettingsGate && readsStorageKey(keys, localSettingsGate.key)) {
+            localSettingsGate.reached();
+            return localSettingsGate.release.then(() => result);
+          }
           return Promise.resolve(result);
         },
-        set(values: Record<string, unknown>) {
+        async set(values: Record<string, unknown>) {
+          const gate = storageSetGate;
+          if (gate && Object.hasOwn(values, gate.key)) {
+            gate.reached();
+            await gate.release;
+          }
           Object.assign(storageValues, values);
-          return Promise.resolve();
         },
         async remove(keys: string | string[]) {
           const normalizedKeys = Array.isArray(keys) ? keys : [keys];
@@ -3297,6 +3492,8 @@ function resetChromeHarness(): void {
   rejectPrimaryTextSelectionStorageReads = false;
   primaryTextSelectionStorageGetGate = null;
   storageRemoveGate = null;
+  storageSetGate = null;
+  storageGetGate = null;
 }
 
 function setTabs(nextTabs: FakeTab[]): void {

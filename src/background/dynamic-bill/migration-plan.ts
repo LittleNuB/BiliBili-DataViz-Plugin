@@ -2,6 +2,7 @@ import type {
   DynamicBillCreatorPauseRecord,
   DynamicBillFeedbackRecord,
 } from '../../shared/types/dynamic-bill.ts';
+import { dynamicBillCreatorDisplayName } from '../../shared/dynamic-bill-creator-name.ts';
 import { DYNAMIC_BILL_MIGRATION_CREATOR_PAUSE_DAYS } from './strategy.ts';
 
 export function deriveLegacyCreatorPauses(
@@ -29,7 +30,10 @@ export function deriveLegacyCreatorPauses(
 
     pausesByCreator.set(creatorMid, {
       creatorMid,
-      creatorName: record.creatorName || record.label || String(creatorMid),
+      creatorName: dynamicBillCreatorDisplayName({
+        creatorMid,
+        creatorName: record.creatorName || record.label,
+      }),
       startedAt,
       expiresAt,
       source: 'migration',

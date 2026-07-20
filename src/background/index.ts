@@ -7,6 +7,7 @@ import { deleteOlderThan } from './storage/watch-history-repo';
 import { clearOrphanedHistorySyncLock, loadConfig } from './storage/config-store';
 import { db } from './storage/db';
 import { computeDailyAggregate, computeStoredHistoryAggregates } from './analytics/engine';
+import { tryRunLocalSettingsWriteOperation } from './storage/local-settings-operation-control';
 
 console.log('[BiliViz] Service Worker started');
 
@@ -114,34 +115,38 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 setupMessageHandlers();
 
 chrome.action.onClicked.addListener(async () => {
-  const stored = await chrome.storage.local.get(FLOATING_POPUP_WINDOW_KEY);
-  const existingWindowId = Number(stored[FLOATING_POPUP_WINDOW_KEY] ?? 0);
+  await tryRunLocalSettingsWriteOperation(async () => {
+    const stored = await chrome.storage.local.get(FLOATING_POPUP_WINDOW_KEY);
+    const existingWindowId = Number(stored[FLOATING_POPUP_WINDOW_KEY] ?? 0);
 
-  if (existingWindowId > 0) {
-    try {
-      await chrome.windows.update(existingWindowId, { focused: true });
-      return;
-    } catch {
-      await chrome.storage.local.remove(FLOATING_POPUP_WINDOW_KEY);
+    if (existingWindowId > 0) {
+      try {
+        await chrome.windows.update(existingWindowId, { focused: true });
+        return;
+      } catch {
+        await chrome.storage.local.remove(FLOATING_POPUP_WINDOW_KEY);
+      }
     }
-  }
 
-  const win = await chrome.windows.create({
-    url: FLOATING_POPUP_URL,
-    type: 'popup',
-    width: 560,
-    height: 760,
-    focused: true,
+    const win = await chrome.windows.create({
+      url: FLOATING_POPUP_URL,
+      type: 'popup',
+      width: 560,
+      height: 760,
+      focused: true,
+    });
+
+    if (win.id !== undefined) {
+      await chrome.storage.local.set({ [FLOATING_POPUP_WINDOW_KEY]: win.id });
+    }
   });
-
-  if (win.id !== undefined) {
-    await chrome.storage.local.set({ [FLOATING_POPUP_WINDOW_KEY]: win.id });
-  }
 });
 
 chrome.windows.onRemoved.addListener(async (windowId) => {
-  const stored = await chrome.storage.local.get(FLOATING_POPUP_WINDOW_KEY);
-  if (Number(stored[FLOATING_POPUP_WINDOW_KEY] ?? 0) === windowId) {
-    await chrome.storage.local.remove(FLOATING_POPUP_WINDOW_KEY);
-  }
+  await tryRunLocalSettingsWriteOperation(async () => {
+    const stored = await chrome.storage.local.get(FLOATING_POPUP_WINDOW_KEY);
+    if (Number(stored[FLOATING_POPUP_WINDOW_KEY] ?? 0) === windowId) {
+      await chrome.storage.local.remove(FLOATING_POPUP_WINDOW_KEY);
+    }
+  });
 });

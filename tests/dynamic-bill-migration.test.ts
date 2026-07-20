@@ -160,6 +160,21 @@ test('first 0.13 read migrates a real 0.12 database before returning any bill da
   assert.equal(pauses[0].source, 'migration');
 });
 
+test('migration stores a neutral paused creator name when legacy feedback has no name', async () => {
+  const now = Date.now();
+  const feedback = legacyCreatorFeedback(17, now - DAY_MS, 'missing-name');
+  delete feedback.creatorName;
+  delete feedback.label;
+  await seedLegacyDatabase({ feedback: [feedback] });
+
+  await dynamicBillRepo.getDynamicBillItems();
+  const pauses = await db.dynamicBillCreatorPauses.toArray();
+
+  assert.equal(pauses.length, 1);
+  assert.equal(pauses[0].creatorMid, 17);
+  assert.equal(pauses[0].creatorName, '名称暂不可用的 UP 主');
+});
+
 test('failed migration rolls back every table and a later retry completes cleanly', async () => {
   const now = Date.now();
   await seedLegacyDatabase({

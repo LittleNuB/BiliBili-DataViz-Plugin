@@ -22,6 +22,10 @@ import type {
   LocalDataPrivacySummary,
   SmartFavoriteIndexRebuildResult,
 } from '../src/shared/types/local-data-privacy.ts';
+import {
+  dynamicBillCreatorDisplayName,
+  UNAVAILABLE_DYNAMIC_BILL_CREATOR_NAME,
+} from '../src/shared/dynamic-bill-creator-name.ts';
 
 test('settings local data cards expose natural Chinese summaries only', () => {
   const cards = buildLocalDataSummaryCards(makeSummary());
@@ -99,6 +103,39 @@ test('settings page keeps Dynamic Bill storage internals out of ordinary copy', 
   assert.match(source, /当前暂停 \{pauses\.length\} 位 UP/);
   assert.match(source, /当前视频 AI 助手只在功能已开启且你主动发起任务时/);
   assert.doesNotMatch(source, /AI 请求只发送当前功能需要的最小证据片段/);
+});
+
+test('settings hides missing or identifier-only paused creator names', async () => {
+  for (const creatorName of ['', '9527', 'UP 9527', '  up   9527  ']) {
+    assert.equal(
+      dynamicBillCreatorDisplayName({ creatorMid: 9527, creatorName }),
+      UNAVAILABLE_DYNAMIC_BILL_CREATOR_NAME,
+    );
+  }
+  assert.equal(
+    dynamicBillCreatorDisplayName({ creatorMid: 9527, creatorName: '自然名称' }),
+    '自然名称',
+  );
+
+  const source = await readFile(
+    new URL('../dashboard/modules/settings/SettingsPage.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /dynamicBillCreatorDisplayName\(pause\)/);
+  assert.doesNotMatch(source, /UP \$\{pause\.creatorMid\}/);
+});
+
+test('full clear coordinates config and popup-window writes through final readback', async () => {
+  const [privacySource, configSource, indexSource] = await Promise.all([
+    readFile(new URL('../src/background/storage/local-data-privacy-repo.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src/background/storage/config-store.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src/background/index.ts', import.meta.url), 'utf8'),
+  ]);
+
+  assert.match(privacySource, /runLocalSettingsClearDataOperation\(clearAllLocalDataExclusive\)/);
+  assert.match(configSource, /runLocalSettingsWriteOperation\(async \(\) =>/);
+  assert.match(configSource, /tryRunLocalSettingsWriteOperation/);
+  assert.equal((indexSource.match(/tryRunLocalSettingsWriteOperation/g) ?? []).length, 3);
 });
 
 test('settings page exposes six independently clearable categories and keeps blind-box history count-only', async () => {
@@ -422,6 +459,7 @@ test('SET-013-B clear-all production path invokes registered category hooks', as
   assert.match(source, /summarizeLifecycleResults\(results\)/);
   assert.match(source, /id === 'favorites'[\s\S]*?runFavoriteDataOperation/);
   assert.match(source, /runFavoriteDataOperation\([\s\S]*?clearAllLocalDataExclusive/);
+  assert.match(source, /runLocalSettingsClearDataOperation\(clearAllLocalDataExclusive\)/);
   assert.doesNotMatch(source, /db\.transaction\(\s*'rw',\s*db\.tables/);
   assert.doesNotMatch(source, /chrome\.storage\.local\.clear\(\)/);
   assert.doesNotMatch(source, /coordinateBlindBoxDrawHistoryClear/);

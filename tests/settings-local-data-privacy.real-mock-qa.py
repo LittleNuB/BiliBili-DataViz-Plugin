@@ -287,12 +287,13 @@ def assert_history_syncing_keeps_recent_time(page: Page) -> None:
 def assert_paused_creator_restore(page: Page) -> None:
     pause_list = page.get_by_test_id("settings-dynamic-bill-pauses")
     expect(pause_list.get_by_text("当前暂停 1 位 UP", exact=True)).to_be_visible()
-    expect(pause_list.get_by_text("测试暂停 UP", exact=True)).to_be_visible()
+    expect(pause_list.get_by_text("名称暂不可用的 UP 主", exact=True)).to_be_visible()
+    expect(pause_list).not_to_contain_text("9527")
     expect(pause_list.get_by_text("约 12 天后自动恢复", exact=False)).to_be_visible()
     pause_list.get_by_role("button", name="恢复提醒", exact=True).click()
     expect(pause_list.get_by_text("当前暂停 0 位 UP", exact=True)).to_be_visible()
     expect(pause_list.get_by_text("当前没有暂停提醒的 UP。", exact=True)).to_be_visible()
-    expect(page.locator(".settings-alert-success")).to_contain_text("已恢复「测试暂停 UP」的动态账单提醒")
+    expect(page.locator(".settings-alert-success")).to_contain_text("已恢复「名称暂不可用的 UP 主」的动态账单提醒")
     state = qa_state(page)
     if state["restoredCreatorMids"] != [9527]:
         raise AssertionError(f"Unexpected restored creator state: {state!r}")
@@ -516,7 +517,7 @@ CHROME_MOCK_SCRIPT = r"""
   const FIXTURE_PAUSE = {
     version: 'pause-9527-v1',
     creatorMid: 9527,
-    creatorName: '测试暂停 UP',
+    creatorName: '',
     startedAt: FIXED_NOW - 3 * 86400000,
     expiresAt: FIXED_NOW + 12 * 86400000,
     source: 'user',
