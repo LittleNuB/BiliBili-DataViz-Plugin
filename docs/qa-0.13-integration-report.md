@@ -8,7 +8,7 @@ Issue：[#181](https://github.com/LittleNuB/BiliBili-DataViz-Plugin/issues/181)
 
 0.13 已合并功能在 clean integration worktree 中通过全量测试、focused tests、生产构建 mock QA、类型检查、构建、迁移、AI payload、时间边界、文案和隐私检查。ASR spike 结论为 no-go，普通 UI 未接入本地转录入口，正式实现专属场景不适用。
 
-真实 B 站公开页 smoke 只完成了扩展 MV3 service worker 加载检查。空白临时 Edge profile 访问公开单 P 和多 P 页面时被 `net::ERR_CONNECTION_CLOSED` 中断；相同 URL 的 B 站公开接口和 `curl` 返回 200。该限制不等同于产品失败，但真实页的注入、当前分 P 身份、字幕和跳转仍需在可访问环境中补跑。确定性生产构建 mock 已覆盖这些交互。
+真实 B 站公开页基础 smoke 已在中立 reviewer 的空白临时 Edge profile 中通过：扩展 MV3 service worker、单 P 与多 P 页面注入、页面与助手标题绑定、第 2 / 8 P 身份、四标签切换，以及开启非敏感本地假 AI 服务后的零自动请求均已验证。主 Agent 环境曾出现连接关闭和超时，脚本保留最多三次有限重试且不吞掉最终失败；reviewer 在两次连接关闭重试后完成全流程。真实字幕正文和真实播放器 seek 仍未执行，确定性生产构建 mock 覆盖对应交互。
 
 本轮没有修改产品实现、版本号、release、tag、package 或发布资产。QA 过程中发现并修正两处测试夹具漂移：动态账单真实构建 mock 缺少 0.13 设置快照字段，盲盒失败夹具的四类顺序仍是旧顺序；均未改变产品代码。
 
@@ -45,7 +45,8 @@ Issue：[#181](https://github.com/LittleNuB/BiliBili-DataViz-Plugin/issues/181)
 | `tests/settings-local-data-privacy.real-mock-qa.py` | Pass，使用生产构建。 |
 | `tests/dynamic-bill-feedback-state.real-qa.mjs` | Pass，使用生产构建。 |
 | `tests/experiment-blind-boxes.mock-qa.py` | Pass，覆盖 ready/failure、四类顺序、来源、链接、窄屏和 raw 文案。 |
-| `tests/qa-0.13-public-page-smoke.py` | Partial；MV3 service worker 加载通过，页面导航被外部连接关闭。 |
+| `tests/experiment-blind-boxes.real-mock-qa.py` | Pass，实际加载 `dist/dashboard.js`；ready/failure、四类来源、链接、窄屏和 raw 文案通过，未请求 `.ts/.tsx` 源模块。 |
+| `tests/qa-0.13-public-page-smoke.py` | Pass；中立 reviewer 在精确 head 上验证单 P、2/8 P、四标签、标题身份和启用假 AI 服务后的零自动请求。 |
 
 ## 证据索引
 
@@ -54,7 +55,7 @@ Issue：[#181](https://github.com/LittleNuB/BiliBili-DataViz-Plugin/issues/181)
 - 会话：`tests/current-video-qa-sessions.test.ts`、`tests/current-video-qa-sessions.mock-qa.py`、`tests/current-video-full-text-qa.test.ts`。
 - 字幕与跳转：`tests/current-video-subtitle-view.test.ts`、`tests/current-video-timestamp-jump.test.ts`、`tests/current-video-timestamp-operation-lease.test.ts`、`tests/current-video-primary-text.mock-qa.py`。
 - 动态账单：`tests/dynamic-bill-013.test.ts`、`tests/dynamic-bill-migration.test.ts`、`tests/dynamic-bill-feedback-state.test.ts`、`tests/dynamic-bill-layout*.test.ts`、`tests/dynamic-bill-feedback-state.real-qa.mjs`。
-- 视频盲盒：`tests/experiment-blind-boxes.test.ts`、`tests/experiment-blind-boxes.mock-qa.py`。
+- 视频盲盒：`tests/experiment-blind-boxes.test.ts`、`tests/experiment-blind-boxes.mock-qa.py`、`tests/experiment-blind-boxes.real-mock-qa.py`。
 - 设置与隐私：`tests/settings-config-migration.test.ts`、`tests/ai-connection.test.ts`、`tests/settings-local-data-privacy.test.ts`、`tests/settings-diagnostic-download.test.ts`、`tests/settings-local-data-privacy*.mock-qa.py`。
 
 以下矩阵中的“Pass”均指上方确定性自动化或生产构建 mock 已覆盖；真实页限制单独记录，不把未执行的真实页面动作算作通过。
@@ -169,23 +170,23 @@ Issue：[#181](https://github.com/LittleNuB/BiliBili-DataViz-Plugin/issues/181)
 
 | ID | 状态 | 证据 |
 | --- | --- | --- |
-| BB-01 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.mock-qa.py` |
-| BB-02 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.mock-qa.py` |
-| BB-03 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.mock-qa.py` |
-| BB-04 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.mock-qa.py` |
-| BB-05 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.mock-qa.py` |
-| BB-06 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.mock-qa.py` |
+| BB-01 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.real-mock-qa.py` |
+| BB-02 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.real-mock-qa.py` |
+| BB-03 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.real-mock-qa.py` |
+| BB-04 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.real-mock-qa.py` |
+| BB-05 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.real-mock-qa.py` |
+| BB-06 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.real-mock-qa.py` |
 | BB-06A | Pass | `experiment-blind-boxes.test.ts` |
-| BB-06B | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.mock-qa.py` |
+| BB-06B | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.real-mock-qa.py` |
 | BB-06C | Pass | `experiment-blind-boxes.test.ts` |
 | BB-06D | Pass | `experiment-blind-boxes.test.ts` |
 | BB-06E | Pass | `experiment-blind-boxes.test.ts` |
 | BB-06F | Pass | `experiment-blind-boxes.test.ts` |
-| BB-07 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.mock-qa.py` |
-| BB-08 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.mock-qa.py` |
+| BB-07 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.real-mock-qa.py` |
+| BB-08 | Pass | `experiment-blind-boxes.test.ts`、`experiment-blind-boxes.real-mock-qa.py` |
 | BB-09 | Pass | `experiment-blind-boxes.test.ts` |
 | BB-10 | Pass | `experiment-blind-boxes.test.ts` |
-| BB-11 | Pass | `experiment-blind-boxes.mock-qa.py`、生产 `dist/dashboard.js` |
+| BB-11 | Pass | `experiment-blind-boxes.real-mock-qa.py`、生产 `dist/dashboard.js` |
 
 ## 设置与本地数据矩阵
 
@@ -225,17 +226,18 @@ Issue：[#181](https://github.com/LittleNuB/BiliBili-DataViz-Plugin/issues/181)
 
 - 当前视频：桌面/窄屏、四标签、完整文本授权、摘要亮点、问答会话、字幕搜索/导出、失败、取消、迟到响应、来源变化、预览/确认/返回均通过。
 - 动态账单：固定三栏、紧凑/全空状态、30 天暂停、撤销、一次性取关提示、恢复提醒和刷新回读通过。
-- 视频盲盒：固定四类、候选来源、真实 B 站候选说明、无种子、接口失败、不可打开、重试和最近抽取去重通过。
+- 视频盲盒：`experiment-blind-boxes.real-mock-qa.py` 实际加载生产 `dist/dashboard.js`；固定四类、候选来源、真实 B 站候选说明、无种子、接口失败、不可打开、重试、窄屏和 raw 文案通过。最近 50 条去重由 focused tests 覆盖。
 - 设置：三个 AI 开关持久化、Key 不回显、最小连接测试、分类清理、全部清理、部分失败、暂停恢复和诊断导出通过。
 
 ### 真实 B 站公开页
 
 - 使用系统 Edge 和本轮新建的空白临时 profile；未复用任何本地浏览器 profile、Cookie 或登录态。
-- `dist/background.js` MV3 service worker 成功加载。
-- 单 P 样本 `BV1uVLX6uEYC` 的公开接口与 `curl` 返回 200；Edge 曾有一次无扩展访问成功，之后 Playwright 启动和独立 CDP 启动均在导航时收到连接关闭。
-- 两个多 P 样本的公开接口确认分别有 8 P 和 2 P，`curl` 返回 200；空白 Edge 导航同样被连接关闭。
-- 因页面 DOM 未稳定载入，本轮不宣称真实页助手注入、真实字幕正文、分 P 切换或真实播放器 seek 已通过。相关确定性交互由生产构建 mock 覆盖。
-- 后续人工 smoke 只需在可访问的公开页中加载本 PR 构建，确认助手注入、当前分 P、字幕重新检测和预览/确认/返回；若需 AI 字幕，由用户在页面手动开启，不读取凭据文件。
+- 精确加载本扩展 `dist/background.js` MV3 service worker；不以 Edge 内建扩展 worker 代替。
+- 单 P 样本页面标题与助手标题均匹配预期公开视频，助手显示当前分 P 已识别。
+- 多 P 样本页面标题匹配第 2 P，助手标题匹配主视频并显示第 2 / 8 P，避免仅凭通用状态文案接受陈旧上下文。
+- 在扩展本地存储中写入非敏感测试配置：当前视频 AI 助手开启、API Key 为固定假值、服务地址指向本机临时 HTTP probe。展开助手并依次切换摘要、亮点、问答、字幕四标签后，probe 收到 0 个请求。
+- 主 Agent 环境曾出现 `net::ERR_CONNECTION_CLOSED` 和导航超时；脚本仅对这两类瞬时网络错误最多重试三次。中立 reviewer 在精确 head `df69b1bc2d97194d35fceb08389e73355e925fef` 上于两次连接关闭重试后完整通过。
+- 本轮真实页没有取得并检查真实 B 站字幕正文，也没有对真实播放器执行预览、确认、seek 和返回；这些场景由生产构建 mock、focused tests 和一次性授权测试覆盖，发布前仍建议人工补一轮富媒体 smoke。
 
 ## #82 / #83 审计
 
@@ -254,10 +256,10 @@ Issue：[#181](https://github.com/LittleNuB/BiliBili-DataViz-Plugin/issues/181)
 ## Blocker 与剩余风险
 
 - 产品/自动化 blocker：无。
-- 外部 smoke 限制：当前机器的空白 Edge 到 B 站公开视频页面连接被关闭，真实页 DOM 交互未完成。正式发布前建议补一轮人工真实页 smoke；不需要提供或读取 Cookie/profile/login-state/key 文件。
+- 真实页剩余覆盖：基础注入、身份和零自动 AI 请求已通过；真实字幕正文与真实播放器跳转尚未覆盖。正式发布前建议补一轮人工富媒体 smoke；不需要提供或读取 Cookie/profile/login-state/key 文件。
 - 依赖风险：`npm ci` 报 2 个 moderate、1 个 high 既有 audit 提示，本轮未修改依赖；由 release owner 单独评估。
 - 构建风险：Vite 仍有既有 dynamic-import 和 chunk-size warning，本轮未观察到对应运行时失败。
 
 ## Readiness
 
-#181 的工程 QA 和可追溯报告已完成，可进入中立 reviewer 复核。真实页人工 smoke 仍是发布前验证项，不在本 PR 中伪造为通过；本报告不授权发布、改版本、打 tag 或创建 release。
+#181 的工程 QA、生产构建 QA、真实页基础 smoke 和可追溯报告已完成，可进入最终中立 reviewer 复核。真实字幕正文与真实播放器跳转仍是发布前人工验证项，不在本 PR 中伪造为通过；本报告不授权发布、改版本、打 tag 或创建 release。
