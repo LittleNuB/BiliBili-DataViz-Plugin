@@ -377,16 +377,18 @@ def assert_metadata_only_category_clears(page: Page) -> None:
     wait_for_settings(page)
 
     cases = [
-        ("清理观看历史", "history"),
-        ("清理字幕缓存", "currentVideoSubtitles"),
-        ("清理动态账单", "dynamicBill"),
+        ("清理观看历史", "history", "清理前存在本地状态", "回读后已清空"),
+        ("清理字幕缓存", "currentVideoSubtitles", "清理前共 1 项本地数据", "回读后为 0"),
+        ("清理动态账单", "dynamicBill", "清理前存在本地状态", "回读后已清空"),
     ]
-    for label, category_id in cases:
+    for label, category_id, before_copy, after_copy in cases:
         button = page.get_by_role("button", name=label, exact=True)
         expect(button).to_be_enabled()
         button.click()
         expect(button).to_be_disabled()
-        expect(page.locator(".settings-alert-success")).to_contain_text("回读后为 0")
+        success = page.locator(".settings-alert-success")
+        expect(success).to_contain_text(before_copy)
+        expect(success).to_contain_text(after_copy)
         if category_id not in qa_state(page)["clearedCategories"]:
             raise AssertionError(f"Metadata-only category was not cleared: {category_id}")
 

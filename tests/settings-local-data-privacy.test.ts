@@ -210,6 +210,25 @@ test('settings local data operation messages stay bounded to counts', () => {
   });
   assert.equal(categoryMessage, '已清理收藏与智能索引：清理前共 28 项本地数据，回读后为 0。');
 
+  const metadataOnlyCategoryMessage = buildLocalDataOperationMessage({
+    operation: 'clear_local_data_category',
+    status: 'completed',
+    completedAt: 1_718_000_000_000,
+    cleared: { dynamicBillItems: 0 },
+    categoryResults: {
+      completed: [{
+        id: 'dynamicBill',
+        label: '动态账单',
+        beforeCount: 0,
+        beforeUsageBytes: 160,
+        afterCount: 0,
+        afterUsageBytes: 0,
+      }],
+      failed: [],
+    },
+  });
+  assert.equal(metadataOnlyCategoryMessage, '已清理动态账单：清理前存在本地状态，回读后已清空。');
+
   const clearAllMessage = buildLocalDataOperationMessage({
     operation: 'clear_all_local_data',
     status: 'completed',
@@ -242,7 +261,7 @@ test('settings local data operation messages stay bounded to counts', () => {
   assert.match(clearAllMessage, /当前视频主要文本选择和浮窗状态也已恢复为默认状态/);
   assert.doesNotMatch(clearAllMessage, /字幕正文 0 段|动态账单 0 项/);
   assert.doesNotMatch(clearAllMessage, /暂停|轮换|动态反馈/);
-  assertCleanUserCopy([subtitleMessage, categoryMessage, clearAllMessage].join('\n'));
+  assertCleanUserCopy([subtitleMessage, categoryMessage, metadataOnlyCategoryMessage, clearAllMessage].join('\n'));
 });
 
 test('settings clear-all partial failure message names failed categories and keeps successes completed', () => {

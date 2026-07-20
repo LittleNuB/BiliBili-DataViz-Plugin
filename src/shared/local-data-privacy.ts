@@ -255,6 +255,9 @@ function buildCompletedOperationMessage(result: LocalDataOperationResult): strin
   if (result.operation === 'clear_local_data_category') {
     const completed = result.categoryResults?.completed[0];
     if (completed) {
+      if (completed.beforeCount === 0 && completed.beforeUsageBytes > 0) {
+        return `已清理${completed.label}：清理前存在本地状态，回读后已清空。`;
+      }
       return `已清理${completed.label}：清理前共 ${completed.beforeCount} 项本地数据，回读后为 0。`;
     }
     return '已执行本地数据清理并完成回读。';
