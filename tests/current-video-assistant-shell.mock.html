@@ -87,6 +87,7 @@
       let videoDetectionReady = mockParams.get("deferVideoDetection") !== "1";
       let lastSearchResult = null;
       let lastFullTextQaResult = null;
+      const mockQaSessions = [];
       let subtitleSourceHash = mockParams.get("sourceVersion") === "v2" ? "mock-source-hash-hidden-v2" : "mock-source-hash-hidden";
       let subtitleBodyHash = mockParams.get("sourceVersion") === "v2" ? "mock-body-hash-hidden-v2" : "mock-body-hash-hidden";
       let subtitleTimelineHash = mockParams.get("sourceVersion") === "v2" ? "mock-timeline-hash-hidden-v2" : "mock-timeline-hash-hidden";
@@ -561,8 +562,12 @@
           return Promise.resolve(finish());
         }
         deferNextProtectedAction = null;
-        return new Promise((resolve) => {
-          pendingProtectedResponses.push(() => resolve(finish()));
+        return new Promise((resolve, reject) => {
+          pendingProtectedResponses.push({
+            action: "GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS",
+            resolve: () => resolve(finish()),
+            reject,
+          });
         });
       }
 
@@ -1132,7 +1137,13 @@
       };
       window.__assistantMockResolveProtectedResponses = () => {
         const pending = pendingProtectedResponses.splice(0);
-        for (const resolve of pending) resolve();
+        for (const response of pending) response.resolve();
+      };
+      window.__assistantMockRejectProtectedResponses = () => {
+        const pending = pendingProtectedResponses.splice(0);
+        for (const response of pending) {
+          response.reject(new Error(`MOCK_${response.action}_FAILURE`));
+        }
       };
       window.__assistantMockPendingProtectedResponseCount = () => pendingProtectedResponses.length;
       window.__assistantMockReplaceSummaryGeneration = () => {
@@ -1589,10 +1600,25 @@
       }
 
       function currentVideoFullTextQaResult(params) {
+        const sessionId = String(params?.sessionId || "mock-session");
         const requestId = String(params?.requestId || "mock-qa-request");
         const turnId = String(params?.turnId || "mock-qa-turn");
         const question = String(params?.question || "").trim();
+        const sourceReference = {
+          title: mockTitle.trim() || "当前视频",
+          partTitle: mockPage === 1 ? "主视频" : "第二分 P",
+          page: mockPage,
+          bvid: mockBvid,
+          cid: mockCid,
+          url: `https://www.bilibili.com/video/${mockBvid}?p=${mockPage}`,
+          sourceLabel: subtitleCached ? "B站字幕" : null,
+          language: "zh-CN",
+          sourceIdentityKey: subtitleSourceIdentityKey(),
+          textSize: { lineCount: subtitleCached ? 4 : 0, charCount: subtitleCached ? 168 : null, utf8Bytes: subtitleCached ? 336 : 0 },
+          capturedAt: Date.now(),
+        };
         const base = {
+          sessionId,
           requestId,
           turnId,
           question,
@@ -1603,6 +1629,8 @@
           answerEvidenceLineNumbers: [],
           citations: [],
           limitations: ["本次只使用当前分 P 的完整主要文本。"],
+          sourceReference,
+          rollingContext: null,
           generatedAt: Date.now(),
           canRetry: true,
         };
@@ -1617,6 +1645,7 @@
               : "AI 服务尚未配置完成，问题已保留。完成设置后可重新提交。",
             ai: { status: state === "disabled" ? "disabled" : "not_configured", model: currentChatModel(), note: "", errorCode: null },
           };
+          recordMockQaTurn(sessionId, lastFullTextQaResult);
           return lastFullTextQaResult;
         }
         if (question.includes("正文过长")) {
@@ -1627,6 +1656,7 @@
             message: "当前正文过长，所选模型没有接受本次完整请求；系统不会截断或分段发送。问题已保留，可更换模型后重试。",
             ai: { status: "context_too_long", model: currentChatModel(), note: "", errorCode: "context_too_long" },
           };
+          recordMockQaTurn(sessionId, lastFullTextQaResult);
           return lastFullTextQaResult;
         }
 
@@ -1640,6 +1670,7 @@
             canRetry: false,
             ai: { status: "unsupported", model: currentChatModel(), note: "", errorCode: null },
           };
+          recordMockQaTurn(sessionId, lastFullTextQaResult);
           return lastFullTextQaResult;
         }
 
@@ -1655,7 +1686,7 @@
           endSeconds: candidate.endSeconds,
           timeRangeLabel: candidate.timeRangeLabel,
           sourceLabel: "B站字幕",
-          binding: { requestId, turnId, citationId: "citation-1" },
+          binding: { sessionId, requestId, turnId, citationId: "citation-1" },
         } : null;
         lastFullTextQaResult = {
           ...base,
@@ -1667,12 +1698,88 @@
           citations: citation ? [citation] : [],
           message: "回答已基于当前分 P 的完整主要文本生成。",
           ai: { status: "generated", model: currentChatModel(), note: "", errorCode: null },
+          rollingContext: "本轮回答了子代理如何承接拆分任务。",
         };
+        recordMockQaTurn(sessionId, lastFullTextQaResult);
         return lastFullTextQaResult;
+      }
+
+      function recordMockQaTurn(sessionId, result) {
+        let session = mockQaSessions.find(item => item.sessionId === sessionId);
+        const now = Date.now();
+        if (!session) {
+          session = {
+            sessionId,
+            title: `${String(result.question || "新问答会话").slice(0, 18)} · 2026/06/22`,
+            customTitle: null,
+            createdAt: now,
+            updatedAt: now,
+            lastAccessedAt: now,
+            turns: [],
+          };
+          mockQaSessions.unshift(session);
+        }
+        const source = result.sourceReference ? {
+          title: result.sourceReference.title,
+          partTitle: result.sourceReference.partTitle,
+          page: result.sourceReference.page,
+          bvid: result.sourceReference.bvid,
+          cid: result.sourceReference.cid,
+          url: result.sourceReference.url,
+          sourceLabel: result.sourceReference.sourceLabel,
+          language: result.sourceReference.language,
+          sourceIdentityKey: result.sourceReference.sourceIdentityKey,
+          textSize: result.sourceReference.textSize,
+          capturedAt: result.sourceReference.capturedAt,
+        } : null;
+        const turn = {
+          turnId: result.turnId,
+          requestId: result.requestId,
+          question: result.question,
+          status: result.status,
+          answer: result.answer,
+          message: result.message,
+          citations: result.citations || [],
+          canRetry: result.canRetry,
+          ai: result.ai,
+          source,
+          rollingContext: result.rollingContext || null,
+          createdAt: now,
+          updatedAt: now,
+          submittedAt: now,
+          generatedAt: result.generatedAt || now,
+        };
+        const index = session.turns.findIndex(item => item.turnId === turn.turnId);
+        if (index >= 0) session.turns[index] = turn;
+        else session.turns.push(turn);
+        session.updatedAt = now;
+        session.lastAccessedAt = now;
+      }
+
+      function mockQaSessionsView(activeSessionId) {
+        const active = activeSessionId
+          ? mockQaSessions.find(item => item.sessionId === activeSessionId) || null
+          : mockQaSessions[0] || null;
+        return {
+          sessions: mockQaSessions.map(session => ({
+            sessionId: session.sessionId,
+            title: session.title,
+            turnCount: session.turns.length,
+            createdAt: session.createdAt,
+            updatedAt: session.updatedAt,
+            lastAccessedAt: session.lastAccessedAt,
+          })),
+          activeSession: active,
+          activeSessionId: active?.sessionId || null,
+          usage: { count: mockQaSessions.length, usageBytes: JSON.stringify(mockQaSessions).length, latestUsedAt: active?.lastAccessedAt || null },
+          limits: { maxSessions: 200, maxBytes: 25 * 1024 * 1024 },
+        };
       }
 
       function requestCurrentVideoQaCitationJump(params) {
         const citation = lastFullTextQaResult?.citations?.find(item =>
+          (item.binding.sessionId || "") === String(params?.sessionId || "")
+          &&
           item.binding.requestId === params?.requestId
           && item.binding.turnId === params?.turnId
           && item.binding.citationId === params?.citationId
@@ -1827,8 +1934,30 @@
       function maybeDeferProtectedResponse(action, response) {
         if (deferNextProtectedAction !== action) return Promise.resolve(response);
         deferNextProtectedAction = null;
-        return new Promise((resolve) => {
-          pendingProtectedResponses.push(() => resolve(response));
+        return new Promise((resolve, reject) => {
+          pendingProtectedResponses.push({
+            action,
+            resolve: () => resolve(response),
+            reject: (error) => {
+              const result = response?.data;
+              if (action === "ASK_CURRENT_VIDEO_FULL_TEXT" && result?.sessionId) {
+                recordMockQaTurn(result.sessionId, {
+                  ...result,
+                  status: "error",
+                  answer: "",
+                  citations: [],
+                  message: "本次回答失败，问题已保留，请稍后重试。",
+                  canRetry: true,
+                  ai: {
+                    ...result.ai,
+                    status: "failed",
+                    errorCode: "request_failed",
+                  },
+                });
+              }
+              reject(error);
+            },
+          });
         });
       }
 
@@ -1935,6 +2064,31 @@
                 success: true,
                 data: searchCurrentVideoSegmentsResult(message.params?.query),
               });
+            }
+            if (message.action === "GET_CURRENT_VIDEO_QA_SESSIONS") {
+              return Promise.resolve({
+                success: true,
+                data: mockQaSessionsView(message.params?.sessionId || null),
+              });
+            }
+            if (message.action === "RENAME_CURRENT_VIDEO_QA_SESSION") {
+              const session = mockQaSessions.find(item => item.sessionId === message.params?.sessionId);
+              if (session) {
+                session.title = String(message.params?.title || session.title).slice(0, 60);
+                session.customTitle = session.title;
+                session.updatedAt = Date.now();
+              }
+              return Promise.resolve({ success: true, data: mockQaSessionsView(message.params?.sessionId || null) });
+            }
+            if (message.action === "DELETE_CURRENT_VIDEO_QA_SESSION") {
+              const index = mockQaSessions.findIndex(item => item.sessionId === message.params?.sessionId);
+              if (index >= 0) mockQaSessions.splice(index, 1);
+              return Promise.resolve({ success: true, data: mockQaSessionsView(null) });
+            }
+            if (message.action === "CLEAR_CURRENT_VIDEO_QA_SESSIONS") {
+              mockQaSessions.splice(0, mockQaSessions.length);
+              lastFullTextQaResult = null;
+              return Promise.resolve({ success: true, data: mockQaSessionsView(null) });
             }
             if (message.action === "ASK_CURRENT_VIDEO_FULL_TEXT") {
               if (String(message.params?.question || "").includes("后台失败")) {

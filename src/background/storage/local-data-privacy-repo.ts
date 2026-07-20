@@ -26,6 +26,10 @@ import {
   clearCurrentVideoSummaryHighlightsCache,
   collectCurrentVideoSummaryHighlightsCacheUsage,
 } from './current-video-summary-highlights-repo.ts';
+import {
+  collectCurrentVideoQaSessionUsage,
+  runCurrentVideoQaSessionClearCoordinator,
+} from './current-video-qa-session-repo.ts';
 
 export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySummary> {
   await ensureDynamicBill013Migration();
@@ -34,12 +38,14 @@ export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySumm
     favorites,
     currentVideoSubtitles,
     currentVideoSummaryHighlights,
+    currentVideoQaSessions,
     dynamicBill,
   ] = await Promise.all([
     summarizeHistory(),
     summarizeFavorites(),
     summarizeCurrentVideoSubtitles(),
     summarizeCurrentVideoSummaryHighlights(),
+    summarizeCurrentVideoQaSessions(),
     summarizeDynamicBill(),
   ]);
 
@@ -49,6 +55,7 @@ export async function getLocalDataPrivacySummary(): Promise<LocalDataPrivacySumm
     favorites,
     currentVideoSubtitles,
     currentVideoSummaryHighlights,
+    currentVideoQaSessions,
     dynamicBill,
   };
 }
@@ -118,25 +125,26 @@ export async function clearAllLocalData(confirmation: unknown): Promise<LocalDat
   return await coordinateCurrentVideoPrimaryTextSelectionClear(async () =>
     runCurrentVideoTranscriptClearCoordinator(async () =>
       runCurrentVideoSummaryHighlightsClearCoordinator(async () =>
-        coordinateBlindBoxDrawHistoryClear(async recentDrawnBvids => {
-          const counts = await collectClearCounts(recentDrawnBvids.length);
-          await db.transaction('rw', db.tables, async () => {
-            for (const table of db.tables) {
-              await table.clear();
-            }
-          });
-          await chrome.storage.local.clear();
-          clearTemporaryCurrentVideoTranscriptCache();
+        runCurrentVideoQaSessionClearCoordinator(async () =>
+          coordinateBlindBoxDrawHistoryClear(async recentDrawnBvids => {
+            const counts = await collectClearCounts(recentDrawnBvids.length);
+            await db.transaction('rw', db.tables, async () => {
+              for (const table of db.tables) {
+                await table.clear();
+              }
+            });
+            await chrome.storage.local.clear();
+            clearTemporaryCurrentVideoTranscriptCache();
 
-          return {
-            operation: 'clear_all_local_data',
-            completedAt: Date.now(),
-            cleared: {
-              ...counts,
-              localSettings: true,
-            },
-          };
-        }))));
+            return {
+              operation: 'clear_all_local_data',
+              completedAt: Date.now(),
+              cleared: {
+                ...counts,
+                localSettings: true,
+              },
+            };
+          })))));
 }
 
 async function summarizeHistory(): Promise<LocalDataPrivacySummary['history']> {
@@ -238,6 +246,15 @@ async function summarizeCurrentVideoSummaryHighlights(): Promise<LocalDataPrivac
   };
 }
 
+async function summarizeCurrentVideoQaSessions(): Promise<LocalDataPrivacySummary['currentVideoQaSessions']> {
+  const usage = await collectCurrentVideoQaSessionUsage();
+  return {
+    sessionCount: usage.count,
+    usageBytes: usage.usageBytes,
+    latestUsedAt: usage.latestUsedAt,
+  };
+}
+
 async function summarizeDynamicBill(): Promise<LocalDataPrivacySummary['dynamicBill']> {
   await ensureDynamicBill013Migration();
   const activeCreatorPauses = await getDynamicBillActiveCreatorPauseViews();
@@ -312,6 +329,8 @@ async function collectClearCounts(
     currentVideoSubtitleSegments,
     currentVideoSummaryHighlightParts,
     currentVideoSummaryHighlightBytes,
+    currentVideoQaSessions,
+    currentVideoQaSessionBytes,
     blindBoxDrawHistory,
   ] = await Promise.all([
     db.watchHistory.count(),
@@ -333,6 +352,8 @@ async function collectClearCounts(
     db.currentVideoTranscriptSegments.count(),
     db.currentVideoSummaryHighlights.count(),
     db.currentVideoSummaryHighlights.toArray().then(rows => serializedRowsSize(rows)),
+    db.currentVideoQaSessions.count(),
+    db.currentVideoQaSessions.toArray().then(rows => serializedRowsSize(rows)),
     coordinatedBlindBoxDrawHistoryCount ?? getBlindBoxRecentDrawnBvids().then(bvids => bvids.length),
   ]);
 
@@ -356,6 +377,8 @@ async function collectClearCounts(
     currentVideoSubtitleSegments,
     currentVideoSummaryHighlightParts,
     currentVideoSummaryHighlightBytes,
+    currentVideoQaSessions,
+    currentVideoQaSessionBytes,
     blindBoxDrawHistory,
   };
 }

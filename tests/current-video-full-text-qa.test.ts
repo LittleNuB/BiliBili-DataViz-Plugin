@@ -17,7 +17,9 @@ import type { UserConfig } from '../src/shared/types/config.ts';
 import type { CurrentVideoContext } from '../src/shared/types/current-video-context.ts';
 import type { CurrentVideoTranscriptSegment } from '../src/shared/types/current-video-transcript.ts';
 import {
+  bindCurrentVideoFullTextQaPreflightPart,
   cancelCurrentVideoFullTextQaForSource,
+  cancelCurrentVideoFullTextQaForSession,
   cancelCurrentVideoFullTextQaRequest,
   generateCurrentVideoFullTextQa,
   getCurrentVideoFullTextQaCitation,
@@ -42,6 +44,26 @@ test('full-text QA payload contains every captured line and excludes unrelated m
   assert.ok(raw.indexOf('"textLines"') < raw.indexOf('"question"'));
   assert.equal(audit.passed, true, JSON.stringify(audit.violations));
   assert.doesNotMatch(raw, /title|description|watchHistory|favoriteItems|followingList|feedbackRecords|Cookie|Key\.txt|sourceHash|segmentId|subtitle_url/i);
+});
+
+test('full-text QA payload carries session id and only the bounded rolling context', () => {
+  const envelope = fullTextEnvelope({ sessionId: 'session-payload' });
+  const payload = buildCurrentVideoFullTextQaAiPayload(envelope, '继续解释一下', {
+    rollingContext: '上一轮问了视频主旨，回答聚焦方法边界。',
+    previousTurn: {
+      question: '这个视频讲了什么？',
+      answer: '视频讲了如何界定工具能力。',
+      citations: [{ timeRangeLabel: '0:00-0:12', evidenceText: '第一行说明问题背景。' }],
+    },
+  });
+  const audit = auditAssistantPayload(payload, currentVideoFullTextQaPayloadContract);
+  const raw = JSON.stringify(payload);
+
+  assert.equal(payload.request.sessionId, 'session-payload');
+  assert.equal(payload.conversationContext?.rollingContext, '上一轮问了视频主旨，回答聚焦方法边界。');
+  assert.equal(payload.conversationContext?.previousTurn.question, '这个视频讲了什么？');
+  assert.equal(audit.passed, true, JSON.stringify(audit.violations));
+  assert.doesNotMatch(raw, /sourceHash|segmentId|subtitle_url|Cookie|Key\.txt/i);
 });
 
 test('validated answer is returned before one to three citations derived from captured lines', () => {
@@ -69,6 +91,31 @@ test('validated answer is returned before one to three citations derived from ca
   assert.equal(result.citations[0]?.startSeconds, 0);
   assert.equal(result.citations[0]?.endSeconds, 12);
   assert.equal(result.citations[0]?.timeRangeLabel, '0:00-0:12');
+});
+
+test('rolling context is accepted only when compact and never rejects an otherwise valid answer', () => {
+  const envelope = fullTextEnvelope();
+  const valid = validateCurrentVideoFullTextQaAiOutput({
+    supported: true,
+    answerPoints: [{ text: '回答来自当前视频文本。', evidenceLineNumbers: [1] }],
+    citations: [{ evidenceLineNumbers: [1] }],
+    rollingContext: '这一轮回答了工具能力边界。',
+  }, envelope);
+  assert.equal(valid.ok, true);
+  if (valid.ok && valid.kind === 'answered') {
+    assert.equal(valid.rollingContext, '这一轮回答了工具能力边界。');
+  }
+
+  const oversized = validateCurrentVideoFullTextQaAiOutput({
+    supported: true,
+    answerPoints: [{ text: '回答来自当前视频文本。', evidenceLineNumbers: [1] }],
+    citations: [{ evidenceLineNumbers: [1] }],
+    rollingContext: '很长'.repeat(1200),
+  }, envelope);
+  assert.equal(oversized.ok, true);
+  if (oversized.ok && oversized.kind === 'answered') {
+    assert.equal(oversized.rollingContext, null);
+  }
 });
 
 test('unsupported output becomes a fixed refusal with no citations', () => {
@@ -267,6 +314,64 @@ test('cancel, retry replacement, source clear, and config change abort in-flight
   assert.equal(configChange.aborted(), true);
 });
 
+test('session-scoped requests block only the same session and keep different sessions independent', async () => {
+  const first = registerCurrentVideoFullTextQaPreflightRequest({
+    sessionId: 'session-one',
+    requestId: 'session-one-request',
+    turnId: 'session-one-turn',
+  });
+  const blocked = registerCurrentVideoFullTextQaPreflightRequest({
+    sessionId: 'session-one',
+    requestId: 'session-one-other-request',
+    turnId: 'session-one-other-turn',
+  });
+  const second = registerCurrentVideoFullTextQaPreflightRequest({
+    sessionId: 'session-two',
+    requestId: 'session-two-request',
+    turnId: 'session-two-turn',
+  });
+  assert.equal(first.accepted, true);
+  assert.equal(blocked.accepted, false);
+  assert.equal(blocked.blockedReason, 'session_busy');
+  assert.equal(second.accepted, true);
+  const sharedPart = { bvid: 'BV1SharedScope', cid: 1001, page: 1, requestScopeId: 'tab-42' };
+  assert.equal(bindCurrentVideoFullTextQaPreflightPart('session-one-request', sharedPart), true);
+  assert.equal(bindCurrentVideoFullTextQaPreflightPart('session-two-request', sharedPart), true);
+  assert.equal(bindCurrentVideoFullTextQaPreflightPart('session-one-request', sharedPart), true);
+  settleCurrentVideoFullTextQaPreflightRequest('session-one-request');
+  settleCurrentVideoFullTextQaPreflightRequest('session-two-request');
+
+  const context = videoContext();
+  const one = abortAwareChat();
+  const two = abortAwareChat();
+  const firstAttempt = generateCurrentVideoFullTextQa(context, {
+    sessionId: 'session-one',
+    requestId: 'active-one-request',
+    turnId: 'active-one-turn',
+    question: '第一会话问题。',
+    config: userConfig(),
+    transcriptSegments: transcriptSegments(),
+    chat: one.chat,
+  });
+  const secondAttempt = generateCurrentVideoFullTextQa(context, {
+    sessionId: 'session-two',
+    requestId: 'active-two-request',
+    turnId: 'active-two-turn',
+    question: '第二会话问题。',
+    config: userConfig(),
+    transcriptSegments: transcriptSegments(),
+    chat: two.chat,
+  });
+  await Promise.all([one.started, two.started]);
+  cancelCurrentVideoFullTextQaForSession('session-one');
+  assert.equal((await firstAttempt).status, 'cancelled');
+  assert.equal(one.aborted(), true);
+  assert.equal(two.aborted(), false);
+  cancelCurrentVideoFullTextQaForSession('session-two');
+  assert.equal((await secondAttempt).status, 'cancelled');
+  assert.equal(two.aborted(), true);
+});
+
 test('part invalidation removes only matching requests and citation bindings', async () => {
   const first = { context: videoContext(), segments: transcriptSegments() };
   const second = alternateVideoFixture();
@@ -341,7 +446,7 @@ test('HTTP 413 maps to controlled context-too-long copy without raw provider tex
   assert.equal(result.question, '请总结完整内容。');
 });
 
-function fullTextEnvelope() {
+function fullTextEnvelope(options: { sessionId?: string } = {}) {
   return buildCurrentVideoFullTextRequestEnvelope({
     requestId: 'qa-request-1',
     operation: 'qa',
@@ -365,6 +470,7 @@ function fullTextEnvelope() {
       { startSeconds: 12, endSeconds: 18, text: '第三行展示第一个例子。' },
       { startSeconds: 18, endSeconds: 24, text: '第四行说明适用边界。' },
     ],
+    sessionId: options.sessionId,
     turnId: 'qa-turn-1',
   });
 }

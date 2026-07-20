@@ -4,8 +4,10 @@ import type { UserConfig } from '../shared/types/config.ts';
 import type {
   CurrentVideoFullTextQaCitation,
   CurrentVideoFullTextQaResult,
+  CurrentVideoFullTextQaSourceReference,
   CurrentVideoFullTextQaTextSize,
 } from '../shared/types/current-video-full-text-qa.ts';
+import type { CurrentVideoQaConversationContext } from '../shared/types/current-video-qa-session.ts';
 import {
   buildCurrentVideoFullTextRequestEnvelope,
   CurrentVideoFullTextRequestGuard,
@@ -22,9 +24,11 @@ import { chatJson } from './ai/openai-compatible.ts';
 
 export interface GenerateCurrentVideoFullTextQaOptions {
   requestId: string;
+  sessionId?: string | null;
   turnId: string;
   question: string;
   transcriptSegments: CurrentVideoTranscriptSegment[];
+  conversationContext?: CurrentVideoQaConversationContext | null;
   config?: UserConfig;
   configGeneration?: number;
   chat?: CurrentVideoFullTextQaChat;
@@ -43,6 +47,7 @@ interface ActiveQaRequest {
 
 interface PreflightQaRequest {
   requestId: string;
+  sessionId: string | null;
   turnId: string;
   sourceIdentityKey: string | null;
   requestScopeId: string | null;
@@ -55,6 +60,7 @@ interface PreflightQaRequest {
 
 interface CompletedQaRequest {
   requestId: string;
+  sessionId: string | null;
   turnId: string;
   sourceIdentityKey: string;
   bvid: string;
@@ -65,6 +71,7 @@ interface CompletedQaRequest {
 }
 
 export interface CurrentVideoFullTextQaCitationLookup {
+  sessionId?: string | null;
   requestId: string;
   turnId: string;
   citationId: string;
@@ -84,7 +91,7 @@ const requestGuard = new CurrentVideoFullTextRequestGuard();
 const preflightRequests = new Map<string, PreflightQaRequest>();
 const activeRequests = new Map<string, ActiveQaRequest>();
 const activeRequestByTurn = new Map<string, string>();
-const activeRequestByScope = new Map<string, string>();
+const activeRequestBySession = new Map<string, string>();
 const completedRequests = new Map<string, CompletedQaRequest>();
 const completedRequestByTurn = new Map<string, string>();
 const MAX_COMPLETED_REQUESTS = 20;
@@ -92,41 +99,75 @@ let configGeneration = 0;
 
 export function registerCurrentVideoFullTextQaPreflightRequest(input: {
   requestId: string;
+  sessionId?: string | null;
   turnId: string;
   sourceIdentityKey?: string | null;
   requestScopeId?: string | null;
   bvid?: string | null;
   cid?: number | null;
   page?: number | null;
-}): { requestId: string; turnId: string; configGeneration: number } {
+}): {
+  requestId: string;
+  sessionId: string | null;
+  turnId: string;
+  configGeneration: number;
+  accepted: boolean;
+  blockedReason: string | null;
+} {
   const requestId = input.requestId.trim();
+  const sessionId = input.sessionId?.trim() || null;
   const turnId = input.turnId.trim();
   const sourceIdentityKey = input.sourceIdentityKey?.trim() || null;
   const requestScopeId = input.requestScopeId?.trim() || null;
   const bvid = input.bvid?.trim() || null;
   const cid = Number.isInteger(input.cid) && Number(input.cid) > 0 ? Number(input.cid) : null;
   const page = Number.isInteger(input.page) && Number(input.page) > 0 ? Number(input.page) : null;
-  if (!requestId || !turnId) return { requestId, turnId, configGeneration };
+  if (!requestId || !turnId) {
+    return { requestId, sessionId, turnId, configGeneration, accepted: false, blockedReason: 'request_invalid' };
+  }
+
+  if (
+    preflightRequests.has(requestId)
+    || activeRequests.has(requestId)
+    || completedRequests.has(requestId)
+  ) {
+    return { requestId, sessionId, turnId, configGeneration, accepted: false, blockedReason: 'request_duplicate' };
+  }
+
+  if (sessionId) {
+    const activeSessionRequestId = activeRequestBySession.get(sessionId);
+    const active = activeSessionRequestId ? activeRequests.get(activeSessionRequestId) : null;
+    if (activeSessionRequestId && activeSessionRequestId !== requestId && active?.envelope.turnId !== turnId) {
+      return { requestId, sessionId, turnId, configGeneration, accepted: false, blockedReason: 'session_busy' };
+    }
+    for (const preflight of preflightRequests.values()) {
+      if (
+        !preflight.cancelled
+        && preflight.requestId !== requestId
+        && preflight.sessionId === sessionId
+        && preflight.turnId !== turnId
+      ) {
+        return { requestId, sessionId, turnId, configGeneration, accepted: false, blockedReason: 'session_busy' };
+      }
+    }
+  }
 
   for (const preflight of preflightRequests.values()) {
     if (
       preflight.requestId !== requestId
-      && (preflight.turnId === turnId || (requestScopeId && preflight.requestScopeId === requestScopeId))
+      && sameQaTurn(preflight.sessionId, preflight.turnId, sessionId, turnId)
     ) {
       preflight.cancelled = true;
       cancelCurrentVideoFullTextQaRequest(preflight.requestId);
     }
   }
-  if (requestScopeId) {
-    const activeRequestId = activeRequestByScope.get(requestScopeId);
-    if (activeRequestId && activeRequestId !== requestId) cancelCurrentVideoFullTextQaRequest(activeRequestId);
-  }
-  const completedRequestId = completedRequestByTurn.get(turnId);
+  const completedRequestId = completedRequestByTurn.get(fullTextQaTurnKey(sessionId, turnId));
   if (completedRequestId && completedRequestId !== requestId) {
     removeCompletedRequest(completedRequestId);
   }
   preflightRequests.set(requestId, {
     requestId,
+    sessionId,
     turnId,
     sourceIdentityKey,
     requestScopeId,
@@ -136,7 +177,7 @@ export function registerCurrentVideoFullTextQaPreflightRequest(input: {
     configGeneration,
     cancelled: false,
   });
-  return { requestId, turnId, configGeneration };
+  return { requestId, sessionId, turnId, configGeneration, accepted: true, blockedReason: null };
 }
 
 export function settleCurrentVideoFullTextQaPreflightRequest(requestId: string): void {
@@ -164,16 +205,6 @@ export function bindCurrentVideoFullTextQaPreflightPart(
   preflight.page = input.page;
   const requestScopeId = input.requestScopeId?.trim() || null;
   if (requestScopeId) {
-    for (const other of preflightRequests.values()) {
-      if (other.requestId !== preflight.requestId && other.requestScopeId === requestScopeId) {
-        other.cancelled = true;
-        cancelCurrentVideoFullTextQaRequest(other.requestId);
-      }
-    }
-    const activeRequestId = activeRequestByScope.get(requestScopeId);
-    if (activeRequestId && activeRequestId !== preflight.requestId) {
-      cancelCurrentVideoFullTextQaRequest(activeRequestId);
-    }
     preflight.requestScopeId = requestScopeId;
   }
   return true;
@@ -182,12 +213,14 @@ export function bindCurrentVideoFullTextQaPreflightPart(
 export function unavailableCurrentVideoFullTextQa(input: {
   status: 'no_context' | 'no_text' | 'disabled' | 'not_configured' | 'cancelled' | 'error';
   requestId: string;
+  sessionId?: string | null;
   turnId: string;
   question: string;
   message: string;
   title?: string | null;
   partTitle?: string | null;
   model?: string | null;
+  sourceReference?: CurrentVideoFullTextQaSourceReference | null;
   textSize?: CurrentVideoFullTextQaTextSize;
   now?: number;
 }): CurrentVideoFullTextQaResult {
@@ -202,6 +235,7 @@ export function unavailableCurrentVideoFullTextQa(input: {
   return baseResult({
     status: input.status,
     requestId: input.requestId.trim(),
+    sessionId: input.sessionId?.trim() || null,
     turnId: input.turnId.trim(),
     question: normalizeQuestion(input.question),
     title: input.title?.trim() || '当前视频',
@@ -210,6 +244,7 @@ export function unavailableCurrentVideoFullTextQa(input: {
     message: input.message,
     aiStatus: statusToAi[input.status],
     model: input.model?.trim() || null,
+    sourceReference: input.sourceReference ?? null,
     errorCode: input.status === 'cancelled' ? null : input.status,
     canRetry: true,
     now: input.now ?? Date.now(),
@@ -223,39 +258,41 @@ export async function generateCurrentVideoFullTextQa(
   const now = options.now ?? Date.now();
   const question = normalizeQuestion(options.question);
   const requestId = options.requestId.trim();
+  const sessionId = options.sessionId?.trim() || null;
   const turnId = options.turnId.trim();
   const config = options.config ?? await loadConfig();
   const model = config.ai.chatModel.trim() || null;
   const title = context.kind === 'video' ? context.title?.trim() || '当前视频' : '当前视频';
   const partTitle = context.kind === 'video' ? context.currentPart.title?.trim() || null : null;
   const approximateSize = approximateTextSize(context);
+  const approximateSourceReference = buildSourceReferenceFromContext(context, approximateSize, now);
 
   if (!requestId || !turnId || !question) {
     return baseResult({
       status: 'error', requestId, turnId, question, title, partTitle, textSize: approximateSize,
       message: '问题没有提交成功，请保留当前问题并重试。',
-      aiStatus: 'failed', model, errorCode: 'request_invalid', canRetry: true, now,
+      aiStatus: 'failed', model, sourceReference: approximateSourceReference, errorCode: 'request_invalid', canRetry: true, now, sessionId,
     });
   }
   if (context.kind !== 'video') {
     return baseResult({
       status: 'no_context', requestId, turnId, question, title, partTitle, textSize: approximateSize,
       message: '当前没有可用的视频上下文，请在 B 站视频页内重新提交。',
-      aiStatus: 'failed', model, errorCode: 'no_context', canRetry: true, now,
+      aiStatus: 'failed', model, sourceReference: approximateSourceReference, errorCode: 'no_context', canRetry: true, now, sessionId,
     });
   }
   if (!config.assistant.currentVideoAiAssistantEnabled) {
     return baseResult({
       status: 'disabled', requestId, turnId, question, title, partTitle, textSize: approximateSize,
       message: '当前视频 AI 助手已关闭，问题已保留。开启后可重新提交。',
-      aiStatus: 'disabled', model, errorCode: null, canRetry: true, now,
+      aiStatus: 'disabled', model, sourceReference: approximateSourceReference, errorCode: null, canRetry: true, now, sessionId,
     });
   }
   if (!aiConfigured(config)) {
     return baseResult({
       status: 'not_configured', requestId, turnId, question, title, partTitle, textSize: approximateSize,
       message: 'AI 服务尚未配置完成，问题已保留。完成设置后可重新提交。',
-      aiStatus: 'not_configured', model, errorCode: null, canRetry: true, now,
+      aiStatus: 'not_configured', model, sourceReference: approximateSourceReference, errorCode: null, canRetry: true, now, sessionId,
     });
   }
   if (
@@ -269,7 +306,7 @@ export async function generateCurrentVideoFullTextQa(
     return baseResult({
       status: 'no_text', requestId, turnId, question, title, partTitle, textSize: approximateSize,
       message: '当前分 P 没有可用的主要文本，无法回答。问题已保留。',
-      aiStatus: 'failed', model, errorCode: 'no_text', canRetry: true, now,
+      aiStatus: 'failed', model, sourceReference: approximateSourceReference, errorCode: 'no_text', canRetry: true, now, sessionId,
     });
   }
 
@@ -295,14 +332,16 @@ export async function generateCurrentVideoFullTextQa(
       endSeconds: segment.endSeconds,
       text: segment.text,
     })),
+    sessionId: sessionId ?? undefined,
     turnId,
   });
   const textSize = textSizeFromEnvelope(envelope);
+  const sourceReference = buildSourceReferenceFromEnvelope(envelope, context.url, now);
   if (context.transcriptEvidence.sourceIdentityKey !== envelope.primaryTextIdentity.sourceIdentityKey) {
     return baseResult({
       status: 'no_text', requestId, turnId, question, title, partTitle, textSize,
       message: '当前主要文本已变化，请重新确认来源后提交。',
-      aiStatus: 'failed', model, errorCode: 'source_mismatch', canRetry: true, now,
+      aiStatus: 'failed', model, sourceReference, errorCode: 'source_mismatch', canRetry: true, now, sessionId,
     });
   }
 
@@ -312,25 +351,25 @@ export async function generateCurrentVideoFullTextQa(
     return baseResult({
       status: 'disabled', requestId, turnId, question, title, partTitle, textSize,
       message: '当前视频 AI 助手已关闭，问题已保留。开启后可重新提交。',
-      aiStatus: 'disabled', model: liveConfig.ai.chatModel.trim() || model, errorCode: null, canRetry: true, now,
+      aiStatus: 'disabled', model: liveConfig.ai.chatModel.trim() || model, sourceReference, errorCode: null, canRetry: true, now, sessionId,
     });
   }
   if (!aiConfigured(liveConfig)) {
     return baseResult({
       status: 'not_configured', requestId, turnId, question, title, partTitle, textSize,
       message: 'AI 服务尚未配置完成，问题已保留。完成设置后可重新提交。',
-      aiStatus: 'not_configured', model: liveConfig.ai.chatModel.trim() || model, errorCode: null, canRetry: true, now,
+      aiStatus: 'not_configured', model: liveConfig.ai.chatModel.trim() || model, sourceReference, errorCode: null, canRetry: true, now, sessionId,
     });
   }
   if (!await preflightStillValid(envelope, capturedGeneration, options)) {
-    return cancelledResult(envelope, question, title, partTitle, textSize, model, now);
+    return cancelledResult(envelope, question, title, partTitle, textSize, model, now, sourceReference);
   }
 
   const active = startNetworkRequest(envelope);
   try {
     let output: unknown;
     try {
-      const payload = buildCurrentVideoFullTextQaAiPayload(envelope, question);
+      const payload = buildCurrentVideoFullTextQaAiPayload(envelope, question, options.conversationContext ?? null);
       output = await requestCurrentVideoFullTextQaAi(
         liveConfig.ai,
         payload,
@@ -340,31 +379,31 @@ export async function generateCurrentVideoFullTextQa(
       );
     } catch (error) {
       if (!await requestStillValid(envelope, active, capturedGeneration, options)) {
-        return cancelledResult(envelope, question, title, partTitle, textSize, model, Date.now());
+        return cancelledResult(envelope, question, title, partTitle, textSize, model, Date.now(), sourceReference);
       }
       if (isContextTooLongError(error)) {
         return baseResult({
           status: 'context_too_long', requestId, turnId, question, title, partTitle, textSize,
           message: '当前正文过长，所选模型没有接受本次完整请求；系统不会截断或分段发送。问题已保留，可更换模型后重试。',
-          aiStatus: 'context_too_long', model, errorCode: 'context_too_long', canRetry: true, now: Date.now(),
+          aiStatus: 'context_too_long', model, sourceReference, errorCode: 'context_too_long', canRetry: true, now: Date.now(), sessionId,
         });
       }
       return baseResult({
         status: 'error', requestId, turnId, question, title, partTitle, textSize,
         message: '本次回答失败，问题已保留，请检查 AI 设置后重试。',
-        aiStatus: 'failed', model, errorCode: 'request_failed', canRetry: true, now: Date.now(),
+        aiStatus: 'failed', model, sourceReference, errorCode: 'request_failed', canRetry: true, now: Date.now(), sessionId,
       });
     }
 
     if (!await requestStillValid(envelope, active, capturedGeneration, options)) {
-      return cancelledResult(envelope, question, title, partTitle, textSize, model, Date.now());
+      return cancelledResult(envelope, question, title, partTitle, textSize, model, Date.now(), sourceReference);
     }
     const validation = validateCurrentVideoFullTextQaAiOutput(output, envelope);
     if (!validation.ok) {
       return baseResult({
         status: 'invalid_output', requestId, turnId, question, title, partTitle, textSize,
         message: '模型返回的回答没有通过证据校验，本次结果已拒绝。问题已保留，可重新提交。',
-        aiStatus: 'invalid_output', model, errorCode: 'invalid_output', canRetry: true, now: Date.now(),
+        aiStatus: 'invalid_output', model, sourceReference, errorCode: 'invalid_output', canRetry: true, now: Date.now(), sessionId,
       });
     }
 
@@ -376,7 +415,7 @@ export async function generateCurrentVideoFullTextQa(
         answerEvidenceLineNumbers: [],
         citations: [],
         sourceLabel: envelope.sourceLabel,
-        aiStatus: 'unsupported', model, errorCode: null, canRetry: false, now: Date.now(),
+        aiStatus: 'unsupported', model, sourceReference, errorCode: null, canRetry: false, now: Date.now(), sessionId,
       });
     }
 
@@ -384,6 +423,7 @@ export async function generateCurrentVideoFullTextQa(
       ...citation,
       sourceLabel: envelope.sourceLabel,
       binding: {
+        ...(sessionId ? { sessionId } : {}),
         requestId,
         turnId,
         citationId: citation.id,
@@ -397,7 +437,8 @@ export async function generateCurrentVideoFullTextQa(
       answerEvidenceLineNumbers: validation.answerEvidenceLineNumbers,
       citations,
       sourceLabel: envelope.sourceLabel,
-      aiStatus: 'generated', model, errorCode: null, canRetry: true, now: generatedAt,
+      aiStatus: 'generated', model, sourceReference, errorCode: null, canRetry: true, now: generatedAt, sessionId,
+      rollingContext: validation.rollingContext,
     });
     rememberCompletedRequest(envelope, result);
     return result;
@@ -412,7 +453,13 @@ export function cancelCurrentVideoFullTextQaRequest(requestId: string): void {
   const preflight = preflightRequests.get(normalized);
   if (preflight) preflight.cancelled = true;
   requestGuard.cancel(normalized);
-  activeRequests.get(normalized)?.controller.abort();
+  const active = activeRequests.get(normalized);
+  if (!active) return;
+  const sessionId = active.envelope.sessionId?.trim() || null;
+  if (sessionId && activeRequestBySession.get(sessionId) === normalized) {
+    activeRequestBySession.delete(sessionId);
+  }
+  active.controller.abort();
 }
 
 export function cancelCurrentVideoFullTextQaForSource(sourceIdentityKey: string): void {
@@ -424,7 +471,7 @@ export function cancelCurrentVideoFullTextQaForSource(sourceIdentityKey: string)
   requestGuard.clearPrimaryText({ sourceIdentityKey: normalized });
   for (const request of activeRequests.values()) {
     if (request.envelope.primaryTextIdentity.sourceIdentityKey === normalized) {
-      request.controller.abort();
+      cancelCurrentVideoFullTextQaRequest(request.envelope.requestId);
     }
   }
   for (const [requestId, request] of completedRequests.entries()) {
@@ -441,7 +488,23 @@ export function cancelCurrentVideoFullTextQaForScope(requestScopeId: string): vo
       cancelCurrentVideoFullTextQaRequest(preflight.requestId);
     }
   }
-  const activeRequestId = activeRequestByScope.get(normalized);
+  for (const active of activeRequests.values()) {
+    if (active.requestScopeId === normalized) {
+      cancelCurrentVideoFullTextQaRequest(active.envelope.requestId);
+    }
+  }
+}
+
+export function cancelCurrentVideoFullTextQaForSession(sessionId: string): void {
+  const normalized = sessionId.trim();
+  if (!normalized) return;
+  for (const preflight of preflightRequests.values()) {
+    if (preflight.sessionId === normalized) {
+      preflight.cancelled = true;
+      cancelCurrentVideoFullTextQaRequest(preflight.requestId);
+    }
+  }
+  const activeRequestId = activeRequestBySession.get(normalized);
   if (activeRequestId) cancelCurrentVideoFullTextQaRequest(activeRequestId);
 }
 
@@ -449,16 +512,14 @@ export function invalidateCurrentVideoFullTextQaConfig(): void {
   configGeneration += 1;
   for (const preflight of preflightRequests.values()) preflight.cancelled = true;
   for (const request of activeRequests.values()) {
-    requestGuard.cancel(request.envelope.requestId);
-    request.controller.abort();
+    cancelCurrentVideoFullTextQaRequest(request.envelope.requestId);
   }
 }
 
 export function invalidateCurrentVideoFullTextQaSources(): void {
   for (const preflight of preflightRequests.values()) preflight.cancelled = true;
   for (const request of activeRequests.values()) {
-    requestGuard.cancel(request.envelope.requestId);
-    request.controller.abort();
+    cancelCurrentVideoFullTextQaRequest(request.envelope.requestId);
   }
   completedRequests.clear();
   completedRequestByTurn.clear();
@@ -501,6 +562,7 @@ export function getCurrentVideoFullTextQaCitation(
   const request = completedRequests.get(lookup.requestId);
   if (
     !request
+    || (lookup.sessionId !== undefined && (lookup.sessionId?.trim() || null) !== request.sessionId)
     || request.turnId !== lookup.turnId
     || request.sourceIdentityKey !== lookup.sourceIdentityKey
   ) return null;
@@ -521,35 +583,42 @@ function startNetworkRequest(
   requestScopeId = preflightRequests.get(envelope.requestId)?.requestScopeId ?? null,
 ): ActiveQaRequest {
   const turnId = envelope.turnId!;
-  const previousRequestId = activeRequestByTurn.get(turnId);
+  const sessionId = envelope.sessionId?.trim() || null;
+  const turnKey = fullTextQaTurnKey(sessionId, turnId);
+  const previousRequestId = activeRequestByTurn.get(turnKey);
   if (previousRequestId && previousRequestId !== envelope.requestId) {
     cancelCurrentVideoFullTextQaRequest(previousRequestId);
   }
-  const previousCompleted = completedRequestByTurn.get(turnId);
+  const previousCompleted = completedRequestByTurn.get(turnKey);
   if (previousCompleted && previousCompleted !== envelope.requestId) {
     removeCompletedRequest(previousCompleted);
   }
-  if (requestScopeId) {
-    const previousScopeRequestId = activeRequestByScope.get(requestScopeId);
-    if (previousScopeRequestId && previousScopeRequestId !== envelope.requestId) {
-      cancelCurrentVideoFullTextQaRequest(previousScopeRequestId);
+  if (sessionId) {
+    const previousSessionRequestId = activeRequestBySession.get(sessionId);
+    if (previousSessionRequestId && previousSessionRequestId !== envelope.requestId) {
+      const previous = activeRequests.get(previousSessionRequestId);
+      if (previous?.envelope.turnId === turnId) {
+        cancelCurrentVideoFullTextQaRequest(previousSessionRequestId);
+      }
     }
   }
   requestGuard.start(envelope);
   const active = { envelope, controller: new AbortController(), requestScopeId };
   activeRequests.set(envelope.requestId, active);
-  activeRequestByTurn.set(turnId, envelope.requestId);
-  if (requestScopeId) activeRequestByScope.set(requestScopeId, envelope.requestId);
+  activeRequestByTurn.set(turnKey, envelope.requestId);
+  if (sessionId) activeRequestBySession.set(sessionId, envelope.requestId);
   return active;
 }
 
 function settleNetworkRequest(envelope: CurrentVideoFullTextRequestEnvelope, active: ActiveQaRequest): void {
   if (activeRequests.get(envelope.requestId) === active) activeRequests.delete(envelope.requestId);
-  if (activeRequestByTurn.get(envelope.turnId!) === envelope.requestId) {
-    activeRequestByTurn.delete(envelope.turnId!);
+  const sessionId = envelope.sessionId?.trim() || null;
+  const turnKey = fullTextQaTurnKey(sessionId, envelope.turnId!);
+  if (activeRequestByTurn.get(turnKey) === envelope.requestId) {
+    activeRequestByTurn.delete(turnKey);
   }
-  if (active.requestScopeId && activeRequestByScope.get(active.requestScopeId) === envelope.requestId) {
-    activeRequestByScope.delete(active.requestScopeId);
+  if (sessionId && activeRequestBySession.get(sessionId) === envelope.requestId) {
+    activeRequestBySession.delete(sessionId);
   }
   requestGuard.settle(envelope);
 }
@@ -583,17 +652,20 @@ async function requestStillValid(
     ? await options.resolveCurrentIdentity()
     : { sourceIdentityKey: envelope.primaryTextIdentity.sourceIdentityKey };
   const commit = requestGuard.canCommit(envelope, currentIdentity);
-  return commit.ok && commit.current;
+  return commit.ok;
 }
 
 function rememberCompletedRequest(
   envelope: CurrentVideoFullTextRequestEnvelope,
   result: CurrentVideoFullTextQaResult,
 ): void {
-  const previous = completedRequestByTurn.get(result.turnId);
+  const sessionId = envelope.sessionId?.trim() || null;
+  const turnKey = fullTextQaTurnKey(sessionId, result.turnId);
+  const previous = completedRequestByTurn.get(turnKey);
   if (previous && previous !== result.requestId) removeCompletedRequest(previous);
   completedRequests.set(result.requestId, {
     requestId: result.requestId,
+    sessionId,
     turnId: result.turnId,
     sourceIdentityKey: envelope.primaryTextIdentity.sourceIdentityKey,
     bvid: envelope.video.bvid,
@@ -602,7 +674,7 @@ function rememberCompletedRequest(
     generatedAt: result.generatedAt,
     citations: result.citations,
   });
-  completedRequestByTurn.set(result.turnId, result.requestId);
+  completedRequestByTurn.set(turnKey, result.requestId);
   while (completedRequests.size > MAX_COMPLETED_REQUESTS) {
     const oldest = completedRequests.keys().next().value as string | undefined;
     if (!oldest) break;
@@ -613,8 +685,8 @@ function rememberCompletedRequest(
 function removeCompletedRequest(requestId: string): void {
   const request = completedRequests.get(requestId);
   completedRequests.delete(requestId);
-  if (request && completedRequestByTurn.get(request.turnId) === requestId) {
-    completedRequestByTurn.delete(request.turnId);
+  if (request && completedRequestByTurn.get(fullTextQaTurnKey(request.sessionId, request.turnId)) === requestId) {
+    completedRequestByTurn.delete(fullTextQaTurnKey(request.sessionId, request.turnId));
   }
 }
 
@@ -626,10 +698,12 @@ function cancelledResult(
   textSize: CurrentVideoFullTextQaTextSize,
   model: string | null,
   now: number,
+  sourceReference: CurrentVideoFullTextQaSourceReference | null,
 ): CurrentVideoFullTextQaResult {
   return baseResult({
     status: 'cancelled',
     requestId: envelope.requestId,
+    sessionId: envelope.sessionId?.trim() || null,
     turnId: envelope.turnId ?? '',
     question,
     title,
@@ -638,6 +712,7 @@ function cancelledResult(
     message: '本次回答已取消，问题已保留，可重新提交。',
     aiStatus: 'cancelled',
     model,
+    sourceReference,
     errorCode: null,
     canRetry: true,
     now,
@@ -647,6 +722,7 @@ function cancelledResult(
 function baseResult(input: {
   status: CurrentVideoFullTextQaResult['status'];
   requestId: string;
+  sessionId?: string | null;
   turnId: string;
   question: string;
   title: string;
@@ -655,6 +731,7 @@ function baseResult(input: {
   message: string;
   aiStatus: CurrentVideoFullTextQaResult['ai']['status'];
   model: string | null;
+  sourceReference: CurrentVideoFullTextQaSourceReference | null;
   errorCode: string | null;
   canRetry: boolean;
   now: number;
@@ -662,8 +739,10 @@ function baseResult(input: {
   answerEvidenceLineNumbers?: number[];
   citations?: CurrentVideoFullTextQaCitation[];
   sourceLabel?: 'B站字幕' | '本地转录' | null;
+  rollingContext?: string | null;
 }): CurrentVideoFullTextQaResult {
   return {
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     status: input.status,
     requestId: input.requestId,
     turnId: input.turnId,
@@ -687,6 +766,8 @@ function baseResult(input: {
       note: input.message,
       errorCode: input.errorCode,
     },
+    sourceReference: input.sourceReference,
+    rollingContext: input.rollingContext ?? null,
     generatedAt: input.now,
     canRetry: input.canRetry,
   };
@@ -707,6 +788,60 @@ function textSizeFromEnvelope(envelope: CurrentVideoFullTextRequestEnvelope): Cu
     charCount: envelope.text.charCount,
     utf8Bytes: envelope.text.utf8Bytes,
   };
+}
+
+function buildSourceReferenceFromContext(
+  context: CurrentVideoContextResult,
+  textSize: CurrentVideoFullTextQaTextSize,
+  capturedAt: number,
+): CurrentVideoFullTextQaSourceReference | null {
+  if (context.kind !== 'video') return null;
+  return {
+    title: context.title?.trim() || '当前视频',
+    partTitle: context.currentPart.title?.trim() || null,
+    page: Number.isInteger(context.currentPart.page) ? context.currentPart.page : null,
+    bvid: context.bvid,
+    cid: typeof context.cid === 'number' ? context.cid : null,
+    url: context.url,
+    sourceLabel: context.transcriptEvidence?.active ? 'B站字幕' : null,
+    language: context.transcriptEvidence?.language ?? null,
+    sourceIdentityKey: context.transcriptEvidence?.sourceIdentityKey ?? null,
+    textSize,
+    capturedAt,
+  };
+}
+
+function buildSourceReferenceFromEnvelope(
+  envelope: CurrentVideoFullTextRequestEnvelope,
+  url: string | null,
+  capturedAt: number,
+): CurrentVideoFullTextQaSourceReference {
+  return {
+    title: envelope.video.title || '当前视频',
+    partTitle: envelope.video.partTitle,
+    page: envelope.video.page,
+    bvid: envelope.video.bvid,
+    cid: envelope.video.cid,
+    url,
+    sourceLabel: envelope.sourceLabel,
+    language: envelope.language,
+    sourceIdentityKey: envelope.primaryTextIdentity.sourceIdentityKey,
+    textSize: textSizeFromEnvelope(envelope),
+    capturedAt,
+  };
+}
+
+function fullTextQaTurnKey(sessionId: string | null, turnId: string): string {
+  return `${sessionId ?? ''}|${turnId}`;
+}
+
+function sameQaTurn(
+  leftSessionId: string | null,
+  leftTurnId: string,
+  rightSessionId: string | null,
+  rightTurnId: string,
+): boolean {
+  return fullTextQaTurnKey(leftSessionId, leftTurnId) === fullTextQaTurnKey(rightSessionId, rightTurnId);
 }
 
 function aiConfigured(config: UserConfig): boolean {

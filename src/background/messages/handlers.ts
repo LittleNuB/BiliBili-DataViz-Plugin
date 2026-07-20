@@ -6,7 +6,10 @@ import type {
   CurrentVideoNoContext,
   CurrentVideoSubtitleSourceState,
 } from '../../shared/types/current-video-context';
-import type { CurrentVideoTranscriptEvidenceState } from '../../shared/types/current-video-transcript';
+import type {
+  CurrentVideoTranscriptEvidenceState,
+  CurrentVideoTranscriptSegment,
+} from '../../shared/types/current-video-transcript';
 import type {
   CurrentVideoSegmentRetrievalResult,
   CurrentVideoTimestampJumpResponse,
@@ -21,7 +24,14 @@ import type {
 } from '../../shared/current-video-subtitle-view.ts';
 import type { CurrentVideoRelatedFavoritesResponse } from '../../shared/types/current-video-related-favorites';
 import type { CurrentVideoSummaryHighlightsResult } from '../../shared/types/current-video-summary';
-import type { CurrentVideoFullTextQaResult } from '../../shared/types/current-video-full-text-qa';
+import type {
+  CurrentVideoFullTextQaResult,
+  CurrentVideoFullTextQaSourceReference,
+} from '../../shared/types/current-video-full-text-qa';
+import type {
+  CurrentVideoQaSessionRecord,
+  CurrentVideoQaSourceSnapshot,
+} from '../../shared/types/current-video-qa-session';
 import type { VideoKnowledgeResult } from '../../shared/types/video-knowledge';
 import type { DynamicBillFeedbackScope, DynamicBillStatusFilter } from '../../shared/types/dynamic-bill';
 import type { SmartIndexResult } from '../../shared/types/favorite';
@@ -57,17 +67,34 @@ import {
 import {
   bindCurrentVideoFullTextQaPreflightPart,
   cancelCurrentVideoFullTextQaForSource,
-  cancelCurrentVideoFullTextQaForScope,
+  cancelCurrentVideoFullTextQaForSession,
   cancelCurrentVideoFullTextQaRequest,
   generateCurrentVideoFullTextQa,
   getCurrentVideoFullTextQaCitation,
   invalidateCurrentVideoFullTextQaConfig,
-  invalidateCurrentVideoFullTextQaPart,
   invalidateCurrentVideoFullTextQaSources,
   registerCurrentVideoFullTextQaPreflightRequest,
   settleCurrentVideoFullTextQaPreflightRequest,
   unavailableCurrentVideoFullTextQa,
 } from '../current-video-full-text-qa';
+import {
+  buildCurrentVideoQaConversationContext,
+  buildRefusedCurrentVideoQaResult,
+  clearCurrentVideoQaSessions,
+  completeCurrentVideoQaTurn,
+  CURRENT_VIDEO_QA_SESSION_STORAGE_LIMIT_MESSAGE,
+  deleteCurrentVideoQaSession,
+  getPersistedCurrentVideoQaCitation,
+  getCurrentVideoQaSessionsView,
+  isCurrentVideoQaSessionStorageLimitError,
+  isCurrentVideoQaSessionWriteInvalidatedError,
+  registerCurrentVideoQaSessionTurnWriteGuard,
+  renameCurrentVideoQaSession,
+  settleCurrentVideoQaSessionTurnWriteGuard,
+  shouldRefuseCurrentVideoQaBeforeNetwork,
+  type CurrentVideoQaSessionWriteGuard,
+  upsertCurrentVideoQaPendingTurn,
+} from '../storage/current-video-qa-session-repo';
 import {
   cancelledCurrentVideoSummaryHighlights,
   currentVideoSummaryHighlightBindingMatchesRecord,
@@ -262,6 +289,7 @@ type CurrentVideoPrimaryTextGuardTestPhase =
   | 'before_evidence_bind'
   | 'before_segment_body_read'
   | 'after_segment_body_read'
+  | 'before_full_text_qa_session_write'
   | 'before_full_text_qa_network'
   | 'before_timestamp_message';
 
@@ -573,7 +601,6 @@ export async function handleRequest<T>(
       const bvid = requireStringParam(request.params?.bvid, 'bvid');
       const cid = requirePositiveIntegerParam(request.params?.cid, 'cid');
       const page = requirePositiveIntegerParam(request.params?.page, 'page');
-      if (requestTabId) cancelCurrentVideoFullTextQaForScope(`tab-${requestTabId}`);
       const saved = await saveCurrentVideoPrimaryTextSelection({
         bvid,
         cid,
@@ -583,7 +610,6 @@ export async function handleRequest<T>(
           'selectedSourceIdentityKey',
         ),
       });
-      invalidateCurrentVideoFullTextQaPart({ bvid, cid, page });
       return {
         success: true,
         data: saved as T,
@@ -694,13 +720,37 @@ export async function handleRequest<T>(
       }
       return { success: true, data: { cancelled: true } as T };
     }
+    case 'GET_CURRENT_VIDEO_QA_SESSIONS': {
+      const sessionId = optionalStringParam(request.params?.sessionId) ?? null;
+      return { success: true, data: await getCurrentVideoQaSessionsView(sessionId) as T };
+    }
+    case 'RENAME_CURRENT_VIDEO_QA_SESSION': {
+      const sessionId = requireStringParam(request.params?.sessionId, 'sessionId');
+      const title = requireStringParam(request.params?.title, 'title');
+      await renameCurrentVideoQaSession(sessionId, title);
+      return { success: true, data: await getCurrentVideoQaSessionsView(sessionId) as T };
+    }
+    case 'DELETE_CURRENT_VIDEO_QA_SESSION': {
+      const sessionId = requireStringParam(request.params?.sessionId, 'sessionId');
+      cancelCurrentVideoFullTextQaForSession(sessionId);
+      return { success: true, data: await deleteCurrentVideoQaSession(sessionId) as T };
+    }
+    case 'CLEAR_CURRENT_VIDEO_QA_SESSIONS': {
+      invalidateCurrentVideoFullTextQaSources();
+      await clearCurrentVideoQaSessions();
+      return { success: true, data: await getCurrentVideoQaSessionsView(null) as T };
+    }
     case 'ASK_CURRENT_VIDEO_FULL_TEXT': {
       const requestId = requireStringParam(request.params?.requestId, 'requestId');
+      const sessionId = optionalStringParam(request.params?.sessionId)
+        ?? `current-video-session-${requestTabId ?? 'page'}`;
       const turnId = requireStringParam(request.params?.turnId, 'turnId');
       const question = requireStringParam(request.params?.question, 'question');
       const sourceIdentityKey = selectedSourceIdentityKey(request.params);
+      let sessionWriteGuard: CurrentVideoQaSessionWriteGuard | null = null;
       const preflight = registerCurrentVideoFullTextQaPreflightRequest({
         requestId,
+        sessionId,
         turnId,
         sourceIdentityKey,
         requestScopeId: requestTabId ? `tab-${requestTabId}` : null,
@@ -709,32 +759,68 @@ export async function handleRequest<T>(
         page: optionalPositiveIntegerParam(request.params?.page),
       });
       try {
-        if (!primaryTextSelectionsReady(request.params)) {
+        if (!preflight.accepted) {
           return {
             success: true,
             data: unavailableCurrentVideoFullTextQa({
-              status: 'no_text',
+              status: 'error',
               requestId,
+              sessionId,
               turnId,
               question,
-              message: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+              message: preflight.blockedReason === 'session_busy'
+                ? '当前会话已有问题正在回答，请等它完成后再继续。'
+                : '问题没有提交成功，请保留当前问题并重试。',
             }) as T,
           };
         }
-        const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
-        if (!lookup.primaryTextAuthorized || !lookup.primaryTextGuard) {
+        sessionWriteGuard = registerCurrentVideoQaSessionTurnWriteGuard({
+          sessionId,
+          turnId,
+          requestId,
+        });
+        if (!sessionWriteGuard.writable) {
           return {
             success: true,
             data: unavailableCurrentVideoFullTextQa({
-              status: 'no_text',
+              status: 'cancelled',
               requestId,
+              sessionId,
               turnId,
               question,
-              title: lookup.context.kind === 'video' ? lookup.context.title : null,
-              partTitle: lookup.context.kind === 'video' ? lookup.context.currentPart.title : null,
-              message: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+              message: '问答会话正在清理，本次问题不再写入。',
             }) as T,
           };
+        }
+        if (!primaryTextSelectionsReady(request.params)) {
+          const result = unavailableCurrentVideoFullTextQa({
+            status: 'no_text',
+            requestId,
+            sessionId,
+            turnId,
+            question,
+            message: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+          });
+          await upsertCurrentVideoQaPendingTurn({ sessionId, requestId, turnId, question, source: null, writeGuard: sessionWriteGuard });
+          return { success: true, data: await completeAndReturnCurrentVideoQaTurn(sessionId, turnId, result, sessionWriteGuard) as T };
+        }
+        const lookup = await getCurrentVideoContextLookupWithSelection(request.params, requestTabId);
+        let sourceSnapshot = currentVideoQaSourceSnapshotFromLookup(lookup, null);
+        if (!lookup.primaryTextAuthorized || !lookup.primaryTextGuard) {
+          const result = unavailableCurrentVideoFullTextQa({
+            status: 'no_text',
+            requestId,
+            sessionId,
+            turnId,
+            question,
+            title: lookup.context.kind === 'video' ? lookup.context.title : null,
+            partTitle: lookup.context.kind === 'video' ? lookup.context.currentPart.title : null,
+            sourceReference: sourceReferenceFromCurrentVideoQaSource(sourceSnapshot),
+            textSize: sourceSnapshot?.textSize,
+            message: PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE,
+          });
+          await upsertCurrentVideoQaPendingTurn({ sessionId, requestId, turnId, question, source: sourceSnapshot, writeGuard: sessionWriteGuard });
+          return { success: true, data: await completeAndReturnCurrentVideoQaTurn(sessionId, turnId, result, sessionWriteGuard) as T };
         }
         if (!bindCurrentVideoFullTextQaPreflightPart(requestId, {
           bvid: lookup.primaryTextGuard.bvid,
@@ -742,60 +828,115 @@ export async function handleRequest<T>(
           page: lookup.primaryTextGuard.page,
           requestScopeId: lookup.tab?.id ? `tab-${lookup.tab.id}` : null,
         })) {
+          const result = unavailableCurrentVideoFullTextQa({
+            status: 'cancelled',
+            requestId,
+            sessionId,
+            turnId,
+            question,
+            title: lookup.context.kind === 'video' ? lookup.context.title : null,
+            partTitle: lookup.context.kind === 'video' ? lookup.context.currentPart.title : null,
+            sourceReference: sourceReferenceFromCurrentVideoQaSource(sourceSnapshot),
+            textSize: sourceSnapshot?.textSize,
+            message: '本次回答已取消，问题已保留。',
+          });
+          await upsertCurrentVideoQaPendingTurn({ sessionId, requestId, turnId, question, source: sourceSnapshot, writeGuard: sessionWriteGuard });
+          return { success: true, data: await completeAndReturnCurrentVideoQaTurn(sessionId, turnId, result, sessionWriteGuard) as T };
+        }
+        const transcriptSegments = await getAuthorizedCurrentVideoTranscriptSegments(lookup);
+        sourceSnapshot = currentVideoQaSourceSnapshotFromLookup(lookup, transcriptSegments);
+        if (!transcriptSegments) {
+          const cancelled = !currentVideoSummaryHighlightsSourceDataStillCurrent(lookup);
+          const result = unavailableCurrentVideoFullTextQa({
+            status: cancelled ? 'cancelled' : 'no_text',
+            requestId,
+            sessionId,
+            turnId,
+            question,
+            title: lookup.context.kind === 'video' ? lookup.context.title : null,
+            partTitle: lookup.context.kind === 'video' ? lookup.context.currentPart.title : null,
+            sourceReference: sourceReferenceFromCurrentVideoQaSource(sourceSnapshot),
+            textSize: sourceSnapshot?.textSize,
+            message: cancelled
+              ? '当前主要文本已变化，本次回答已取消，问题已保留。'
+              : '当前分 P 没有可用的主要文本，无法回答。问题已保留。',
+          });
+          await upsertCurrentVideoQaPendingTurn({ sessionId, requestId, turnId, question, source: sourceSnapshot, writeGuard: sessionWriteGuard });
+          return { success: true, data: await completeAndReturnCurrentVideoQaTurn(sessionId, turnId, result, sessionWriteGuard) as T };
+        }
+        const existingSession = await getCurrentVideoQaSessionForSubmit(sessionId);
+        const sourceKey = sourceSnapshot?.sourceIdentityKey ?? lookup.primaryTextGuard.sourceIdentityKey;
+        const refusal = shouldRefuseCurrentVideoQaBeforeNetwork({
+          session: existingSession,
+          question,
+          sourceIdentityKey: sourceKey,
+        });
+        const config = await loadConfig();
+        await currentVideoPrimaryTextGuardTestHook('before_full_text_qa_session_write');
+        await upsertCurrentVideoQaPendingTurn({ sessionId, requestId, turnId, question, source: sourceSnapshot, writeGuard: sessionWriteGuard });
+        if (refusal) {
+          const result = buildRefusedCurrentVideoQaResult({
+            sessionId,
+            requestId,
+            turnId,
+            question,
+            message: refusal,
+            source: sourceSnapshot,
+            model: config.ai.chatModel.trim() || null,
+          });
+          return { success: true, data: await completeAndReturnCurrentVideoQaTurn(sessionId, turnId, result, sessionWriteGuard) as T };
+        }
+        const conversationContext = buildCurrentVideoQaConversationContext(existingSession, sourceKey);
+        await currentVideoPrimaryTextGuardTestHook('before_full_text_qa_network');
+        const result = await generateCurrentVideoFullTextQa(lookup.context, {
+          requestId,
+          sessionId,
+          turnId,
+          question,
+          transcriptSegments,
+          conversationContext,
+          config,
+          configGeneration: preflight.configGeneration,
+          resolveLiveConfig: loadConfig,
+          resolveCurrentIdentity: () => resolveCurrentVideoSummaryHighlightCommitIdentity(request.params, requestTabId),
+          sourceDataStillCurrent: () => currentVideoSummaryHighlightsSourceDataStillCurrent(lookup),
+          authorizationStillEnabled: async () => {
+            const liveConfig = await loadConfig();
+            return liveConfig.assistant.currentVideoAiAssistantEnabled;
+          },
+        });
+        return { success: true, data: await completeAndReturnCurrentVideoQaTurn(sessionId, turnId, result, sessionWriteGuard) as T };
+      } catch (error) {
+        if (isCurrentVideoQaSessionWriteInvalidatedError(error)) {
           return {
             success: true,
             data: unavailableCurrentVideoFullTextQa({
               status: 'cancelled',
               requestId,
+              sessionId,
               turnId,
               question,
-              title: lookup.context.kind === 'video' ? lookup.context.title : null,
-              partTitle: lookup.context.kind === 'video' ? lookup.context.currentPart.title : null,
-              message: '本次回答已取消，问题已保留。',
+              message: '会话已更新、删除或清空，本次回答不再写入。',
             }) as T,
           };
         }
-        const transcriptSegments = await getAuthorizedCurrentVideoTranscriptSegments(lookup);
-        if (!transcriptSegments) {
-          const cancelled = !currentVideoSummaryHighlightsSourceDataStillCurrent(lookup);
+        if (isCurrentVideoQaSessionStorageLimitError(error)) {
           return {
             success: true,
             data: unavailableCurrentVideoFullTextQa({
-              status: cancelled ? 'cancelled' : 'no_text',
+              status: 'error',
               requestId,
+              sessionId,
               turnId,
               question,
-              title: lookup.context.kind === 'video' ? lookup.context.title : null,
-              partTitle: lookup.context.kind === 'video' ? lookup.context.currentPart.title : null,
-              message: cancelled
-                ? '当前主要文本已变化，本次回答已取消，问题已保留。'
-                : '当前分 P 没有可用的主要文本，无法回答。问题已保留。',
+              message: CURRENT_VIDEO_QA_SESSION_STORAGE_LIMIT_MESSAGE,
             }) as T,
           };
         }
-        await currentVideoPrimaryTextGuardTestHook('before_full_text_qa_network');
-        const config = await loadConfig();
-        return {
-          success: true,
-          data: await generateCurrentVideoFullTextQa(lookup.context, {
-            requestId,
-            turnId,
-            question,
-            transcriptSegments,
-            config,
-            configGeneration: preflight.configGeneration,
-            resolveLiveConfig: loadConfig,
-            resolveCurrentIdentity: () => resolveCurrentVideoSummaryHighlightCommitIdentity(request.params, requestTabId),
-            sourceDataStillCurrent: () => currentVideoSummaryHighlightsSourceDataStillCurrent(lookup),
-            authorizationStillEnabled: async () => {
-              const liveConfig = await loadConfig();
-              return liveConfig.assistant.currentVideoAiAssistantEnabled
-                && await currentVideoPrimaryTextGuardStillAuthorized(lookup);
-            },
-          }) as T,
-        };
+        throw error;
       } finally {
         settleCurrentVideoFullTextQaPreflightRequest(requestId);
+        if (sessionWriteGuard) settleCurrentVideoQaSessionTurnWriteGuard(sessionWriteGuard);
       }
     }
     case 'CANCEL_CURRENT_VIDEO_FULL_TEXT_QA': {
@@ -803,6 +944,11 @@ export async function handleRequest<T>(
       if (requestId) {
         cancelCurrentVideoFullTextQaRequest(requestId);
       } else {
+        const sessionId = optionalStringParam(request.params?.sessionId);
+        if (sessionId) {
+          cancelCurrentVideoFullTextQaForSession(sessionId);
+          return { success: true, data: { cancelled: true } as T };
+        }
         const sourceIdentityKey = selectedSourceIdentityKey(request.params);
         if (sourceIdentityKey) cancelCurrentVideoFullTextQaForSource(sourceIdentityKey);
       }
@@ -1511,6 +1657,7 @@ async function requestCurrentVideoQaCitationJump(
   requestTabId: number | null,
 ): Promise<CurrentVideoTimestampJumpResponse> {
   const requestId = requireStringParam(params?.requestId, 'requestId');
+  const sessionId = optionalStringParam(params?.sessionId) ?? null;
   const turnId = requireStringParam(params?.turnId, 'turnId');
   const citationId = requireStringParam(params?.citationId ?? params?.candidateId, 'citationId');
   if (params?.confirmed !== true) {
@@ -1544,12 +1691,15 @@ async function requestCurrentVideoQaCitationJump(
   }
 
   const operationGuard = lookup.primaryTextGuard;
-  let record = getCurrentVideoFullTextQaCitation({
+  const citationLookup = {
+    sessionId,
     requestId,
     turnId,
     citationId,
     sourceIdentityKey: operationGuard.sourceIdentityKey,
-  });
+  };
+  let record = getCurrentVideoFullTextQaCitation(citationLookup)
+    ?? (sessionId ? await getPersistedCurrentVideoQaCitation({ ...citationLookup, sessionId }) : null);
   if (
     !record
     || record.bvid !== context.bvid
@@ -1567,12 +1717,8 @@ async function requestCurrentVideoQaCitationJump(
   if (!await currentVideoPrimaryTextGuardStillAuthorized(lookup)) {
     return blockedTimestampJumpResponse(citationId, 'no_context', PRIMARY_TEXT_SELECTION_NOT_READY_MESSAGE);
   }
-  record = getCurrentVideoFullTextQaCitation({
-    requestId,
-    turnId,
-    citationId,
-    sourceIdentityKey: operationGuard.sourceIdentityKey,
-  });
+  record = getCurrentVideoFullTextQaCitation(citationLookup)
+    ?? (sessionId ? await getPersistedCurrentVideoQaCitation({ ...citationLookup, sessionId }) : null);
   if (
     !record
     || record.bvid !== context.bvid
@@ -2108,6 +2254,94 @@ async function getCurrentVideoContextLookupWithSelection(
     ...authorizedLookup,
     primaryTextAuthorized: true,
   };
+}
+
+async function getCurrentVideoQaSessionForSubmit(sessionId: string): Promise<CurrentVideoQaSessionRecord | null> {
+  const view = await getCurrentVideoQaSessionsView(sessionId);
+  return view.activeSession?.sessionId === sessionId ? view.activeSession : null;
+}
+
+async function completeAndReturnCurrentVideoQaTurn(
+  sessionId: string,
+  turnId: string,
+  result: CurrentVideoFullTextQaResult,
+  writeGuard: CurrentVideoQaSessionWriteGuard,
+): Promise<CurrentVideoFullTextQaResult> {
+  const saved = await completeCurrentVideoQaTurn(sessionId, turnId, result, Date.now(), writeGuard);
+  if (saved) return result;
+  return unavailableCurrentVideoFullTextQa({
+    status: 'cancelled',
+    requestId: result.requestId,
+    sessionId,
+    turnId,
+    question: result.question,
+    title: result.title,
+    partTitle: result.partTitle,
+    sourceReference: result.sourceReference,
+    textSize: result.textSize,
+    model: result.ai.model,
+    message: '会话已更新、删除或清空，本次回答不再写入。',
+  });
+}
+
+function currentVideoQaSourceSnapshotFromLookup(
+  lookup: CurrentVideoContextLookupResult,
+  transcriptSegments: CurrentVideoTranscriptSegment[] | null,
+): CurrentVideoQaSourceSnapshot | null {
+  if (lookup.context.kind !== 'video') return null;
+  const context = lookup.context;
+  const guard = lookup.primaryTextGuard;
+  const evidence = context.transcriptEvidence;
+  const charCount = transcriptSegments
+    ? transcriptSegments.reduce((sum, segment) => sum + segment.text.length, 0)
+    : null;
+  const utf8Bytes = transcriptSegments
+    ? utf8ByteLength(transcriptSegments.map(segment => segment.text).join('\n'))
+    : evidence?.serializedBytes ?? 0;
+  return {
+    title: context.title?.trim() || '当前视频',
+    partTitle: context.currentPart.title?.trim() || null,
+    page: guard?.page ?? context.currentPart.page ?? null,
+    bvid: guard?.bvid ?? context.bvid ?? null,
+    cid: guard?.cid ?? context.cid ?? null,
+    url: context.url,
+    sourceLabel: evidence?.active || transcriptSegments ? 'B站字幕' : null,
+    language: transcriptSegments?.find(segment => segment.language)?.language ?? evidence?.language ?? null,
+    sourceIdentityKey: guard?.sourceIdentityKey
+      ?? transcriptSegments?.find(segment => segment.sourceIdentityKey)?.sourceIdentityKey
+      ?? evidence?.sourceIdentityKey
+      ?? null,
+    textSize: {
+      lineCount: transcriptSegments?.length ?? evidence?.segmentCount ?? 0,
+      charCount,
+      utf8Bytes,
+    },
+    capturedAt: Date.now(),
+  };
+}
+
+function sourceReferenceFromCurrentVideoQaSource(
+  source: CurrentVideoQaSourceSnapshot | null,
+): CurrentVideoFullTextQaSourceReference | null {
+  if (!source) return null;
+  return {
+    title: source.title,
+    partTitle: source.partTitle,
+    page: source.page,
+    bvid: source.bvid,
+    cid: source.cid,
+    url: source.url,
+    sourceLabel: source.sourceLabel,
+    language: source.language,
+    sourceIdentityKey: source.sourceIdentityKey,
+    textSize: source.textSize,
+    capturedAt: source.capturedAt,
+  };
+}
+
+function utf8ByteLength(value: string): number {
+  if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(value).byteLength;
+  return value.length;
 }
 
 function withoutSelectedCurrentVideoTranscriptEvidence(

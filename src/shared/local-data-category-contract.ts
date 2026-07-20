@@ -3,6 +3,7 @@ export type LocalDataCategoryId =
   | 'favorites'
   | 'currentVideoSubtitles'
   | 'currentVideoSummaryHighlights'
+  | 'currentVideoQaSessions'
   | 'dynamicBill'
   | 'blindBoxDrawHistory'
   | 'localSettings';
@@ -28,6 +29,8 @@ export interface LocalDataClearedCounts {
   currentVideoSubtitleSegments?: number;
   currentVideoSummaryHighlightParts?: number;
   currentVideoSummaryHighlightBytes?: number;
+  currentVideoQaSessions?: number;
+  currentVideoQaSessionBytes?: number;
   localSettings?: boolean;
 }
 

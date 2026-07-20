@@ -1,6 +1,7 @@
 import type { CurrentVideoFullTextRequestEnvelope } from './current-video-primary-text.ts';
 import type { AiConfig } from './types/config.ts';
 import type { CurrentVideoFullTextQaCitation } from './types/current-video-full-text-qa.ts';
+import type { CurrentVideoQaConversationContext } from './types/current-video-qa-session.ts';
 import {
   assertAssistantPayloadAudit,
   currentVideoFullTextQaPayloadContract,
@@ -21,6 +22,7 @@ export interface CurrentVideoFullTextQaAiPayload {
   }>;
   request: {
     requestId: string;
+    sessionId: string | null;
     turnId: string;
     operation: 'qa';
     submittedAt: number;
@@ -29,6 +31,7 @@ export interface CurrentVideoFullTextQaAiPayload {
     charCount: number;
     utf8Bytes: number;
   };
+  conversationContext?: CurrentVideoQaConversationContext;
   question: string;
 }
 
@@ -36,6 +39,7 @@ export interface CurrentVideoFullTextQaAiOutput {
   supported?: unknown;
   answerPoints?: unknown;
   citations?: unknown;
+  rollingContext?: unknown;
 }
 
 export interface CurrentVideoFullTextQaValidatedAnswerPoint {
@@ -57,6 +61,7 @@ export type CurrentVideoFullTextQaValidationResult =
       answer: string;
       answerEvidenceLineNumbers: number[];
       citations: Array<Omit<CurrentVideoFullTextQaCitation, 'sourceLabel' | 'binding'>>;
+      rollingContext: string | null;
     }
   | {
       ok: true;
@@ -77,6 +82,7 @@ const UNSUPPORTED_ANSWER = '当前视频文本没有足够内容回答这个问�
 export function buildCurrentVideoFullTextQaAiPayload(
   envelope: CurrentVideoFullTextRequestEnvelope,
   question: string,
+  conversationContext?: CurrentVideoQaConversationContext | null,
 ): CurrentVideoFullTextQaAiPayload {
   if (envelope.operation !== 'qa' || !envelope.turnId?.trim()) {
     throw new Error('FULL_TEXT_QA_REQUEST_IDENTITY_INVALID');
@@ -93,6 +99,8 @@ export function buildCurrentVideoFullTextQaAiPayload(
       '每条 answerPoint 只包含 text 和 evidenceLineNumbers；text 是直接中文回答的一部分。',
       '每条 citation 只包含 evidenceLineNumbers，行号必须连续且来自 textLines。',
       '每条 answerPoint 的 evidenceLineNumbers 必须全部出现在 citations 引用的行号中。',
+      '如果有 conversationContext，它只用于理解同一文本身份下的连续追问；不能把它当作视频证据。',
+      '有充分依据时可返回 rollingContext，概括本轮后仍有助于同一文本身份下继续追问的脉络。',
       '正文不足以支持回答时返回 supported=false，citations 为空；不要猜测或补全。',
       '不要返回视频身份、来源标识、时间戳或引用正文，系统会从本地行号生成引用。',
     ],
@@ -108,6 +116,7 @@ export function buildCurrentVideoFullTextQaAiPayload(
     })),
     request: {
       requestId: envelope.requestId,
+      sessionId: envelope.sessionId?.trim() || null,
       turnId: envelope.turnId,
       operation: 'qa',
       submittedAt: envelope.submittedAt,
@@ -116,6 +125,7 @@ export function buildCurrentVideoFullTextQaAiPayload(
       charCount: envelope.text.charCount,
       utf8Bytes: envelope.text.utf8Bytes,
     },
+    ...(conversationContext ? { conversationContext } : {}),
     question: normalizedQuestion,
   };
 }
@@ -129,8 +139,9 @@ export function buildCurrentVideoFullTextQaMessages(
       content: [
         '你是当前视频正文问答助手，只能依据用户提供的带编号时间行回答。',
         '先形成直接、自然的中文答案，再给出支撑答案的行号；证据不足时必须拒答。',
+        'conversationContext 只用于理解连续追问，不是证据；答案和引用仍必须全部来自 textLines。',
         '禁止使用标题、简介、常识或其他视频内容补全，禁止编造引用、正文或时间。',
-        '返回 JSON 对象，字段为 supported、answerPoints、citations。',
+        '返回 JSON 对象，字段为 supported、answerPoints、citations、rollingContext。',
       ].join('\n'),
     },
     { role: 'user', content: JSON.stringify(payload) },
@@ -237,6 +248,7 @@ export function validateCurrentVideoFullTextQaAiOutput(
   if (!Array.from(answerEvidenceLineNumbers).every(lineNo => citedLineNumbers.has(lineNo))) {
     return invalid('answer_point_evidence_not_cited');
   }
+  const rollingContext = normalizeRollingContext(record.rollingContext);
 
   return {
     ok: true,
@@ -245,6 +257,7 @@ export function validateCurrentVideoFullTextQaAiOutput(
     answer,
     answerEvidenceLineNumbers: Array.from(answerEvidenceLineNumbers).sort((a, b) => a - b),
     citations,
+    rollingContext,
   };
 }
 
@@ -254,6 +267,7 @@ function assertCompleteFullTextQaPayload(
 ): void {
   const complete = envelope.operation === 'qa'
     && Boolean(envelope.turnId)
+    && payload.request.sessionId === (envelope.sessionId?.trim() || null)
     && payload.request.requestId === envelope.requestId
     && payload.request.turnId === envelope.turnId
     && payload.request.operation === envelope.operation
@@ -272,6 +286,13 @@ function assertCompleteFullTextQaPayload(
   if (!complete) {
     throw new Error('完整文本问答请求未包含本次捕获的全部正文。');
   }
+}
+
+function normalizeRollingContext(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized || normalized.length > 2_000) return null;
+  return normalized;
 }
 
 function normalizeLineNumbers(

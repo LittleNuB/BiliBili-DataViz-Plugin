@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bili-Bill 当前视频问答会话 Mock</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #f5f7fb;
+      color: #f4f7fb;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Arial, sans-serif;
+    }
+    main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 390px;
+      gap: 16px;
+      min-height: 100vh;
+      padding: 18px;
+    }
+    .video {
+      min-height: 420px;
+      border-radius: 8px;
+      background: #151827;
+      padding: 18px;
+    }
+    .video-box {
+      aspect-ratio: 16 / 9;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      background: #05070d;
+      color: #9aa3b4;
+    }
+    .assistant,
+    .settings {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      background: #1f2138;
+      padding: 14px;
+    }
+    h1, h2, h3, p { margin: 0; }
+    p, small, li { color: #b8bed1; line-height: 1.55; }
+    .tabs, .actions, .sessions, .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    button, .pill {
+      min-height: 34px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.06);
+      color: #f4f7fb;
+      padding: 0 10px;
+      font: inherit;
+      font-weight: 750;
+    }
+    button.primary {
+      border-color: rgba(251, 114, 153, 0.58);
+      background: #fb7299;
+      color: #fff;
+    }
+    button:disabled { opacity: .55; }
+    .session.active, .pill {
+      border-color: rgba(251, 114, 153, 0.62);
+      background: rgba(251, 114, 153, 0.18);
+      color: #ffd6e2;
+    }
+    textarea {
+      width: 100%;
+      min-height: 74px;
+      resize: vertical;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 8px;
+      background: #151827;
+      color: #f4f7fb;
+      padding: 10px;
+      font: inherit;
+    }
+    .card {
+      display: grid;
+      gap: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.045);
+      padding: 10px;
+    }
+    .answer { border-color: rgba(155, 231, 176, 0.45); }
+    .warn { border-color: rgba(255, 207, 138, 0.5); }
+    .source { color: #c8e6ff; font-size: 12px; }
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .settings-card {
+      min-height: 100px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      background: #191b31;
+      padding: 10px;
+    }
+    @media (max-width: 760px) {
+      main { grid-template-columns: 1fr; padding: 10px; }
+      .settings-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="video">
+      <div class="video-box">当前视频播放器</div>
+      <h1>示例视频：工具能力边界</h1>
+      <p>本页只用于静态 QA，不读取真实账号数据。</p>
+    </section>
+
+    <aside class="assistant" aria-label="当前视频助手">
+      <h2>问这个视频</h2>
+      <p>本次参考：示例视频：工具能力边界。切换视频只更新本次参考，不会自动发问或插入消息。</p>
+      <div class="tabs" role="tablist">
+        <button>摘要</button>
+        <button class="primary">问答</button>
+        <button>字幕</button>
+      </div>
+      <div class="sessions" aria-label="会话列表">
+        <button class="session active">工具能力边界（2）</button>
+        <button class="session">跨视频回看（1）</button>
+        <button>新建会话</button>
+        <button>重命名</button>
+        <button>删除</button>
+      </div>
+      <textarea aria-label="向当前视频提问">作者为什么强调工具边界？</textarea>
+      <div class="actions">
+        <button class="primary">提问</button>
+        <button>取消</button>
+      </div>
+
+      <article class="card">
+        <strong>作者为什么强调工具边界？</strong>
+        <div class="actions"><button>在当前视频再问</button></div>
+      </article>
+      <article class="card answer">
+        <div class="meta">
+          <span class="pill">回答：有证据</span>
+          <span class="pill">引用 2 条</span>
+        </div>
+        <p>作者认为工具能力要和任务边界一起看：工具适合承接拆分后的小任务，但不能替代对目标、证据和流程的判断。</p>
+        <p class="source">来源：《工具能力边界》 · P1（主视频） · B站字幕</p>
+        <div class="actions">
+          <button>打开来源视频</button>
+        </div>
+      </article>
+      <article class="card">
+        <strong>引用 1 · 0:00-0:12</strong>
+        <p>作者先说明问题背景，再解释工具适合处理拆分后的任务。</p>
+        <div class="actions">
+          <button>预览跳转</button>
+          <button>确认跳转</button>
+          <button>返回原位置</button>
+        </div>
+      </article>
+      <article class="card warn">
+        <strong>那这个呢？</strong>
+        <p>这个问题需要补全指代对象。请把要问的内容说完整，Bili-Bill 才能只按本次参考视频回答。</p>
+      </article>
+      <article class="card warn">
+        <strong>旧视频里的回答</strong>
+        <p>来源：《旧视频》 · P1（第一分 P） · B站字幕（基于此前视频文本）</p>
+        <div class="actions">
+          <button disabled>预览跳转</button>
+          <button>在当前视频再问</button>
+        </div>
+      </article>
+    </aside>
+
+    <section class="settings" aria-label="本地数据与隐私管理">
+      <h2>本地数据与隐私管理</h2>
+      <p>这里只展示本地数据的数量、覆盖范围和最近时间，不展示完整记录、敏感标识或本地文件路径。</p>
+      <div class="settings-grid">
+        <article class="settings-card">
+          <strong>当前视频问答会话</strong>
+          <p>2 个会话</p>
+          <small>仅保存问题、已验证回答、引用和必要来源，不保存完整视频正文。</small>
+        </article>
+        <article class="settings-card">
+          <strong>当前视频摘要与亮点缓存</strong>
+          <p>1 个分 P</p>
+        </article>
+        <article class="settings-card">
+          <strong>当前视频字幕缓存</strong>
+          <p>3 个来源</p>
+        </article>
+      </div>
+      <div class="actions">
+        <button>刷新状态</button>
+        <button>清理问答会话</button>
+        <button>清理本地数据</button>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

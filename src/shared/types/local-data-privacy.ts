@@ -37,6 +37,11 @@ export interface LocalDataPrivacySummary {
     usageBytes: number;
     latestGeneratedAt: number | null;
   };
+  currentVideoQaSessions: {
+    sessionCount: number;
+    usageBytes: number;
+    latestUsedAt: number | null;
+  };
   dynamicBill: {
     activeFollowedCreatorCount: number;
     followedVideoUpdateCount: number;

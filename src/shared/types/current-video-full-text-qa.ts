@@ -27,6 +27,7 @@ export interface CurrentVideoFullTextQaTextSize {
 }
 
 export interface CurrentVideoFullTextQaCitationBinding {
+  sessionId?: string;
   requestId: string;
   turnId: string;
   citationId: string;
@@ -50,7 +51,22 @@ export interface CurrentVideoFullTextQaAiState {
   errorCode: string | null;
 }
 
+export interface CurrentVideoFullTextQaSourceReference {
+  title: string;
+  partTitle: string | null;
+  page: number | null;
+  bvid: string | null;
+  cid: number | null;
+  url: string | null;
+  sourceLabel: 'B站字幕' | '本地转录' | null;
+  language: string | null;
+  sourceIdentityKey: string | null;
+  textSize: CurrentVideoFullTextQaTextSize;
+  capturedAt: number;
+}
+
 export interface CurrentVideoFullTextQaResult {
+  sessionId?: string;
   status: CurrentVideoFullTextQaStatus;
   requestId: string;
   turnId: string;
@@ -65,6 +81,8 @@ export interface CurrentVideoFullTextQaResult {
   message: string;
   limitations: string[];
   ai: CurrentVideoFullTextQaAiState;
+  sourceReference?: CurrentVideoFullTextQaSourceReference | null;
+  rollingContext?: string | null;
   generatedAt: number;
   canRetry: boolean;
 }

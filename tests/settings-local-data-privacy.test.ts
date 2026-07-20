@@ -36,6 +36,7 @@ test('settings local data cards expose natural Chinese summaries only', () => {
     '收藏与智能索引',
     '当前视频字幕缓存',
     '当前视频摘要与亮点缓存',
+    '当前视频问答会话',
     '动态账单',
   ]);
   assert.match(cards.map(card => card.value).join('\n'), /128 条/);
@@ -73,6 +74,7 @@ test('settings local data operation messages stay bounded to counts', () => {
       favoriteItems: 24,
       currentVideoSubtitleSegments: 42,
       currentVideoSummaryHighlightParts: 2,
+      currentVideoQaSessions: 1,
       dynamicBillItems: 6,
       localSettings: true,
     },
@@ -112,6 +114,7 @@ test('local data categories expose the shared lifecycle contract', () => {
     'favorites',
     'currentVideoSubtitles',
     'currentVideoSummaryHighlights',
+    'currentVideoQaSessions',
     'dynamicBill',
     'blindBoxDrawHistory',
     'localSettings',
@@ -125,10 +128,14 @@ test('local data categories expose the shared lifecycle contract', () => {
 
 test('registered categories collect usage, clear independently, and read back the cleared state', async () => {
   const dependencies = createRegistryDependencies();
+  let qaSessionInvalidations = 0;
+  dependencies.onCurrentVideoQaSessionsClear = () => {
+    qaSessionInvalidations += 1;
+  };
   const categories = createRegisteredLocalDataCategories(dependencies);
   const usageBefore = await Promise.all(categories.map(category => category.collectUsage()));
 
-  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 1, 1, 9, 2, 3]);
+  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 1, 1, 1, 9, 2, 3]);
   assert.ok(usageBefore.every(usage => usage.usageBytes > 0));
   assert.equal(usageBefore[2].details?.currentVideoSubtitleSources, 1);
   assert.equal(usageBefore[2].details?.currentVideoSubtitleSegments, 1);
@@ -173,11 +180,17 @@ test('registered categories collect usage, clear independently, and read back th
     if (category.id === 'currentVideoSummaryHighlights') {
       assert.equal(clearResult.cleared.currentVideoSummaryHighlightParts, 1);
     }
+    if (category.id === 'currentVideoQaSessions') {
+      assert.equal(clearResult.cleared.currentVideoQaSessions, 1);
+      assert.equal(typeof clearResult.cleared.currentVideoQaSessionBytes, 'number');
+      assert.equal(qaSessionInvalidations, 1);
+    }
     const readback = await category.readAfterClear();
     assert.equal(readback.count, 0, category.label);
     assert.equal(readback.empty, true, category.label);
   }
   assert.equal(await dependencies.tables.dynamicBillFeedback.count(), 0);
+  assert.equal(qaSessionInvalidations, 1);
 });
 
 test('lifecycle results retain completed categories and name a failed category in natural Chinese', async () => {
@@ -254,8 +267,21 @@ test('SET-013-A keeps the existing clear-all production transaction', async () =
   assert.match(source, /db\.transaction\(\s*'rw',\s*db\.tables/);
   assert.match(source, /chrome\.storage\.local\.clear\(\)/);
   assert.match(source, /runCurrentVideoTranscriptClearCoordinator\(\s*async\s*\(\)\s*=>\s*\r?\n\s*runCurrentVideoSummaryHighlightsClearCoordinator/);
+  assert.match(source, /runCurrentVideoSummaryHighlightsClearCoordinator\(\s*async\s*\(\)\s*=>\s*\r?\n\s*runCurrentVideoQaSessionClearCoordinator/);
   assert.match(source, /coordinateBlindBoxDrawHistoryClear/);
   assert.doesNotMatch(source, /clearRegisteredLocalDataCategories/);
+});
+
+test('independent QA session clear uses the shared write coordinator', async () => {
+  const source = await readFile(
+    new URL('../src/background/storage/local-data-category-registry.ts', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(
+    source,
+    /id:\s*'currentVideoQaSessions'[\s\S]*?clear:\s*async\s*\(\)\s*=>\s*runCurrentVideoQaSessionClearCoordinator/,
+  );
 });
 
 function makeSummary(): LocalDataPrivacySummary {
@@ -295,6 +321,11 @@ function makeSummary(): LocalDataPrivacySummary {
       usageBytes: 2048,
       latestGeneratedAt: 1_718_000_000_000,
     },
+    currentVideoQaSessions: {
+      sessionCount: 1,
+      usageBytes: 1024,
+      latestUsedAt: 1_718_000_000_000,
+    },
     dynamicBill: {
       activeFollowedCreatorCount: 12,
       followedVideoUpdateCount: 8,
@@ -328,6 +359,7 @@ function createRegistryDependencies(): LocalDataCategoryRegistryDependencies {
     'currentVideoTranscriptSources',
     'currentVideoTranscriptSegments',
     'currentVideoSummaryHighlights',
+    'currentVideoQaSessions',
     'followedCreators',
     'followedVideoUpdates',
     'dynamicBillItems',
@@ -389,6 +421,15 @@ function registryRow(name: keyof LocalDataCategoryRegistryDependencies['tables']
       generatedAt: 1_718_000_000_000,
       lastAccessedAt: 1_718_000_000_000,
       serializedBytes: 256,
+    };
+  }
+  if (name === 'currentVideoQaSessions') {
+    return {
+      id: name,
+      sessionId: 'session-settings',
+      title: '设置页测试会话',
+      lastAccessedAt: 1_718_000_000_000,
+      turns: [{ turnId: 'turn-settings', question: '这个视频讲了什么？', answer: '回答' }],
     };
   }
   return { id: name, value: `row-${name}` };
