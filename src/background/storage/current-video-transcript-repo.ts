@@ -13,6 +13,7 @@ import type {
 import {
   buildTemporaryCurrentVideoTranscriptUnavailableState,
   buildTemporaryCurrentVideoTranscriptWriteFailureState,
+  clearTemporaryCurrentVideoTranscriptCache,
   getTemporaryCurrentVideoTranscriptEvidenceState,
   getTemporaryCurrentVideoTranscriptCurrentSourceIdentity,
   getTemporaryCurrentVideoTranscriptSegments,
@@ -25,7 +26,14 @@ import {
 import {
   canUseCurrentVideoTranscriptClearGeneration,
   getCurrentVideoTranscriptClearState,
+  runCurrentVideoTranscriptClearCoordinator,
 } from '../current-video-transcript-clear-epoch.ts';
+import { invalidateCurrentVideoFullTextQaSources } from '../current-video-full-text-qa.ts';
+import type {
+  LocalDataCategoryRegistration,
+  LocalDataCategoryUsage,
+} from '../../shared/local-data-category-contract.ts';
+import type { LocalDataPrivacySummary } from '../../shared/types/local-data-privacy.ts';
 import { db } from './db.ts';
 
 export interface UpsertCurrentVideoTranscriptEvidenceOptions {
@@ -395,4 +403,102 @@ function transcriptClearedBeforeWriteState(
     message: '字幕缓存已在本次检测过程中被清理；请重新检测当前视频字幕正文。',
     warnings: ['transcript_cache_cleared_during_request'],
   });
+}
+
+export function getCurrentVideoTranscriptLocalDataCategoryRegistration(): LocalDataCategoryRegistration {
+  return {
+    id: 'currentVideoSubtitles',
+    label: 'B站字幕正文',
+    includeInClearAll: true,
+    collectUsage: collectCurrentVideoTranscriptLocalDataUsage,
+    clear: async () => runCurrentVideoTranscriptClearCoordinator(async () => {
+      invalidateCurrentVideoFullTextQaSources();
+      const [sourceCount, segmentCount] = await Promise.all([
+        db.currentVideoTranscriptSources.count(),
+        db.currentVideoTranscriptSegments.count(),
+      ]);
+      await db.transaction(
+        'rw',
+        db.currentVideoTranscriptSources,
+        db.currentVideoTranscriptSegments,
+        async () => {
+          await db.currentVideoTranscriptSources.clear();
+          await db.currentVideoTranscriptSegments.clear();
+        },
+      );
+      clearTemporaryCurrentVideoTranscriptCache();
+      return {
+        cleared: {
+          currentVideoSubtitleSources: sourceCount,
+          currentVideoSubtitleSegments: segmentCount,
+        },
+      };
+    }),
+    readAfterClear: async () => {
+      const usage = await collectCurrentVideoTranscriptLocalDataUsage();
+      return {
+        ...usage,
+        empty: usage.count === 0 && usage.usageBytes === 0,
+      };
+    },
+  };
+}
+
+export async function getCurrentVideoTranscriptLocalDataPrivacySummary(): Promise<LocalDataPrivacySummary['currentVideoSubtitles']> {
+  const [sources, segments, lastUpdated] = await Promise.all([
+    db.currentVideoTranscriptSources.toArray(),
+    db.currentVideoTranscriptSegments.toArray(),
+    db.currentVideoTranscriptSources.orderBy('updatedAt').last(),
+  ]);
+  const sourceIdentityCount = transcriptSourceIdentityCount(sources);
+  const cachedVideoCount = new Set(
+    sources
+      .filter(source => source.status === 'cached')
+      .map(source => `${source.bvid}:${source.cid}:${source.page}`),
+  ).size;
+  return {
+    sourceCount: sources.length,
+    sourceIdentityCount,
+    segmentCount: segments.length,
+    staleSegmentCount: segments.filter(segment => segment.stale === true).length,
+    cachedVideoCount,
+    usageBytes: serializedRowsSize([...sources, ...segments]),
+    lastUpdatedAt: normalizePositiveTimestamp(lastUpdated?.updatedAt),
+  };
+}
+
+async function collectCurrentVideoTranscriptLocalDataUsage(): Promise<LocalDataCategoryUsage> {
+  const [sources, segments] = await Promise.all([
+    db.currentVideoTranscriptSources.toArray(),
+    db.currentVideoTranscriptSegments.toArray(),
+  ]);
+  return {
+    count: transcriptSourceIdentityCount(sources),
+    usageBytes: serializedRowsSize([...sources, ...segments]),
+    details: {
+      currentVideoSubtitleSources: sources.length,
+      currentVideoSubtitleSegments: segments.length,
+    },
+  };
+}
+
+function transcriptSourceIdentityCount(sources: CurrentVideoTranscriptSourceRecord[]): number {
+  return new Set(
+    sources
+      .map(source => source.sourceIdentityKey ?? source.identityKey)
+      .filter((value): value is string => Boolean(value)),
+  ).size;
+}
+
+function normalizePositiveTimestamp(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function serializedRowsSize(rows: unknown[]): number {
+  return rows.reduce<number>((sum, row) => {
+    const text = JSON.stringify(row ?? null);
+    return sum + (typeof TextEncoder === 'undefined'
+      ? text.length
+      : new TextEncoder().encode(text).byteLength);
+  }, 0);
 }

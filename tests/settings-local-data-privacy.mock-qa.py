@@ -101,6 +101,14 @@ def main():
         expect(page.locator("#blind-count")).to_have_text("2 条")
         assert_no_forbidden_text(page.locator("body").inner_text(), FORBIDDEN_VISIBLE_TERMS, "reloaded settings mock")
 
+        page.get_by_role("button", name="清理观看历史").click()
+        expect(page.locator("#history-count")).to_have_text("0 条")
+        expect(page.get_by_text("已清理观看历史")).to_be_visible()
+
+        page.get_by_role("button", name="清理收藏与索引").click()
+        expect(page.locator("#favorite-count")).to_have_text("0 条")
+        expect(page.locator("#pending-index")).to_have_text("0")
+
         page.get_by_role("button", name="清理字幕缓存").click()
         expect(page.locator("#subtitle-count")).to_have_text("0 个来源")
         expect(page.get_by_text("已清理B站字幕正文")).to_be_visible()
@@ -110,6 +118,9 @@ def main():
 
         page.get_by_role("button", name="清理问答会话").click()
         expect(page.locator("#qa-count")).to_have_text("0 个会话")
+
+        page.get_by_role("button", name="清理动态账单").click()
+        expect(page.locator("#dynamic-count")).to_have_text("0 项")
 
         first_pause = page.locator("[data-pause-item]").first
         expect(first_pause).to_be_visible()
@@ -137,6 +148,9 @@ def main():
             raise AssertionError("diagnostic privacy boundary schema mismatch")
         if any(set(category.keys()) != {"类别", "数量", "占用字节"} for category in diagnostic["本地数据类别"]):
             raise AssertionError("diagnostic category schema mismatch")
+        category_labels = [category["类别"] for category in diagnostic["本地数据类别"]]
+        if len(category_labels) != 8 or "本地 AI 设置" not in category_labels:
+            raise AssertionError(f"diagnostic category coverage mismatch: {category_labels}")
         exported = json.dumps(diagnostic, ensure_ascii=False)
         assert_no_forbidden_text(exported, FORBIDDEN_EXPORT_TERMS, "diagnostic export")
         if "完整记录正文" in exported or "原文片段" in exported:

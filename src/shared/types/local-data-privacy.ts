@@ -78,6 +78,7 @@ export interface LocalDataPrivacySummary {
 }
 
 export type LocalDataOperationKind =
+  | 'clear_local_data_category'
   | 'clear_current_video_subtitle_cache'
   | 'clear_current_video_summary_highlight_cache'
   | 'clear_dynamic_bill_data'

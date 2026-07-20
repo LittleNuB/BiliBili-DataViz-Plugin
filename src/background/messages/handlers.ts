@@ -80,7 +80,6 @@ import {
 import {
   buildCurrentVideoQaConversationContext,
   buildRefusedCurrentVideoQaResult,
-  clearCurrentVideoQaSessions,
   completeCurrentVideoQaTurn,
   CURRENT_VIDEO_QA_SESSION_STORAGE_LIMIT_MESSAGE,
   deleteCurrentVideoQaSession,
@@ -169,10 +168,12 @@ import {
 } from '../storage/favorite-repo';
 import {
   clearAllLocalData,
+  clearLocalDataCategory,
   clearCurrentVideoSummaryHighlightCache,
   clearCurrentVideoSubtitleCache,
   getLocalDataPrivacySummary,
 } from '../storage/local-data-privacy-repo';
+import { isIndependentlyClearableLocalDataCategoryId } from '../../shared/local-data-category-contract.ts';
 import {
   applyDynamicBillCreatorLessReminder,
   getDynamicBillFilterPreference,
@@ -590,14 +591,19 @@ export async function handleRequest<T>(
     case 'GET_LOCAL_DATA_PRIVACY_SUMMARY':
       return { success: true, data: await getLocalDataPrivacySummary() as T };
     case 'CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE':
-      invalidateCurrentVideoFullTextQaSources();
       return { success: true, data: await clearCurrentVideoSubtitleCache() as T };
     case 'CLEAR_CURRENT_VIDEO_SUMMARY_HIGHLIGHT_CACHE':
       return { success: true, data: await clearCurrentVideoSummaryHighlightCache() as T };
+    case 'CLEAR_LOCAL_DATA_CATEGORY': {
+      const categoryId = request.params?.categoryId;
+      if (!isIndependentlyClearableLocalDataCategoryId(categoryId)) {
+        throw new Error('LOCAL_DATA_CATEGORY_NOT_CLEARABLE');
+      }
+      return { success: true, data: await clearLocalDataCategory(categoryId) as T };
+    }
     case 'REBUILD_SMART_FAVORITE_INDEX':
       return { success: true, data: await rebuildSmartFavoriteIndex(request.params) as T };
     case 'CLEAR_ALL_LOCAL_DATA':
-      invalidateCurrentVideoFullTextQaSources();
       return { success: true, data: await clearAllLocalData(request.params?.confirmation) as T };
     case 'GET_CURRENT_VIDEO_CONTEXT':
       return { success: true, data: await getCurrentVideoContextForActiveTab(currentVideoLookupOptions(request.params), requestTabId) as T };
@@ -741,7 +747,10 @@ export async function handleRequest<T>(
     }
     case 'CLEAR_CURRENT_VIDEO_QA_SESSIONS': {
       invalidateCurrentVideoFullTextQaSources();
-      await clearCurrentVideoQaSessions();
+      const result = await clearLocalDataCategory('currentVideoQaSessions');
+      if (result.status === 'partial_failure') {
+        throw new Error('LOCAL_DATA_CATEGORY_CLEAR_FAILED');
+      }
       return { success: true, data: await getCurrentVideoQaSessionsView(null) as T };
     }
     case 'ASK_CURRENT_VIDEO_FULL_TEXT': {

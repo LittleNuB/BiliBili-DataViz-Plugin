@@ -853,6 +853,111 @@ test('handler clear paths prevent a preflight request from restoring QA sessions
   }
 });
 
+test('rejected clear-all requests do not cancel an in-flight QA turn', async t => {
+  const cases = [
+    {
+      name: 'invalid confirmation',
+      confirmation: '删除本地数据',
+      expectedError: 'LOCAL_DATA_CLEAR_CONFIRMATION_REQUIRED',
+      historySyncing: false,
+    },
+    {
+      name: 'active history sync',
+      confirmation: '清理本地数据',
+      expectedError: 'HISTORY_SYNC_IN_PROGRESS',
+      historySyncing: true,
+    },
+  ] as const;
+
+  for (const [index, currentCase] of cases.entries()) {
+    await t.test(currentCase.name, async () => {
+      resetChromeHarness();
+      await resetTranscriptDb();
+      await db.currentVideoQaSessions.clear();
+      const tabId = 18_646 + index;
+      const context = handlerVideoContext(`BV1QaReject0${index}`, 4_846 + index);
+      const evidence = await seedHandlerTranscript(
+        context,
+        tabId,
+        `handler-qa-rejected-clear-${index}`,
+        '这一行正文用于验证未被接受的清理请求不会中断当前视频问答。',
+      );
+      const sourceIdentityKey = evidence.sourceRecord.sourceIdentityKey!;
+      storageValues[CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY] = {
+        [handlerPartKey(context)]: sourceIdentityKey,
+      };
+      setTabs([{ id: tabId, url: context.url, active: true, lastAccessed: 8_846 + index }]);
+      await sendContentMessage({ action: 'CURRENT_VIDEO_CONTEXT_UPDATE', payload: context }, tabId, context.url);
+      await confirmHandlerTranscriptCurrent(context, tabId, evidence);
+      await sendRequest<void>({
+        action: 'UPDATE_CONFIG',
+        params: {
+          ai: {
+            baseURL: 'https://example.invalid',
+            apiKey: 'handler-test-key',
+            chatModel: 'handler-test-model',
+          },
+          assistant: { currentVideoAiAssistantEnabled: true },
+        },
+      }, tabId, context.url);
+      if (currentCase.historySyncing) {
+        storageValues.historySyncing = true;
+        storageValues.historySyncStartedAt = Date.now();
+      }
+
+      const originalFetch = globalThis.fetch;
+      let fetchCalls = 0;
+      try {
+        globalThis.fetch = (async () => {
+          fetchCalls += 1;
+          return new Response(JSON.stringify({
+            choices: [{ message: { content: JSON.stringify({
+              supported: true,
+              answerPoints: [{ text: '未被接受的清理不会中断这次回答。', evidenceLineNumbers: [1] }],
+              citations: [{ evidenceLineNumbers: [1] }],
+            }) } }],
+          }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }) as typeof fetch;
+        installGuardTestHook('before_full_text_qa_session_write', async () => {
+          const rejected = await sendRequest({
+            action: 'CLEAR_ALL_LOCAL_DATA',
+            params: { confirmation: currentCase.confirmation },
+          }, tabId, context.url);
+          assert.equal(rejected.success, false);
+          assert.equal(rejected.error, currentCase.expectedError);
+          delete storageValues.historySyncing;
+          delete storageValues.historySyncStartedAt;
+        });
+
+        const sessionId = `handler-qa-rejected-clear-session-${index}`;
+        const response = await sendRequest<CurrentVideoFullTextQaResult>({
+          action: 'ASK_CURRENT_VIDEO_FULL_TEXT' as BiliVizRequest['action'],
+          params: {
+            sessionId,
+            requestId: `handler-qa-rejected-clear-request-${index}`,
+            turnId: `handler-qa-rejected-clear-turn-${index}`,
+            question: '这次回答会继续吗？',
+            primaryTextSelectionsReady: true,
+            selectedSourceIdentityKey: sourceIdentityKey,
+          },
+        }, tabId, context.url);
+
+        assert.equal(response.success, true);
+        assert.equal(response.data?.status, 'ready');
+        assert.equal(fetchCalls, 1);
+        const persisted = await db.currentVideoQaSessions.where({ sessionId }).first();
+        assert.equal(persisted?.turns.length, 1);
+        assert.equal(persisted?.turns[0]?.status, 'ready');
+      } finally {
+        delete storageValues.historySyncing;
+        delete storageValues.historySyncStartedAt;
+        globalThis.fetch = originalFetch;
+        await db.currentVideoQaSessions.clear();
+      }
+    });
+  }
+});
+
 test('handler same-turn retry cannot be overwritten by an older preflight request', async () => {
   resetChromeHarness();
   await resetTranscriptDb();

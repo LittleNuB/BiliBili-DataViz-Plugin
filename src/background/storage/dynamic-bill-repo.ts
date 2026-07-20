@@ -26,6 +26,11 @@ import type {
   FollowedVideoUpdate,
 } from '../../shared/types/dynamic-bill';
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
+import type {
+  LocalDataCategoryRegistration,
+  LocalDataCategoryUsage,
+} from '../../shared/local-data-category-contract.ts';
+import type { LocalDataPrivacySummary } from '../../shared/types/local-data-privacy.ts';
 import { buildDynamicBillExplanationContent } from '../dynamic-bill/explanation-content';
 import { ensureDynamicBill013Migration } from '../dynamic-bill/migration';
 import { DYNAMIC_BILL_COLUMNS, DYNAMIC_BILL_STRATEGY } from '../dynamic-bill/strategy';
@@ -736,6 +741,200 @@ export async function clearDynamicBillStoredState(): Promise<void> {
     DYNAMIC_SYNC_STATE_KEY,
     DYNAMIC_BILL_FILTER_KEY,
   ]);
+}
+
+export function getDynamicBillLocalDataCategoryRegistration(): LocalDataCategoryRegistration {
+  return {
+    id: 'dynamicBill',
+    label: '动态账单',
+    includeInClearAll: true,
+    collectUsage: collectDynamicBillLocalDataUsage,
+    clear: async () => {
+      await ensureDynamicBill013Migration();
+      const counts = await Promise.all([
+        db.followedCreators.count(),
+        db.followedVideoUpdates.count(),
+        db.dynamicBillItems.count(),
+        db.dynamicBillExplanations.count(),
+        db.dynamicBillCreatorPauses.count(),
+        db.dynamicBillFeedbackActions.count(),
+        db.dynamicBillCreatorFeedbackCounts.count(),
+        db.dynamicBillCreatorReviewPrompts.count(),
+        db.dynamicBillRotationRecords.count(),
+      ]);
+      await db.transaction(
+        'rw',
+        [
+          db.followedCreators,
+          db.followedVideoUpdates,
+          db.dynamicBillItems,
+          db.dynamicBillExplanations,
+          db.dynamicBillFeedback,
+          db.dynamicBillCreatorPauses,
+          db.dynamicBillFeedbackActions,
+          db.dynamicBillCreatorFeedbackCounts,
+          db.dynamicBillCreatorReviewPrompts,
+          db.dynamicBillRotationRecords,
+        ],
+        async () => {
+          await db.followedCreators.clear();
+          await db.followedVideoUpdates.clear();
+          await db.dynamicBillItems.clear();
+          await db.dynamicBillExplanations.clear();
+          await db.dynamicBillFeedback.clear();
+          await db.dynamicBillCreatorPauses.clear();
+          await db.dynamicBillFeedbackActions.clear();
+          await db.dynamicBillCreatorFeedbackCounts.clear();
+          await db.dynamicBillCreatorReviewPrompts.clear();
+          await db.dynamicBillRotationRecords.clear();
+        },
+      );
+      await clearDynamicBillStoredState();
+      return {
+        cleared: {
+          followedCreators: counts[0] ?? 0,
+          followedVideoUpdates: counts[1] ?? 0,
+          dynamicBillItems: counts[2] ?? 0,
+          dynamicBillExplanations: counts[3] ?? 0,
+          dynamicBillCreatorPauses: counts[4] ?? 0,
+          dynamicBillFeedbackActions: counts[5] ?? 0,
+          dynamicBillCreatorFeedbackCounts: counts[6] ?? 0,
+          dynamicBillCreatorReviewPrompts: counts[7] ?? 0,
+          dynamicBillRotationRecords: counts[8] ?? 0,
+        },
+      };
+    },
+    readAfterClear: async () => {
+      const usage = await collectDynamicBillLocalDataUsage();
+      return {
+        ...usage,
+        empty: usage.count === 0 && usage.usageBytes === 0,
+      };
+    },
+  };
+}
+
+export async function getDynamicBillLocalDataPrivacySummary(): Promise<LocalDataPrivacySummary['dynamicBill']> {
+  await ensureDynamicBill013Migration();
+  const activeCreatorPauses = await getDynamicBillActiveCreatorPauseViews();
+  const [
+    creators,
+    updatesCount,
+    items,
+    explanationCount,
+    actionCount,
+    creatorFeedbackCount,
+    promptCount,
+    rotationRecordCount,
+    syncState,
+  ] = await Promise.all([
+    db.followedCreators.toArray(),
+    db.followedVideoUpdates.count(),
+    db.dynamicBillItems.toArray(),
+    db.dynamicBillExplanations.count(),
+    db.dynamicBillFeedbackActions.count(),
+    db.dynamicBillCreatorFeedbackCounts.count(),
+    db.dynamicBillCreatorReviewPrompts.count(),
+    db.dynamicBillRotationRecords.count(),
+    getDynamicSyncState(),
+  ]);
+  const statusCounts = items.reduce<Record<string, number>>((counts, item) => {
+    counts[item.status] = (counts[item.status] ?? 0) + 1;
+    return counts;
+  }, {});
+  const lastGeneratedAt = items.reduce(
+    (latest, item) => Math.max(latest, item.generatedAt ?? 0),
+    0,
+  );
+  return {
+    activeFollowedCreatorCount: creators.filter(creator => creator.isActive !== false).length,
+    followedVideoUpdateCount: updatesCount,
+    billItemCount: items.length,
+    rotationRecordCount,
+    creatorPauseCount: activeCreatorPauses.length,
+    feedbackActionCount: actionCount,
+    creatorFeedbackCount,
+    creatorReviewPromptCount: promptCount,
+    activeCreatorPauses,
+    unopenedItems: statusCounts.unopened ?? 0,
+    openedItems: statusCounts.opened ?? 0,
+    consumedItems: statusCounts.consumed ?? 0,
+    processedItems: statusCounts.processed ?? 0,
+    explanationCount,
+    lastGeneratedAt: normalizeLocalDataTimestamp(lastGeneratedAt),
+    lastSyncedAt: normalizeLocalDataTimestamp(syncState.lastSuccessAt),
+    syncStatus: syncState.status,
+  };
+}
+
+async function collectDynamicBillLocalDataUsage(): Promise<LocalDataCategoryUsage> {
+  await ensureDynamicBill013Migration();
+  const [
+    creators,
+    updates,
+    items,
+    explanations,
+    pauses,
+    actions,
+    feedbackCounts,
+    prompts,
+    rotations,
+    stored,
+  ] = await Promise.all([
+    db.followedCreators.toArray(),
+    db.followedVideoUpdates.toArray(),
+    db.dynamicBillItems.toArray(),
+    db.dynamicBillExplanations.toArray(),
+    db.dynamicBillCreatorPauses.toArray(),
+    db.dynamicBillFeedbackActions.toArray(),
+    db.dynamicBillCreatorFeedbackCounts.toArray(),
+    db.dynamicBillCreatorReviewPrompts.toArray(),
+    db.dynamicBillRotationRecords.toArray(),
+    chrome.storage.local.get([DYNAMIC_SYNC_STATE_KEY, DYNAMIC_BILL_FILTER_KEY]),
+  ]);
+  const rows = [
+    ...creators,
+    ...updates,
+    ...items,
+    ...explanations,
+    ...pauses,
+    ...actions,
+    ...feedbackCounts,
+    ...prompts,
+    ...rotations,
+  ];
+  const presentStorage = Object.fromEntries(
+    Object.entries(stored).filter(([, value]) => value !== undefined),
+  );
+  return {
+    count: rows.length,
+    usageBytes: serializedLocalDataRowsSize(rows)
+      + (Object.keys(presentStorage).length > 0 ? serializedLocalDataSize(presentStorage) : 0),
+    details: {
+      followedCreators: creators.length,
+      followedVideoUpdates: updates.length,
+      dynamicBillItems: items.length,
+      dynamicBillExplanations: explanations.length,
+      dynamicBillCreatorPauses: pauses.length,
+      dynamicBillFeedbackActions: actions.length,
+      dynamicBillCreatorFeedbackCounts: feedbackCounts.length,
+      dynamicBillCreatorReviewPrompts: prompts.length,
+      dynamicBillRotationRecords: rotations.length,
+    },
+  };
+}
+
+function normalizeLocalDataTimestamp(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function serializedLocalDataRowsSize(rows: unknown[]): number {
+  return rows.reduce<number>((sum, row) => sum + serializedLocalDataSize(row), 0);
+}
+
+function serializedLocalDataSize(value: unknown): number {
+  const text = JSON.stringify(value ?? null);
+  return typeof TextEncoder === 'undefined' ? text.length : new TextEncoder().encode(text).byteLength;
 }
 
 export async function addDynamicBillFeedback(

@@ -22,7 +22,7 @@ import type {
   LocalDataPrivacySummary,
   SmartFavoriteIndexRebuildResult,
 } from '../../../src/shared/types/local-data-privacy';
-import type { CurrentVideoQaSessionsView } from '../../../src/shared/types/current-video-qa-session';
+import type { IndependentlyClearableLocalDataCategoryId } from '../../../src/shared/local-data-category-contract';
 import type {
   DynamicBillCreatorPauseView,
   DynamicBillRestoreCreatorReminderResult,
@@ -39,9 +39,12 @@ type BusyState =
   | 'save'
   | 'test'
   | 'local-refresh'
+  | 'history-clear'
+  | 'favorites-clear'
   | 'subtitle-clear'
   | 'summary-highlight-clear'
   | 'qa-session-clear'
+  | 'dynamic-bill-clear'
   | 'index-rebuild'
   | 'pause-restore'
   | 'clear-all';
@@ -125,7 +128,7 @@ export function SettingsPage() {
     : null;
   const canConfirmClear = clearConfirmText.trim() === LOCAL_DATA_CLEAR_CONFIRMATION;
 
-  async function refreshConfig() {
+  async function refreshConfig(): Promise<boolean> {
     setLoading(true);
     setError('');
     try {
@@ -133,20 +136,24 @@ export function SettingsPage() {
       applyConfig(config);
       setNotice('');
       setLastTest(null);
+      return true;
     } catch (err) {
       setError(formatSettingsError(err));
+      return false;
     } finally {
       setLoading(false);
     }
   }
 
-  async function refreshLocalData() {
+  async function refreshLocalData(): Promise<boolean> {
     setLocalDataError('');
     try {
       const summary = await requestSW<LocalDataPrivacySummary>('GET_LOCAL_DATA_PRIVACY_SUMMARY');
       setLocalData(summary);
+      return true;
     } catch (err) {
       setLocalDataError(formatLocalDataError(err));
+      return false;
     }
   }
 
@@ -215,53 +222,61 @@ export function SettingsPage() {
     setBusy('local-refresh');
     setNotice('');
     setError('');
-    await refreshLocalData();
+    if (await refreshLocalData()) {
+      setNotice('本地数据状态已刷新。');
+    }
     setBusy('');
   }
 
-  async function clearSubtitleCache() {
-    setBusy('subtitle-clear');
+  async function clearCategory(
+    categoryId: IndependentlyClearableLocalDataCategoryId,
+    busyState: Exclude<BusyState, ''>,
+  ) {
+    setBusy(busyState);
     setNotice('');
     setError('');
+    setLocalDataError('');
     try {
-      const result = await requestSW<LocalDataOperationResult>('CLEAR_CURRENT_VIDEO_SUBTITLE_CACHE');
-      setNotice(buildLocalDataOperationMessage(result));
-      await refreshLocalData();
+      const result = await requestSW<LocalDataOperationResult>('CLEAR_LOCAL_DATA_CATEGORY', {
+        categoryId,
+      });
+      if (await refreshLocalData()) {
+        const message = buildLocalDataOperationMessage(result);
+        if (result.status === 'partial_failure') {
+          setLocalDataError(message);
+        } else {
+          setNotice(message);
+        }
+      }
     } catch (err) {
       setLocalDataError(formatLocalDataError(err));
     } finally {
       setBusy('');
     }
+  }
+
+  async function clearHistory() {
+    await clearCategory('history', 'history-clear');
+  }
+
+  async function clearFavorites() {
+    await clearCategory('favorites', 'favorites-clear');
+  }
+
+  async function clearSubtitleCache() {
+    await clearCategory('currentVideoSubtitles', 'subtitle-clear');
   }
 
   async function clearSummaryHighlightCache() {
-    setBusy('summary-highlight-clear');
-    setNotice('');
-    setError('');
-    try {
-      const result = await requestSW<LocalDataOperationResult>('CLEAR_CURRENT_VIDEO_SUMMARY_HIGHLIGHT_CACHE');
-      setNotice(buildLocalDataOperationMessage(result));
-      await refreshLocalData();
-    } catch (err) {
-      setLocalDataError(formatLocalDataError(err));
-    } finally {
-      setBusy('');
-    }
+    await clearCategory('currentVideoSummaryHighlights', 'summary-highlight-clear');
   }
 
   async function clearQaSessions() {
-    setBusy('qa-session-clear');
-    setNotice('');
-    setError('');
-    try {
-      await requestSW<CurrentVideoQaSessionsView>('CLEAR_CURRENT_VIDEO_QA_SESSIONS');
-      setNotice('已清理问答会话。');
-      await refreshLocalData();
-    } catch (err) {
-      setLocalDataError(formatLocalDataError(err));
-    } finally {
-      setBusy('');
-    }
+    await clearCategory('currentVideoQaSessions', 'qa-session-clear');
+  }
+
+  async function clearDynamicBill() {
+    await clearCategory('dynamicBill', 'dynamic-bill-clear');
   }
 
   async function rebuildSmartFavoriteIndex() {
@@ -318,9 +333,15 @@ export function SettingsPage() {
       const message = buildLocalDataOperationMessage(result);
       setClearConfirmVisible(false);
       setClearConfirmText('');
-      await refreshConfig();
-      await refreshLocalData();
-      setNotice(message);
+      const configRefreshed = await refreshConfig();
+      const localDataRefreshed = await refreshLocalData();
+      if (configRefreshed && localDataRefreshed) {
+        if (result.status === 'partial_failure') {
+          setLocalDataError(message);
+        } else {
+          setNotice(message);
+        }
+      }
     } catch (err) {
       setLocalDataError(formatLocalDataError(err));
     } finally {
@@ -553,6 +574,22 @@ export function SettingsPage() {
           <button
             type="button"
             className="settings-action"
+            onClick={clearHistory}
+            disabled={!!busy || !localData || localData.history.syncing || localDataCategoryCount(localData, 'history') === 0}
+          >
+            {busy === 'history-clear' ? '清理中...' : '清理观看历史'}
+          </button>
+          <button
+            type="button"
+            className="settings-action"
+            onClick={clearFavorites}
+            disabled={!!busy || !localData || localDataCategoryCount(localData, 'favorites') === 0}
+          >
+            {busy === 'favorites-clear' ? '清理中...' : '清理收藏与索引'}
+          </button>
+          <button
+            type="button"
+            className="settings-action"
             onClick={clearSubtitleCache}
             disabled={!!busy || !localData || localData.currentVideoSubtitles.segmentCount === 0}
           >
@@ -573,6 +610,14 @@ export function SettingsPage() {
             disabled={!!busy || !localData || localData.currentVideoQaSessions.sessionCount === 0}
           >
             {busy === 'qa-session-clear' ? '清理中...' : '清理问答会话'}
+          </button>
+          <button
+            type="button"
+            className="settings-action"
+            onClick={clearDynamicBill}
+            disabled={!!busy || !localData || localDataCategoryCount(localData, 'dynamicBill') === 0}
+          >
+            {busy === 'dynamic-bill-clear' ? '清理中...' : '清理动态账单'}
           </button>
           <button
             type="button"
@@ -688,6 +733,13 @@ export function SettingsPage() {
       </section>
     </div>
   );
+}
+
+function localDataCategoryCount(
+  summary: LocalDataPrivacySummary,
+  id: IndependentlyClearableLocalDataCategoryId,
+): number {
+  return summary.categories.find(category => category.id === id)?.count ?? 0;
 }
 
 function DataStat({ label, value }: { label: string; value: number }) {

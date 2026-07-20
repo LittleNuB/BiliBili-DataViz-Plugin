@@ -867,6 +867,17 @@ test('registered dynamic bill lifecycle uses real Dexie tables and fails closed 
     assert.deepEqual(successfulLifecycle.after, {
       count: 0,
       usageBytes: 0,
+      details: {
+        followedCreators: 0,
+        followedVideoUpdates: 0,
+        dynamicBillItems: 0,
+        dynamicBillExplanations: 0,
+        dynamicBillCreatorPauses: 0,
+        dynamicBillFeedbackActions: 0,
+        dynamicBillCreatorFeedbackCounts: 0,
+        dynamicBillCreatorReviewPrompts: 0,
+        dynamicBillRotationRecords: 0,
+      },
       empty: true,
     });
   }
@@ -920,6 +931,35 @@ test('registered dynamic bill lifecycle uses real Dexie tables and fails closed 
   }
   assert.equal(await db.dynamicBillItems.count(), 1);
   assert.equal(await db.dynamicBillMigrations.count(), 1);
+});
+
+test('independent history and favorites clears use owner hooks, read back zero, and preserve other categories', async () => {
+  await seedLegacyDatabase({ seedUnrelatedRows: true });
+  storageData.set('lastSyncTime', Date.now());
+
+  const historyResult = await localDataRepo.clearLocalDataCategory('history');
+  assert.equal(historyResult.status, 'completed');
+  assert.equal(historyResult.cleared.historyRecords, 1);
+  assert.deepEqual(historyResult.categoryResults?.completed.map(result => ({
+    id: result.id,
+    afterCount: result.afterCount,
+    afterUsageBytes: result.afterUsageBytes,
+  })), [{ id: 'history', afterCount: 0, afterUsageBytes: 0 }]);
+  assert.equal(await db.watchHistory.count(), 0);
+  assert.equal(storageData.has('lastSyncTime'), false);
+  assert.equal(await db.favoriteItems.count(), 1);
+  assert.equal(await db.dynamicBillItems.count(), 1);
+
+  const favoritesResult = await localDataRepo.clearLocalDataCategory('favorites');
+  assert.equal(favoritesResult.status, 'completed');
+  assert.equal(favoritesResult.cleared.favoriteItems, 1);
+  assert.deepEqual(favoritesResult.categoryResults?.completed.map(result => ({
+    id: result.id,
+    afterCount: result.afterCount,
+    afterUsageBytes: result.afterUsageBytes,
+  })), [{ id: 'favorites', afterCount: 0, afterUsageBytes: 0 }]);
+  assert.equal(await db.favoriteItems.count(), 0);
+  assert.equal(await db.dynamicBillItems.count(), 1);
 });
 
 test('clear all leaves every table and local setting untouched when migration fails', async () => {

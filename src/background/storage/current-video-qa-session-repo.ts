@@ -15,6 +15,8 @@ import {
   type CurrentVideoQaSessionsView,
   type CurrentVideoQaSessionUsage,
 } from '../../shared/types/current-video-qa-session.ts';
+import type { LocalDataCategoryRegistration } from '../../shared/local-data-category-contract.ts';
+import { invalidateCurrentVideoFullTextQaSources } from '../current-video-full-text-qa.ts';
 import { db } from './db.ts';
 
 const DEFAULT_AI_STATE = {
@@ -460,6 +462,36 @@ export async function readCurrentVideoQaSessionsAfterClear() {
   return {
     ...usage,
     empty: usage.count === 0 && usage.usageBytes === 0,
+  };
+}
+
+export function getCurrentVideoQaSessionsLocalDataCategoryRegistration(): LocalDataCategoryRegistration {
+  return {
+    id: 'currentVideoQaSessions',
+    label: '问答会话',
+    includeInClearAll: true,
+    collectUsage: async () => {
+      const usage = await collectCurrentVideoQaSessionUsage();
+      return {
+        ...usage,
+        details: {
+          currentVideoQaSessions: usage.count,
+          currentVideoQaSessionBytes: usage.usageBytes,
+        },
+      };
+    },
+    clear: async () => {
+      invalidateCurrentVideoFullTextQaSources();
+      const usage = await collectCurrentVideoQaSessionUsage();
+      await clearCurrentVideoQaSessions();
+      return {
+        cleared: {
+          currentVideoQaSessions: usage.count,
+          currentVideoQaSessionBytes: usage.usageBytes,
+        },
+      };
+    },
+    readAfterClear: readCurrentVideoQaSessionsAfterClear,
   };
 }
 

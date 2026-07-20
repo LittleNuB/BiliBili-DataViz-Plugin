@@ -1,0 +1,790 @@
+from __future__ import annotations
+
+import json
+import mimetypes
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
+from playwright.sync_api import Page, Route, expect, sync_playwright
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DIST = ROOT / "dist"
+DASHBOARD_INDEX = DIST / "dashboard" / "index.html"
+
+QA_URL = "http://bili-bill-real-mock.test/dashboard/index.html#settings"
+
+PUBLIC_CARD_TITLES = [
+    "观看历史",
+    "收藏与智能索引",
+    "B站字幕正文",
+    "摘要与亮点",
+    "问答会话",
+    "动态账单",
+    "盲盒抽取记录",
+]
+
+DIAGNOSTIC_CATEGORY_TITLES = [
+    *PUBLIC_CARD_TITLES,
+    "本地 AI 设置",
+]
+
+FORBIDDEN_VISIBLE_TERMS = [
+    "未消费",
+    "猜你喜欢",
+    "fallback",
+    "transcript",
+    "confidence",
+    "sourceHash",
+    "segmentId",
+    "subtitle_url",
+    "BVID",
+    "CID",
+]
+
+FORBIDDEN_EXPORT_TERMS = [
+    *FORBIDDEN_VISIBLE_TERMS,
+    "Cookie",
+    "profile",
+    "login-state",
+    "Key.txt",
+    "apiKey",
+    "userConfig",
+    "sourceIdentity",
+    "sourceIdentityKey",
+    "syncStatus",
+    "usageBytes",
+    "bvid",
+    "cid",
+    "C:\\",
+    "/Users/",
+]
+
+
+def main() -> None:
+    ensure_dashboard_bundle()
+    run_browser_qa()
+    print("PASS settings-local-data-privacy.real-mock-qa")
+
+
+def ensure_dashboard_bundle() -> None:
+    if os.environ.get("BILI_BILL_REAL_MOCK_QA_SKIP_BUILD") == "1":
+        if not DASHBOARD_INDEX.exists():
+            raise AssertionError(
+                "dist/dashboard/index.html is missing. Run npm run build or unset "
+                "BILI_BILL_REAL_MOCK_QA_SKIP_BUILD."
+            )
+        return
+
+    npm = "npm.cmd" if os.name == "nt" else "npm"
+    result = subprocess.run(
+        [npm, "run", "build"],
+        cwd=ROOT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            "npm run build failed before real Settings QA could run:\n"
+            + result.stdout[-8000:]
+        )
+    if not DASHBOARD_INDEX.exists():
+        raise AssertionError("npm run build completed but dist/dashboard/index.html was not created.")
+
+
+def run_browser_qa() -> None:
+    with sync_playwright() as playwright:
+        downloads_dir = Path(tempfile.mkdtemp(prefix="bili-bill-settings-real-qa-"))
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(
+            accept_downloads=True,
+            viewport={"width": 1280, "height": 820},
+        )
+        page = context.new_page()
+        console_errors: list[str] = []
+        page.on(
+            "console",
+            lambda message: console_errors.append(message.text) if message.type == "error" else None,
+        )
+        page.on("pageerror", lambda error: console_errors.append(str(error)))
+        page.add_init_script(CHROME_MOCK_SCRIPT)
+        page.route("**/*", route_dist_asset)
+
+        try:
+            page.goto(QA_URL, wait_until="networkidle")
+            wait_for_settings(page)
+            assert_settings_cards(page)
+            assert_config_toggles(page, current_video=True, smart_favorites=False, dynamic_bill=True)
+            assert_no_horizontal_overflow(page, "desktop settings")
+            assert_no_forbidden_text(page.locator("body").inner_text(), FORBIDDEN_VISIBLE_TERMS, "settings page")
+
+            enable_smart_favorites_and_save(page)
+            before_nav_reads = qa_state(page)["summaryRequestCount"]
+            page.locator(".bb-nav-item").nth(0).click()
+            page.wait_for_function("!document.querySelector('.settings-page')")
+            page.locator(".bb-nav-item").nth(7).click()
+            wait_for_settings(page)
+            page.wait_for_function(
+                "(before) => window.__BiliBillSettingsRealMockQa.state().summaryRequestCount > before",
+                arg=before_nav_reads,
+            )
+            assert_config_toggles(page, current_video=True, smart_favorites=True, dynamic_bill=True)
+
+            before_reload_reads = qa_state(page)["summaryRequestCount"]
+            page.reload(wait_until="networkidle")
+            wait_for_settings(page)
+            page.wait_for_function(
+                "(before) => window.__BiliBillSettingsRealMockQa.state().summaryRequestCount > before",
+                arg=before_reload_reads,
+            )
+            assert_config_toggles(page, current_video=True, smart_favorites=True, dynamic_bill=True)
+            assert_settings_cards(page)
+
+            diagnostic = export_diagnostic_json(page, downloads_dir)
+            assert_diagnostic_schema(diagnostic)
+            exported = json.dumps(diagnostic, ensure_ascii=False)
+            assert_no_forbidden_text(exported, FORBIDDEN_EXPORT_TERMS, "diagnostic export")
+
+            assert_independent_category_clears(page)
+
+            page.set_viewport_size({"width": 375, "height": 812})
+            wait_for_settings(page)
+            assert_no_horizontal_overflow(page, "narrow settings")
+            assert_no_forbidden_text(page.locator("body").inner_text(), FORBIDDEN_VISIBLE_TERMS, "narrow settings page")
+
+            settings_console_errors = [
+                error for error in console_errors
+                if "settings" in error.lower()
+                or "local-data" in error.lower()
+                or "local data" in error.lower()
+                or "runtime exception" in error.lower()
+            ]
+            if settings_console_errors:
+                raise AssertionError(
+                    "Settings-attributable console errors:\n" + "\n".join(settings_console_errors)
+                )
+        finally:
+            context.close()
+            browser.close()
+            shutil.rmtree(downloads_dir, ignore_errors=True)
+
+
+def route_dist_asset(route: Route) -> None:
+    parsed = urlparse(route.request.url)
+    path = unquote(parsed.path)
+    if path in ("", "/"):
+        path = "/dashboard/index.html"
+    if path == "/favicon.ico":
+        route.fulfill(status=204, body="")
+        return
+
+    target = safe_dist_path(path)
+    if not target.exists() or not target.is_file():
+        route.fulfill(status=404, body=f"Missing QA asset: {path}")
+        return
+
+    content_type = content_type_for(target)
+    if target == DASHBOARD_INDEX:
+        route.fulfill(
+            status=200,
+            body=target.read_text(encoding="utf-8"),
+            content_type="text/html; charset=utf-8",
+        )
+    else:
+        route.fulfill(status=200, path=str(target), content_type=content_type)
+
+
+def safe_dist_path(url_path: str) -> Path:
+    relative = Path(*[part for part in url_path.lstrip("/").split("/") if part])
+    target = (DIST / relative).resolve()
+    dist_root = DIST.resolve()
+    if os.path.commonpath([str(dist_root), str(target)]) != str(dist_root):
+        raise AssertionError(f"Refusing to serve path outside dist: {url_path}")
+    return target
+
+
+def content_type_for(path: Path) -> str:
+    if path.suffix == ".js":
+        return "text/javascript; charset=utf-8"
+    if path.suffix == ".css":
+        return "text/css; charset=utf-8"
+    guessed, _ = mimetypes.guess_type(path.name)
+    return guessed or "application/octet-stream"
+
+
+def wait_for_settings(page: Page) -> None:
+    expect(page.locator(".settings-page")).to_be_visible()
+    expect(page.locator(".settings-data-card")).to_have_count(7)
+
+
+def assert_settings_cards(page: Page) -> None:
+    cards = page.locator(".settings-data-card")
+    expect(cards).to_have_count(7)
+    for title in PUBLIC_CARD_TITLES:
+        expect(cards.filter(has_text=title).first).to_be_visible()
+
+    blind_card = cards.filter(has_text="盲盒抽取记录").first
+    expect(blind_card).to_be_visible()
+    expect(blind_card.get_by_text("3 条")).to_be_visible()
+    expect(blind_card.get_by_text("不提供单独开关或单独清理入口")).to_be_visible()
+    if blind_card.locator("button, input, select, textarea").count() != 0:
+        raise AssertionError("Blind-box public card must remain count-only without controls.")
+
+
+def assert_independent_category_clears(page: Page) -> None:
+    cases = [
+        ("清理观看历史", "观看历史", "0 条", "history"),
+        ("清理收藏与索引", "收藏与智能索引", "0 条", "favorites"),
+        ("清理字幕缓存", "B站字幕正文", "0 个来源", "currentVideoSubtitles"),
+        ("清理摘要亮点缓存", "摘要与亮点", "0 个分P", "currentVideoSummaryHighlights"),
+        ("清理问答会话", "问答会话", "0 个会话", "currentVideoQaSessions"),
+        ("清理动态账单", "动态账单", "0 项", "dynamicBill"),
+    ]
+    cards = page.locator(".settings-data-card")
+    for button_label, card_title, expected_value, category_id in cases:
+        button = page.get_by_role("button", name=button_label, exact=True)
+        expect(button).to_be_enabled()
+        button.click()
+        card = cards.filter(has_text=card_title).first
+        expect(card.locator("strong")).to_have_text(expected_value)
+        expect(button).to_be_disabled()
+        expect(page.locator(".settings-alert-success")).to_contain_text("回读后为 0")
+        if category_id not in qa_state(page)["clearedCategories"]:
+            raise AssertionError(f"Production Settings did not request clear for {category_id}")
+
+    expect(cards.filter(has_text="盲盒抽取记录").first.get_by_text("3 条")).to_be_visible()
+
+
+def assert_config_toggles(
+    page: Page,
+    *,
+    current_video: bool,
+    smart_favorites: bool,
+    dynamic_bill: bool,
+) -> None:
+    expected = {
+        "当前视频 AI 助手": current_video,
+        "智能收藏问答": smart_favorites,
+        "动态账单解释": dynamic_bill,
+    }
+    for title, checked in expected.items():
+        toggle_input = page.locator(".settings-toggle", has_text=title).locator("input")
+        if checked:
+            expect(toggle_input).to_be_checked()
+        else:
+            expect(toggle_input).not_to_be_checked()
+
+
+def enable_smart_favorites_and_save(page: Page) -> None:
+    smart_toggle = page.locator(".settings-toggle", has_text="智能收藏问答")
+    smart_toggle.click()
+    expect(smart_toggle.locator("input")).to_be_checked()
+    page.get_by_role("button", name="保存设置").click()
+    page.wait_for_function(
+        "window.__BiliBillSettingsRealMockQa.state().config.assistant.smartFavoritesQaAiEnabled === true"
+    )
+    expect(page.locator(".settings-alert-success", has_text="设置已保存")).to_be_visible()
+
+
+def export_diagnostic_json(page: Page, downloads_dir: Path) -> dict:
+    page.get_by_role("button", name="导出诊断摘要").click()
+    dialog = page.get_by_role("dialog", name="确认导出诊断摘要")
+    expect(dialog).to_be_visible()
+    expect(dialog.get_by_text("诊断文件只会保存到本机，不会自动上传。", exact=True)).to_be_visible()
+    expect(dialog.get_by_text("包含", exact=True)).to_be_visible()
+    expect(dialog.get_by_text("不包含", exact=True)).to_be_visible()
+
+    with page.expect_download() as download_info:
+        dialog.get_by_role("button", name="确认导出").click()
+    download = download_info.value
+    target = downloads_dir / download.suggested_filename
+    download.save_as(str(target))
+    if not target.exists():
+        raise AssertionError("Diagnostic download did not create a JSON file.")
+    return json.loads(target.read_text(encoding="utf-8"))
+
+
+def assert_diagnostic_schema(diagnostic: dict) -> None:
+    assert_list_equal(
+        list(diagnostic.keys()),
+        ["导出时间", "应用", "隐私边界", "本地数据类别", "功能状态"],
+        "diagnostic top-level keys",
+    )
+    assert_list_equal(list(diagnostic["应用"].keys()), ["产品", "诊断格式版本"], "diagnostic app keys")
+    assert_list_equal(list(diagnostic["隐私边界"].keys()), ["包含", "不包含"], "privacy boundary keys")
+    assert_list_equal(
+        list(diagnostic["功能状态"].keys()),
+        ["当前视频文本", "当前视频助手", "动态账单", "视频盲盒"],
+        "diagnostic feature-state keys",
+    )
+
+    if diagnostic["应用"] != {"产品": "Bili-Bill", "诊断格式版本": 1}:
+        raise AssertionError(f"Unexpected diagnostic app block: {diagnostic['应用']!r}")
+
+    categories = diagnostic["本地数据类别"]
+    if len(categories) != 8:
+        raise AssertionError(f"Expected 8 diagnostic categories, got {len(categories)}")
+    assert_list_equal(
+        [category["类别"] for category in categories],
+        DIAGNOSTIC_CATEGORY_TITLES,
+        "diagnostic category labels",
+    )
+    for category in categories:
+        assert_list_equal(list(category.keys()), ["类别", "数量", "占用字节"], "category keys")
+        if not isinstance(category["数量"], int) or not isinstance(category["占用字节"], int):
+            raise AssertionError(f"Category counts must be integers: {category!r}")
+
+    includes = diagnostic["隐私边界"]["包含"]
+    excludes = diagnostic["隐私边界"]["不包含"]
+    if not any("数量" in item and "占用" in item for item in includes):
+        raise AssertionError(f"Privacy include list is not aggregate-only enough: {includes!r}")
+    for expected in ["完整记录", "登录状态", "密钥", "本地敏感路径", "内部字段"]:
+        if not any(expected in item for item in excludes):
+            raise AssertionError(f"Privacy exclude list missing {expected!r}: {excludes!r}")
+
+    blind_box_state = diagnostic["功能状态"]["视频盲盒"]
+    if blind_box_state != {"最近抽取": 3, "最多保留": 50}:
+        raise AssertionError(f"Unexpected blind-box diagnostic state: {blind_box_state!r}")
+
+
+def assert_no_horizontal_overflow(page: Page, label: str) -> None:
+    overflow = page.evaluate(
+        """() => Math.ceil(Math.max(
+            document.documentElement.scrollWidth,
+            document.body.scrollWidth
+        ) - window.innerWidth)"""
+    )
+    if overflow > 1:
+        raise AssertionError(f"{label} has horizontal overflow: {overflow}px")
+
+
+def assert_no_forbidden_text(text: str, terms: list[str], label: str) -> None:
+    lowered = text.lower()
+    for term in terms:
+        if term.lower() in lowered:
+            raise AssertionError(f"{label} exposed forbidden term: {term}")
+
+
+def qa_state(page: Page) -> dict:
+    return page.evaluate("window.__BiliBillSettingsRealMockQa.state()")
+
+
+def assert_list_equal(actual: list, expected: list, label: str) -> None:
+    if actual != expected:
+        raise AssertionError(f"{label} mismatch:\nactual:   {actual!r}\nexpected: {expected!r}")
+
+
+CHROME_MOCK_SCRIPT = r"""
+(() => {
+  const STORE_KEY = 'bili-bill-settings-real-mock-qa-v1';
+  const FIXED_NOW = 1718000000000;
+
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function initialConfig() {
+    return {
+      dailyWatchGoal: 60,
+      weeklyWatchGoal: 420,
+      overDependencyThreshold: 0.3,
+      syncIntervalMinutes: 5,
+      retentionDays: 90,
+      showSidebar: true,
+      theme: 'dark',
+      ai: {
+        baseURL: 'https://api.example.test',
+        apiKey: 'stored-local-test-token',
+        chatModel: 'qa-model',
+      },
+      assistant: {
+        currentVideoAiAssistantEnabled: true,
+        smartFavoritesQaAiEnabled: false,
+      },
+      dynamicBill: {
+        aiExplanationsEnabled: true,
+      },
+    };
+  }
+
+  function initialState() {
+    return {
+      config: initialConfig(),
+      summaryRequestCount: 0,
+      configRequestCount: 0,
+      updateConfigCount: 0,
+      clearedCategories: [],
+    };
+  }
+
+  function loadState() {
+    try {
+      return JSON.parse(localStorage.getItem(STORE_KEY)) || initialState();
+    } catch {
+      return initialState();
+    }
+  }
+
+  function saveState(state) {
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  }
+
+  function summary(state) {
+    state.summaryRequestCount += 1;
+    const result = {
+      checkedAt: FIXED_NOW,
+      categories: [
+        { id: 'history', label: '观看历史', count: 128, usageBytes: 4096 },
+        { id: 'favorites', label: '收藏与智能索引', count: 24, usageBytes: 2048 },
+        { id: 'currentVideoSubtitles', label: 'B站字幕正文', count: 3, usageBytes: 8192 },
+        { id: 'currentVideoSummaryHighlights', label: '摘要与亮点', count: 2, usageBytes: 2048 },
+        { id: 'currentVideoQaSessions', label: '问答会话', count: 1, usageBytes: 1024 },
+        { id: 'dynamicBill', label: '动态账单', count: 9, usageBytes: 3072 },
+        { id: 'blindBoxDrawHistory', label: '盲盒抽取记录', count: 3, usageBytes: 96 },
+        { id: 'localSettings', label: '本地 AI 设置', count: 3, usageBytes: 512 },
+      ],
+      history: {
+        totalRecords: 128,
+        oldestViewAt: 1700000000,
+        newestViewAt: 1718000000,
+        lastSyncedAt: FIXED_NOW,
+        syncing: false,
+        backfillComplete: true,
+      },
+      favorites: {
+        folderCount: 4,
+        reportedItems: 28,
+        storedItems: 24,
+        indexedItems: 21,
+        failedIndexItems: 1,
+        pendingIndexItems: 2,
+        incompleteFolders: 0,
+        syncComplete: true,
+        lastSyncedAt: FIXED_NOW,
+        lastIndexedAt: FIXED_NOW,
+      },
+      currentVideoSubtitles: {
+        sourceCount: 3,
+        sourceIdentityCount: 3,
+        segmentCount: 42,
+        staleSegmentCount: 4,
+        cachedVideoCount: 2,
+        usageBytes: 8192,
+        lastUpdatedAt: FIXED_NOW,
+      },
+      currentVideoSummaryHighlights: {
+        cachedPartCount: 2,
+        usageBytes: 2048,
+        latestGeneratedAt: FIXED_NOW,
+      },
+      currentVideoQaSessions: {
+        sessionCount: 1,
+        usageBytes: 1024,
+        latestUsedAt: FIXED_NOW,
+      },
+      dynamicBill: {
+        activeFollowedCreatorCount: 12,
+        followedVideoUpdateCount: 8,
+        billItemCount: 6,
+        rotationRecordCount: 4,
+        creatorPauseCount: 0,
+        feedbackActionCount: 0,
+        creatorFeedbackCount: 0,
+        creatorReviewPromptCount: 0,
+        activeCreatorPauses: [],
+        unopenedItems: 2,
+        openedItems: 1,
+        consumedItems: 2,
+        processedItems: 1,
+        explanationCount: 5,
+        lastGeneratedAt: FIXED_NOW,
+        lastSyncedAt: FIXED_NOW,
+        syncStatus: 'success',
+      },
+      blindBoxDrawHistory: {
+        recentDrawCount: 3,
+        maxRecentDraws: 50,
+        usageBytes: 96,
+        lastUpdatedAt: FIXED_NOW,
+      },
+    };
+    const cleared = new Set(state.clearedCategories || []);
+    for (const category of result.categories) {
+      if (!cleared.has(category.id)) continue;
+      category.count = 0;
+      category.usageBytes = 0;
+    }
+    if (cleared.has('history')) {
+      Object.assign(result.history, {
+        totalRecords: 0,
+        oldestViewAt: null,
+        newestViewAt: null,
+        lastSyncedAt: null,
+      });
+    }
+    if (cleared.has('favorites')) {
+      Object.assign(result.favorites, {
+        folderCount: 0,
+        reportedItems: 0,
+        storedItems: 0,
+        indexedItems: 0,
+        failedIndexItems: 0,
+        pendingIndexItems: 0,
+        incompleteFolders: 0,
+        syncComplete: false,
+        lastSyncedAt: null,
+        lastIndexedAt: null,
+      });
+    }
+    if (cleared.has('currentVideoSubtitles')) {
+      Object.assign(result.currentVideoSubtitles, {
+        sourceCount: 0,
+        sourceIdentityCount: 0,
+        segmentCount: 0,
+        staleSegmentCount: 0,
+        cachedVideoCount: 0,
+        usageBytes: 0,
+        lastUpdatedAt: null,
+      });
+    }
+    if (cleared.has('currentVideoSummaryHighlights')) {
+      Object.assign(result.currentVideoSummaryHighlights, {
+        cachedPartCount: 0,
+        usageBytes: 0,
+        latestGeneratedAt: null,
+      });
+    }
+    if (cleared.has('currentVideoQaSessions')) {
+      Object.assign(result.currentVideoQaSessions, {
+        sessionCount: 0,
+        usageBytes: 0,
+        latestUsedAt: null,
+      });
+    }
+    if (cleared.has('dynamicBill')) {
+      Object.assign(result.dynamicBill, {
+        activeFollowedCreatorCount: 0,
+        followedVideoUpdateCount: 0,
+        billItemCount: 0,
+        rotationRecordCount: 0,
+        creatorPauseCount: 0,
+        feedbackActionCount: 0,
+        creatorFeedbackCount: 0,
+        creatorReviewPromptCount: 0,
+        activeCreatorPauses: [],
+        unopenedItems: 0,
+        openedItems: 0,
+        consumedItems: 0,
+        processedItems: 0,
+        explanationCount: 0,
+        lastGeneratedAt: null,
+        lastSyncedAt: null,
+        syncStatus: 'idle',
+      });
+    }
+    return result;
+  }
+
+  function dashboardOverview() {
+    return {
+      weeklyWatchTime: 3600,
+      monthlyWatchTime: 14400,
+      weeklyChange: 0.12,
+      monthlyChange: -0.05,
+      avgCompletion: 0.68,
+      streakDays: 3,
+      streakStartDate: '2024-06-08',
+      streakEndDate: '2024-06-10',
+      longestStreak: 9,
+      longestStreakStartDate: '2024-05-01',
+      longestStreakEndDate: '2024-05-09',
+      hourlyHeatmap: Array.from({ length: 24 }, (_, hour) =>
+        Array.from({ length: 7 }, (_, day) => (hour + day) % 4 === 0 ? 20 : 0)
+      ),
+      efficiencyScore: 82,
+      weekStart: '2024-06-03',
+      weekEnd: '2024-06-09',
+      monthStart: '2024-06-01',
+      monthEnd: '2024-06-30',
+      weeklyRecordCount: 12,
+      monthlyRecordCount: 48,
+      weeklyLocalPcWatchTime: 1200,
+      weeklyLocalPcDays: 2,
+      oldestRecordDate: '2024-05-01',
+      newestRecordDate: '2024-06-10',
+      historyCoverageStatus: 'complete',
+      historyCoverageNote: '本地测试摘要覆盖到历史末尾。',
+      streakTrustworthy: true,
+      streakCoverageNote: '本地测试摘要足够判断连续天数。',
+      historySyncDiagnostics: null,
+    };
+  }
+
+  function deviceData() {
+    return {
+      breakdown: [
+        { label: '手机', deviceType: 1, watchTime: 1800, videoCount: 8, avgCompletion: 0.7, percentage: 60 },
+        { label: 'PC', deviceType: 3, watchTime: 1200, videoCount: 4, avgCompletion: 0.6, percentage: 40 },
+      ],
+      hourly: {
+        mobile: Array.from({ length: 24 }, (_, hour) => hour === 21 ? 600 : 0),
+        pc: Array.from({ length: 24 }, (_, hour) => hour === 22 ? 300 : 0),
+      },
+      deviceCompletion: { mobile: 0.7, pc: 0.6 },
+    };
+  }
+
+  async function handleMessage(message) {
+    const state = loadState();
+    let data;
+    switch (message.action) {
+      case 'GET_SYNC_STATUS':
+        data = {
+          lastSyncTime: FIXED_NOW,
+          totalRecords: 128,
+          syncing: false,
+          backfillComplete: true,
+          syncProgress: null,
+        };
+        break;
+      case 'GET_CONFIG':
+        state.configRequestCount += 1;
+        data = clone(state.config);
+        break;
+      case 'UPDATE_CONFIG':
+        state.updateConfigCount += 1;
+        state.config = {
+          ...state.config,
+          ai: {
+            ...state.config.ai,
+            ...(message.params && message.params.ai ? message.params.ai : {}),
+          },
+          assistant: {
+            ...state.config.assistant,
+            ...(message.params && message.params.assistant ? message.params.assistant : {}),
+          },
+          dynamicBill: {
+            ...state.config.dynamicBill,
+            ...(message.params && message.params.dynamicBill ? message.params.dynamicBill : {}),
+          },
+        };
+        data = clone(state.config);
+        break;
+      case 'GET_LOCAL_DATA_PRIVACY_SUMMARY':
+        data = summary(state);
+        break;
+      case 'CLEAR_LOCAL_DATA_CATEGORY': {
+        const categoryId = message.params && message.params.categoryId;
+        const before = summary(state);
+        const category = before.categories.find(item => item.id === categoryId);
+        const clearable = [
+          'history',
+          'favorites',
+          'currentVideoSubtitles',
+          'currentVideoSummaryHighlights',
+          'currentVideoQaSessions',
+          'dynamicBill',
+        ];
+        if (!category || !clearable.includes(categoryId)) {
+          saveState(state);
+          return { success: false, error: 'LOCAL_DATA_CATEGORY_NOT_CLEARABLE' };
+        }
+        state.clearedCategories = [...new Set([...(state.clearedCategories || []), categoryId])];
+        data = {
+          operation: 'clear_local_data_category',
+          status: 'completed',
+          completedAt: FIXED_NOW,
+          cleared: {},
+          categoryResults: {
+            completed: [{
+              id: category.id,
+              label: category.label,
+              beforeCount: category.count,
+              beforeUsageBytes: category.usageBytes,
+              afterCount: 0,
+              afterUsageBytes: 0,
+            }],
+            failed: [],
+          },
+        };
+        break;
+      }
+      case 'GET_DASHBOARD_DATA':
+        data = dashboardOverview();
+        break;
+      case 'GET_DEVICE_DATA':
+        data = deviceData();
+        break;
+      case 'EXPORT_DATA_PAGE':
+        data = { records: [], total: 0, offset: 0, nextOffset: 0, hasMore: false };
+        break;
+      case 'TEST_AI_CONNECTION':
+        data = { ok: true, model: state.config.ai.chatModel, checkedAt: FIXED_NOW, latencyMs: 12 };
+        break;
+      default:
+        saveState(state);
+        return { success: false, error: 'QA mock does not implement action: ' + message.action };
+    }
+    saveState(state);
+    return { success: true, data };
+  }
+
+  window.chrome = {
+    runtime: {
+      sendMessage: handleMessage,
+      getURL: path => path,
+    },
+    storage: {
+      onChanged: {
+        addListener() {},
+        removeListener() {},
+      },
+      local: {
+        async get() {
+          return {};
+        },
+        async set() {},
+      },
+    },
+    permissions: {
+      contains(_options, callback) {
+        callback(true);
+      },
+      request(_options, callback) {
+        callback(true);
+      },
+    },
+  };
+
+  window.__BiliBillSettingsRealMockQa = {
+    state() {
+      return clone(loadState());
+    },
+    reset() {
+      const state = initialState();
+      saveState(state);
+      return clone(state);
+    },
+  };
+
+  if (!localStorage.getItem(STORE_KEY)) {
+    saveState(initialState());
+  }
+})();
+"""
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        print(f"FAIL settings-local-data-privacy.real-mock-qa: {error}", file=sys.stderr)
+        raise

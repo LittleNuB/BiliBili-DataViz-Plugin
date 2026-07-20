@@ -273,14 +273,14 @@
         <article class="card" data-card="history">
           <span>观看历史</span>
           <strong id="history-count">128 条</strong>
-          <p>覆盖 2026/05/20 10:30 至 2026/06/19 09:10</p>
-          <small>占用 4.0 KB；最近同步：2026/06/19 09:15</small>
+          <p id="history-detail">覆盖 2026/05/20 10:30 至 2026/06/19 09:10</p>
+          <small id="history-time">占用 4.0 KB；最近同步：2026/06/19 09:15</small>
         </article>
         <article class="card" data-card="favorites">
           <span>收藏与智能索引</span>
           <strong id="favorite-count">24 条</strong>
           <p id="favorite-detail">B站报告 28 条，本地保存 24 条，已索引 21 条。</p>
-          <small>占用 2.0 KB；最近同步：2026/06/18 22:10</small>
+          <small id="favorite-time">占用 2.0 KB；最近同步：2026/06/18 22:10</small>
         </article>
         <article class="card" data-card="subtitles">
           <span>B站字幕正文</span>
@@ -303,8 +303,8 @@
         <article class="card" data-card="dynamic">
           <span>动态账单</span>
           <strong id="dynamic-count">6 项</strong>
-          <p>关注快照 12 位，近期视频投稿 8 条。</p>
-          <small>占用 3.0 KB；最近生成：2026/06/19 09:05</small>
+          <p id="dynamic-detail">关注快照 12 位，近期视频投稿 8 条。</p>
+          <small id="dynamic-time">占用 3.0 KB；最近生成：2026/06/19 09:05</small>
         </article>
         <article class="card" data-card="blind-box">
           <span>盲盒抽取记录</span>
@@ -344,9 +344,12 @@
       <div class="actions">
         <button id="refresh" type="button">刷新状态</button>
         <button id="diagnostic" type="button">导出诊断摘要</button>
+        <button id="clear-history" type="button">清理观看历史</button>
+        <button id="clear-favorites" type="button">清理收藏与索引</button>
         <button id="clear-subtitles" type="button">清理字幕缓存</button>
         <button id="clear-summary" type="button">清理摘要亮点缓存</button>
         <button id="clear-qa" type="button">清理问答会话</button>
+        <button id="clear-dynamic" type="button">清理动态账单</button>
         <button id="rebuild-index" class="primary" type="button">重建智能收藏索引</button>
         <button id="partial-failure" type="button">模拟部分失败</button>
         <button id="show-danger" class="danger" type="button">清理本地数据</button>
@@ -453,7 +456,8 @@
           { '类别': '摘要与亮点', '数量': 2, '占用字节': 2048 },
           { '类别': '问答会话', '数量': 1, '占用字节': 1024 },
           { '类别': '动态账单', '数量': 9, '占用字节': 3072 },
-          { '类别': '盲盒抽取记录', '数量': 2, '占用字节': 96 }
+          { '类别': '盲盒抽取记录', '数量': 2, '占用字节': 96 },
+          { '类别': '本地 AI 设置', '数量': 3, '占用字节': 512 }
         ],
         '功能状态': {
           '当前视频文本': { 'B站字幕来源': 3, 'B站字幕片段': 42, '已缓存视频分P': 3, '过期片段': 4 },
@@ -464,6 +468,25 @@
       };
       diagnosticBox.classList.remove('show');
       showNotice('已导出诊断摘要；文件只包含数量、占用和状态，不包含完整记录、正文、登录凭据、密钥或本地敏感路径。');
+    });
+
+    document.getElementById('clear-history').addEventListener('click', () => {
+      zero('history-count', '0 条');
+      zero('history-detail', '还没有本地观看记录。');
+      zero('history-time', '占用 0 B；最近同步：暂无记录');
+      document.getElementById('clear-history').disabled = true;
+      showNotice('已清理观看历史：清理前共 128 项本地数据，回读后为 0。');
+    });
+
+    document.getElementById('clear-favorites').addEventListener('click', () => {
+      zero('favorite-count', '0 条');
+      zero('favorite-detail', 'B站报告 0 条，本地保存 0 条，已索引 0 条。');
+      zero('favorite-time', '占用 0 B；最近同步：暂无记录');
+      zero('pending-index', '0');
+      zero('failed-index', '0');
+      document.getElementById('clear-favorites').disabled = true;
+      document.getElementById('rebuild-index').disabled = true;
+      showNotice('已清理收藏与智能索引：清理前共 28 项本地数据，回读后为 0。');
     });
 
     document.getElementById('clear-subtitles').addEventListener('click', () => {
@@ -489,6 +512,14 @@
       zero('qa-time', '占用 0 B；最近使用：暂无记录');
       zero('qa-stat', '0');
       showNotice('已清理问答会话。');
+    });
+
+    document.getElementById('clear-dynamic').addEventListener('click', () => {
+      zero('dynamic-count', '0 项');
+      zero('dynamic-detail', '关注快照 0 位，近期视频投稿 0 条。');
+      zero('dynamic-time', '占用 0 B；最近生成：暂无记录');
+      document.getElementById('clear-dynamic').disabled = true;
+      showNotice('已清理动态账单：清理前共 9 项本地数据，回读后为 0。');
     });
 
     document.getElementById('rebuild-index').addEventListener('click', () => {

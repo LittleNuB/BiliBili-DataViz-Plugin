@@ -16,17 +16,6 @@ import {
   type LocalDataCategoryRegistration,
   type LocalDataCategoryReadback,
 } from '../src/shared/local-data-category-contract.ts';
-import {
-  createRegisteredLocalDataCategories,
-  getRegisteredLocalDataCategories,
-  type LocalDataCategoryRegistryDependencies,
-  type LocalDataCategoryTable,
-} from '../src/background/storage/local-data-category-registry.ts';
-import {
-  BLIND_BOX_DRAW_HISTORY_STORAGE_KEY,
-  BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY,
-} from '../src/background/storage/blind-box-draw-history-repo.ts';
-import { CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY } from '../src/shared/current-video-primary-text-selection.ts';
 import type {
   LocalDataOperationResult,
   LocalDataPrivacySummary,
@@ -62,6 +51,35 @@ test('settings page keeps Dynamic Bill storage internals out of ordinary copy', 
   assert.doesNotMatch(source, /dynamicBill\.(creatorPauseCount|rotationRecordCount|feedbackCount)/);
 });
 
+test('settings page exposes six independently clearable categories and keeps blind-box history count-only', async () => {
+  const source = await readFile(
+    new URL('../dashboard/modules/settings/SettingsPage.tsx', import.meta.url),
+    'utf8',
+  );
+
+  for (const categoryId of [
+    'history',
+    'favorites',
+    'currentVideoSubtitles',
+    'currentVideoSummaryHighlights',
+    'currentVideoQaSessions',
+    'dynamicBill',
+  ]) {
+    assert.match(source, new RegExp(`clearCategory\\('${categoryId}'`), categoryId);
+  }
+  for (const label of [
+    '清理观看历史',
+    '清理收藏与索引',
+    '清理字幕缓存',
+    '清理摘要亮点缓存',
+    '清理问答会话',
+    '清理动态账单',
+  ]) {
+    assert.match(source, new RegExp(label), label);
+  }
+  assert.doesNotMatch(source, /clearCategory\('blindBoxDrawHistory'/);
+});
+
 test('settings local data operation messages stay bounded to counts', () => {
   const subtitleMessage = buildLocalDataOperationMessage({
     operation: 'clear_current_video_subtitle_cache',
@@ -72,6 +90,25 @@ test('settings local data operation messages stay bounded to counts', () => {
     },
   });
   assert.equal(subtitleMessage, '已清理B站字幕正文：移除 3 条来源记录和 42 段字幕正文。');
+
+  const categoryMessage = buildLocalDataOperationMessage({
+    operation: 'clear_local_data_category',
+    status: 'completed',
+    completedAt: 1_718_000_000_000,
+    cleared: { favoriteItems: 24 },
+    categoryResults: {
+      completed: [{
+        id: 'favorites',
+        label: '收藏与智能索引',
+        beforeCount: 28,
+        beforeUsageBytes: 2048,
+        afterCount: 0,
+        afterUsageBytes: 0,
+      }],
+      failed: [],
+    },
+  });
+  assert.equal(categoryMessage, '已清理收藏与智能索引：清理前共 28 项本地数据，回读后为 0。');
 
   const clearAllMessage = buildLocalDataOperationMessage({
     operation: 'clear_all_local_data',
@@ -89,7 +126,7 @@ test('settings local data operation messages stay bounded to counts', () => {
   } satisfies LocalDataOperationResult);
   assert.match(clearAllMessage, /本地 AI 设置和功能开关也已恢复为默认状态/);
   assert.doesNotMatch(clearAllMessage, /暂停|轮换|动态反馈/);
-  assertCleanUserCopy([subtitleMessage, clearAllMessage].join('\n'));
+  assertCleanUserCopy([subtitleMessage, categoryMessage, clearAllMessage].join('\n'));
 });
 
 test('settings clear-all partial failure message names failed categories and keeps successes completed', () => {
@@ -161,6 +198,7 @@ test('settings diagnostic export is aggregate-only and does not expose raw recor
     '问答会话',
     '动态账单',
     '盲盒抽取记录',
+    '本地 AI 设置',
   ]);
   assert.equal(diagnostic['功能状态']['视频盲盒']['最近抽取'], 2);
   assert.deepEqual(diagnostic['隐私边界']['包含'], [
@@ -206,9 +244,26 @@ test('settings smart favorite rebuild message summarizes the run', () => {
   assertCleanUserCopy(message);
 });
 
-test('local data categories expose the shared lifecycle contract', () => {
-  const categories = getRegisteredLocalDataCategories();
-  assert.deepEqual(categories.map(category => category.id), [
+test('local data categories expose the shared lifecycle contract', async () => {
+  const source = await readFile(
+    new URL('../src/background/storage/local-data-category-registry.ts', import.meta.url),
+    'utf8',
+  );
+  const returnBlock = source.match(/return \[([\s\S]*?)\];/)?.[1] ?? '';
+  const getters = [...returnBlock.matchAll(/\b(get[A-Za-z]+CategoryRegistration)\(\)/g)]
+    .map(match => match[1]);
+  assert.deepEqual(getters, [
+    'getHistoryLocalDataCategoryRegistration',
+    'getFavoritesLocalDataCategoryRegistration',
+    'getCurrentVideoTranscriptLocalDataCategoryRegistration',
+    'getCurrentVideoSummaryHighlightsLocalDataCategoryRegistration',
+    'getCurrentVideoQaSessionsLocalDataCategoryRegistration',
+    'getDynamicBillLocalDataCategoryRegistration',
+    'getBlindBoxDrawHistoryLocalDataCategoryRegistration',
+    'getLocalSettingsDataCategoryRegistration',
+  ]);
+
+  const ids: LocalDataCategoryRegistration['id'][] = [
     'history',
     'favorites',
     'currentVideoSubtitles',
@@ -217,7 +272,8 @@ test('local data categories expose the shared lifecycle contract', () => {
     'dynamicBill',
     'blindBoxDrawHistory',
     'localSettings',
-  ]);
+  ];
+  const categories = ids.map(id => lifecycleRegistration(id, id, []));
 
   for (const category of categories) {
     assert.deepEqual(validateLocalDataCategoryRegistration(category), []);
@@ -225,71 +281,18 @@ test('local data categories expose the shared lifecycle contract', () => {
   }
 });
 
-test('registered categories collect usage, clear independently, and read back the cleared state', async () => {
-  const dependencies = createRegistryDependencies();
-  let qaSessionInvalidations = 0;
-  dependencies.onCurrentVideoQaSessionsClear = () => {
-    qaSessionInvalidations += 1;
-  };
-  const categories = createRegisteredLocalDataCategories(dependencies);
-  const usageBefore = await Promise.all(categories.map(category => category.collectUsage()));
+test('registered category registry composes module-owned hooks without private table knowledge', async () => {
+  const source = await readFile(
+    new URL('../src/background/storage/local-data-category-registry.ts', import.meta.url),
+    'utf8',
+  );
 
-  assert.deepEqual(usageBefore.map(usage => usage.count), [3, 3, 1, 1, 1, 9, 2, 3]);
-  assert.ok(usageBefore.every(usage => usage.usageBytes > 0));
-  assert.equal(usageBefore[2].details?.currentVideoSubtitleSources, 1);
-  assert.equal(usageBefore[2].details?.currentVideoSubtitleSegments, 1);
-  const subtitleRows = [
-    registryRow('currentVideoTranscriptSources'),
-    registryRow('currentVideoTranscriptSegments'),
-  ];
-  const subtitleRecordSumBytes = subtitleRows.reduce((sum, row) => sum + utf8JsonBytes(row), 0);
-  const subtitleWrappedBytes = utf8JsonBytes({
-    sources: [subtitleRows[0]],
-    segments: [subtitleRows[1]],
-  });
-  assert.equal(usageBefore[2].usageBytes, subtitleRecordSumBytes);
-  assert.ok(usageBefore[2].usageBytes < subtitleWrappedBytes);
-
-  const history = categories[0];
-  const favorites = categories[1];
-  const historyClear = await history.clear();
-  assert.equal(historyClear.cleared.historyRecords, 1);
-  assert.deepEqual(await history.readAfterClear(), {
-    count: 0,
-    usageBytes: 0,
-    empty: true,
-  });
-  assert.equal((await favorites.collectUsage()).count, 3, 'independent clear must not touch another category');
-
-  for (const category of categories.slice(1)) {
-    const clearResult = await category.clear();
-    assert.ok(Object.keys(clearResult.cleared).length > 0);
-    if (category.id === 'dynamicBill') {
-      assert.equal(clearResult.cleared.dynamicBillCreatorPauses, 1);
-      assert.equal(clearResult.cleared.dynamicBillFeedbackActions, 1);
-      assert.equal(clearResult.cleared.dynamicBillCreatorFeedbackCounts, 1);
-      assert.equal(clearResult.cleared.dynamicBillCreatorReviewPrompts, 1);
-      assert.equal(clearResult.cleared.dynamicBillRotationRecords, 1);
-      assert.equal('dynamicBillFeedback' in clearResult.cleared, false);
-    }
-    if (category.id === 'currentVideoSubtitles') {
-      const localSettings = categories.find(entry => entry.id === 'localSettings');
-      assert.equal((await localSettings?.collectUsage())?.count, 3, 'subtitle clear must preserve source choices');
-    }
-    if (category.id === 'currentVideoSummaryHighlights') {
-      assert.equal(clearResult.cleared.currentVideoSummaryHighlightParts, 1);
-    }
-    if (category.id === 'currentVideoQaSessions') {
-      assert.equal(clearResult.cleared.currentVideoQaSessions, 1);
-      assert.equal(typeof clearResult.cleared.currentVideoQaSessionBytes, 'number');
-      assert.equal(qaSessionInvalidations, 1);
-    }
-    const readback = await category.readAfterClear();
-    assert.equal(readback.count, 0, category.label);
-    assert.equal(readback.empty, true, category.label);
-  }
-  assert.equal(await dependencies.tables.dynamicBillFeedback.count(), 0);
-  assert.equal(qaSessionInvalidations, 1);
+  assert.match(source, /getHistoryLocalDataCategoryRegistration/);
+  assert.match(source, /getCurrentVideoTranscriptLocalDataCategoryRegistration/);
+  assert.match(source, /getDynamicBillLocalDataCategoryRegistration/);
+  assert.match(source, /getLocalSettingsDataCategoryRegistration/);
+  assert.doesNotMatch(source, /\bdb\./);
+  assert.doesNotMatch(source, /currentVideoTranscriptSources|dynamicBillItems|favoriteItems/);
 });
 
 test('lifecycle results retain completed categories and name a failed category in natural Chinese', async () => {
@@ -372,14 +375,13 @@ test('SET-013-B clear-all production path invokes registered category hooks', as
 
 test('independent QA session clear uses the shared write coordinator', async () => {
   const source = await readFile(
-    new URL('../src/background/storage/local-data-category-registry.ts', import.meta.url),
+    new URL('../src/background/storage/current-video-qa-session-repo.ts', import.meta.url),
     'utf8',
   );
 
-  assert.match(
-    source,
-    /id:\s*'currentVideoQaSessions'[\s\S]*?clear:\s*async\s*\(\)\s*=>\s*runCurrentVideoQaSessionClearCoordinator/,
-  );
+  assert.match(source, /getCurrentVideoQaSessionsLocalDataCategoryRegistration/);
+  assert.match(source, /clear:[\s\S]*?invalidateCurrentVideoFullTextQaSources\(\)/);
+  assert.match(source, /clear:[\s\S]*?clearCurrentVideoQaSessions\(\)/);
 });
 
 function makeSummary(): LocalDataPrivacySummary {
@@ -393,6 +395,7 @@ function makeSummary(): LocalDataPrivacySummary {
       { id: 'currentVideoQaSessions', label: '问答会话', count: 1, usageBytes: 1024 },
       { id: 'dynamicBill', label: '动态账单', count: 9, usageBytes: 3072 },
       { id: 'blindBoxDrawHistory', label: '盲盒抽取记录', count: 2, usageBytes: 96 },
+      { id: 'localSettings', label: '本地 AI 设置', count: 3, usageBytes: 512 },
     ],
     history: {
       totalRecords: 128,
@@ -461,105 +464,6 @@ function makeSummary(): LocalDataPrivacySummary {
   };
 }
 
-function createRegistryDependencies(): LocalDataCategoryRegistryDependencies {
-  const tableNames: Array<keyof LocalDataCategoryRegistryDependencies['tables']> = [
-    'watchHistory',
-    'playerEvents',
-    'dailyAggregates',
-    'favoriteFolders',
-    'favoriteItems',
-    'smartFavoriteIndex',
-    'currentVideoTranscriptSources',
-    'currentVideoTranscriptSegments',
-    'currentVideoSummaryHighlights',
-    'currentVideoQaSessions',
-    'followedCreators',
-    'followedVideoUpdates',
-    'dynamicBillItems',
-    'dynamicBillExplanations',
-    'dynamicBillFeedback',
-    'dynamicBillCreatorPauses',
-    'dynamicBillFeedbackActions',
-    'dynamicBillCreatorFeedbackCounts',
-    'dynamicBillCreatorReviewPrompts',
-    'dynamicBillRotationRecords',
-  ];
-  const tables = Object.fromEntries(
-    tableNames.map(name => [name, memoryTable([registryRow(name)])]),
-  ) as LocalDataCategoryRegistryDependencies['tables'];
-  const storage = new Map<string, unknown>([
-    ['lastSyncTime', 100],
-    ['dynamicBillSyncState', { status: 'success' }],
-    [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY, ['BV1LATEST01', 'BV1LATEST02']],
-    [BLIND_BOX_DRAW_HISTORY_UPDATED_AT_STORAGE_KEY, 1_718_000_000_000],
-    ['userConfig', { assistant: {} }],
-    ['floatingPopupWindowId', 7],
-    [CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY, {
-      'BV1Settings:101:1': 'primary-text:bilibili_subtitle:BV1Settings:101:1:zh-cn:hash',
-    }],
-  ]);
-
-  return {
-    tables,
-    storage: {
-      get: async keys => Object.fromEntries(keys.map(key => [key, storage.get(key)])),
-      remove: async keys => {
-        for (const key of keys) storage.delete(key);
-      },
-    },
-    transaction: async (_tables, operation) => operation(),
-  };
-}
-
-function registryRow(name: keyof LocalDataCategoryRegistryDependencies['tables']): Record<string, unknown> {
-  if (name === 'currentVideoTranscriptSources') {
-    return {
-      id: name,
-      identityKey: 'primary-text:bilibili_subtitle:BV1Settings:101:1:zh-cn:hash',
-      sourceIdentityKey: 'primary-text:bilibili_subtitle:BV1Settings:101:1:zh-cn:hash',
-    };
-  }
-  if (name === 'currentVideoTranscriptSegments') {
-    return {
-      id: name,
-      segmentId: 'transcript:settings:1',
-      sourceIdentityKey: 'primary-text:bilibili_subtitle:BV1Settings:101:1:zh-cn:hash',
-    };
-  }
-  if (name === 'currentVideoSummaryHighlights') {
-    return {
-      id: name,
-      cacheKey: 'summary-highlight-cache',
-      sourceIdentityKey: 'primary-text:bilibili_subtitle:BV1Settings:101:1:zh-cn:hash',
-      model: 'test-model',
-      generatedAt: 1_718_000_000_000,
-      lastAccessedAt: 1_718_000_000_000,
-      serializedBytes: 256,
-    };
-  }
-  if (name === 'currentVideoQaSessions') {
-    return {
-      id: name,
-      sessionId: 'session-settings',
-      title: '设置页测试会话',
-      lastAccessedAt: 1_718_000_000_000,
-      turns: [{ turnId: 'turn-settings', question: '这个视频讲了什么？', answer: '回答' }],
-    };
-  }
-  return { id: name, value: `row-${name}` };
-}
-
-function memoryTable(initialRows: unknown[]): LocalDataCategoryTable {
-  let rows = [...initialRows];
-  return {
-    count: async () => rows.length,
-    toArray: async () => [...rows],
-    clear: async () => {
-      rows = [];
-    },
-  };
-}
-
 function lifecycleRegistration(
   id: LocalDataCategoryRegistration['id'],
   label: string,
@@ -606,8 +510,4 @@ function assertCleanUserCopy(text: string): void {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function utf8JsonBytes(value: unknown): number {
-  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }

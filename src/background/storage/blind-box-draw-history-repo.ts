@@ -1,5 +1,6 @@
 import type {
   LocalDataCategoryReadback,
+  LocalDataCategoryRegistration,
   LocalDataCategoryUsage,
 } from '../../shared/local-data-category-contract.ts';
 
@@ -148,6 +149,24 @@ export async function readBlindBoxDrawHistoryAfterClear(
   return {
     ...usage,
     empty: usage.count === 0 && usage.usageBytes === 0,
+  };
+}
+
+export function getBlindBoxDrawHistoryLocalDataCategoryRegistration(
+  storage?: BlindBoxDrawHistoryStorage,
+): LocalDataCategoryRegistration {
+  const resolveStorage = () => storage ?? chrome.storage.local;
+  return {
+    id: 'blindBoxDrawHistory',
+    label: '盲盒抽取记录',
+    includeInClearAll: true,
+    collectUsage: () => collectBlindBoxDrawHistoryUsage(resolveStorage()),
+    clear: async () => ({
+      cleared: {
+        blindBoxDrawHistory: await clearBlindBoxDrawHistory(resolveStorage()),
+      },
+    }),
+    readAfterClear: () => readBlindBoxDrawHistoryAfterClear(resolveStorage()),
   };
 }
 
