@@ -138,17 +138,27 @@ export function canUseCurrentVideoQaSessionWriteGuard(
 export async function runCurrentVideoQaSessionClearCoordinator<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
-  currentVideoQaSessionClearGeneration += 1;
-  currentVideoQaSessionClearingDepth += 1;
+  const endClearWindow = beginCurrentVideoQaSessionClearWindow();
   try {
     return await withCurrentVideoQaSessionMutation(operation);
   } finally {
+    endClearWindow();
+  }
+}
+
+export function beginCurrentVideoQaSessionClearWindow(): () => void {
+  let ended = false;
+  currentVideoQaSessionClearGeneration += 1;
+  currentVideoQaSessionClearingDepth += 1;
+  return () => {
+    if (ended) return;
+    ended = true;
     currentVideoQaSessionClearingDepth = Math.max(0, currentVideoQaSessionClearingDepth - 1);
     if (currentVideoQaSessionClearingDepth === 0) {
       currentVideoQaSessionClearGeneration += 1;
       currentVideoQaSessionTurnAttempts.clear();
     }
-  }
+  };
 }
 
 export interface PersistedCurrentVideoQaCitationRecord {

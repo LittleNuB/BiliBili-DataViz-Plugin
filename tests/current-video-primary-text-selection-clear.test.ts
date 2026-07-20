@@ -102,6 +102,17 @@ const { db } = await import('../src/background/storage/db.ts');
 const { clearAllLocalData } = await import('../src/background/storage/local-data-privacy-repo.ts');
 const { getRegisteredLocalDataCategories } = await import('../src/background/storage/local-data-category-registry.ts');
 const { DYNAMIC_BILL_MIGRATION_VERSION } = await import('../src/background/dynamic-bill/strategy.ts');
+const { getCurrentVideoTranscriptClearState } = await import(
+  '../src/background/current-video-transcript-clear-epoch.ts'
+);
+const { getCurrentVideoSummaryHighlightsClearState } = await import(
+  '../src/background/current-video-summary-highlights-clear-epoch.ts'
+);
+const {
+  canUseCurrentVideoQaSessionWriteGuard,
+  registerCurrentVideoQaSessionTurnWriteGuard,
+  settleCurrentVideoQaSessionTurnWriteGuard,
+} = await import('../src/background/storage/current-video-qa-session-repo.ts');
 const { saveCurrentVideoPrimaryTextSelection } = await import(
   '../src/background/storage/current-video-primary-text-selection-store.ts'
 );
@@ -158,6 +169,30 @@ test('clear all rejects a selection save started while local settings clear is a
   }
 
   assert.equal(storageData.has(KEY), false);
+});
+
+test('clear all keeps current-video write barriers active while an early category clear is waiting', async () => {
+  holdStorageRemove = deferred<void>();
+  const clearing = clearAllLocalData(LOCAL_DATA_CLEAR_CONFIRMATION);
+  await storageRemoveStarted.promise;
+  const guard = registerCurrentVideoQaSessionTurnWriteGuard({
+    sessionId: 'session-during-clear',
+    turnId: 'turn-during-clear',
+    requestId: 'request-during-clear',
+  });
+
+  try {
+    assert.equal(getCurrentVideoTranscriptClearState().clearing, true);
+    assert.equal(getCurrentVideoSummaryHighlightsClearState().clearing, true);
+    assert.equal(canUseCurrentVideoQaSessionWriteGuard('session-during-clear', guard), false);
+  } finally {
+    settleCurrentVideoQaSessionTurnWriteGuard(guard);
+    holdStorageRemove.resolve();
+    await clearing;
+  }
+
+  assert.equal(getCurrentVideoTranscriptClearState().clearing, false);
+  assert.equal(getCurrentVideoSummaryHighlightsClearState().clearing, false);
 });
 
 test('local settings clear owns selection lifecycle and rejects writes during clear', async () => {

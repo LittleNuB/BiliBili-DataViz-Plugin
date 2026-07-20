@@ -23,42 +23,42 @@ export interface LocalDataSummaryCard {
 }
 
 export interface LocalDataDiagnosticExport {
-  exportedAt: string;
-  app: {
-    product: 'Bili-Bill';
-    diagnosticSchema: 1;
+  '导出时间': string;
+  '应用': {
+    '产品': 'Bili-Bill';
+    '诊断格式版本': 1;
   };
-  privacyBoundary: {
-    includes: string[];
-    excludes: string[];
+  '隐私边界': {
+    '包含': string[];
+    '不包含': string[];
   };
-  categories: Array<{
-    name: string;
-    count: number;
-    usageBytes: number;
+  '本地数据类别': Array<{
+    '类别': string;
+    '数量': number;
+    '占用字节': number;
   }>;
-  features: {
-    currentVideoText: {
-      bilibiliSubtitleSources: number;
-      bilibiliSubtitleSegments: number;
-      cachedVideoParts: number;
-      staleSegments: number;
+  '功能状态': {
+    '当前视频文本': {
+      'B站字幕来源': number;
+      'B站字幕片段': number;
+      '已缓存视频分P': number;
+      '过期片段': number;
     };
-    currentVideoAssistant: {
-      summaryHighlightParts: number;
-      qaSessions: number;
+    '当前视频助手': {
+      '摘要与亮点分P': number;
+      '问答会话': number;
     };
-    dynamicBill: {
-      billItems: number;
-      pausedCreators: number;
-      explanations: number;
-      lastGeneratedAt: string;
-      lastSyncedAt: string;
-      syncStatus: string;
+    '动态账单': {
+      '账单项': number;
+      '暂停中的UP主': number;
+      '解释': number;
+      '最近生成': string;
+      '最近同步': string;
+      '同步状态': string;
     };
-    blindBox: {
-      recentDrawCount: number;
-      maxRecentDraws: number;
+    '视频盲盒': {
+      '最近抽取': number;
+      '最多保留': number;
     };
   };
 }
@@ -170,17 +170,17 @@ export function dangerousLocalDataClearScope(): string[] {
 
 export function buildLocalDataDiagnosticExport(summary: LocalDataPrivacySummary): LocalDataDiagnosticExport {
   return {
-    exportedAt: new Date(summary.checkedAt).toISOString(),
-    app: {
-      product: 'Bili-Bill',
-      diagnosticSchema: 1,
+    '导出时间': new Date(summary.checkedAt).toISOString(),
+    '应用': {
+      '产品': 'Bili-Bill',
+      '诊断格式版本': 1,
     },
-    privacyBoundary: {
-      includes: [
+    '隐私边界': {
+      '包含': [
         '本地数据类别名称、数量和占用',
         '动态账单与盲盒的宽泛状态和必要时间',
       ],
-      excludes: [
+      '不包含': [
         '完整记录或正文',
         '站点凭据、登录状态和浏览器资料目录',
         '完整或可恢复的密钥',
@@ -189,33 +189,33 @@ export function buildLocalDataDiagnosticExport(summary: LocalDataPrivacySummary)
         '视频内部标识、内容哈希和内部字段',
       ],
     },
-    categories: summary.categories.map(category => ({
-      name: category.label,
-      count: category.count,
-      usageBytes: category.usageBytes,
+    '本地数据类别': summary.categories.map(category => ({
+      '类别': category.label,
+      '数量': category.count,
+      '占用字节': category.usageBytes,
     })),
-    features: {
-      currentVideoText: {
-        bilibiliSubtitleSources: summary.currentVideoSubtitles.sourceIdentityCount,
-        bilibiliSubtitleSegments: summary.currentVideoSubtitles.segmentCount,
-        cachedVideoParts: summary.currentVideoSubtitles.cachedVideoCount,
-        staleSegments: summary.currentVideoSubtitles.staleSegmentCount,
+    '功能状态': {
+      '当前视频文本': {
+        'B站字幕来源': summary.currentVideoSubtitles.sourceIdentityCount,
+        'B站字幕片段': summary.currentVideoSubtitles.segmentCount,
+        '已缓存视频分P': summary.currentVideoSubtitles.cachedVideoCount,
+        '过期片段': summary.currentVideoSubtitles.staleSegmentCount,
       },
-      currentVideoAssistant: {
-        summaryHighlightParts: summary.currentVideoSummaryHighlights.cachedPartCount,
-        qaSessions: summary.currentVideoQaSessions.sessionCount,
+      '当前视频助手': {
+        '摘要与亮点分P': summary.currentVideoSummaryHighlights.cachedPartCount,
+        '问答会话': summary.currentVideoQaSessions.sessionCount,
       },
-      dynamicBill: {
-        billItems: summary.dynamicBill.billItemCount,
-        pausedCreators: summary.dynamicBill.creatorPauseCount,
-        explanations: summary.dynamicBill.explanationCount,
-        lastGeneratedAt: formatDiagnosticDate(summary.dynamicBill.lastGeneratedAt),
-        lastSyncedAt: formatDiagnosticDate(summary.dynamicBill.lastSyncedAt),
-        syncStatus: dynamicSyncStatusLabel(summary.dynamicBill.syncStatus),
+      '动态账单': {
+        '账单项': summary.dynamicBill.billItemCount,
+        '暂停中的UP主': summary.dynamicBill.creatorPauseCount,
+        '解释': summary.dynamicBill.explanationCount,
+        '最近生成': formatDiagnosticDate(summary.dynamicBill.lastGeneratedAt),
+        '最近同步': formatDiagnosticDate(summary.dynamicBill.lastSyncedAt),
+        '同步状态': dynamicSyncStatusLabel(summary.dynamicBill.syncStatus),
       },
-      blindBox: {
-        recentDrawCount: summary.blindBoxDrawHistory.recentDrawCount,
-        maxRecentDraws: summary.blindBoxDrawHistory.maxRecentDraws,
+      '视频盲盒': {
+        '最近抽取': summary.blindBoxDrawHistory.recentDrawCount,
+        '最多保留': summary.blindBoxDrawHistory.maxRecentDraws,
       },
     },
   };

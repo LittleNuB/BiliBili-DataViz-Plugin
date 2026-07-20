@@ -23,14 +23,24 @@ export function canUseCurrentVideoTranscriptClearGeneration(
 export async function runCurrentVideoTranscriptClearCoordinator<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
-  currentVideoTranscriptClearGeneration += 1;
-  currentVideoTranscriptClearingDepth += 1;
+  const endClearWindow = beginCurrentVideoTranscriptClearWindow();
   try {
     return await operation();
   } finally {
+    endClearWindow();
+  }
+}
+
+export function beginCurrentVideoTranscriptClearWindow(): () => void {
+  let ended = false;
+  currentVideoTranscriptClearGeneration += 1;
+  currentVideoTranscriptClearingDepth += 1;
+  return () => {
+    if (ended) return;
+    ended = true;
     currentVideoTranscriptClearingDepth = Math.max(0, currentVideoTranscriptClearingDepth - 1);
     if (currentVideoTranscriptClearingDepth === 0) {
       currentVideoTranscriptClearGeneration += 1;
     }
-  }
+  };
 }

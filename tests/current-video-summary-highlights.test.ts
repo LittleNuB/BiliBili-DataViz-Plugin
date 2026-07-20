@@ -39,7 +39,9 @@ import {
   CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE_MAX_RECORDS,
 } from '../src/background/storage/current-video-summary-highlights-repo.ts';
 import {
+  canUseCurrentVideoSummaryHighlightsClearGeneration,
   getCurrentVideoSummaryHighlightsClearState,
+  runCurrentVideoSummaryHighlightsClearCoordinator,
 } from '../src/background/current-video-summary-highlights-clear-epoch.ts';
 import { db } from '../src/background/storage/db.ts';
 import type { UserConfig } from '../src/shared/types/config.ts';
@@ -588,6 +590,31 @@ test('cache clear generation is checked inside the write transaction', async () 
   assert.equal(result.cached, false);
   assert.equal(result.rejectedReason, 'cleared');
   assert.equal((await collectCurrentVideoSummaryHighlightsCacheUsage()).count, 0);
+});
+
+test('overlapping summary clear coordinators keep the write barrier until the last clear finishes', async () => {
+  let markOuterStarted!: () => void;
+  let releaseOuter!: () => void;
+  const outerStarted = new Promise<void>(resolve => { markOuterStarted = resolve; });
+  const outerRelease = new Promise<void>(resolve => { releaseOuter = resolve; });
+
+  const outer = runCurrentVideoSummaryHighlightsClearCoordinator(async () => {
+    markOuterStarted();
+    await outerRelease;
+  });
+  await outerStarted;
+  await runCurrentVideoSummaryHighlightsClearCoordinator(async () => undefined);
+
+  const duringOverlap = getCurrentVideoSummaryHighlightsClearState();
+  assert.equal(duringOverlap.clearing, true);
+  assert.equal(
+    canUseCurrentVideoSummaryHighlightsClearGeneration(duringOverlap.generation),
+    false,
+  );
+
+  releaseOuter();
+  await outer;
+  assert.equal(getCurrentVideoSummaryHighlightsClearState().clearing, false);
 });
 
 test('post-write invalidation rolls back a replacement and preserves the previous cache row', async () => {

@@ -34,6 +34,11 @@ FORBIDDEN_EXPORT_TERMS = [
     "subtitle" + "_url",
     "BV" + "ID",
     "C" + "ID",
+    "exportedAt",
+    "diagnosticSchema",
+    "usageBytes",
+    "bilibiliSubtitleSources",
+    "syncStatus",
     "C:\\",
     "/Users/",
 ]
@@ -90,6 +95,12 @@ def main():
         if blind_card.locator("input, button").count() != 0:
             raise AssertionError("blind-box card should be count-only")
 
+        page.get_by_role("button", name="刷新状态").click()
+        expect(page.get_by_text("本地数据状态已刷新。", exact=True)).to_be_visible()
+        page.reload()
+        expect(page.locator("#blind-count")).to_have_text("2 条")
+        assert_no_forbidden_text(page.locator("body").inner_text(), FORBIDDEN_VISIBLE_TERMS, "reloaded settings mock")
+
         page.get_by_role("button", name="清理字幕缓存").click()
         expect(page.locator("#subtitle-count")).to_have_text("0 个来源")
         expect(page.get_by_text("已清理B站字幕正文")).to_be_visible()
@@ -119,6 +130,13 @@ def main():
             raise AssertionError("diagnostic export started before explicit confirmation")
         diagnostic_dialog.get_by_role("button", name="确认导出").click()
         diagnostic = page.evaluate("() => window.__lastDiagnosticExport")
+        expected_top_level = {"导出时间", "应用", "隐私边界", "本地数据类别", "功能状态"}
+        if set(diagnostic.keys()) != expected_top_level:
+            raise AssertionError(f"diagnostic export schema mismatch: {set(diagnostic.keys())}")
+        if set(diagnostic["隐私边界"].keys()) != {"包含", "不包含"}:
+            raise AssertionError("diagnostic privacy boundary schema mismatch")
+        if any(set(category.keys()) != {"类别", "数量", "占用字节"} for category in diagnostic["本地数据类别"]):
+            raise AssertionError("diagnostic category schema mismatch")
         exported = json.dumps(diagnostic, ensure_ascii=False)
         assert_no_forbidden_text(exported, FORBIDDEN_EXPORT_TERMS, "diagnostic export")
         if "完整记录正文" in exported or "原文片段" in exported:
@@ -138,6 +156,11 @@ def main():
         page.set_viewport_size({"width": 360, "height": 780})
         assert_no_horizontal_overflow(page, "mobile settings mock")
         assert_no_forbidden_text(page.locator("body").inner_text(), FORBIDDEN_VISIBLE_TERMS, "mobile settings mock")
+
+        page.goto(MOCK_HTML.as_uri() + "?pauses=empty")
+        expect(page.get_by_text("当前没有暂停提醒的 UP。", exact=True)).to_be_visible()
+        expect(page.locator("[data-pause-item]:visible")).to_have_count(0)
+        assert_no_horizontal_overflow(page, "empty-pause settings mock")
 
         if console_errors:
             raise AssertionError("console errors: " + "\n".join(console_errors))

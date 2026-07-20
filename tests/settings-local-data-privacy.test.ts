@@ -153,7 +153,7 @@ test('settings diagnostic export is aggregate-only and does not expose raw recor
   const diagnostic = buildLocalDataDiagnosticExport(makeSummary());
   const text = JSON.stringify(diagnostic);
 
-  assert.deepEqual(diagnostic.categories.map(category => category.name), [
+  assert.deepEqual(diagnostic['本地数据类别'].map(category => category['类别']), [
     '观看历史',
     '收藏与智能索引',
     'B站字幕正文',
@@ -162,13 +162,14 @@ test('settings diagnostic export is aggregate-only and does not expose raw recor
     '动态账单',
     '盲盒抽取记录',
   ]);
-  assert.equal(diagnostic.features.blindBox.recentDrawCount, 2);
-  assert.deepEqual(diagnostic.privacyBoundary.includes, [
+  assert.equal(diagnostic['功能状态']['视频盲盒']['最近抽取'], 2);
+  assert.deepEqual(diagnostic['隐私边界']['包含'], [
     '本地数据类别名称、数量和占用',
     '动态账单与盲盒的宽泛状态和必要时间',
   ]);
-  assert.ok(diagnostic.privacyBoundary.excludes.length > 0);
+  assert.ok(diagnostic['隐私边界']['不包含'].length > 0);
   assert.doesNotMatch(text, /完整字幕|完整记录正文|原文片段/);
+  assert.doesNotMatch(text, /exportedAt|diagnosticSchema|usageBytes|bilibiliSubtitleSources|syncStatus/);
   assert.doesNotMatch(text, /Cookie|Key|BVID|CID|transcript|confidence|sourceHash|segmentId|subtitle_url|C:\\|\/Users\//i);
   assertCleanUserCopy(text);
 });

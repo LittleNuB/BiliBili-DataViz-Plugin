@@ -32,6 +32,7 @@ import {
   normalizeSettingsUserConfig,
   saveSettingsDraft,
 } from './settings-save-state';
+import { downloadLocalDataDiagnostic } from './settings-diagnostic-download';
 
 type BusyState =
   | ''
@@ -336,20 +337,15 @@ export function SettingsPage() {
       return;
     }
 
-    const diagnostic = buildLocalDataDiagnosticExport(localData);
-    const blob = new Blob([JSON.stringify(diagnostic, null, 2)], {
-      type: 'application/json;charset=utf-8',
-    });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `bili-bill-diagnostic-${new Date(localData.checkedAt).toISOString().slice(0, 10)}.json`;
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    setDiagnosticConfirmVisible(false);
-    setNotice('已导出诊断摘要；文件只包含数量、占用和状态，不包含完整记录、正文、登录凭据、密钥或本地敏感路径。');
+    try {
+      const diagnostic = buildLocalDataDiagnosticExport(localData);
+      const date = new Date(localData.checkedAt).toISOString().slice(0, 10);
+      downloadLocalDataDiagnostic(diagnostic, `bili-bill-diagnostic-${date}.json`);
+      setDiagnosticConfirmVisible(false);
+      setNotice('已导出诊断摘要；文件只包含数量、占用和状态，不包含完整记录、正文、登录凭据、密钥或本地敏感路径。');
+    } catch {
+      setLocalDataError('诊断摘要导出失败，请稍后重试。');
+    }
   }
 
   function applyConfig(config: Partial<UserConfig>) {
@@ -609,13 +605,13 @@ export function SettingsPage() {
               <div>
                 <span>包含</span>
                 <ul>
-                  {diagnosticPreview.privacyBoundary.includes.map(item => <li key={item}>{item}</li>)}
+                  {diagnosticPreview['隐私边界']['包含'].map(item => <li key={item}>{item}</li>)}
                 </ul>
               </div>
               <div>
                 <span>不包含</span>
                 <ul>
-                  {diagnosticPreview.privacyBoundary.excludes.map(item => <li key={item}>{item}</li>)}
+                  {diagnosticPreview['隐私边界']['不包含'].map(item => <li key={item}>{item}</li>)}
                 </ul>
               </div>
             </div>

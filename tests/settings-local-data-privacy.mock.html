@@ -170,6 +170,14 @@
     .pause-item.hidden {
       display: none;
     }
+    .pause-empty {
+      display: none;
+      padding: 12px;
+      color: var(--muted);
+    }
+    .pause-empty.show {
+      display: block;
+    }
     .danger-box {
       display: none;
       gap: 12px;
@@ -330,6 +338,7 @@
           </div>
           <button type="button" data-restore-pause>恢复提醒</button>
         </article>
+        <div id="pause-empty" class="pause-empty">当前没有暂停提醒的 UP。</div>
       </div>
 
       <div class="actions">
@@ -401,6 +410,13 @@
     const confirmText = document.getElementById('confirm-text');
     const confirmClear = document.getElementById('confirm-clear');
 
+    if (new URLSearchParams(window.location.search).get('pauses') === 'empty') {
+      for (const item of document.querySelectorAll('[data-pause-item]')) {
+        item.classList.add('hidden');
+      }
+      document.getElementById('pause-empty').classList.add('show');
+    }
+
     function showNotice(text) {
       notice.textContent = text;
       notice.classList.add('show');
@@ -425,18 +441,26 @@
     document.getElementById('confirm-diagnostic').addEventListener('click', () => {
       window.__lastDiagnosticExport = {
         '导出时间': '2026-06-19T01:15:00.000Z',
-        '包含': ['本地数据类别名称、数量和占用', '动态账单与盲盒的宽泛状态和必要时间'],
-        '不包含': ['完整记录或正文', '登录凭据和浏览器资料目录', '完整或可恢复的密钥', '原始字幕地址', '本地敏感路径', '视频内部标识和内容哈希'],
-        '类别': [
-          { '名称': '观看历史', '数量': 128, '占用字节': 4096 },
-          { '名称': '收藏与智能索引', '数量': 24, '占用字节': 2048 },
-          { '名称': 'B站字幕正文', '数量': 3, '占用字节': 8192 },
-          { '名称': '摘要与亮点', '数量': 2, '占用字节': 2048 },
-          { '名称': '问答会话', '数量': 1, '占用字节': 1024 },
-          { '名称': '动态账单', '数量': 9, '占用字节': 3072 },
-          { '名称': '盲盒抽取记录', '数量': 2, '占用字节': 96 }
+        '应用': { '产品': 'Bili-Bill', '诊断格式版本': 1 },
+        '隐私边界': {
+          '包含': ['本地数据类别名称、数量和占用', '动态账单与盲盒的宽泛状态和必要时间'],
+          '不包含': ['完整记录或正文', '登录凭据和浏览器资料目录', '完整或可恢复的密钥', '原始字幕地址', '本地敏感路径', '视频内部标识和内容哈希']
+        },
+        '本地数据类别': [
+          { '类别': '观看历史', '数量': 128, '占用字节': 4096 },
+          { '类别': '收藏与智能索引', '数量': 24, '占用字节': 2048 },
+          { '类别': 'B站字幕正文', '数量': 3, '占用字节': 8192 },
+          { '类别': '摘要与亮点', '数量': 2, '占用字节': 2048 },
+          { '类别': '问答会话', '数量': 1, '占用字节': 1024 },
+          { '类别': '动态账单', '数量': 9, '占用字节': 3072 },
+          { '类别': '盲盒抽取记录', '数量': 2, '占用字节': 96 }
         ],
-        '盲盒': { '最近抽取数量': 2, '最多保留数量': 50 }
+        '功能状态': {
+          '当前视频文本': { 'B站字幕来源': 3, 'B站字幕片段': 42, '已缓存视频分P': 3, '过期片段': 4 },
+          '当前视频助手': { '摘要与亮点分P': 2, '问答会话': 1 },
+          '动态账单': { '账单项': 6, '暂停中的UP主': 2, '解释': 1, '最近生成': '2026-06-19T01:15:00.000Z', '最近同步': '2026-06-19T01:10:00.000Z', '同步状态': '同步完成' },
+          '视频盲盒': { '最近抽取': 2, '最多保留': 50 }
+        }
       };
       diagnosticBox.classList.remove('show');
       showNotice('已导出诊断摘要；文件只包含数量、占用和状态，不包含完整记录、正文、登录凭据、密钥或本地敏感路径。');

@@ -22,6 +22,7 @@ interface BlindBoxDrawHistoryClaim<T> {
 
 let mutationTail: Promise<void> = Promise.resolve();
 let drawHistoryEpoch = 0;
+let drawHistoryClearingDepth = 0;
 
 export function getBlindBoxDrawHistoryEpoch(): number {
   return drawHistoryEpoch;
@@ -40,6 +41,7 @@ export async function recordBlindBoxDrawnBvids(
 ): Promise<string[]> {
   return enqueueMutation(async () => {
     const current = await readBlindBoxRecentDrawnBvids(storage);
+    if (drawHistoryClearingDepth > 0) return current;
     const next = mergeBlindBoxDrawHistory(current, drawnBvids);
     await storage.set({
       [BLIND_BOX_DRAW_HISTORY_STORAGE_KEY]: next,
@@ -57,7 +59,7 @@ export async function claimBlindBoxDrawHistory<T>(
   return enqueueMutation(async () => {
     const current = await readBlindBoxRecentDrawnBvids(storage);
     const result = await claim(current);
-    if (generationEpoch !== drawHistoryEpoch) {
+    if (generationEpoch !== drawHistoryEpoch || drawHistoryClearingDepth > 0) {
       return result.value;
     }
 
@@ -78,10 +80,26 @@ export async function coordinateBlindBoxDrawHistoryClear<T>(
   storage: Pick<BlindBoxDrawHistoryStorage, 'get'> = chrome.storage.local,
 ): Promise<T> {
   return enqueueMutation(async () => {
-    drawHistoryEpoch += 1;
-    const current = await readBlindBoxRecentDrawnBvids(storage);
-    return clear(current);
+    const endClearWindow = beginBlindBoxDrawHistoryClearWindow();
+    try {
+      const current = await readBlindBoxRecentDrawnBvids(storage);
+      return await clear(current);
+    } finally {
+      endClearWindow();
+    }
   });
+}
+
+export function beginBlindBoxDrawHistoryClearWindow(): () => void {
+  let ended = false;
+  drawHistoryEpoch += 1;
+  drawHistoryClearingDepth += 1;
+  return () => {
+    if (ended) return;
+    ended = true;
+    drawHistoryClearingDepth = Math.max(0, drawHistoryClearingDepth - 1);
+    if (drawHistoryClearingDepth === 0) drawHistoryEpoch += 1;
+  };
 }
 
 export async function collectBlindBoxDrawHistoryUsage(

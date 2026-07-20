@@ -141,7 +141,11 @@ import {
   computeStoredHistoryAggregates,
 } from '../analytics/engine';
 import { getDeviceData } from '../analytics/device';
-import { abortCurrentHistorySync, hasActiveHistorySyncAbortScope } from '../sync/sync-control';
+import {
+  abortCurrentHistorySync,
+  hasActiveHistoryDataOperation,
+  hasActiveHistorySyncAbortScope,
+} from '../sync/sync-control';
 import { syncFavorites } from '../favorites/sync';
 import { probeFavoriteFolderGap } from '../favorites/folder-gap-probe';
 import { buildSmartFavoriteIndex, getSmartFavoriteOverview, getSmartFavoritesByPath, searchSmartFavorites } from '../favorites/smart';
@@ -471,7 +475,7 @@ export async function handleRequest<T>(
         const normalizedMaxPages = normalizePageLimit(maxPages);
         const storedCount = await db.watchHistory.count();
         const mode = requestedMode ?? (storedCount === 0 ? 'full' : 'incremental');
-        if (await getHistorySyncing()) {
+        if (await getHistorySyncing() || hasActiveHistoryDataOperation()) {
           throw new Error('HISTORY_SYNC_IN_PROGRESS');
         }
 

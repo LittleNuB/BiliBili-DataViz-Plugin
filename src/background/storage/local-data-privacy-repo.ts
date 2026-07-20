@@ -11,8 +11,15 @@ import type {
   LocalDataPrivacySummary,
 } from '../../shared/types/local-data-privacy.ts';
 import { ensureDynamicBill013Migration } from '../dynamic-bill/migration.ts';
+import { runHistoryClearDataOperation } from '../sync/sync-control.ts';
 import { clearTemporaryCurrentVideoTranscriptCache } from '../current-video-temporary-transcript-cache.ts';
-import { runCurrentVideoTranscriptClearCoordinator } from '../current-video-transcript-clear-epoch.ts';
+import {
+  beginCurrentVideoTranscriptClearWindow,
+  runCurrentVideoTranscriptClearCoordinator,
+} from '../current-video-transcript-clear-epoch.ts';
+import {
+  beginCurrentVideoSummaryHighlightsClearWindow,
+} from '../current-video-summary-highlights-clear-epoch.ts';
 import { getDynamicBillActiveCreatorPauseViews, getDynamicSyncState } from './dynamic-bill-repo.ts';
 import { db } from './db.ts';
 import { getRegisteredLocalDataCategories } from './local-data-category-registry.ts';
@@ -23,6 +30,7 @@ import {
 } from './config-store.ts';
 import {
   BLIND_BOX_DRAW_HISTORY_LIMIT,
+  beginBlindBoxDrawHistoryClearWindow,
   getBlindBoxDrawHistoryUpdatedAt,
   getBlindBoxRecentDrawnBvids,
 } from './blind-box-draw-history-repo.ts';
@@ -34,6 +42,7 @@ import {
   beginCurrentVideoPrimaryTextSelectionClearWindow,
 } from './current-video-primary-text-selection-store.ts';
 import {
+  beginCurrentVideoQaSessionClearWindow,
   collectCurrentVideoQaSessionUsage,
 } from './current-video-qa-session-repo.ts';
 
@@ -126,15 +135,23 @@ export async function clearDynamicBillLocalData(): Promise<LocalDataOperationRes
   };
 }
 
-export async function clearAllLocalData(confirmation: unknown): Promise<LocalDataOperationResult> {
+export function clearAllLocalData(confirmation: unknown): Promise<LocalDataOperationResult> {
   if (confirmation !== LOCAL_DATA_CLEAR_CONFIRMATION) {
-    throw new Error('LOCAL_DATA_CLEAR_CONFIRMATION_REQUIRED');
+    return Promise.reject(new Error('LOCAL_DATA_CLEAR_CONFIRMATION_REQUIRED'));
   }
+  return runHistoryClearDataOperation(clearAllLocalDataExclusive);
+}
+
+async function clearAllLocalDataExclusive(): Promise<LocalDataOperationResult> {
   await ensureDynamicBill013Migration();
   if (await getHistorySyncing()) {
     throw new Error('HISTORY_SYNC_IN_PROGRESS');
   }
   const endPrimaryTextClearWindow = beginCurrentVideoPrimaryTextSelectionClearWindow();
+  const endTranscriptClearWindow = beginCurrentVideoTranscriptClearWindow();
+  const endSummaryHighlightsClearWindow = beginCurrentVideoSummaryHighlightsClearWindow();
+  const endQaSessionClearWindow = beginCurrentVideoQaSessionClearWindow();
+  const endBlindBoxClearWindow = beginBlindBoxDrawHistoryClearWindow();
   try {
     const categories = getRegisteredLocalDataCategories()
       .filter(category => category.includeInClearAll);
@@ -150,6 +167,10 @@ export async function clearAllLocalData(confirmation: unknown): Promise<LocalDat
       categoryResults: summarizeLifecycleResults(results),
     };
   } finally {
+    endBlindBoxClearWindow();
+    endQaSessionClearWindow();
+    endSummaryHighlightsClearWindow();
+    endTranscriptClearWindow();
     endPrimaryTextClearWindow();
   }
 }
