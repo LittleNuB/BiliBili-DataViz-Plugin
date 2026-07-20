@@ -7,6 +7,7 @@ import {
   buildLocalDataSummaryCards,
   buildSmartFavoriteRebuildMessage,
   dangerousLocalDataClearScope,
+  hasLocalDataCategoryContent,
   LOCAL_DATA_CLEAR_CONFIRMATION,
 } from '../src/shared/local-data-privacy.ts';
 import {
@@ -39,6 +40,48 @@ test('settings local data cards expose natural Chinese summaries only', () => {
   const copy = JSON.stringify(cards);
   assert.doesNotMatch(copy, /暂停|轮换|动态反馈/);
   assertCleanUserCopy(copy);
+});
+
+test('settings cards keep recent sync evidence visible in incomplete states', () => {
+  const summary = makeSummary();
+  summary.favorites.incompleteFolders = 2;
+  summary.favorites.syncComplete = false;
+
+  const cards = buildLocalDataSummaryCards(summary);
+  const favorites = cards.find(card => card.id === 'favorites');
+  const dynamicBill = cards.find(card => card.id === 'dynamicBill');
+
+  assert.match(favorites?.meta ?? '', /最近同步：/);
+  assert.match(favorites?.meta ?? '', /2 个收藏夹可能尚未同步完整/);
+  assert.match(dynamicBill?.meta ?? '', /最近生成：/);
+  assert.match(dynamicBill?.meta ?? '', /最近同步：/);
+  assertCleanUserCopy([favorites?.meta ?? '', dynamicBill?.meta ?? ''].join('\n'));
+});
+
+test('settings clear availability follows registered category usage, including metadata-only data', () => {
+  const summary = makeSummary();
+  const history = summary.categories.find(category => category.id === 'history');
+  const subtitles = summary.categories.find(category => category.id === 'currentVideoSubtitles');
+  const dynamicBill = summary.categories.find(category => category.id === 'dynamicBill');
+  assert.ok(history);
+  assert.ok(subtitles);
+  assert.ok(dynamicBill);
+
+  Object.assign(history, { count: 0, usageBytes: 128 });
+  Object.assign(subtitles, { count: 1, usageBytes: 64 });
+  Object.assign(dynamicBill, { count: 0, usageBytes: 96 });
+  summary.currentVideoSubtitles.segmentCount = 0;
+
+  assert.equal(hasLocalDataCategoryContent(summary, 'history'), true);
+  assert.equal(hasLocalDataCategoryContent(summary, 'currentVideoSubtitles'), true);
+  assert.equal(hasLocalDataCategoryContent(summary, 'dynamicBill'), true);
+
+  Object.assign(history, { count: 0, usageBytes: 0 });
+  Object.assign(subtitles, { count: 0, usageBytes: 0 });
+  Object.assign(dynamicBill, { count: 0, usageBytes: 0 });
+  assert.equal(hasLocalDataCategoryContent(summary, 'history'), false);
+  assert.equal(hasLocalDataCategoryContent(summary, 'currentVideoSubtitles'), false);
+  assert.equal(hasLocalDataCategoryContent(summary, 'dynamicBill'), false);
 });
 
 test('settings page keeps Dynamic Bill storage internals out of ordinary copy', async () => {
@@ -78,6 +121,8 @@ test('settings page exposes six independently clearable categories and keeps bli
     assert.match(source, new RegExp(label), label);
   }
   assert.doesNotMatch(source, /clearCategory\('blindBoxDrawHistory'/);
+  assert.match(source, /hasLocalDataCategoryContent/);
+  assert.doesNotMatch(source, /currentVideoSubtitles\.segmentCount === 0/);
 });
 
 test('settings local data operation messages stay bounded to counts', () => {

@@ -1514,7 +1514,7 @@ test('real Dexie v9 to current upgrade clears legacy transcript rows and adds 0.
   }
 });
 
-test('production current-video subtitle clear removes persistent and temporary transcript bodies only', async () => {
+test('production current-video subtitle clear removes source-only records and transcript bodies only', async () => {
   const { db } = await import('../src/background/storage/db.ts');
   const { upsertCurrentVideoTranscriptEvidence } = await import('../src/background/storage/current-video-transcript-repo.ts');
   const { clearCurrentVideoSubtitleCache } = await import('../src/background/storage/local-data-privacy-repo.ts');
@@ -1533,7 +1533,12 @@ test('production current-video subtitle clear removes persistent and temporary t
       { body: [{ from: 2, to: 4, content: 'temporary subtitle body must be cleared' }] },
       baseNormalizeOptions({ bvid: 'BV1ProductionTemp', cid: 6622, fetchedAt: 10_401 }),
     );
+    const sourceOnly = normalizeBilibiliTranscriptEvidence(
+      { body: [] },
+      baseNormalizeOptions({ bvid: 'BV1ProductionEmpty', cid: 6623, fetchedAt: 10_402 }),
+    );
     await upsertCurrentVideoTranscriptEvidence(persistent);
+    await upsertCurrentVideoTranscriptEvidence(sourceOnly);
     const owner = temporaryOwner(171, temporary);
     assert.equal(putTemporaryCurrentVideoTranscriptEvidence(owner, temporary, 10_410).status, 'stored');
     assert.equal(getTemporaryCurrentVideoTranscriptSegments(owner, transcriptIdentityFromEvidence(temporary), 10_411).length, 1);
@@ -1546,13 +1551,13 @@ test('production current-video subtitle clear removes persistent and temporary t
       .find(category => category.id === 'currentVideoSubtitles');
     assert.ok(subtitleCategory);
     const usageBefore = await subtitleCategory.collectUsage();
-    assert.equal(usageBefore.count, 1);
-    assert.equal(usageBefore.details?.currentVideoSubtitleSources, 1);
+    assert.equal(usageBefore.count, 2);
+    assert.equal(usageBefore.details?.currentVideoSubtitleSources, 2);
     assert.equal(usageBefore.details?.currentVideoSubtitleSegments, 1);
     assert.ok(usageBefore.usageBytes > 0);
 
     const result = await clearCurrentVideoSubtitleCache();
-    assert.equal(result.cleared.currentVideoSubtitleSources, 1);
+    assert.equal(result.cleared.currentVideoSubtitleSources, 2);
     assert.equal(result.cleared.currentVideoSubtitleSegments, 1);
     assert.equal(await db.currentVideoTranscriptSources.count(), 0);
     assert.equal(await db.currentVideoTranscriptSegments.count(), 0);

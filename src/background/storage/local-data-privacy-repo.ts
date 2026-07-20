@@ -12,6 +12,7 @@ import type {
   LocalDataPrivacySummary,
 } from '../../shared/types/local-data-privacy.ts';
 import { ensureDynamicBill013Migration } from '../dynamic-bill/migration.ts';
+import { runDynamicBillDataOperation } from '../dynamic-bill/operation-control.ts';
 import { runHistoryClearDataOperation } from '../sync/sync-control.ts';
 import {
   beginCurrentVideoTranscriptClearWindow,
@@ -99,11 +100,14 @@ export async function clearLocalDataCategory(
     };
   };
 
-  if (id !== 'history') return run();
-  return runHistoryClearDataOperation(async () => {
-    if (await getHistorySyncing()) throw new Error('HISTORY_SYNC_IN_PROGRESS');
-    return run();
-  });
+  if (id === 'history') {
+    return runHistoryClearDataOperation(async () => {
+      if (await getHistorySyncing()) throw new Error('HISTORY_SYNC_IN_PROGRESS');
+      return run();
+    });
+  }
+  if (id === 'dynamicBill') return runDynamicBillDataOperation(run);
+  return run();
 }
 
 export async function clearCurrentVideoSubtitleCache(): Promise<LocalDataOperationResult> {
@@ -137,7 +141,9 @@ export function clearAllLocalData(confirmation: unknown): Promise<LocalDataOpera
   if (confirmation !== LOCAL_DATA_CLEAR_CONFIRMATION) {
     return Promise.reject(new Error('LOCAL_DATA_CLEAR_CONFIRMATION_REQUIRED'));
   }
-  return runHistoryClearDataOperation(clearAllLocalDataExclusive);
+  return runHistoryClearDataOperation(
+    () => runDynamicBillDataOperation(clearAllLocalDataExclusive),
+  );
 }
 
 async function clearAllLocalDataExclusive(): Promise<LocalDataOperationResult> {

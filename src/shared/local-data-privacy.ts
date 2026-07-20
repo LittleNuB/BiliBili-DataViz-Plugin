@@ -4,6 +4,7 @@ import type {
   LocalDataPrivacySummary,
   SmartFavoriteIndexRebuildResult,
 } from './types/local-data-privacy';
+import type { IndependentlyClearableLocalDataCategoryId } from './local-data-category-contract';
 
 export const LOCAL_DATA_CLEAR_CONFIRMATION = '清理本地数据';
 
@@ -89,9 +90,13 @@ export function buildLocalDataSummaryCards(summary: LocalDataPrivacySummary): Lo
       title: '收藏与智能索引',
       value: `${summary.favorites.storedItems} 条`,
       detail: `B站报告 ${summary.favorites.reportedItems} 条，本地保存 ${summary.favorites.storedItems} 条，已索引 ${summary.favorites.indexedItems} 条。`,
-      meta: summary.favorites.incompleteFolders > 0
-        ? `占用 ${formatBytes(favoriteUsage?.usageBytes ?? 0)}；有 ${summary.favorites.incompleteFolders} 个收藏夹可能尚未同步完整。`
-        : `占用 ${formatBytes(favoriteUsage?.usageBytes ?? 0)}；最近同步：${formatLocalDate(summary.favorites.lastSyncedAt, 'milliseconds')}`,
+      meta: [
+        `占用 ${formatBytes(favoriteUsage?.usageBytes ?? 0)}`,
+        `最近同步：${formatLocalDate(summary.favorites.lastSyncedAt, 'milliseconds')}`,
+        summary.favorites.incompleteFolders > 0
+          ? `有 ${summary.favorites.incompleteFolders} 个收藏夹可能尚未同步完整`
+          : '',
+      ].filter(Boolean).join('；'),
     },
     {
       id: 'subtitles',
@@ -125,7 +130,11 @@ export function buildLocalDataSummaryCards(summary: LocalDataPrivacySummary): Lo
       title: '动态账单',
       value: `${summary.dynamicBill.billItemCount} 项`,
       detail: `关注快照 ${summary.dynamicBill.activeFollowedCreatorCount} 位，近期视频投稿 ${summary.dynamicBill.followedVideoUpdateCount} 条。`,
-      meta: `占用 ${formatBytes(dynamicBillUsage?.usageBytes ?? 0)}；最近生成：${formatLocalDate(summary.dynamicBill.lastGeneratedAt, 'milliseconds')}`,
+      meta: [
+        `占用 ${formatBytes(dynamicBillUsage?.usageBytes ?? 0)}`,
+        `最近生成：${formatLocalDate(summary.dynamicBill.lastGeneratedAt, 'milliseconds')}`,
+        `最近同步：${formatLocalDate(summary.dynamicBill.lastSyncedAt, 'milliseconds')}`,
+      ].join('；'),
     },
     {
       id: 'blindBoxDrawHistory',
@@ -135,6 +144,14 @@ export function buildLocalDataSummaryCards(summary: LocalDataPrivacySummary): Lo
       meta: `占用 ${formatBytes(blindBoxUsage?.usageBytes ?? summary.blindBoxDrawHistory.usageBytes)}；最近记录：${formatLocalDate(summary.blindBoxDrawHistory.lastUpdatedAt, 'milliseconds')}`,
     },
   ];
+}
+
+export function hasLocalDataCategoryContent(
+  summary: LocalDataPrivacySummary,
+  id: IndependentlyClearableLocalDataCategoryId,
+): boolean {
+  const category = categorySummary(summary, id);
+  return category !== null && (category.count > 0 || category.usageBytes > 0);
 }
 
 export function buildLocalDataOperationMessage(result: LocalDataOperationResult): string {

@@ -19,6 +19,7 @@ import {
   upsertFollowedVideoUpdates,
 } from '../storage/dynamic-bill-repo';
 import { ensureDynamicBill013Migration } from './migration';
+import { runDynamicBillDataOperation } from './operation-control';
 
 const VIDEO_UPDATE_RETENTION_DAYS = 30;
 const VIDEO_DETAIL_ENRICHMENT_LIMIT = 40;
@@ -37,7 +38,11 @@ export async function getDynamicOverview(): Promise<DynamicBillOverview> {
   return getDynamicBillOverview(DYNAMIC_UPDATE_WINDOW_DAYS);
 }
 
-export async function syncDynamicBillUpdates(signal?: AbortSignal): Promise<DynamicSyncResult> {
+export function syncDynamicBillUpdates(signal?: AbortSignal): Promise<DynamicSyncResult> {
+  return runDynamicBillDataOperation(() => syncDynamicBillUpdatesExclusive(signal));
+}
+
+async function syncDynamicBillUpdatesExclusive(signal?: AbortSignal): Promise<DynamicSyncResult> {
   await ensureDynamicBill013Migration();
   const startedAt = Date.now();
   const previousState = await getDynamicSyncState();

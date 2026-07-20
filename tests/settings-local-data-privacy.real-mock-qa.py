@@ -123,6 +123,7 @@ def run_browser_qa() -> None:
             wait_for_settings(page)
             assert_settings_cards(page)
             assert_config_toggles(page, current_video=True, smart_favorites=False, dynamic_bill=True)
+            assert_paused_creator_restore(page)
             assert_no_horizontal_overflow(page, "desktop settings")
             assert_no_forbidden_text(page.locator("body").inner_text(), FORBIDDEN_VISIBLE_TERMS, "settings page")
 
@@ -154,6 +155,9 @@ def run_browser_qa() -> None:
             assert_no_forbidden_text(exported, FORBIDDEN_EXPORT_TERMS, "diagnostic export")
 
             assert_independent_category_clears(page)
+            assert_metadata_only_category_clears(page)
+            assert_clear_all_success(page)
+            assert_clear_all_partial_failure_survives_refresh(page)
 
             page.set_viewport_size({"width": 375, "height": 812})
             wait_for_settings(page)
@@ -261,6 +265,99 @@ def assert_independent_category_clears(page: Page) -> None:
             raise AssertionError(f"Production Settings did not request clear for {category_id}")
 
     expect(cards.filter(has_text="盲盒抽取记录").first.get_by_text("3 条")).to_be_visible()
+
+
+def assert_paused_creator_restore(page: Page) -> None:
+    pause_list = page.get_by_test_id("settings-dynamic-bill-pauses")
+    expect(pause_list.get_by_text("测试暂停 UP", exact=True)).to_be_visible()
+    expect(pause_list.get_by_text("约 12 天后自动恢复", exact=False)).to_be_visible()
+    pause_list.get_by_role("button", name="恢复提醒", exact=True).click()
+    expect(pause_list.get_by_text("当前没有暂停提醒的 UP。", exact=True)).to_be_visible()
+    expect(page.locator(".settings-alert-success")).to_contain_text("已恢复「测试暂停 UP」的动态账单提醒")
+    state = qa_state(page)
+    if state["restoredCreatorMids"] != [9527]:
+        raise AssertionError(f"Unexpected restored creator state: {state!r}")
+
+
+def assert_metadata_only_category_clears(page: Page) -> None:
+    page.evaluate("window.__BiliBillSettingsRealMockQa.reset({metadataOnlyCategories: true})")
+    page.reload(wait_until="networkidle")
+    wait_for_settings(page)
+
+    cases = [
+        ("清理观看历史", "history"),
+        ("清理字幕缓存", "currentVideoSubtitles"),
+        ("清理动态账单", "dynamicBill"),
+    ]
+    for label, category_id in cases:
+        button = page.get_by_role("button", name=label, exact=True)
+        expect(button).to_be_enabled()
+        button.click()
+        expect(button).to_be_disabled()
+        expect(page.locator(".settings-alert-success")).to_contain_text("回读后为 0")
+        if category_id not in qa_state(page)["clearedCategories"]:
+            raise AssertionError(f"Metadata-only category was not cleared: {category_id}")
+
+
+def assert_clear_all_success(page: Page) -> None:
+    page.evaluate("window.__BiliBillSettingsRealMockQa.reset()")
+    page.reload(wait_until="networkidle")
+    wait_for_settings(page)
+
+    page.get_by_role("button", name="清理本地数据", exact=True).click()
+    danger = page.locator(".settings-danger-box")
+    expect(danger).to_be_visible()
+    confirm = danger.get_by_role("button", name="确认清理", exact=True)
+    expect(confirm).to_be_disabled()
+    confirmation = danger.locator("input")
+    confirmation.fill("清理")
+    expect(confirm).to_be_disabled()
+    confirmation.fill("清理本地数据")
+    expect(confirm).to_be_enabled()
+    confirm.click()
+
+    expect(danger).to_be_hidden()
+    expect(page.locator(".settings-alert-success")).to_contain_text("已清理本地数据")
+    assert_config_toggles(page, current_video=False, smart_favorites=False, dynamic_bill=False)
+    state = qa_state(page)
+    if state["clearAllCount"] != 1:
+        raise AssertionError(f"Production Settings did not request clear-all: {state!r}")
+    expected_cleared = {
+        "history",
+        "favorites",
+        "currentVideoSubtitles",
+        "currentVideoSummaryHighlights",
+        "currentVideoQaSessions",
+        "dynamicBill",
+        "blindBoxDrawHistory",
+        "localSettings",
+    }
+    if set(state["clearedCategories"]) != expected_cleared:
+        raise AssertionError(f"Clear-all did not cover every registered category: {state!r}")
+    for value in ["0 条", "0 个来源", "0 个分P", "0 个会话", "0 项"]:
+        expect(page.locator(".settings-data-card").get_by_text(value, exact=True).first).to_be_visible()
+
+
+def assert_clear_all_partial_failure_survives_refresh(page: Page) -> None:
+    page.evaluate(
+        "window.__BiliBillSettingsRealMockQa.reset({"
+        "nextClearAllMode: 'partial', failSummaryAfterClearAll: true})"
+    )
+    page.reload(wait_until="networkidle")
+    wait_for_settings(page)
+
+    page.get_by_role("button", name="清理本地数据", exact=True).click()
+    danger = page.locator(".settings-danger-box")
+    danger.locator("input").fill("清理本地数据")
+    danger.get_by_role("button", name="确认清理", exact=True).click()
+
+    failure = page.locator(".settings-alert-error")
+    expect(failure).to_contain_text("以下类别清理失败：动态账单")
+    expect(failure).to_contain_text("请稍后重试失败类别")
+    assert_no_forbidden_text(failure.inner_text(), ["QA_SUMMARY_REFRESH_FAILED"], "partial clear failure")
+    state = qa_state(page)
+    if state["clearAllCount"] != 1 or state["failNextSummary"]:
+        raise AssertionError(f"Partial clear refresh path did not execute as expected: {state!r}")
 
 
 def assert_config_toggles(
@@ -386,6 +483,26 @@ CHROME_MOCK_SCRIPT = r"""
 (() => {
   const STORE_KEY = 'bili-bill-settings-real-mock-qa-v1';
   const FIXED_NOW = 1718000000000;
+  const CATEGORY_IDS = [
+    'history',
+    'favorites',
+    'currentVideoSubtitles',
+    'currentVideoSummaryHighlights',
+    'currentVideoQaSessions',
+    'dynamicBill',
+    'blindBoxDrawHistory',
+    'localSettings',
+  ];
+  const INDEPENDENT_CATEGORY_IDS = CATEGORY_IDS.slice(0, 6);
+  const FIXTURE_PAUSE = {
+    version: 'pause-9527-v1',
+    creatorMid: 9527,
+    creatorName: '测试暂停 UP',
+    startedAt: FIXED_NOW - 3 * 86400000,
+    expiresAt: FIXED_NOW + 12 * 86400000,
+    source: 'user',
+    remainingDays: 12,
+  };
 
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -422,7 +539,22 @@ CHROME_MOCK_SCRIPT = r"""
       configRequestCount: 0,
       updateConfigCount: 0,
       clearedCategories: [],
+      restoredCreatorMids: [],
+      clearAllCount: 0,
+      nextClearAllMode: 'completed',
+      failSummaryAfterClearAll: false,
+      failNextSummary: false,
+      metadataOnlyCategories: false,
     };
+  }
+
+  function clearedConfig() {
+    const config = initialConfig();
+    config.ai.apiKey = '';
+    config.assistant.currentVideoAiAssistantEnabled = false;
+    config.assistant.smartFavoritesQaAiEnabled = false;
+    config.dynamicBill.aiExplanationsEnabled = false;
+    return config;
   }
 
   function loadState() {
@@ -439,6 +571,9 @@ CHROME_MOCK_SCRIPT = r"""
 
   function summary(state) {
     state.summaryRequestCount += 1;
+    const activeCreatorPauses = (state.restoredCreatorMids || []).includes(FIXTURE_PAUSE.creatorMid)
+      ? []
+      : [clone(FIXTURE_PAUSE)];
     const result = {
       checkedAt: FIXED_NOW,
       categories: [
@@ -495,11 +630,11 @@ CHROME_MOCK_SCRIPT = r"""
         followedVideoUpdateCount: 8,
         billItemCount: 6,
         rotationRecordCount: 4,
-        creatorPauseCount: 0,
+        creatorPauseCount: activeCreatorPauses.length,
         feedbackActionCount: 0,
         creatorFeedbackCount: 0,
         creatorReviewPromptCount: 0,
-        activeCreatorPauses: [],
+        activeCreatorPauses,
         unopenedItems: 2,
         openedItems: 1,
         consumedItems: 2,
@@ -516,6 +651,44 @@ CHROME_MOCK_SCRIPT = r"""
         lastUpdatedAt: FIXED_NOW,
       },
     };
+    if (state.metadataOnlyCategories) {
+      const historyCategory = result.categories.find(category => category.id === 'history');
+      const subtitleCategory = result.categories.find(category => category.id === 'currentVideoSubtitles');
+      const dynamicBillCategory = result.categories.find(category => category.id === 'dynamicBill');
+      Object.assign(historyCategory, { count: 0, usageBytes: 128 });
+      Object.assign(subtitleCategory, { count: 1, usageBytes: 96 });
+      Object.assign(dynamicBillCategory, { count: 0, usageBytes: 160 });
+      Object.assign(result.history, {
+        totalRecords: 0,
+        oldestViewAt: null,
+        newestViewAt: null,
+      });
+      Object.assign(result.currentVideoSubtitles, {
+        sourceCount: 1,
+        sourceIdentityCount: 1,
+        segmentCount: 0,
+        staleSegmentCount: 0,
+        cachedVideoCount: 0,
+        usageBytes: 96,
+      });
+      Object.assign(result.dynamicBill, {
+        activeFollowedCreatorCount: 0,
+        followedVideoUpdateCount: 0,
+        billItemCount: 0,
+        rotationRecordCount: 0,
+        creatorPauseCount: 0,
+        feedbackActionCount: 0,
+        creatorFeedbackCount: 0,
+        creatorReviewPromptCount: 0,
+        activeCreatorPauses: [],
+        unopenedItems: 0,
+        openedItems: 0,
+        consumedItems: 0,
+        processedItems: 0,
+        explanationCount: 0,
+        lastGeneratedAt: null,
+      });
+    }
     const cleared = new Set(state.clearedCategories || []);
     for (const category of result.categories) {
       if (!cleared.has(category.id)) continue;
@@ -588,6 +761,13 @@ CHROME_MOCK_SCRIPT = r"""
         lastGeneratedAt: null,
         lastSyncedAt: null,
         syncStatus: 'idle',
+      });
+    }
+    if (cleared.has('blindBoxDrawHistory')) {
+      Object.assign(result.blindBoxDrawHistory, {
+        recentDrawCount: 0,
+        usageBytes: 0,
+        lastUpdatedAt: null,
       });
     }
     return result;
@@ -679,21 +859,18 @@ CHROME_MOCK_SCRIPT = r"""
         data = clone(state.config);
         break;
       case 'GET_LOCAL_DATA_PRIVACY_SUMMARY':
+        if (state.failNextSummary) {
+          state.failNextSummary = false;
+          saveState(state);
+          return { success: false, error: 'QA_SUMMARY_REFRESH_FAILED' };
+        }
         data = summary(state);
         break;
       case 'CLEAR_LOCAL_DATA_CATEGORY': {
         const categoryId = message.params && message.params.categoryId;
         const before = summary(state);
         const category = before.categories.find(item => item.id === categoryId);
-        const clearable = [
-          'history',
-          'favorites',
-          'currentVideoSubtitles',
-          'currentVideoSummaryHighlights',
-          'currentVideoQaSessions',
-          'dynamicBill',
-        ];
-        if (!category || !clearable.includes(categoryId)) {
+        if (!category || !INDEPENDENT_CATEGORY_IDS.includes(categoryId)) {
           saveState(state);
           return { success: false, error: 'LOCAL_DATA_CATEGORY_NOT_CLEARABLE' };
         }
@@ -715,6 +892,70 @@ CHROME_MOCK_SCRIPT = r"""
             failed: [],
           },
         };
+        break;
+      }
+      case 'CLEAR_ALL_LOCAL_DATA': {
+        if (!message.params || message.params.confirmation !== '清理本地数据') {
+          saveState(state);
+          return { success: false, error: 'LOCAL_DATA_CLEAR_CONFIRMATION_REQUIRED' };
+        }
+        const before = summary(state);
+        const failedIds = state.nextClearAllMode === 'partial' ? ['dynamicBill'] : [];
+        const completedIds = CATEGORY_IDS.filter(id => !failedIds.includes(id));
+        state.clearAllCount += 1;
+        state.clearedCategories = [...new Set([
+          ...(state.clearedCategories || []),
+          ...completedIds,
+        ])];
+        if (completedIds.includes('localSettings')) state.config = clearedConfig();
+        if (state.failSummaryAfterClearAll) {
+          state.failNextSummary = true;
+          state.failSummaryAfterClearAll = false;
+        }
+        state.nextClearAllMode = 'completed';
+        data = {
+          operation: 'clear_all_local_data',
+          status: failedIds.length > 0 ? 'partial_failure' : 'completed',
+          completedAt: FIXED_NOW,
+          cleared: { localSettings: completedIds.includes('localSettings') },
+          categoryResults: {
+            completed: before.categories
+              .filter(category => completedIds.includes(category.id))
+              .map(category => ({
+                id: category.id,
+                label: category.label,
+                beforeCount: category.count,
+                beforeUsageBytes: category.usageBytes,
+                afterCount: 0,
+                afterUsageBytes: 0,
+              })),
+            failed: before.categories
+              .filter(category => failedIds.includes(category.id))
+              .map(category => ({
+                id: category.id,
+                label: category.label,
+                message: category.label + '清理失败，已完成的其他类别不会受影响。',
+              })),
+          },
+        };
+        break;
+      }
+      case 'RESTORE_DYNAMIC_BILL_CREATOR_REMINDER': {
+        const creatorMid = Number(message.params && message.params.creatorMid);
+        const pauseVersion = String(message.params && message.params.pauseVersion || '');
+        if ((state.restoredCreatorMids || []).includes(creatorMid)) {
+          data = { status: 'not_found' };
+          break;
+        }
+        if (creatorMid !== FIXTURE_PAUSE.creatorMid || pauseVersion !== FIXTURE_PAUSE.version) {
+          data = { status: 'stale', currentPause: clone(FIXTURE_PAUSE) };
+          break;
+        }
+        state.restoredCreatorMids = [...new Set([
+          ...(state.restoredCreatorMids || []),
+          creatorMid,
+        ])];
+        data = { status: 'restored', pause: clone(FIXTURE_PAUSE) };
         break;
       }
       case 'GET_DASHBOARD_DATA':
@@ -768,8 +1009,8 @@ CHROME_MOCK_SCRIPT = r"""
     state() {
       return clone(loadState());
     },
-    reset() {
-      const state = initialState();
+    reset(options = {}) {
+      const state = { ...initialState(), ...clone(options) };
       saveState(state);
       return clone(state);
     },

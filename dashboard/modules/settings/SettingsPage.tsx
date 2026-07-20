@@ -7,6 +7,7 @@ import {
   buildSmartFavoriteRebuildMessage,
   dangerousLocalDataClearScope,
   formatLocalDataError,
+  hasLocalDataCategoryContent,
   LOCAL_DATA_CLEAR_CONFIRMATION,
 } from '../../../src/shared/local-data-privacy';
 import {
@@ -145,14 +146,14 @@ export function SettingsPage() {
     }
   }
 
-  async function refreshLocalData(): Promise<boolean> {
-    setLocalDataError('');
+  async function refreshLocalData(options: { preserveError?: boolean } = {}): Promise<boolean> {
+    if (!options.preserveError) setLocalDataError('');
     try {
       const summary = await requestSW<LocalDataPrivacySummary>('GET_LOCAL_DATA_PRIVACY_SUMMARY');
       setLocalData(summary);
       return true;
     } catch (err) {
-      setLocalDataError(formatLocalDataError(err));
+      if (!options.preserveError) setLocalDataError(formatLocalDataError(err));
       return false;
     }
   }
@@ -240,13 +241,12 @@ export function SettingsPage() {
       const result = await requestSW<LocalDataOperationResult>('CLEAR_LOCAL_DATA_CATEGORY', {
         categoryId,
       });
-      if (await refreshLocalData()) {
-        const message = buildLocalDataOperationMessage(result);
-        if (result.status === 'partial_failure') {
-          setLocalDataError(message);
-        } else {
-          setNotice(message);
-        }
+      const message = buildLocalDataOperationMessage(result);
+      if (result.status === 'partial_failure') {
+        setLocalDataError(message);
+        await refreshLocalData({ preserveError: true });
+      } else if (await refreshLocalData()) {
+        setNotice(message);
       }
     } catch (err) {
       setLocalDataError(formatLocalDataError(err));
@@ -333,14 +333,12 @@ export function SettingsPage() {
       const message = buildLocalDataOperationMessage(result);
       setClearConfirmVisible(false);
       setClearConfirmText('');
+      const partialFailure = result.status === 'partial_failure';
+      if (partialFailure) setLocalDataError(message);
       const configRefreshed = await refreshConfig();
-      const localDataRefreshed = await refreshLocalData();
-      if (configRefreshed && localDataRefreshed) {
-        if (result.status === 'partial_failure') {
-          setLocalDataError(message);
-        } else {
-          setNotice(message);
-        }
+      const localDataRefreshed = await refreshLocalData({ preserveError: partialFailure });
+      if (!partialFailure && configRefreshed && localDataRefreshed) {
+        setNotice(message);
       }
     } catch (err) {
       setLocalDataError(formatLocalDataError(err));
@@ -575,7 +573,7 @@ export function SettingsPage() {
             type="button"
             className="settings-action"
             onClick={clearHistory}
-            disabled={!!busy || !localData || localData.history.syncing || localDataCategoryCount(localData, 'history') === 0}
+            disabled={!!busy || !localData || localData.history.syncing || !hasLocalDataCategoryContent(localData, 'history')}
           >
             {busy === 'history-clear' ? '清理中...' : '清理观看历史'}
           </button>
@@ -583,7 +581,7 @@ export function SettingsPage() {
             type="button"
             className="settings-action"
             onClick={clearFavorites}
-            disabled={!!busy || !localData || localDataCategoryCount(localData, 'favorites') === 0}
+            disabled={!!busy || !localData || !hasLocalDataCategoryContent(localData, 'favorites')}
           >
             {busy === 'favorites-clear' ? '清理中...' : '清理收藏与索引'}
           </button>
@@ -591,7 +589,7 @@ export function SettingsPage() {
             type="button"
             className="settings-action"
             onClick={clearSubtitleCache}
-            disabled={!!busy || !localData || localData.currentVideoSubtitles.segmentCount === 0}
+            disabled={!!busy || !localData || !hasLocalDataCategoryContent(localData, 'currentVideoSubtitles')}
           >
             {busy === 'subtitle-clear' ? '清理中...' : '清理字幕缓存'}
           </button>
@@ -599,7 +597,7 @@ export function SettingsPage() {
             type="button"
             className="settings-action"
             onClick={clearSummaryHighlightCache}
-            disabled={!!busy || !localData || localData.currentVideoSummaryHighlights.cachedPartCount === 0}
+            disabled={!!busy || !localData || !hasLocalDataCategoryContent(localData, 'currentVideoSummaryHighlights')}
           >
             {busy === 'summary-highlight-clear' ? '清理中...' : '清理摘要亮点缓存'}
           </button>
@@ -607,7 +605,7 @@ export function SettingsPage() {
             type="button"
             className="settings-action"
             onClick={clearQaSessions}
-            disabled={!!busy || !localData || localData.currentVideoQaSessions.sessionCount === 0}
+            disabled={!!busy || !localData || !hasLocalDataCategoryContent(localData, 'currentVideoQaSessions')}
           >
             {busy === 'qa-session-clear' ? '清理中...' : '清理问答会话'}
           </button>
@@ -615,7 +613,7 @@ export function SettingsPage() {
             type="button"
             className="settings-action"
             onClick={clearDynamicBill}
-            disabled={!!busy || !localData || localDataCategoryCount(localData, 'dynamicBill') === 0}
+            disabled={!!busy || !localData || !hasLocalDataCategoryContent(localData, 'dynamicBill')}
           >
             {busy === 'dynamic-bill-clear' ? '清理中...' : '清理动态账单'}
           </button>
@@ -733,13 +731,6 @@ export function SettingsPage() {
       </section>
     </div>
   );
-}
-
-function localDataCategoryCount(
-  summary: LocalDataPrivacySummary,
-  id: IndependentlyClearableLocalDataCategoryId,
-): number {
-  return summary.categories.find(category => category.id === id)?.count ?? 0;
 }
 
 function DataStat({ label, value }: { label: string; value: number }) {

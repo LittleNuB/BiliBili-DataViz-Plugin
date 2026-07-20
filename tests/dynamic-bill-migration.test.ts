@@ -933,6 +933,98 @@ test('registered dynamic bill lifecycle uses real Dexie tables and fails closed 
   assert.equal(await db.dynamicBillMigrations.count(), 1);
 });
 
+test('dynamic bill clear waits for an in-flight sync and removes every delayed sync write', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const followingStarted = deferred<void>();
+  const followingResponse = deferred<Response>();
+  fetchHandler = input => {
+    const url = input instanceof Request ? input.url : input.toString();
+    if (url.includes('/x/web-interface/nav')) {
+      return Promise.resolve(biliApiResponse({ isLogin: true, mid: 7001 }));
+    }
+    if (url.includes('/x/relation/followings')) {
+      followingStarted.resolve(undefined);
+      return followingResponse.promise;
+    }
+    if (url.includes('/x/polymer/web-dynamic/v1/feed/all')) {
+      return Promise.resolve(biliApiResponse({ items: [], has_more: false, offset: '' }));
+    }
+    return Promise.reject(new Error(`UNEXPECTED_TEST_REQUEST:${url}`));
+  };
+
+  const syncing = dynamicBillSync.syncDynamicBillUpdates();
+  await followingStarted.promise;
+  let clearSettled = false;
+  const clearing = localDataRepo.clearLocalDataCategory('dynamicBill').finally(() => {
+    clearSettled = true;
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(clearSettled, false);
+
+  followingResponse.resolve(biliApiResponse({
+    list: [{ mid: 7001, uname: '延迟同步 UP', mtime: Math.floor(Date.now() / 1000) - DAY_MS / 1000 }],
+    total: 1,
+  }));
+  const syncResult = await syncing;
+  const clearResult = await clearing;
+
+  assert.equal(syncResult.status, 'success');
+  assert.equal(clearResult.status, 'completed');
+  assert.deepEqual(await Promise.all([
+    db.followedCreators.count(),
+    db.followedVideoUpdates.count(),
+    db.dynamicBillItems.count(),
+    db.dynamicBillExplanations.count(),
+  ]), [0, 0, 0, 0]);
+  assert.equal(storageData.has('dynamicBillSyncState'), false);
+  assert.equal(storageData.has('dynamicBillFilterPreference'), false);
+});
+
+test('dynamic bill sync does not start until clear readback has released its operation gate', async () => {
+  await seedLegacyDatabase();
+  await migration.ensureDynamicBill013Migration();
+  const clearStorageReached = deferred<void>();
+  const releaseClear = deferred<void>();
+  afterStorageRemove = async () => {
+    clearStorageReached.resolve(undefined);
+    await releaseClear.promise;
+  };
+  fetchHandler = input => {
+    const url = input instanceof Request ? input.url : input.toString();
+    if (url.includes('/x/web-interface/nav')) {
+      return Promise.resolve(biliApiResponse({ isLogin: true, mid: 7002 }));
+    }
+    if (url.includes('/x/relation/followings')) {
+      return Promise.resolve(biliApiResponse({
+        list: [{ mid: 7002, uname: '清理后同步 UP', mtime: Math.floor(Date.now() / 1000) }],
+        total: 1,
+      }));
+    }
+    if (url.includes('/x/polymer/web-dynamic/v1/feed/all')) {
+      return Promise.resolve(biliApiResponse({ items: [], has_more: false, offset: '' }));
+    }
+    return Promise.reject(new Error(`UNEXPECTED_TEST_REQUEST:${url}`));
+  };
+
+  const clearing = localDataRepo.clearLocalDataCategory('dynamicBill');
+  await clearStorageReached.promise;
+  const syncing = dynamicBillSync.syncDynamicBillUpdates();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  assert.equal(sideEffects.fetch, 0);
+
+  releaseClear.resolve(undefined);
+  const clearResult = await clearing;
+  const syncResult = await syncing;
+
+  assert.equal(clearResult.status, 'completed');
+  assert.equal(syncResult.status, 'success');
+  assert.equal(await db.followedCreators.count(), 1);
+  assert.ok(sideEffects.fetch >= 3);
+});
+
 test('independent history and favorites clears use owner hooks, read back zero, and preserve other categories', async () => {
   await seedLegacyDatabase({ seedUnrelatedRows: true });
   storageData.set('lastSyncTime', Date.now());
@@ -1293,6 +1385,13 @@ function aiResponse(content: Record<string, unknown>): Response {
   return new Response(JSON.stringify({
     choices: [{ message: { content: JSON.stringify(content) } }],
   }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+function biliApiResponse(data: unknown): Response {
+  return new Response(JSON.stringify({ code: 0, data }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   });
