@@ -7,7 +7,7 @@ import {
   type SettingsDraft,
 } from '../dashboard/modules/settings/settings-save-state.ts';
 import {
-  advanceUserConfigRevisionAfterClear,
+  clearStoredUserConfigAndAdvanceRevision,
   loadConfig,
   loadConfigSnapshot,
   normalizeUserConfig,
@@ -108,8 +108,7 @@ test('settings save rejects a stale expected config after settings were cleared'
   const initialConfig = normalizeUserConfig({});
   const store = installChromeStorageMock({ userConfig: initialConfig });
   const expected = await loadConfigSnapshot();
-  delete store.userConfig;
-  await advanceUserConfigRevisionAfterClear();
+  await clearStoredUserConfigAndAdvanceRevision();
 
   await assert.rejects(
     saveConfig({
@@ -124,7 +123,7 @@ test('settings save rejects a stale expected config after settings were cleared'
     }, expected),
     error => error instanceof Error && error.message === 'LOCAL_SETTINGS_STALE_CONFIG',
   );
-  assert.equal(store.userConfig, undefined);
+  assert.equal(store.userConfig, null);
 });
 
 test('concurrent settings pages serialize compare-and-save and reject the stale second page', async () => {
@@ -173,6 +172,10 @@ test('settings storage removal resets a stale page before a later save', async (
   assert.equal(clearedConfig.dynamicBill.aiExplanationsEnabled, false);
   assert.equal(settingsUserConfigFromStorageChange(undefined), null);
   assert.equal(settingsUserConfigFromStorageChange({ newValue: 'invalid' }), null);
+  assert.equal(
+    settingsUserConfigFromStorageChange({ newValue: null })?.ai.apiKey,
+    '',
+  );
   assert.equal(settingsManagedConfigMatches(staleObservedConfig, clearedConfig), false);
   assert.equal(settingsManagedConfigMatches(clearedConfig, clearedConfig), true);
 

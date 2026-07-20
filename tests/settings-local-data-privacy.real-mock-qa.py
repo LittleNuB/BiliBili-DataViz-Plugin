@@ -307,6 +307,19 @@ def assert_external_config_removal_resets_open_page(page: Page) -> None:
     page.reload(wait_until="networkidle")
     wait_for_settings(page)
 
+    page.evaluate("window.__BiliBillSettingsRealMockQa.emitRevisionOnlyClearEvent()")
+    assert_config_toggles(page, current_video=True, smart_favorites=False, dynamic_bill=True)
+    expect(page.get_by_text("Key 已保存", exact=True)).to_be_visible()
+    notice = page.locator(".settings-alert-success")
+    if notice.count() > 0 and "本地 AI 设置已清理" in (notice.text_content() or ""):
+        raise AssertionError("A revision-only failed clear was presented as completed")
+    if qa_state(page)["config"]["ai"]["apiKey"] != "stored-local-test-token":
+        raise AssertionError("A revision-only failed clear changed the stored config fixture")
+
+    page.evaluate("window.__BiliBillSettingsRealMockQa.reset()")
+    page.reload(wait_until="networkidle")
+    wait_for_settings(page)
+
     stale_smart_toggle = page.locator(".settings-toggle", has_text="智能收藏问答")
     stale_smart_toggle.click()
     expect(stale_smart_toggle.locator("input")).to_be_checked()
@@ -1242,6 +1255,23 @@ CHROME_MOCK_SCRIPT = r"""
       const state = loadState();
       state.clearBeforeNextConfigUpdate = true;
       saveState(state);
+      return clone(state);
+    },
+    emitRevisionOnlyClearEvent() {
+      const state = loadState();
+      const failedClearRevision = {
+        token: 'qa-failed-clear-revision',
+        configPresent: false,
+        mutation: 'clear',
+      };
+      for (const listener of storageChangeListeners) {
+        listener({
+          userConfigRevision: {
+            oldValue: clone(state.configRevision),
+            newValue: failedClearRevision,
+          },
+        }, 'local');
+      }
       return clone(state);
     },
   };

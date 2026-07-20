@@ -30,7 +30,7 @@ export async function loadConfigSnapshot(): Promise<SettingsConfigSnapshot> {
         CONFIG_KEY,
         USER_CONFIG_REVISION_STORAGE_KEY,
       ]);
-      const configPresent = result[CONFIG_KEY] !== undefined;
+      const configPresent = hasStoredUserConfig(result[CONFIG_KEY]);
       const config = configPresent ? normalizeUserConfig(result[CONFIG_KEY]) : DEFAULT_CONFIG;
       const storedRevision = settingsConfigRevisionRecord(result[USER_CONFIG_REVISION_STORAGE_KEY]);
       const revision = storedRevision?.configPresent === configPresent
@@ -59,7 +59,7 @@ export function saveConfig(
       CONFIG_KEY,
       USER_CONFIG_REVISION_STORAGE_KEY,
     ]);
-    const configPresent = result[CONFIG_KEY] !== undefined;
+    const configPresent = hasStoredUserConfig(result[CONFIG_KEY]);
     const current = configPresent ? normalizeUserConfig(result[CONFIG_KEY]) : DEFAULT_CONFIG;
     const storedRevision = settingsConfigRevisionRecord(result[USER_CONFIG_REVISION_STORAGE_KEY]);
     const currentRevision = storedRevision?.configPresent === configPresent
@@ -99,9 +99,10 @@ export function saveConfig(
   }));
 }
 
-export function advanceUserConfigRevisionAfterClear(): Promise<void> {
+export function clearStoredUserConfigAndAdvanceRevision(): Promise<void> {
   return runConfigStorageOperation(async () => {
     await chrome.storage.local.set({
+      [CONFIG_KEY]: null,
       [USER_CONFIG_REVISION_STORAGE_KEY]: createConfigRevisionRecord(false, 'clear'),
     });
   });
@@ -121,6 +122,10 @@ function createConfigRevisionRecord(
     ? crypto.randomUUID()
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   return { token, configPresent, mutation };
+}
+
+function hasStoredUserConfig(value: unknown): boolean {
+  return value !== undefined && value !== null;
 }
 
 export function normalizeUserConfig(value: unknown): UserConfig {

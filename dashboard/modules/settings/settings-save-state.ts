@@ -46,7 +46,9 @@ export function settingsUserConfigFromStorageChange(
   change: { newValue?: unknown } | undefined,
 ): UserConfig | null {
   if (!change) return null;
-  if (change.newValue === undefined) return normalizeSettingsUserConfig(DEFAULT_CONFIG);
+  if (change.newValue === undefined || change.newValue === null) {
+    return normalizeSettingsUserConfig(DEFAULT_CONFIG);
+  }
   if (!change.newValue || typeof change.newValue !== 'object' || Array.isArray(change.newValue)) {
     return null;
   }

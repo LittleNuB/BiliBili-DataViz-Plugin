@@ -4,11 +4,16 @@ import type {
 } from '../../shared/local-data-category-contract.ts';
 import { CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY } from '../../shared/current-video-primary-text-selection.ts';
 import { coordinateCurrentVideoPrimaryTextSelectionClear } from './current-video-primary-text-selection-store.ts';
-import { advanceUserConfigRevisionAfterClear } from './config-store.ts';
+import { clearStoredUserConfigAndAdvanceRevision } from './config-store.ts';
 import { runLocalSettingsClearDataOperation } from './local-settings-operation-control.ts';
 
 const LOCAL_SETTING_STORAGE_KEYS = [
   'userConfig',
+  'floatingPopupWindowId',
+  CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
+];
+
+const LOCAL_SETTING_STORAGE_KEYS_REMOVED_ON_CLEAR = [
   'floatingPopupWindowId',
   CURRENT_VIDEO_PRIMARY_TEXT_SELECTIONS_STORAGE_KEY,
 ];
@@ -21,8 +26,8 @@ export function getLocalSettingsDataCategoryRegistration(): LocalDataCategoryReg
     collectUsage: collectLocalSettingsUsage,
     clear: async () => coordinateCurrentVideoPrimaryTextSelectionClear(
       () => runLocalSettingsClearDataOperation(async () => {
-        await advanceUserConfigRevisionAfterClear();
-        await chrome.storage.local.remove(LOCAL_SETTING_STORAGE_KEYS);
+        await clearStoredUserConfigAndAdvanceRevision();
+        await chrome.storage.local.remove(LOCAL_SETTING_STORAGE_KEYS_REMOVED_ON_CLEAR);
         return { cleared: { localSettings: true } };
       }),
     ),
@@ -39,7 +44,9 @@ export function getLocalSettingsDataCategoryRegistration(): LocalDataCategoryReg
 async function collectLocalSettingsUsage(): Promise<LocalDataCategoryUsage> {
   const stored = await chrome.storage.local.get(LOCAL_SETTING_STORAGE_KEYS);
   const present = Object.fromEntries(
-    Object.entries(stored).filter(([, value]) => value !== undefined),
+    Object.entries(stored).filter(([key, value]) => (
+      value !== undefined && !(key === 'userConfig' && value === null)
+    )),
   );
   const count = Object.keys(present).length;
   return {

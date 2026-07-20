@@ -114,12 +114,9 @@ export function SettingsPage() {
       if (!changedConfig && !revision) return;
       if (changedConfig) {
         applyConfig(changedConfig, revision?.token);
-        setNotice(change?.newValue === undefined
+        setNotice(change?.newValue == null || revision?.mutation === 'clear'
           ? '本地 AI 设置已清理，当前表单已恢复默认状态。'
           : '');
-      } else if (revision?.mutation === 'clear') {
-        applyConfig(DEFAULT_CONFIG, revision.token);
-        setNotice('本地 AI 设置已清理，当前表单已恢复默认状态。');
       } else if (revision) {
         setLoadedConfigRevision(revision.token);
       }

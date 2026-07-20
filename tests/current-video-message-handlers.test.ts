@@ -1080,7 +1080,7 @@ test('clear all waits for an earlier config write and removes its completed valu
     const clearResult = await clearing;
     assert.equal(clearResult.success, true);
     assert.equal(clearResult.data?.status, 'completed');
-    assert.equal(storageValues.userConfig, undefined);
+    assert.equal(storageValues.userConfig, null);
     const revision = storageValues.userConfigRevision as {
       token?: string;
       configPresent?: boolean;
@@ -1139,7 +1139,7 @@ test('config writes started during clear all are rejected through final readback
     const clearResult = await clearing;
     assert.equal(clearResult.success, true);
     assert.equal(clearResult.data?.status, 'completed');
-    assert.equal(storageValues.userConfig, undefined);
+    assert.equal(storageValues.userConfig, null);
   } finally {
     storageRemoveGate = null;
     releaseLaterCategory.resolve();
@@ -1222,7 +1222,7 @@ test('UPDATE_CONFIG without an expected snapshot cannot write after a completed 
 
   assert.equal(update.success, false);
   assert.equal(update.error, 'LOCAL_SETTINGS_STALE_CONFIG');
-  assert.equal(storageValues.userConfig, undefined);
+  assert.equal(storageValues.userConfig, null);
   assert.equal((storageValues.userConfigRevision as { token?: string }).token, revisionBefore.token);
 });
 
@@ -1279,7 +1279,7 @@ test('clear all waits for an earlier config read and prevents normalized config 
     const clearResult = await clearing;
     assert.equal(clearResult.success, true);
     assert.equal(clearResult.data?.status, 'completed');
-    assert.equal(storageValues.userConfig, undefined);
+    assert.equal(storageValues.userConfig, null);
   } finally {
     storageGetGate = null;
     storageRemoveGate = null;
