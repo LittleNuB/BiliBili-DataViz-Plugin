@@ -1195,6 +1195,37 @@ test('concurrent Settings pages serialize UPDATE_CONFIG and reject the stale sec
   assert.equal(storedConfig.ai?.apiKey, 'fixture-first-page-key');
 });
 
+test('UPDATE_CONFIG without an expected snapshot cannot write after a completed clear', async () => {
+  resetChromeHarness();
+  await resetTranscriptDb();
+  const tabId = 18_654;
+  const senderUrl = 'https://www.bilibili.com/video/BV1LegacySettings';
+  const cleared = await sendRequest<{ status: string }>({
+    action: 'CLEAR_ALL_LOCAL_DATA',
+    params: { confirmation: '清理本地数据' },
+  }, tabId, senderUrl);
+  assert.equal(cleared.success, true);
+  assert.equal(cleared.data?.status, 'completed');
+  const revisionBefore = storageValues.userConfigRevision as { token?: string };
+
+  const update = await sendRuntimeMessage<BiliVizResponse<void>>({
+    action: 'UPDATE_CONFIG',
+    params: {
+      ai: {
+        baseURL: 'https://example.invalid',
+        apiKey: 'fixture-legacy-stale-key',
+        chatModel: 'fixture-legacy-model',
+      },
+      assistant: { currentVideoAiAssistantEnabled: true },
+    },
+  }, tabId, senderUrl);
+
+  assert.equal(update.success, false);
+  assert.equal(update.error, 'LOCAL_SETTINGS_STALE_CONFIG');
+  assert.equal(storageValues.userConfig, undefined);
+  assert.equal((storageValues.userConfigRevision as { token?: string }).token, revisionBefore.token);
+});
+
 test('clear all waits for an earlier config read and prevents normalized config from returning', async () => {
   resetChromeHarness();
   await resetTranscriptDb();
@@ -3670,7 +3701,25 @@ async function sendRequest<T>(
   tabId: number,
   senderUrl: string,
 ): Promise<BiliVizResponse<T>> {
-  return await sendRuntimeMessage<BiliVizResponse<T>>(request, tabId, senderUrl);
+  let guardedRequest = request;
+  if (request.action === 'UPDATE_CONFIG'
+      && (!request.params?.expectedConfig
+        || typeof request.params.expectedConfigRevision !== 'string')) {
+    const snapshot = await sendRuntimeMessage<BiliVizResponse<{
+      config: Record<string, unknown>;
+      revision: string;
+    }>>({ action: 'GET_CONFIG_SNAPSHOT' }, tabId, senderUrl);
+    if (!snapshot.success || !snapshot.data) return snapshot as BiliVizResponse<T>;
+    guardedRequest = {
+      ...request,
+      params: {
+        ...(request.params ?? {}),
+        expectedConfig: snapshot.data.config,
+        expectedConfigRevision: snapshot.data.revision,
+      },
+    };
+  }
+  return await sendRuntimeMessage<BiliVizResponse<T>>(guardedRequest, tabId, senderUrl);
 }
 
 async function sendPopupRequest<T>(request: BiliVizRequest): Promise<BiliVizResponse<T>> {

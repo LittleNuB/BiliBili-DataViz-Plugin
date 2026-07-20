@@ -82,6 +82,7 @@ test('settings save preserves a saved API key when updating feature switches', a
       },
     }),
   });
+  const expected = await loadConfigSnapshot();
 
   await saveConfig({
     ai: {
@@ -93,7 +94,7 @@ test('settings save preserves a saved API key when updating feature switches', a
       currentVideoAiAssistantEnabled: true,
       smartFavoritesQaAiEnabled: true,
     },
-  });
+  }, expected);
 
   const persisted = store.userConfig as ReturnType<typeof normalizeUserConfig>;
   assert.equal(persisted.ai.apiKey, 'saved-key');

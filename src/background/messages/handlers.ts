@@ -584,6 +584,7 @@ async function handleRequestExclusive<T>(
       const expectation = expectedConfig && typeof expectedConfigRevision === 'string'
         ? { config: expectedConfig, revision: expectedConfigRevision }
         : undefined;
+      if (!expectation) throw new Error('LOCAL_SETTINGS_STALE_CONFIG');
       const saved = await saveConfig(configPatch, expectation);
       if (currentVideoSummaryHighlightsConfigChanged(saved.previousConfig, saved.snapshot.config)) {
         invalidateCurrentVideoSummaryHighlightsConfig();

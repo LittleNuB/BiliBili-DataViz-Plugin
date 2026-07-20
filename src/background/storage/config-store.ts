@@ -52,7 +52,7 @@ export async function loadConfigSnapshot(): Promise<SettingsConfigSnapshot> {
 
 export function saveConfig(
   config: Partial<UserConfig>,
-  expected?: { config: UserConfig; revision: string },
+  expected: { config: UserConfig; revision: string },
 ): Promise<{ previousConfig: UserConfig; snapshot: SettingsConfigSnapshot }> {
   return runLocalSettingsWriteOperation(async () => runConfigStorageOperation(async () => {
     const result = await chrome.storage.local.get([
@@ -65,10 +65,10 @@ export function saveConfig(
     const currentRevision = storedRevision?.configPresent === configPresent
       ? storedRevision
       : createConfigRevisionRecord(configPresent, 'state');
-    if (expected && (
+    if (
       expected.revision !== currentRevision.token
       || !managedSettingsConfigMatches(expected.config, current)
-    )) {
+    ) {
       throw new Error('LOCAL_SETTINGS_STALE_CONFIG');
     }
     const updated = normalizeUserConfig({
