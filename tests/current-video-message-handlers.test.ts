@@ -63,6 +63,8 @@ let storageGetGate: {
 installChromeFake();
 const {
   clearTemporaryCurrentVideoTranscriptCache,
+  computeDailyAggregate,
+  computeStoredHistoryAggregates,
   db,
   getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys,
   getTemporaryCurrentVideoTranscriptSegments,
@@ -936,6 +938,90 @@ test('clear all suppresses a heartbeat after history readback while later catego
     releaseLaterCategory.resolve();
     storageRemoveGate = null;
     await clearing.catch(() => undefined);
+  }
+});
+
+test('history-only clear waits for stored-history aggregation and removes its final write', async () => {
+  resetChromeHarness();
+  await Promise.all([
+    db.watchHistory.clear(),
+    db.playerEvents.clear(),
+    db.dailyAggregates.clear(),
+  ]);
+  const aggregateWriteReached = deferred<void>();
+  const releaseAggregateWrite = deferred<void>();
+  installHistoryAggregateTestHook(async () => {
+    aggregateWriteReached.resolve();
+    await releaseAggregateWrite.promise;
+  });
+
+  const aggregating = computeStoredHistoryAggregates();
+  await aggregateWriteReached.promise;
+  const clearing = sendRequest<{ status: string }>({
+    action: 'CLEAR_LOCAL_DATA_CATEGORY',
+    params: { categoryId: 'history' },
+  }, 18_654, 'https://www.bilibili.com/video/BV1HistoryAggregate');
+  let clearSettled = false;
+  void clearing.then(
+    () => { clearSettled = true; },
+    () => { clearSettled = true; },
+  );
+
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(clearSettled, false);
+
+    releaseAggregateWrite.resolve();
+    await aggregating;
+    const clearResult = await clearing;
+    assert.equal(clearResult.success, true);
+    assert.equal(clearResult.data?.status, 'completed');
+    assert.equal(await db.dailyAggregates.count(), 0);
+  } finally {
+    releaseAggregateWrite.resolve();
+    await Promise.allSettled([aggregating, clearing]);
+  }
+});
+
+test('clear all waits for daily aggregation and removes its final write', async () => {
+  resetChromeHarness();
+  await Promise.all([
+    db.watchHistory.clear(),
+    db.playerEvents.clear(),
+    db.dailyAggregates.clear(),
+  ]);
+  const aggregateWriteReached = deferred<void>();
+  const releaseAggregateWrite = deferred<void>();
+  installHistoryAggregateTestHook(async () => {
+    aggregateWriteReached.resolve();
+    await releaseAggregateWrite.promise;
+  });
+
+  const aggregating = computeDailyAggregate('2026-07-20');
+  await aggregateWriteReached.promise;
+  const clearing = sendRequest<{ status: string }>({
+    action: 'CLEAR_ALL_LOCAL_DATA',
+    params: { confirmation: '清理本地数据' },
+  }, 18_655, 'https://www.bilibili.com/video/BV1DailyAggregate');
+  let clearSettled = false;
+  void clearing.then(
+    () => { clearSettled = true; },
+    () => { clearSettled = true; },
+  );
+
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(clearSettled, false);
+
+    releaseAggregateWrite.resolve();
+    assert.ok(await aggregating);
+    const clearResult = await clearing;
+    assert.equal(clearResult.success, true);
+    assert.equal(clearResult.data?.status, 'completed');
+    assert.equal(await db.dailyAggregates.count(), 0);
+  } finally {
+    releaseAggregateWrite.resolve();
+    await Promise.allSettled([aggregating, clearing]);
   }
 });
 
@@ -3485,6 +3571,9 @@ function resetChromeHarness(): void {
   delete (globalThis as typeof globalThis & {
     __biliBillCurrentVideoPrimaryTextGuardTestHook__?: unknown;
   }).__biliBillCurrentVideoPrimaryTextGuardTestHook__;
+  delete (globalThis as typeof globalThis & {
+    __biliBillHistoryAggregateTestHook__?: unknown;
+  }).__biliBillHistoryAggregateTestHook__;
   for (const key of Object.keys(storageValues)) {
     delete storageValues[key];
   }
@@ -3616,6 +3705,14 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function installHistoryAggregateTestHook(
+  hook: (phase: 'before_daily_aggregate_write') => Promise<void>,
+): void {
+  (globalThis as typeof globalThis & {
+    __biliBillHistoryAggregateTestHook__?: typeof hook;
+  }).__biliBillHistoryAggregateTestHook__ = hook;
+}
+
 function qaSessionNearByteLimit(sessionId: string): CurrentVideoQaSessionRecord {
   const now = 20_000;
   const sizingRecord: CurrentVideoQaSessionRecord = {
@@ -3661,6 +3758,8 @@ function serializedTestBytes(rows: unknown[]): number {
 async function importBundledMessageHandlers(): Promise<{
   setupMessageHandlers: () => void;
   clearTemporaryCurrentVideoTranscriptCache: typeof import('../src/background/current-video-temporary-transcript-cache.ts').clearTemporaryCurrentVideoTranscriptCache;
+  computeDailyAggregate: typeof import('../src/background/analytics/engine.ts').computeDailyAggregate;
+  computeStoredHistoryAggregates: typeof import('../src/background/analytics/engine.ts').computeStoredHistoryAggregates;
   db: typeof import('../src/background/storage/db.ts').db;
   getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys: typeof import('../src/background/storage/current-video-transcript-repo.ts').getCurrentVideoCurrentOwnerTranscriptSourceIdentityKeys;
   getTemporaryCurrentVideoTranscriptSegments: typeof import('../src/background/current-video-temporary-transcript-cache.ts').getTemporaryCurrentVideoTranscriptSegments;
@@ -3677,6 +3776,7 @@ async function importBundledMessageHandlers(): Promise<{
     stdin: {
       contents: [
         "export { setupMessageHandlers } from './src/background/messages/handlers.ts';",
+        "export { computeDailyAggregate, computeStoredHistoryAggregates } from './src/background/analytics/engine.ts';",
         "export { clearTemporaryCurrentVideoTranscriptCache, getTemporaryCurrentVideoTranscriptSegments, putTemporaryCurrentVideoTranscriptEvidence } from './src/background/current-video-temporary-transcript-cache.ts';",
         "export { retainTemporaryTranscriptOwnerForContextSnapshot } from './src/background/current-video-transcript-owner.ts';",
         "export { invalidateCurrentVideoFullTextQaSources } from './src/background/current-video-full-text-qa.ts';",

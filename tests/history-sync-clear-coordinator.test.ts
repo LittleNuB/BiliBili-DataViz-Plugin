@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   hasActiveHistoryDataOperation,
+  runHistoryAggregateDataOperation,
   runHistoryClearDataOperation,
   runHistoryPlayerEventDataOperation,
   runHistorySyncDataOperation,
@@ -108,6 +109,48 @@ test('player event writes are suppressed for the full history clear window', asy
   });
   assert.equal(written, false);
   assert.equal(eventRan, false);
+
+  releaseClear.resolve();
+  await clearing;
+});
+
+test('history clear waits for an aggregate write that already started', async () => {
+  const aggregateStarted = deferred<void>();
+  const releaseAggregate = deferred<void>();
+  const aggregateWrite = runHistoryAggregateDataOperation(async () => {
+    aggregateStarted.resolve();
+    await releaseAggregate.promise;
+  });
+  await aggregateStarted.promise;
+
+  let clearRan = false;
+  const clearing = runHistoryClearDataOperation(async () => {
+    clearRan = true;
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(clearRan, false);
+
+  releaseAggregate.resolve();
+  assert.equal(await aggregateWrite, true);
+  await clearing;
+  assert.equal(clearRan, true);
+});
+
+test('aggregate writes are suppressed for the full history clear window', async () => {
+  const clearStarted = deferred<void>();
+  const releaseClear = deferred<void>();
+  const clearing = runHistoryClearDataOperation(async () => {
+    clearStarted.resolve();
+    await releaseClear.promise;
+  });
+  await clearStarted.promise;
+
+  let aggregateRan = false;
+  const written = await runHistoryAggregateDataOperation(async () => {
+    aggregateRan = true;
+  });
+  assert.equal(written, false);
+  assert.equal(aggregateRan, false);
 
   releaseClear.resolve();
   await clearing;

@@ -327,6 +327,8 @@ def assert_clear_all_success(page: Page) -> None:
     page.get_by_role("button", name="清理本地数据", exact=True).click()
     danger = page.locator(".settings-danger-box")
     expect(danger).to_be_visible()
+    expect(danger).to_contain_text("当前视频主要文本选择")
+    expect(danger).to_contain_text("浮窗状态")
     confirm = danger.get_by_role("button", name="确认清理", exact=True)
     expect(confirm).to_be_disabled()
     confirmation = danger.locator("input")
@@ -337,7 +339,10 @@ def assert_clear_all_success(page: Page) -> None:
     confirm.click()
 
     expect(danger).to_be_hidden()
-    expect(page.locator(".settings-alert-success")).to_contain_text("已清理本地数据")
+    success = page.locator(".settings-alert-success")
+    expect(success).to_contain_text("已清理本地数据")
+    expect(success).to_contain_text("当前视频主要文本选择")
+    expect(success).to_contain_text("浮窗状态")
     assert_config_toggles(page, current_video=False, smart_favorites=False, dynamic_bill=False)
     state = qa_state(page)
     if state["clearAllCount"] != 1:

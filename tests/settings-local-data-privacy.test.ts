@@ -106,7 +106,16 @@ test('settings page keeps Dynamic Bill storage internals out of ordinary copy', 
 });
 
 test('settings hides missing or identifier-only paused creator names', async () => {
-  for (const creatorName of ['', '9527', 'UP 9527', '  up   9527  ']) {
+  for (const creatorName of [
+    '',
+    '9527',
+    'UP 9527',
+    '  up   9527  ',
+    'UP9527',
+    'UP主9527',
+    'UP-9527',
+    'UP 主 - 9527',
+  ]) {
     assert.equal(
       dynamicBillCreatorDisplayName({ creatorMid: 9527, creatorName }),
       UNAVAILABLE_DYNAMIC_BILL_CREATOR_NAME,
@@ -213,7 +222,7 @@ test('settings local data operation messages stay bounded to counts', () => {
       localSettings: true,
     },
   } satisfies LocalDataOperationResult);
-  assert.match(clearAllMessage, /本地 AI 设置和功能开关也已恢复为默认状态/);
+  assert.match(clearAllMessage, /当前视频主要文本选择和浮窗状态也已恢复为默认状态/);
   assert.doesNotMatch(clearAllMessage, /暂停|轮换|动态反馈/);
   assertCleanUserCopy([subtitleMessage, categoryMessage, clearAllMessage].join('\n'));
 });
@@ -314,6 +323,8 @@ test('settings dangerous clear scope requires explicit Chinese confirmation', ()
   assert.equal(LOCAL_DATA_CLEAR_CONFIRMATION, '清理本地数据');
   const scope = dangerousLocalDataClearScope().join('\n');
   assert.match(scope, /本地 AI 服务设置/);
+  assert.match(scope, /当前视频主要文本选择/);
+  assert.match(scope, /浮窗状态/);
   assertCleanUserCopy(scope);
 });
 

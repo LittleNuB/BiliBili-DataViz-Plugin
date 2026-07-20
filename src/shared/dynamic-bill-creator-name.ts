@@ -8,7 +8,11 @@ export function dynamicBillCreatorDisplayName(input: {
     ? input.creatorName.trim().replace(/\s+/g, ' ')
     : '';
   const rawMid = String(input.creatorMid);
-  if (!name || name === rawMid || name.toLocaleLowerCase() === `up ${rawMid}`) {
+  const identifierLike = name.toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  if (!name
+    || identifierLike === rawMid
+    || identifierLike === `up${rawMid}`
+    || identifierLike === `up主${rawMid}`) {
     return UNAVAILABLE_DYNAMIC_BILL_CREATOR_NAME;
   }
   return name;

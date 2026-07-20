@@ -183,7 +183,7 @@ export function dangerousLocalDataClearScope(): string[] {
     '观看历史、播放器事件和统计聚合。',
     '收藏夹快照、智能收藏索引和收藏问答本地依据。',
     'B站字幕正文、摘要与亮点、问答会话、动态账单记录、动态账单反馈和解释、盲盒抽取记录。',
-    '本地 AI 服务设置、密钥保存状态和功能开关。',
+    '本地 AI 服务设置、密钥保存状态、功能开关、当前视频主要文本选择和浮窗状态。',
   ];
 }
 
@@ -274,7 +274,9 @@ function buildCompletedOperationMessage(result: LocalDataOperationResult): strin
 
   return [
     `已清理本地数据：观看历史 ${result.cleared.historyRecords ?? 0} 条、收藏 ${result.cleared.favoriteItems ?? 0} 条、字幕正文 ${result.cleared.currentVideoSubtitleSegments ?? 0} 段、摘要与亮点 ${result.cleared.currentVideoSummaryHighlightParts ?? 0} 个分P、问答会话 ${result.cleared.currentVideoQaSessions ?? 0} 个、动态账单 ${result.cleared.dynamicBillItems ?? 0} 项、盲盒抽取记录 ${result.cleared.blindBoxDrawHistory ?? 0} 条。`,
-    result.cleared.localSettings ? '本地 AI 设置和功能开关也已恢复为默认状态。' : '',
+    result.cleared.localSettings
+      ? '本地 AI 设置、密钥保存状态、功能开关、当前视频主要文本选择和浮窗状态也已恢复为默认状态。'
+      : '',
   ].filter(Boolean).join(' ');
 }
 
