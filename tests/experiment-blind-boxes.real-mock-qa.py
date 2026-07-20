@@ -147,6 +147,15 @@ def assert_failure_mode(page: Page) -> None:
     expect(page.get_by_text("本地收藏暂时打不开", exact=True)).to_be_visible()
     expect(page.get_by_text("暂时无法取得 UP 公开投稿", exact=True)).to_be_visible()
     expect(page.get_by_role("button", name="重新生成这一页")).to_have_count(4)
+
+    before_retry = page.evaluate("window.__BiliBillBlindBoxRealMockQa.state().requestCount")
+    page.get_by_role("button", name="重新生成这一页").first.click()
+    page.wait_for_function(
+        "before => window.__BiliBillBlindBoxRealMockQa.state().requestCount > before",
+        arg=before_retry,
+    )
+    expect(page.locator('[data-action="explain"]')).to_have_count(4)
+    expect(page.locator('[data-action="open-video"]')).to_have_count(0)
     assert_clean_visible_copy(page)
     assert_no_horizontal_overflow(page, "failure desktop")
 
@@ -250,6 +259,7 @@ def chrome_mock_script() -> str:
 (() => {{
   const MODE_KEY = 'bili-bill-blind-box-real-mock-mode';
   const fixtures = {fixtures};
+  let requestCount = 0;
   const selected = () => localStorage.getItem(MODE_KEY) === 'failure' ? 'failure' : 'ready';
   window.chrome = {{
     runtime: {{
@@ -258,6 +268,7 @@ def chrome_mock_script() -> str:
           return {{ success: true, data: {{ lastSyncTime: 0, totalRecords: 0 }} }};
         }}
         if (message?.action === 'GET_EXPERIMENT_DATA') {{
+          requestCount += 1;
           return {{ success: true, data: structuredClone(fixtures[selected()]) }};
         }}
         return {{ success: false, error: 'QA mock does not implement action: ' + message?.action }};
@@ -267,6 +278,7 @@ def chrome_mock_script() -> str:
   }};
   window.__BiliBillBlindBoxRealMockQa = {{
     setMode(mode) {{ localStorage.setItem(MODE_KEY, mode); }},
+    state() {{ return {{ mode: selected(), requestCount }}; }},
   }};
 }})();
 """
