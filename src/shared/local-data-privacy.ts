@@ -272,8 +272,10 @@ function buildCompletedOperationMessage(result: LocalDataOperationResult): strin
     return `已清理动态账单本地数据：账单 ${result.cleared.dynamicBillItems ?? 0} 项、解释 ${result.cleared.dynamicBillExplanations ?? 0} 条。`;
   }
 
+  const completedCategories = result.categoryResults?.completed.map(item => item.label) ?? [];
   return [
-    `已清理本地数据：观看历史 ${result.cleared.historyRecords ?? 0} 条、收藏 ${result.cleared.favoriteItems ?? 0} 条、字幕正文 ${result.cleared.currentVideoSubtitleSegments ?? 0} 段、摘要与亮点 ${result.cleared.currentVideoSummaryHighlightParts ?? 0} 个分P、问答会话 ${result.cleared.currentVideoQaSessions ?? 0} 个、动态账单 ${result.cleared.dynamicBillItems ?? 0} 项、盲盒抽取记录 ${result.cleared.blindBoxDrawHistory ?? 0} 条。`,
+    '已清理本地数据并完成回读。',
+    completedCategories.length > 0 ? `已完成类别：${completedCategories.join('、')}。` : '',
     result.cleared.localSettings
       ? '本地 AI 设置、密钥保存状态、功能开关、当前视频主要文本选择和浮窗状态也已恢复为默认状态。'
       : '',

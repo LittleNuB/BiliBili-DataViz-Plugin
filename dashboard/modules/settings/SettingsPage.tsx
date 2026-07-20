@@ -33,6 +33,7 @@ import {
   formatSettingsError,
   normalizeSettingsUserConfig,
   saveSettingsDraft,
+  settingsUserConfigFromStorageChange,
 } from './settings-save-state';
 import { downloadLocalDataDiagnostic } from './settings-diagnostic-download';
 
@@ -66,6 +67,7 @@ const DEFAULT_AI_FORM: AiFormState = {
 const DEFAULT_ASSISTANT: AssistantConfig = DEFAULT_CONFIG.assistant;
 
 const DEFAULT_DYNAMIC_BILL: DynamicBillConfig = DEFAULT_CONFIG.dynamicBill;
+const CLEAR_COMPLETED_REFRESH_FAILED_MESSAGE = '清理已完成并完成回读，但页面最新状态刷新失败。请重新打开设置页后核对。';
 
 export function SettingsPage() {
   const [form, setForm] = useState<AiFormState>(DEFAULT_AI_FORM);
@@ -98,9 +100,13 @@ export function SettingsPage() {
     ) => {
       if (areaName !== 'local') return;
       const change = changes.userConfig;
-      if (!change?.newValue) return;
-      applyConfig(change.newValue as Partial<UserConfig>);
-      setNotice('');
+      const changedConfig = settingsUserConfigFromStorageChange(change);
+      if (!changedConfig) return;
+      applyConfig(changedConfig);
+      setNotice(change.newValue === undefined
+        ? '本地 AI 设置已清理，当前表单已恢复默认状态。'
+        : '');
+      setError('');
       setLastTest(null);
     };
 
@@ -246,8 +252,10 @@ export function SettingsPage() {
       if (result.status === 'partial_failure') {
         setLocalDataError(message);
         await refreshLocalData({ preserveError: true });
-      } else if (await refreshLocalData()) {
+      } else {
+        const refreshed = await refreshLocalData();
         setNotice(message);
+        if (!refreshed) setLocalDataError(CLEAR_COMPLETED_REFRESH_FAILED_MESSAGE);
       }
     } catch (err) {
       setLocalDataError(formatLocalDataError(err));
@@ -327,6 +335,7 @@ export function SettingsPage() {
     setBusy('clear-all');
     setNotice('');
     setError('');
+    setLocalDataError('');
     try {
       const result = await requestSW<LocalDataOperationResult>('CLEAR_ALL_LOCAL_DATA', {
         confirmation: clearConfirmText.trim(),
@@ -338,8 +347,12 @@ export function SettingsPage() {
       if (partialFailure) setLocalDataError(message);
       const configRefreshed = await refreshConfig();
       const localDataRefreshed = await refreshLocalData({ preserveError: partialFailure });
-      if (!partialFailure && configRefreshed && localDataRefreshed) {
+      if (!partialFailure) {
         setNotice(message);
+        if (!configRefreshed || !localDataRefreshed) {
+          setError('');
+          setLocalDataError(CLEAR_COMPLETED_REFRESH_FAILED_MESSAGE);
+        }
       }
     } catch (err) {
       setLocalDataError(formatLocalDataError(err));

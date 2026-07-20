@@ -126,6 +126,7 @@ def run_browser_qa() -> None:
             assert_paused_creator_restore(page)
             assert_no_horizontal_overflow(page, "desktop settings")
             assert_no_forbidden_text(page.locator("body").inner_text(), FORBIDDEN_VISIBLE_TERMS, "settings page")
+            assert_external_config_removal_resets_open_page(page)
 
             enable_smart_favorites_and_save(page)
             before_nav_reads = qa_state(page)["summaryRequestCount"]
@@ -157,6 +158,8 @@ def run_browser_qa() -> None:
             assert_history_syncing_keeps_recent_time(page)
             assert_independent_category_clears(page)
             assert_metadata_only_category_clears(page)
+            assert_category_clear_receipt_survives_refresh_failure(page)
+            assert_clear_all_receipt_survives_refresh_failure(page)
             assert_clear_all_success(page)
             assert_clear_all_partial_failure_survives_refresh(page)
 
@@ -299,6 +302,27 @@ def assert_paused_creator_restore(page: Page) -> None:
         raise AssertionError(f"Unexpected restored creator state: {state!r}")
 
 
+def assert_external_config_removal_resets_open_page(page: Page) -> None:
+    page.evaluate("window.__BiliBillSettingsRealMockQa.removeUserConfigExternally()")
+    assert_config_toggles(page, current_video=False, smart_favorites=False, dynamic_bill=False)
+    expect(page.locator(".settings-alert-success")).to_contain_text("当前表单已恢复默认状态")
+
+    smart_toggle = page.locator(".settings-toggle", has_text="智能收藏问答")
+    smart_toggle.click()
+    page.get_by_role("button", name="保存设置", exact=True).click()
+    page.wait_for_function(
+        "window.__BiliBillSettingsRealMockQa.state().updateConfigCount === 1"
+    )
+    state = qa_state(page)
+    if state["config"]["ai"]["apiKey"] != "":
+        raise AssertionError("A cleared mock API key was restored by a stale Settings page")
+    assert_config_toggles(page, current_video=False, smart_favorites=True, dynamic_bill=False)
+
+    page.evaluate("window.__BiliBillSettingsRealMockQa.reset()")
+    page.reload(wait_until="networkidle")
+    wait_for_settings(page)
+
+
 def assert_metadata_only_category_clears(page: Page) -> None:
     page.evaluate("window.__BiliBillSettingsRealMockQa.reset({metadataOnlyCategories: true})")
     page.reload(wait_until="networkidle")
@@ -317,6 +341,46 @@ def assert_metadata_only_category_clears(page: Page) -> None:
         expect(page.locator(".settings-alert-success")).to_contain_text("回读后为 0")
         if category_id not in qa_state(page)["clearedCategories"]:
             raise AssertionError(f"Metadata-only category was not cleared: {category_id}")
+
+
+def assert_category_clear_receipt_survives_refresh_failure(page: Page) -> None:
+    page.evaluate(
+        "window.__BiliBillSettingsRealMockQa.reset({failSummaryAfterCategoryClear: true})"
+    )
+    page.reload(wait_until="networkidle")
+    wait_for_settings(page)
+
+    page.get_by_role("button", name="清理观看历史", exact=True).click()
+    expect(page.locator(".settings-alert-success")).to_contain_text("已清理观看历史")
+    warning = page.locator(".settings-alert-error")
+    expect(warning).to_contain_text("清理已完成并完成回读")
+    expect(warning).to_contain_text("页面最新状态刷新失败")
+    assert_no_forbidden_text(warning.inner_text(), ["QA_SUMMARY_REFRESH_FAILED"], "category refresh warning")
+
+
+def assert_clear_all_receipt_survives_refresh_failure(page: Page) -> None:
+    cases = [
+        ("failSummaryAfterClearAll", "QA_SUMMARY_REFRESH_FAILED"),
+        ("failConfigAfterClearAll", "QA_CONFIG_REFRESH_FAILED"),
+    ]
+    for option, raw_error in cases:
+        page.evaluate(
+            "(option) => window.__BiliBillSettingsRealMockQa.reset({[option]: true})",
+            option,
+        )
+        page.reload(wait_until="networkidle")
+        wait_for_settings(page)
+
+        page.get_by_role("button", name="清理本地数据", exact=True).click()
+        danger = page.locator(".settings-danger-box")
+        danger.locator("input").fill("清理本地数据")
+        danger.get_by_role("button", name="确认清理", exact=True).click()
+
+        expect(page.locator(".settings-alert-success")).to_contain_text("已清理本地数据并完成回读")
+        warning = page.locator(".settings-alert-error")
+        expect(warning).to_contain_text("清理已完成并完成回读")
+        expect(warning).to_contain_text("页面最新状态刷新失败")
+        assert_no_forbidden_text(warning.inner_text(), [raw_error], "clear-all refresh warning")
 
 
 def assert_clear_all_success(page: Page) -> None:
@@ -340,7 +404,9 @@ def assert_clear_all_success(page: Page) -> None:
 
     expect(danger).to_be_hidden()
     success = page.locator(".settings-alert-success")
-    expect(success).to_contain_text("已清理本地数据")
+    expect(success).to_contain_text("已清理本地数据并完成回读")
+    expect(success).to_contain_text("已完成类别：观看历史、收藏与智能索引、B站字幕正文")
+    expect(success).not_to_contain_text("字幕正文 0 段")
     expect(success).to_contain_text("当前视频主要文本选择")
     expect(success).to_contain_text("浮窗状态")
     assert_config_toggles(page, current_video=False, smart_favorites=False, dynamic_bill=False)
@@ -507,6 +573,7 @@ def assert_list_equal(actual: list, expected: list, label: str) -> None:
 CHROME_MOCK_SCRIPT = r"""
 (() => {
   const STORE_KEY = 'bili-bill-settings-real-mock-qa-v1';
+  const storageChangeListeners = new Set();
   const FIXED_NOW = 1718000000000;
   const CATEGORY_IDS = [
     'history',
@@ -567,7 +634,10 @@ CHROME_MOCK_SCRIPT = r"""
       restoredCreatorMids: [],
       clearAllCount: 0,
       nextClearAllMode: 'completed',
+      failSummaryAfterCategoryClear: false,
       failSummaryAfterClearAll: false,
+      failConfigAfterClearAll: false,
+      failNextConfig: false,
       failNextSummary: false,
       metadataOnlyCategories: false,
       historySyncing: false,
@@ -862,6 +932,11 @@ CHROME_MOCK_SCRIPT = r"""
         };
         break;
       case 'GET_CONFIG':
+        if (state.failNextConfig) {
+          state.failNextConfig = false;
+          saveState(state);
+          return { success: false, error: 'QA_CONFIG_REFRESH_FAILED' };
+        }
         state.configRequestCount += 1;
         data = clone(state.config);
         break;
@@ -901,6 +976,10 @@ CHROME_MOCK_SCRIPT = r"""
           return { success: false, error: 'LOCAL_DATA_CATEGORY_NOT_CLEARABLE' };
         }
         state.clearedCategories = [...new Set([...(state.clearedCategories || []), categoryId])];
+        if (state.failSummaryAfterCategoryClear) {
+          state.failNextSummary = true;
+          state.failSummaryAfterCategoryClear = false;
+        }
         data = {
           operation: 'clear_local_data_category',
           status: 'completed',
@@ -937,6 +1016,10 @@ CHROME_MOCK_SCRIPT = r"""
         if (state.failSummaryAfterClearAll) {
           state.failNextSummary = true;
           state.failSummaryAfterClearAll = false;
+        }
+        if (state.failConfigAfterClearAll) {
+          state.failNextConfig = true;
+          state.failConfigAfterClearAll = false;
         }
         state.nextClearAllMode = 'completed';
         data = {
@@ -1011,8 +1094,12 @@ CHROME_MOCK_SCRIPT = r"""
     },
     storage: {
       onChanged: {
-        addListener() {},
-        removeListener() {},
+        addListener(listener) {
+          storageChangeListeners.add(listener);
+        },
+        removeListener(listener) {
+          storageChangeListeners.delete(listener);
+        },
       },
       local: {
         async get() {
@@ -1038,6 +1125,16 @@ CHROME_MOCK_SCRIPT = r"""
     reset(options = {}) {
       const state = { ...initialState(), ...clone(options) };
       saveState(state);
+      return clone(state);
+    },
+    removeUserConfigExternally() {
+      const state = loadState();
+      const oldValue = clone(state.config);
+      state.config = clearedConfig();
+      saveState(state);
+      for (const listener of storageChangeListeners) {
+        listener({ userConfig: { oldValue, newValue: undefined } }, 'local');
+      }
       return clone(state);
     },
   };

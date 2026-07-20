@@ -210,6 +210,7 @@ test('settings local data operation messages stay bounded to counts', () => {
 
   const clearAllMessage = buildLocalDataOperationMessage({
     operation: 'clear_all_local_data',
+    status: 'completed',
     completedAt: 1_718_000_000_000,
     cleared: {
       historyRecords: 128,
@@ -221,8 +222,23 @@ test('settings local data operation messages stay bounded to counts', () => {
       blindBoxDrawHistory: 2,
       localSettings: true,
     },
+    categoryResults: {
+      completed: [
+        { id: 'history', label: '观看历史', beforeCount: 128, beforeUsageBytes: 4096, afterCount: 0, afterUsageBytes: 0 },
+        { id: 'favorites', label: '收藏与智能索引', beforeCount: 24, beforeUsageBytes: 2048, afterCount: 0, afterUsageBytes: 0 },
+        { id: 'currentVideoSubtitles', label: 'B站字幕正文', beforeCount: 1, beforeUsageBytes: 96, afterCount: 0, afterUsageBytes: 0 },
+        { id: 'currentVideoSummaryHighlights', label: '摘要与亮点', beforeCount: 2, beforeUsageBytes: 2048, afterCount: 0, afterUsageBytes: 0 },
+        { id: 'currentVideoQaSessions', label: '问答会话', beforeCount: 1, beforeUsageBytes: 1024, afterCount: 0, afterUsageBytes: 0 },
+        { id: 'dynamicBill', label: '动态账单', beforeCount: 0, beforeUsageBytes: 160, afterCount: 0, afterUsageBytes: 0 },
+        { id: 'blindBoxDrawHistory', label: '盲盒抽取记录', beforeCount: 2, beforeUsageBytes: 96, afterCount: 0, afterUsageBytes: 0 },
+        { id: 'localSettings', label: '本地 AI 设置', beforeCount: 3, beforeUsageBytes: 512, afterCount: 0, afterUsageBytes: 0 },
+      ],
+      failed: [],
+    },
   } satisfies LocalDataOperationResult);
+  assert.match(clearAllMessage, /已完成类别：观看历史、收藏与智能索引、B站字幕正文/);
   assert.match(clearAllMessage, /当前视频主要文本选择和浮窗状态也已恢复为默认状态/);
+  assert.doesNotMatch(clearAllMessage, /字幕正文 0 段|动态账单 0 项/);
   assert.doesNotMatch(clearAllMessage, /暂停|轮换|动态反馈/);
   assertCleanUserCopy([subtitleMessage, categoryMessage, clearAllMessage].join('\n'));
 });

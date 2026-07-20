@@ -40,6 +40,17 @@ export type SaveSettingsDraftResult =
     error: string;
   };
 
+export function settingsUserConfigFromStorageChange(
+  change: { newValue?: unknown } | undefined,
+): UserConfig | null {
+  if (!change) return null;
+  if (change.newValue === undefined) return normalizeSettingsUserConfig(DEFAULT_CONFIG);
+  if (!change.newValue || typeof change.newValue !== 'object' || Array.isArray(change.newValue)) {
+    return null;
+  }
+  return normalizeSettingsUserConfig(change.newValue as Partial<UserConfig>);
+}
+
 export async function saveSettingsDraft(
   input: SaveSettingsDraftInput,
   dependencies: SaveSettingsDraftDependencies,

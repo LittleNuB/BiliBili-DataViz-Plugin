@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   saveSettingsDraft,
+  settingsUserConfigFromStorageChange,
   type SettingsDraft,
 } from '../dashboard/modules/settings/settings-save-state.ts';
 import {
@@ -97,6 +98,48 @@ test('settings save preserves a saved API key when updating feature switches', a
   assert.equal(persisted.assistant.currentVideoAiAssistantEnabled, true);
   assert.equal(persisted.assistant.smartFavoritesQaAiEnabled, true);
   assert.equal('videoBlindBoxAiEnabled' in persisted.assistant, false);
+});
+
+test('settings storage removal resets a stale page before a later save', async () => {
+  const clearedConfig = settingsUserConfigFromStorageChange({ newValue: undefined });
+  assert.ok(clearedConfig);
+  assert.equal(clearedConfig.ai.apiKey, '');
+  assert.equal(clearedConfig.assistant.currentVideoAiAssistantEnabled, false);
+  assert.equal(clearedConfig.dynamicBill.aiExplanationsEnabled, false);
+  assert.equal(settingsUserConfigFromStorageChange(undefined), null);
+  assert.equal(settingsUserConfigFromStorageChange({ newValue: 'invalid' }), null);
+
+  let persistedConfig = clearedConfig;
+  const result = await saveSettingsDraft(
+    {
+      persistedConfig: clearedConfig,
+      draft: {
+        ai: {
+          baseURL: clearedConfig.ai.baseURL,
+          chatModel: clearedConfig.ai.chatModel,
+          apiKeyInput: '',
+          savedApiKey: clearedConfig.ai.apiKey,
+        },
+        assistant: {
+          ...clearedConfig.assistant,
+          smartFavoritesQaAiEnabled: true,
+        },
+        dynamicBill: clearedConfig.dynamicBill,
+      },
+    },
+    {
+      persist: async config => {
+        persistedConfig = config;
+      },
+      applyPersistedConfig: () => undefined,
+    },
+  );
+
+  assert.equal(result.status, 'success');
+  assert.equal(persistedConfig.ai.apiKey, '');
+  assert.equal(persistedConfig.assistant.currentVideoAiAssistantEnabled, false);
+  assert.equal(persistedConfig.assistant.smartFavoritesQaAiEnabled, true);
+  assert.equal(persistedConfig.dynamicBill.aiExplanationsEnabled, false);
 });
 
 test('settings save failure keeps the complete draft and does not apply unpersisted state', async () => {
