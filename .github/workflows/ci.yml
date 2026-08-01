@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-qa.txt
+      - run: npm ci
+      - run: python -m pip install -r requirements-qa.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run qa:preference-word-cloud
+        env:
+          BILI_BILL_REAL_MOCK_QA_SKIP_BUILD: "1"
+      - run: npm audit

@@ -14,10 +14,12 @@ export default defineConfig({
     jsxImportSource: 'preact',
   },
   resolve: {
-    alias: {
-      '@shared': resolveRoot('src/shared'),
-      '@background': resolveRoot('src/background'),
-    },
+    alias: [
+      { find: '@shared', replacement: resolveRoot('src/shared') },
+      { find: '@background', replacement: resolveRoot('src/background') },
+      // The ECharts 6 word-cloud package imports utilities from the full entry; bind that exact import to core.
+      { find: /^echarts$/, replacement: 'echarts/core' },
+    ],
   },
   build: {
     target: 'es2022',

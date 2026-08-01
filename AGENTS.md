@@ -15,6 +15,7 @@ This repository is worked on by multiple Codex development threads. Follow this 
 - Do not upload full watch history, full favorites, full following lists, full feedback records, full notes, or full local database contents.
 - Do not write back to Bilibili relationships or content: no follow/unfollow, favorite-folder edits, comments, likes, coins, or collection mutations.
 - Use current browser extension runtime state only when a task explicitly needs logged-in smoke testing. Never extract credentials or session data from disk.
+- Keep Manifest permissions minimal. Do not add the `cookies` permission unless an accepted issue introduces a reviewed `chrome.cookies` use case.
 
 ## Language And UX Invariants
 

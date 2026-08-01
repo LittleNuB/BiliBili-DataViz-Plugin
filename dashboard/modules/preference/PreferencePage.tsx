@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
+import type { CustomSeriesOption, EChartsOption } from 'echarts';
 import { prefData, prefError, prefLoading } from '../../signals';
 import { requestSW } from '../../utils/messaging';
 import type {
@@ -360,20 +361,30 @@ function buildDurationBarOption(buckets: DurationBucket[]) {
   };
 }
 
-function buildWordCloudOption(tags: Array<{ name: string; count: number }>) {
-  return {
-    tooltip: { show: true },
-    series: [{
-      type: 'wordCloud' as const,
+function buildWordCloudOption(tags: Array<{ name: string; count: number }>): EChartsOption {
+  const wordCloudSeries = {
+    type: 'custom' as const,
+    renderItem: 'wordCloud',
+    coordinateSystem: 'none' as const,
+    itemPayload: {
       shape: 'circle',
       sizeRange: [12, 40],
       rotationRange: [-45, 45],
-      textStyle: {
-        fontFamily: '"Noto Sans SC", sans-serif',
-        color: () => CHART_COLORS[Math.floor(Math.random() * CHART_COLORS.length)],
-      },
-      data: tags.slice(0, 50).map(tag => ({ name: tag.name, value: tag.count })),
-    }],
+    },
+    label: {
+      fontFamily: '"Noto Sans SC", sans-serif',
+    },
+    data: tags.slice(0, 50).map((tag, index) => ({
+      name: tag.name,
+      value: [tag.name, tag.count],
+      itemStyle: { color: CHART_COLORS[index % CHART_COLORS.length] },
+    })),
+  };
+
+  return {
+    tooltip: { show: true },
+    // The plugin registers a named custom renderer that ECharts core does not expose in its union type.
+    series: [wordCloudSeries as unknown as CustomSeriesOption],
   };
 }
 
