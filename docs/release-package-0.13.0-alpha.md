@@ -25,18 +25,18 @@ The ZIP and checksum are local generated release artifacts and are excluded from
 
 ## Method
 
-`npm run package:release` invokes the reviewed PowerShell packager with no user profile loading. The packager:
+`npm run package:release` first performs a fresh production build, then invokes the reviewed PowerShell packager with no user profile loading. The packager:
 
-1. Reads only the current `dist/` tree.
-2. Sorts all file paths.
-3. Writes extension-relative paths directly at ZIP root.
-4. Uses a fixed ZIP entry timestamp and compression level.
-5. Writes a SHA-256 sidecar.
-6. Extracts to a newly generated system-temp directory.
-7. Compares every extracted file path and SHA-256 with `dist/`.
-8. Checks required project and third-party license files.
-9. Rejects source, dependency, git, credential-like, and nested `dist/` paths.
-10. Removes only the verified temporary audit directory.
+1. Requires an exact semantic version matching package and Manifest metadata.
+2. Validates canonical artifact paths before any write or cleanup.
+3. Checks all declared runtime entry points, Manifest resources, project license, and third-party notices.
+4. Preflights `dist/` paths and text content for source/dependency directories, reparse points, credential-like filenames, and common secret markers.
+5. Sorts all file paths and writes a temporary ZIP with extension-relative paths at ZIP root.
+6. Uses a fixed ZIP entry timestamp and compression level.
+7. Extracts to a newly generated system-temp directory and compares every path and SHA-256 with `dist/`.
+8. Promotes the temporary ZIP and checksum only after all checks pass.
+9. Refuses to overwrite a different existing release artifact.
+10. Removes only canonical temporary files under the artifact directory and verified system-temp audit directory.
 
 Two consecutive package runs produced the same byte size and SHA-256.
 
