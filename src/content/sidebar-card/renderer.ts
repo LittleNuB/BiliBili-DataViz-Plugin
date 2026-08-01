@@ -1,4 +1,5 @@
 import type { QuickStats } from '../../shared/types/analytics';
+import { SIDEBAR_CARD_ID } from './placement';
 
 const STYLE_ID = 'bdc-sidebar-styles';
 
@@ -11,6 +12,12 @@ const CSS = `
   color: #e0e0e0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans SC", sans-serif;
   box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+.bdc-card--feed {
+  align-self: stretch;
+  box-sizing: border-box;
+  min-width: 0;
+  margin-bottom: 0;
 }
 .bdc-card-header {
   font-size: 15px;
@@ -87,7 +94,7 @@ export function buildSidebarCard(data: QuickStats): HTMLElement {
 
   const card = document.createElement('div');
   card.className = 'bdc-card';
-  card.id = 'bdc-sidebar-card';
+  card.id = SIDEBAR_CARD_ID;
 
   card.innerHTML = `
     <div class="bdc-card-header">本周消费小结</div>
