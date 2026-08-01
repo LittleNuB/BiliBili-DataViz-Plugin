@@ -37,4 +37,7 @@ jobs:
       - run: npm run qa:preference-word-cloud
         env:
           BILI_BILL_REAL_MOCK_QA_SKIP_BUILD: "1"
+      - run: npm run qa:sidebar-card
+        env:
+          BILI_BILL_REAL_MOCK_QA_SKIP_BUILD: "1"
       - run: npm audit

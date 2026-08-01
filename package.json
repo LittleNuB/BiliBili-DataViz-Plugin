@@ -14,6 +14,7 @@
     "test": "node --test tests/*.test.ts",
     "audit:high": "npm audit --audit-level=high",
     "qa:preference-word-cloud": "python tests/preference-word-cloud.real-mock-qa.py",
+    "qa:sidebar-card": "python tests/sidebar-card.real-mock-qa.py",
     "verify:release-dist": "node scripts/verify-release-dist.mjs",
     "package:release": "npm run build && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1",
     "test:experiments": "node --test tests/experiment-blind-boxes.test.ts",
