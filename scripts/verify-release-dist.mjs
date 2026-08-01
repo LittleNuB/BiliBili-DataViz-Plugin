@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getRequiredReleaseEntryFiles } from './release-entry-contract.mjs';
+import { Script } from 'node:vm';
+import {
+  collectManifestContentScriptFiles,
+  getRequiredReleaseEntryFiles,
+} from './release-entry-contract.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distRoot = path.join(repositoryRoot, 'dist');
@@ -27,6 +31,14 @@ for (const [relativePath, expected] of requiredFiles) {
 for (const relativePath of requiredEntryFiles) {
   const entry = await stat(path.join(distRoot, relativePath));
   assert.ok(entry.isFile(), `Release distribution entry point is missing: ${relativePath}`);
+}
+
+for (const relativePath of collectManifestContentScriptFiles(manifest)) {
+  const source = await readFile(path.join(distRoot, relativePath), 'utf8');
+  assert.doesNotThrow(
+    () => new Script(source, { filename: relativePath }),
+    `Manifest content script is not valid classic JavaScript: ${relativePath}`,
+  );
 }
 
 const chunkFiles = await collectJavaScriptFiles(distRoot);

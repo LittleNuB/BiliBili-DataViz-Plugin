@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  collectManifestContentScriptFiles,
   collectManifestEntryFiles,
   getRequiredReleaseEntryFiles,
   REQUIRED_BUILD_ENTRY_FILES,
@@ -72,10 +73,14 @@ test("production build keeps chart vendors bounded and background imports consis
     readRepositoryFile("scripts/verify-release-dist.mjs"),
   ]);
 
-  assert.match(viteConfigSource, /manualChunks: buildVendorChunk/);
+  assert.match(viteConfigSource, /rolldownOptions:/);
+  assert.match(viteConfigSource, /codeSplitting:/);
+  assert.match(viteConfigSource, /includeDependenciesRecursively: false/);
   assert.match(viteConfigSource, /echarts-word-cloud/);
   assert.match(viteConfigSource, /echarts-renderer/);
-  assert.match(viteConfigSource, /return 'echarts';/);
+  assert.match(viteConfigSource, /name: 'echarts'/);
+  assert.doesNotMatch(viteConfigSource, /manualChunks/);
+  assert.doesNotMatch(viteConfigSource, /rollupOptions/);
   assert.doesNotMatch(viteConfigSource, /chunkSizeWarningLimit/);
   assert.match(blindBoxSource, /import \{ biliGet \} from '\.\/client\.ts';/);
   assert.doesNotMatch(blindBoxSource, /await import\('\.\/client\.ts'\)/);
@@ -91,6 +96,48 @@ test("production build keeps chart vendors bounded and background imports consis
   );
   assert.match(verificationSource, /MAX_MINIFIED_CHUNK_BYTES = 500_000/);
   assert.match(verificationSource, /getRequiredReleaseEntryFiles\(manifest\)/);
+  assert.match(verificationSource, /new Script\(source/);
+});
+
+test("Vite 8 build configuration uses Rolldown and Oxc without deprecated compatibility options", async () => {
+  const [packageSource, ciSource, devBuildSource, viteConfigSource, sidebarConfigSource, playerMonitorConfigSource] = await Promise.all([
+    readRepositoryFile("package.json"),
+    readRepositoryFile(".github/workflows/ci.yml"),
+    readRepositoryFile("scripts/dev-build.mjs"),
+    readRepositoryFile("vite.config.ts"),
+    readRepositoryFile("vite.sidebar-card.config.ts"),
+    readRepositoryFile("vite.player-monitor.config.ts"),
+  ]);
+  const packageJson = JSON.parse(packageSource) as {
+    engines?: { node?: string };
+    devDependencies: Record<string, string>;
+  };
+
+  assert.equal(packageJson.devDependencies.vite, "^8.2.0");
+  assert.equal(packageJson.engines?.node, "^20.19.0 || >=22.12.0");
+  assert.equal(
+    (JSON.parse(packageSource) as { scripts: Record<string, string> }).scripts.dev,
+    "node scripts/dev-build.mjs",
+  );
+  assert.match(devBuildSource, /vite\.config\.ts/);
+  assert.match(devBuildSource, /vite\.sidebar-card\.config\.ts/);
+  assert.match(devBuildSource, /vite\.player-monitor\.config\.ts/);
+  assert.match(devBuildSource, /waitForInitialBuild/);
+  assert.match(devBuildSource, /emptyOutDir: false/);
+  assert.match(devBuildSource, /triggerIncrementalMainBuild/);
+  assert.match(devBuildSource, /verifyDevelopmentEntries/);
+  assert.match(ciSource, /node scripts\/dev-build\.mjs --smoke/);
+  for (const configSource of [viteConfigSource, sidebarConfigSource, playerMonitorConfigSource]) {
+    assert.match(configSource, /oxc:/);
+    assert.match(configSource, /rolldownOptions:/);
+    assert.doesNotMatch(configSource, /esbuild:/);
+    assert.doesNotMatch(configSource, /rollupOptions:/);
+    assert.doesNotMatch(configSource, /inlineDynamicImports/);
+  }
+  assert.doesNotMatch(viteConfigSource, /'content\/sidebar-card'/);
+  assert.match(sidebarConfigSource, /'content\/sidebar-card'/);
+  assert.match(sidebarConfigSource, /codeSplitting: false/);
+  assert.match(playerMonitorConfigSource, /codeSplitting: false/);
 });
 
 test("release entry contract covers every manifest-declared runtime entry", async () => {
@@ -123,6 +170,10 @@ test("release entry contract covers every manifest-declared runtime entry", asyn
   ].filter((entry): entry is string => Boolean(entry)).sort();
 
   assert.deepEqual(collectManifestEntryFiles(manifest), expectedManifestEntries);
+  assert.deepEqual(
+    collectManifestContentScriptFiles(manifest),
+    (manifest.content_scripts ?? []).flatMap(entry => entry.js ?? []).sort(),
+  );
   assert.deepEqual(
     getRequiredReleaseEntryFiles(manifest),
     [...new Set([...expectedManifestEntries, ...REQUIRED_BUILD_ENTRY_FILES])].sort(),
@@ -157,6 +208,7 @@ test("release builds carry project and third-party licenses", async () => {
 
   assert.match(packageJson.scripts.build, /copy-release-licenses\.mjs/);
   assert.match(packageJson.scripts.build, /verify-release-dist\.mjs/);
+  assert.match(packageJson.scripts.build, /vite\.sidebar-card\.config\.ts/);
   assert.match(noticesSource, /Apache ECharts 6\.1\.0/);
   assert.match(noticesSource, /ECharts WordCloud Custom Series 1\.0\.1/);
   assert.match(apacheSource, /Apache License\s+Version 2\.0/);

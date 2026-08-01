@@ -32,6 +32,7 @@ jobs:
       - run: python -m playwright install --with-deps chromium
       - run: npm test
       - run: npm run typecheck
+      - run: node scripts/dev-build.mjs --smoke
       - run: npm run build
       - run: npm run qa:preference-word-cloud
         env:
