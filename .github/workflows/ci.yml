@@ -22,8 +22,17 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
       - run: npm ci
+      - run: python -m pip install -r requirements-qa.txt
+      - run: python -m playwright install --with-deps chromium
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+      - run: npm run qa:preference-word-cloud
+        env:
+          BILI_BILL_REAL_MOCK_QA_SKIP_BUILD: "1"
       - run: npm audit

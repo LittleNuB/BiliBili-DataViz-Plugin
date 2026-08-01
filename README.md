@@ -61,7 +61,9 @@ Bili-Bill 是一个 Chrome/Edge 扩展，用于长期归档 B站观看历史，�
 
 ### 直接体验 GitHub Release
 
-1. 从 [Releases](https://github.com/LittleNuB/BiliBili-DataViz-Plugin/releases) 下载 `bili-bill-0.13.0-alpha.zip`。
+当 [Releases](https://github.com/LittleNuB/BiliBili-DataViz-Plugin/releases) 页面出现 `v0.13.0-alpha` 后：
+
+1. 下载 `bili-bill-0.13.0-alpha.zip`。
 2. 解压到单独目录。
 3. 在 Chrome/Edge 的扩展管理页打开“开发者模式”，点击“加载已解压的扩展程序”，选择包含 `manifest.json` 的解压目录。
 
@@ -133,6 +135,7 @@ npm test           # 全量单元/合同测试
 npm run typecheck  # TypeScript 检查
 npm run build      # 类型检查 + 生产构建
 npm run audit:high # 高危依赖审计门禁
+npm run qa:preference-word-cloud # 生产词云桌面/移动端浏览器回归
 ```
 
 ## 调试
