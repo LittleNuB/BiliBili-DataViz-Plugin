@@ -185,7 +185,7 @@ function finiteNumber(value: unknown, fallback: number): number {
 }
 
 export async function getLastSyncTime(): Promise<number> {
-  const result = await chrome.storage.local.get('lastSyncTime');
+  const result = await chrome.storage.local.get<{ lastSyncTime?: number }>('lastSyncTime');
   return result.lastSyncTime ?? 0;
 }
 
@@ -265,7 +265,7 @@ export async function clearOrphanedHistorySyncLock(): Promise<void> {
 }
 
 export async function getBackfillComplete(): Promise<boolean> {
-  const result = await chrome.storage.local.get('backfillComplete');
+  const result = await chrome.storage.local.get<{ backfillComplete?: boolean }>('backfillComplete');
   return result.backfillComplete ?? false;
 }
 
@@ -274,7 +274,7 @@ export async function setBackfillComplete(complete = true): Promise<void> {
 }
 
 export async function getDeviceTypeMigrationComplete(): Promise<boolean> {
-  const result = await chrome.storage.local.get('deviceTypeMigrationComplete');
+  const result = await chrome.storage.local.get<{ deviceTypeMigrationComplete?: boolean }>('deviceTypeMigrationComplete');
   return result.deviceTypeMigrationComplete ?? false;
 }
 

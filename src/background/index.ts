@@ -136,7 +136,7 @@ chrome.action.onClicked.addListener(async () => {
       focused: true,
     });
 
-    if (win.id !== undefined) {
+    if (win?.id !== undefined) {
       await chrome.storage.local.set({ [FLOATING_POPUP_WINDOW_KEY]: win.id });
     }
   });

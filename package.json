@@ -29,7 +29,7 @@
   "devDependencies": {
     "typescript": "^7.0.2",
     "vite": "^6.4.3",
-    "@types/chrome": "^0.0.270",
+    "@types/chrome": "^0.2.5",
     "fake-indexeddb": "^6.2.5",
     "prettier": "^3.3.0"
   }
