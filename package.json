@@ -20,8 +20,8 @@
     "test:video-knowledge": "node --test tests/video-knowledge.test.ts"
   },
   "dependencies": {
-    "preact": "^10.24.0",
-    "@preact/signals": "^1.3.0",
+    "preact": "^10.25.0",
+    "@preact/signals": "^2.10.1",
     "@echarts-x/custom-word-cloud": "^1.0.1",
     "echarts": "^6.1.0",
     "dexie": "^4.0.0"

@@ -108,6 +108,12 @@ def assert_clean_page(page):
     assert not overflow, "popup has horizontal overflow"
 
 
+def assert_quick_stats_signal_render(page):
+    completion_label = page.get_by_text("平均完播率", exact=True)
+    expect(completion_label).to_be_visible()
+    expect(completion_label.locator("..").get_by_text("50%", exact=True)).to_be_visible()
+
+
 def qa_panel(page):
     return page.get_by_text("问这个视频", exact=True).locator("..")
 
@@ -131,6 +137,7 @@ def prepare_qa_preview(page, question):
 def run_manual_exact_flow(page):
     page.route("**/*", route_popup)
     page.goto(POPUP_URL)
+    assert_quick_stats_signal_render(page)
     expect(page.get_by_text("Popup 授权 Mock 视频").first).to_be_visible()
     assert_no_protected_actions(page)
 
