@@ -47,7 +47,7 @@ Run these before handing work back unless the issue explicitly says docs-only an
 
 For UI changes, also run Browser, Playwright, or a committed/static mock QA flow that covers the changed states. Record any limitation honestly.
 
-The existing Vite large chunk warning for `chunks/theme-*.js` is known build hygiene. Keep recording it as non-blocking unless the task is specifically about bundle size.
+The release verifier enforces a 500,000-byte maximum for every minified JavaScript chunk. Treat any chunk-size assertion or renewed Vite large-chunk warning as a blocking build regression.
 
 ## AI Feature Rules
 

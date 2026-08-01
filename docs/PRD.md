@@ -1,4 +1,6 @@
-# B站消费数据中心 PRD
+# [归档] B站消费数据中心 PRD
+
+> 本文是早期产品与数据模型记录，保留用于追溯，不再代表 Bili-Bill 0.13 的当前合同。当前版本请以 [0.13 发布合同](./PRD-0.13-release-contract.md)、[当前视频助手合同](./PRD-current-video-agent-v2.md) 和 [动态账单合同](./PRD-dynamic-bill.md) 为准；本文中的旧产品名、Dexie v2 和长期存储描述均不得用于判断现行实现。
 
 ## 1. 产品定位
 
