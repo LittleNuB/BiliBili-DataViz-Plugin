@@ -7,6 +7,22 @@ const __dirname = path.dirname(__filename);
 
 const resolveRoot = (...segments: string[]) => path.resolve(__dirname, ...segments);
 
+function buildVendorChunk(id: string): string | undefined {
+  const normalizedId = id.replaceAll('\\', '/');
+
+  if (normalizedId.includes('/node_modules/@echarts-x/custom-word-cloud/')) {
+    return 'echarts-word-cloud';
+  }
+  if (normalizedId.includes('/node_modules/zrender/')) {
+    return 'echarts-renderer';
+  }
+  if (normalizedId.includes('/node_modules/echarts/')) {
+    return 'echarts';
+  }
+
+  return undefined;
+}
+
 export default defineConfig({
   root: __dirname,
   esbuild: {
@@ -36,6 +52,8 @@ export default defineConfig({
         entryFileNames: '[name].js',
         chunkFileNames: 'chunks/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash].[ext]',
+        // Keep shared chart dependencies cached independently while keeping every output below Vite's warning threshold.
+        manualChunks: buildVendorChunk,
       },
     },
   },

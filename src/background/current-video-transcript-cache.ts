@@ -20,6 +20,8 @@ import {
   canUseCurrentVideoTranscriptClearGeneration,
   getCurrentVideoTranscriptClearState,
 } from './current-video-transcript-clear-epoch.ts';
+import { biliGet } from './api/client.ts';
+import { upsertCurrentVideoTranscriptEvidence } from './storage/current-video-transcript-repo.ts';
 
 const SUBTITLE_FETCH_TIMEOUT_MS = 30_000;
 const PLAYER_INFO_ATTEMPTS: Array<PlayerInfoFetchOptions> = [
@@ -276,8 +278,7 @@ async function defaultUpsertEvidence(
     expectedClearGeneration?: number;
   } = {},
 ): Promise<CurrentVideoTranscriptEvidenceState> {
-  const repo = await import('./storage/current-video-transcript-repo.ts');
-  return await repo.upsertCurrentVideoTranscriptEvidence(evidence, options);
+  return await upsertCurrentVideoTranscriptEvidence(evidence, options);
 }
 
 function transcriptClearedDuringRequestState(
@@ -300,7 +301,6 @@ const fetchBilibiliPlayerInfo: CurrentVideoSubtitlePlayerInfoFetcher = async (
   target,
   options,
 ) => {
-  const { biliGet } = await import('./api/client.ts');
   return await biliGet<unknown>(
     options.sourcePath,
     {

@@ -59,6 +59,39 @@ test("the supported ECharts 6 word-cloud integration is registered", async () =>
   assert.ok(!preferenceSource.includes("type: 'wordCloud'"));
 });
 
+test("production build keeps chart vendors bounded and background imports consistent", async () => {
+  const [viteConfigSource, blindBoxSource, transcriptCacheSource, verificationSource] = await Promise.all([
+    readRepositoryFile("vite.config.ts"),
+    readRepositoryFile("src/background/api/video-blind-box-candidates.ts"),
+    readRepositoryFile("src/background/current-video-transcript-cache.ts"),
+    readRepositoryFile("scripts/verify-release-dist.mjs"),
+  ]);
+
+  assert.match(viteConfigSource, /manualChunks: buildVendorChunk/);
+  assert.match(viteConfigSource, /echarts-word-cloud/);
+  assert.match(viteConfigSource, /echarts-renderer/);
+  assert.match(viteConfigSource, /return 'echarts';/);
+  assert.doesNotMatch(viteConfigSource, /chunkSizeWarningLimit/);
+  assert.match(blindBoxSource, /import \{ biliGet \} from '\.\/client\.ts';/);
+  assert.doesNotMatch(blindBoxSource, /await import\('\.\/client\.ts'\)/);
+  assert.match(transcriptCacheSource, /import \{ biliGet \} from '\.\/api\/client\.ts';/);
+  assert.match(
+    transcriptCacheSource,
+    /import \{ upsertCurrentVideoTranscriptEvidence \} from '\.\/storage\/current-video-transcript-repo\.ts';/,
+  );
+  assert.doesNotMatch(transcriptCacheSource, /await import\('\.\/api\/client\.ts'\)/);
+  assert.doesNotMatch(
+    transcriptCacheSource,
+    /await import\('\.\/storage\/current-video-transcript-repo\.ts'\)/,
+  );
+  assert.match(verificationSource, /MAX_MINIFIED_CHUNK_BYTES = 500_000/);
+  assert.match(verificationSource, /'background\.js'/);
+  assert.match(verificationSource, /'content\/player-monitor\.js'/);
+  assert.match(verificationSource, /'content\/sidebar-card\.js'/);
+  assert.match(verificationSource, /'dashboard\.js'/);
+  assert.match(verificationSource, /'popup\.js'/);
+});
+
 test("release builds carry project and third-party licenses", async () => {
   const [packageSource, noticesSource, apacheSource, d3Source, wordCloudSource] =
     await Promise.all([
