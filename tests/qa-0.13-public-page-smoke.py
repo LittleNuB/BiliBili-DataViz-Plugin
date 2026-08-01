@@ -162,10 +162,17 @@ def main() -> None:
         action="store_true",
         help="Only verify the public single-part page when multi-part navigation is blocked by the network environment.",
     )
+    parser.add_argument(
+        "--extension-root",
+        type=Path,
+        default=EXTENSION_ROOT,
+        help="Built or extracted extension directory containing manifest.json.",
+    )
     args = parser.parse_args()
+    extension_root = args.extension_root.resolve()
 
-    if not (EXTENSION_ROOT / "manifest.json").exists():
-        raise AssertionError("Missing dist/manifest.json. Run npm run build first.")
+    if not (extension_root / "manifest.json").exists():
+        raise AssertionError(f"Missing extension manifest: {extension_root / 'manifest.json'}")
 
     ai_probe = AiRequestProbe()
     ai_probe.start()
@@ -176,8 +183,8 @@ def main() -> None:
                 channel="msedge",
                 headless=False,
                 args=[
-                    f"--disable-extensions-except={EXTENSION_ROOT}",
-                    f"--load-extension={EXTENSION_ROOT}",
+                    f"--disable-extensions-except={extension_root}",
+                    f"--load-extension={extension_root}",
                     "--disable-quic",
                     "--window-position=-32000,-32000",
                     "--window-size=1280,900",
