@@ -71,6 +71,7 @@ export type CurrentVideoSummaryHighlightsValidationResult =
 
 // Hard limits for untrusted model output. String lengths use UTF-16 code units.
 export const CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_OUTPUT_LIMITS = Object.freeze({
+  rawJsonBytes: 32 * 1024,
   summarySentenceChars: 240,
   keyPointChars: 180,
   highlightTitleChars: 80,
@@ -169,6 +170,10 @@ export function validateCurrentVideoSummaryHighlightsAiOutput(
 ): CurrentVideoSummaryHighlightsValidationResult {
   if (!output || typeof output !== 'object') {
     return invalid('output_not_object');
+  }
+  const rawJsonBytes = serializedJsonUtf8Bytes(output);
+  if (rawJsonBytes === null || rawJsonBytes > CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_OUTPUT_LIMITS.rawJsonBytes) {
+    return invalid('output_too_large');
   }
   const record = output as CurrentVideoSummaryHighlightsAiOutput;
   if (Array.isArray(record.summarySentences) && (record.summarySentences.length < 1 || record.summarySentences.length > 4)) {
@@ -693,7 +698,7 @@ function compareByFirstEvidenceLine(
 }
 
 function invalidOutputVisibleFailure(reason: string): { message: string; action: string } {
-  if (/too_long|too_many/.test(reason)) {
+  if (/too_long|too_many|too_large/.test(reason)) {
     return {
       message: '模型返回内容超出可接受范围，旧结果不会被替换。',
       action: '请重新生成；系统不会采用异常过长或数量过多的内容。',
@@ -709,6 +714,17 @@ function invalidOutputVisibleFailure(reason: string): { message: string; action:
     message: '模型返回的摘要与亮点结构不完整，旧结果不会被替换。',
     action: '请重新生成；本次返回缺少可用的摘要、要点或亮点。',
   };
+}
+
+function serializedJsonUtf8Bytes(value: unknown): number | null {
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === 'string'
+      ? new TextEncoder().encode(serialized).length
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function hasChineseText(text: string): boolean {

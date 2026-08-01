@@ -15,6 +15,7 @@ import { db } from './db.ts';
 
 export const CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE_MAX_RECORDS = 50;
 export const CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE_MAX_BYTES = 5 * 1024 * 1024;
+export const CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE_KEY_VERSION = 2;
 
 export interface CurrentVideoSummaryHighlightsCacheUsage {
   count: number;
@@ -43,12 +44,12 @@ export function buildCurrentVideoSummaryHighlightsCacheKey(input: {
   model: string;
 }): string {
   const digest = stableDigestHex(serializeCurrentVideoCanonicalRecord({
-    version: 1,
+    version: CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE_KEY_VERSION,
     kind: 'current-video-summary-highlights-cache-key',
     sourceIdentityKey: input.identity.sourceIdentityKey,
     model: normalizeModel(input.model),
   }));
-  return `cv-summary-highlights:v1:${digest}`;
+  return `cv-summary-highlights:v${CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_CACHE_KEY_VERSION}:${digest}`;
 }
 
 export async function getCurrentVideoSummaryHighlightsCache(input: {

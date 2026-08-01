@@ -316,12 +316,23 @@ test('accepts output limits at the boundary and rejects every oversized item', (
   }
 });
 
+test('rejects an oversized raw model result even when known fields are valid', () => {
+  const envelope = fullTextEnvelope();
+  const validation = validateCurrentVideoSummaryHighlightsAiOutput({
+    ...validAiOutput(),
+    debug: 'x'.repeat(CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_OUTPUT_LIMITS.rawJsonBytes),
+  }, envelope);
+
+  assert.deepEqual(validation, { ok: false, reason: 'output_too_large' });
+});
+
 test('maps rejected model output to safe Chinese failure categories', () => {
   const textSize = { lineCount: 6, charCount: 120, utf8Bytes: 360 };
   const cases = [
     { reason: 'summary_sentences_not_array', expected: /结构不完整/ },
     { reason: 'highlight_evidence_line_missing', expected: /引用.*当前正文/ },
     { reason: 'highlight_description_too_long', expected: /超出.*范围/ },
+    { reason: 'output_too_large', expected: /超出.*范围/ },
   ];
 
   for (const testCase of cases) {
@@ -447,6 +458,50 @@ test('generation succeeds only after validation and writes exact-identity model 
   assert.equal(cached?.requestAudit.requestId, result.requestId);
   assert.equal(cached?.requestAudit.text.lineCount, 6);
   assert.equal('lines' in (cached?.requestAudit.text ?? {}), false);
+});
+
+test('does not reuse a v1 cache entry after the summary protocol upgrade', async () => {
+  await resetSummaryCache();
+  const context = videoContext();
+  const config = userConfig({ enabled: true, apiKey: 'test-key' });
+  const generated = await generateCurrentVideoSummaryHighlights(context, {
+    config,
+    transcriptSegments: transcriptSegments(),
+    chat: async () => validAiOutput(),
+  });
+  assert.equal(generated.status, 'ready');
+
+  const currentRecord = await db.currentVideoSummaryHighlights.toCollection().first();
+  assert.ok(currentRecord);
+  const legacyCacheKey = currentRecord.cacheKey.replace(
+    'cv-summary-highlights:v2:',
+    'cv-summary-highlights:v1:',
+  );
+  await resetSummaryCache();
+  await putCurrentVideoSummaryHighlightsCache({
+    cacheKey: legacyCacheKey,
+    sourceIdentityKey: currentRecord.sourceIdentityKey,
+    model: currentRecord.model,
+    bvid: currentRecord.bvid,
+    cid: currentRecord.cid,
+    page: currentRecord.page,
+    generatedAt: currentRecord.generatedAt,
+    lastAccessedAt: currentRecord.lastAccessedAt,
+    requestAudit: currentRecord.requestAudit,
+    result: {
+      ...currentRecord.result,
+      cacheKey: legacyCacheKey,
+    },
+  });
+
+  const currentCacheKey = buildCurrentVideoSummaryHighlightsCacheKey({
+    identity: { sourceIdentityKey: context.transcriptEvidence?.sourceIdentityKey ?? '' },
+    model: 'test-model',
+  });
+  assert.match(currentCacheKey, /^cv-summary-highlights:v2:/);
+  const cached = await readCachedCurrentVideoSummaryHighlights(context, { config });
+  assert.equal(cached.status, 'not_requested');
+  assert.equal((await collectCurrentVideoSummaryHighlightsCacheUsage()).count, 1);
 });
 
 test('generation caches a sparse model result after local evidence normalization', async () => {
