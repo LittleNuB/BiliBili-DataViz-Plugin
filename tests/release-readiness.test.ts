@@ -1,25 +1,32 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   collectManifestContentScriptFiles,
   collectManifestEntryFiles,
   getRequiredReleaseEntryFiles,
   REQUIRED_BUILD_ENTRY_FILES,
 } from "../scripts/release-entry-contract.mjs";
+import {
+  collectPackageAttributionFiles,
+  collectProductionPackages,
+  getPackageLicenseDirectory,
+  getPackageNoticeLine,
+  isAttributionFilePath,
+} from "../scripts/production-license-contract.mjs";
 
 async function readRepositoryFile(path: string): Promise<string> {
   return readFile(new URL(`../${path}`, import.meta.url), "utf8");
 }
 
 test("release metadata, permissions, and license stay coherent", async () => {
-  const [packageSource, manifestSource, licenseSource, prdSource] =
-    await Promise.all([
-      readRepositoryFile("package.json"),
-      readRepositoryFile("public/manifest.json"),
-      readRepositoryFile("LICENSE"),
-      readRepositoryFile("docs/PRD.md"),
-    ]);
+  const [packageSource, manifestSource, licenseSource, prdSource] = await Promise.all([
+    readRepositoryFile("package.json"),
+    readRepositoryFile("public/manifest.json"),
+    readRepositoryFile("LICENSE"),
+    readRepositoryFile("docs/PRD.md"),
+  ]);
   const packageJson = JSON.parse(packageSource) as {
     name: string;
     version: string;
@@ -53,10 +60,7 @@ test("the supported ECharts 6 word-cloud integration is registered", async () =>
   };
 
   assert.match(packageJson.dependencies.echarts, /^\^6\.1\./);
-  assert.equal(
-    packageJson.dependencies["@echarts-x/custom-word-cloud"],
-    "^1.0.1",
-  );
+  assert.equal(packageJson.dependencies["@echarts-x/custom-word-cloud"], "^1.0.1");
   assert.equal(packageJson.dependencies["echarts-wordcloud"], undefined);
   assert.match(registrySource, /@echarts-x\/custom-word-cloud/);
   assert.match(registrySource, /CustomChart/);
@@ -66,12 +70,13 @@ test("the supported ECharts 6 word-cloud integration is registered", async () =>
 });
 
 test("production build keeps chart vendors bounded and background imports consistent", async () => {
-  const [viteConfigSource, blindBoxSource, transcriptCacheSource, verificationSource] = await Promise.all([
-    readRepositoryFile("vite.config.ts"),
-    readRepositoryFile("src/background/api/video-blind-box-candidates.ts"),
-    readRepositoryFile("src/background/current-video-transcript-cache.ts"),
-    readRepositoryFile("scripts/verify-release-dist.mjs"),
-  ]);
+  const [viteConfigSource, blindBoxSource, transcriptCacheSource, verificationSource] =
+    await Promise.all([
+      readRepositoryFile("vite.config.ts"),
+      readRepositoryFile("src/background/api/video-blind-box-candidates.ts"),
+      readRepositoryFile("src/background/current-video-transcript-cache.ts"),
+      readRepositoryFile("scripts/verify-release-dist.mjs"),
+    ]);
 
   assert.match(viteConfigSource, /rolldownOptions:/);
   assert.match(viteConfigSource, /codeSplitting:/);
@@ -100,7 +105,14 @@ test("production build keeps chart vendors bounded and background imports consis
 });
 
 test("Vite 8 build configuration uses Rolldown and Oxc without deprecated compatibility options", async () => {
-  const [packageSource, ciSource, devBuildSource, viteConfigSource, sidebarConfigSource, playerMonitorConfigSource] = await Promise.all([
+  const [
+    packageSource,
+    ciSource,
+    devBuildSource,
+    viteConfigSource,
+    sidebarConfigSource,
+    playerMonitorConfigSource,
+  ] = await Promise.all([
     readRepositoryFile("package.json"),
     readRepositoryFile(".github/workflows/ci.yml"),
     readRepositoryFile("scripts/dev-build.mjs"),
@@ -167,7 +179,9 @@ test("release entry contract covers every manifest-declared runtime entry", asyn
     ...(manifest.web_accessible_resources ?? [])
       .flatMap(entry => entry.resources ?? [])
       .filter(resource => !resource.includes("*")),
-  ].filter((entry): entry is string => Boolean(entry)).sort();
+  ]
+    .filter((entry): entry is string => Boolean(entry))
+    .sort();
 
   assert.deepEqual(collectManifestEntryFiles(manifest), expectedManifestEntries);
   assert.deepEqual(
@@ -182,9 +196,11 @@ test("release entry contract covers every manifest-declared runtime entry", asyn
 
 test("release entry contract ignores wildcard web resources but keeps concrete pages", () => {
   const manifest = {
-    web_accessible_resources: [{
-      resources: ["assets/*", "dashboard/index.html"],
-    }],
+    web_accessible_resources: [
+      {
+        resources: ["assets/*", "dashboard/index.html"],
+      },
+    ],
   };
 
   assert.deepEqual(collectManifestEntryFiles(manifest), ["dashboard/index.html"]);
@@ -194,9 +210,10 @@ test("release entry contract ignores wildcard web resources but keeps concrete p
 });
 
 test("release builds carry project and third-party licenses", async () => {
-  const [packageSource, noticesSource, apacheSource, d3Source, wordCloudSource] =
+  const [packageSource, lockSource, noticesSource, apacheSource, d3Source, wordCloudSource] =
     await Promise.all([
       readRepositoryFile("package.json"),
+      readRepositoryFile("package-lock.json"),
       readRepositoryFile("THIRD_PARTY_NOTICES.txt"),
       readRepositoryFile("third_party/licenses/Apache-2.0.txt"),
       readRepositoryFile("third_party/licenses/BSD-3-Clause-d3.txt"),
@@ -205,6 +222,8 @@ test("release builds carry project and third-party licenses", async () => {
   const packageJson = JSON.parse(packageSource) as {
     scripts: Record<string, string>;
   };
+  const productionPackages = collectProductionPackages(JSON.parse(lockSource));
+  const noticeLines = new Set(noticesSource.split(/\r?\n/).map(line => line.trim()));
 
   assert.match(packageJson.scripts.build, /copy-release-licenses\.mjs/);
   assert.match(packageJson.scripts.build, /verify-release-dist\.mjs/);
@@ -214,6 +233,91 @@ test("release builds carry project and third-party licenses", async () => {
   assert.match(apacheSource, /Apache License\s+Version 2\.0/);
   assert.match(d3Source, /Copyright 2010-2016 Mike Bostock/);
   assert.match(wordCloudSource, /Copyright \(c\) 2011- Timothy Guan-tin Chien/);
+  assert.deepEqual(
+    productionPackages.map(packageRecord => packageRecord.name),
+    [
+      "@echarts-x/custom-word-cloud",
+      "@preact/signals",
+      "@preact/signals-core",
+      "dexie",
+      "echarts",
+      "preact",
+      "tslib",
+      "zrender",
+    ],
+  );
+  for (const packageRecord of productionPackages) {
+    assert.ok(packageRecord.license);
+    assert.ok(noticeLines.has(getPackageNoticeLine(packageRecord, packageRecord.license)));
+    assert.match(
+      getPackageLicenseDirectory(packageRecord),
+      /^third_party_licenses\/npm\/package-[^/]+\/version-[^/]+\/location-[0-9a-f]{16}$/,
+    );
+    assert.ok(!getPackageLicenseDirectory(packageRecord).split("/").includes("node_modules"));
+  }
+
+  const echartsAttributions = await collectPackageAttributionFiles(
+    fileURLToPath(new URL("../node_modules/echarts", import.meta.url)),
+  );
+  const tslibAttributions = await collectPackageAttributionFiles(
+    fileURLToPath(new URL("../node_modules/tslib", import.meta.url)),
+  );
+  assert.ok(echartsAttributions.includes("licenses/LICENSE-d3"));
+  assert.ok(tslibAttributions.includes("CopyrightNotice.txt"));
+});
+
+test("production license contract includes scoped and transitive packages but excludes dev-only packages", () => {
+  const packages = collectProductionPackages({
+    packages: {
+      "": { dependencies: { runtime: "1.0.0" } },
+      "node_modules/runtime": { version: "1.0.0" },
+      "node_modules/runtime/node_modules/transitive": { version: "2.0.0" },
+      "node_modules/@scope/runtime": { version: "3.0.0" },
+      "node_modules/other/node_modules/runtime": {
+        version: "1.0.0",
+        resolved: "git+https://example.test/runtime.git#different-source",
+      },
+      "node_modules/dev-only": { version: "4.0.0", dev: true },
+    },
+  });
+
+  assert.deepEqual(packages.map(packageRecord => packageRecord.location), [
+    "node_modules/@scope/runtime",
+    "node_modules/other/node_modules/runtime",
+    "node_modules/runtime",
+    "node_modules/runtime/node_modules/transitive",
+  ]);
+  assert.equal(packages.filter(packageRecord => packageRecord.name === "runtime").length, 2);
+  assert.equal(
+    packages.find(packageRecord => packageRecord.location.includes("other"))?.resolved,
+    "git+https://example.test/runtime.git#different-source",
+  );
+  const runtimeDirectories = packages
+    .filter(packageRecord => packageRecord.name === "runtime")
+    .map(getPackageLicenseDirectory);
+  assert.equal(new Set(runtimeDirectories).size, 2);
+  assert.throws(
+    () => collectProductionPackages({
+      packages: {
+        "node_modules/../../escape": { version: "1.0.0" },
+      },
+    }),
+    /Unsafe package-lock location/,
+  );
+});
+
+test("production license contract recognizes non-standard and nested attribution paths", () => {
+  for (const relativePath of [
+    "LICENSE-MIT",
+    "NOTICE-third-party",
+    "THIRD_PARTY_NOTICES",
+    "CopyrightNotice.txt",
+    "licenses/LICENSE-d3",
+    "legal/upstream.txt",
+  ]) {
+    assert.equal(isAttributionFilePath(relativePath), true, relativePath);
+  }
+  assert.equal(isAttributionFilePath("README.md"), false);
 });
 
 test("release packaging builds fresh and promotes only a validated artifact", async () => {
@@ -230,9 +334,12 @@ test("release packaging builds fresh and promotes only a validated artifact", as
   assert.match(packagerSource, /Assert-ChildPath/);
   assert.match(packagerSource, /Assert-NotReparsePoint/);
   assert.match(packagerSource, /Assert-SafeReleaseTree/);
+  assert.match(packagerSource, /Forbidden release path/);
   assert.match(packagerSource, /browser\[-_\]\?profile/);
   assert.match(packagerSource, /key\\\.txt/);
   assert.match(packagerSource, /temporaryZipPath/);
+  assert.match(packagerSource, /\[IO\.Path\]::GetTempPath\(\)/);
+  assert.ok(!packagerSource.includes("$env:TEMP"));
   assert.match(packagerSource, /Refusing to replace a different existing release ZIP/);
   assert.match(packagerSource, /Assert-RequiredReleaseFiles/);
   assert.ok(!packagerSource.includes("Remove-Item -LiteralPath $zipPath"));

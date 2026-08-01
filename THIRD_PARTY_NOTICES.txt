@@ -2,7 +2,22 @@ Bili-Bill third-party notices
 ================================
 
 This distribution includes the following third-party software.
-The complete license texts are provided in third_party_licenses/.
+The complete license and NOTICE texts are provided in third_party_licenses/.
+
+Production npm packages
+-----------------------
+
+- @echarts-x/custom-word-cloud 1.0.1 | License: Apache-2.0 | Lock path: node_modules/@echarts-x/custom-word-cloud
+- @preact/signals 2.10.1 | License: MIT | Lock path: node_modules/@preact/signals
+- @preact/signals-core 1.14.4 | License: MIT | Lock path: node_modules/@preact/signals-core
+- dexie 4.4.4 | License: Apache-2.0 | Lock path: node_modules/dexie
+- echarts 6.1.0 | License: Apache-2.0 | Lock path: node_modules/echarts
+- preact 10.29.8 | License: MIT | Lock path: node_modules/preact
+- tslib 2.3.0 | License: 0BSD | Lock path: node_modules/tslib
+- zrender 6.1.0 | License: BSD-3-Clause | Lock path: node_modules/zrender
+
+Exact upstream license and NOTICE files for these packages are copied from the
+installed lockfile versions into third_party_licenses/npm/ during every build.
 
 Apache ECharts 6.1.0
 --------------------
@@ -36,3 +51,4 @@ License files
 - Apache-2.0.txt: Apache License 2.0
 - BSD-3-Clause-d3.txt: d3.js license and copyright notice
 - MIT-wordcloud2.txt: wordcloud2.js license and copyright notice
+- npm/: exact license and NOTICE files for every production npm package

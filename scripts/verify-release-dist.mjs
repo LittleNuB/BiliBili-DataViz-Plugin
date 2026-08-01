@@ -7,6 +7,14 @@ import {
   collectManifestContentScriptFiles,
   getRequiredReleaseEntryFiles,
 } from './release-entry-contract.mjs';
+import {
+  collectPackageAttributionFiles,
+  collectProductionPackages,
+  getDeclaredLicense,
+  getPackageLicenseDirectory,
+  getPackageNoticeLine,
+  isLicenseFilePath,
+} from './production-license-contract.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distRoot = path.join(repositoryRoot, 'dist');
@@ -21,11 +29,59 @@ const requiredFiles = [
 const MAX_MINIFIED_CHUNK_BYTES = 500_000;
 
 const manifest = JSON.parse(await readFile(path.join(distRoot, 'manifest.json'), 'utf8'));
+const packageLock = JSON.parse(
+  await readFile(path.join(repositoryRoot, 'package-lock.json'), 'utf8'),
+);
+const thirdPartyNotices = await readFile(path.join(distRoot, 'THIRD_PARTY_NOTICES.txt'), 'utf8');
+const thirdPartyNoticeLines = new Set(thirdPartyNotices.split(/\r?\n/).map(line => line.trim()));
 const requiredEntryFiles = getRequiredReleaseEntryFiles(manifest);
+let productionAttributionFileCount = 0;
 
 for (const [relativePath, expected] of requiredFiles) {
   const source = await readFile(path.join(distRoot, relativePath), 'utf8');
   assert.match(source, expected, `Release distribution notice is invalid: ${relativePath}`);
+}
+
+for (const packageRecord of collectProductionPackages(packageLock)) {
+  const packageLabel = `${packageRecord.name} ${packageRecord.version}`;
+  const packageRoot = path.join(repositoryRoot, ...packageRecord.location.split('/'));
+  const packageMetadata = JSON.parse(
+    await readFile(path.join(packageRoot, 'package.json'), 'utf8'),
+  );
+  assert.equal(packageMetadata.name, packageRecord.name, `Installed package name changed: ${packageLabel}`);
+  assert.equal(
+    packageMetadata.version,
+    packageRecord.version,
+    `Installed package version changed: ${packageLabel}`,
+  );
+  const declaredLicense = getDeclaredLicense(packageMetadata, packageLabel);
+  if (packageRecord.license && packageRecord.license !== declaredLicense) {
+    throw new Error(`Installed package license does not match lockfile: ${packageLabel}`);
+  }
+  assert.ok(
+    thirdPartyNoticeLines.has(getPackageNoticeLine(packageRecord, declaredLicense)),
+    `Third-party notices omit or misstate production package license: ${packageLabel}`,
+  );
+
+  const attributionFiles = await collectPackageAttributionFiles(packageRoot);
+  assert.ok(
+    attributionFiles.some(isLicenseFilePath),
+    `Production package has no source license file: ${packageLabel}`,
+  );
+
+  const releaseDirectory = getPackageLicenseDirectory(packageRecord);
+  for (const relativePath of attributionFiles) {
+    const [source, released] = await Promise.all([
+      readFile(path.join(packageRoot, ...relativePath.split('/'))),
+      readFile(path.join(distRoot, releaseDirectory, ...relativePath.split('/'))),
+    ]);
+    assert.deepEqual(
+      released,
+      source,
+      `Release distribution changed ${packageLabel} ${relativePath}`,
+    );
+    productionAttributionFileCount += 1;
+  }
 }
 
 for (const relativePath of requiredEntryFiles) {
@@ -51,17 +107,19 @@ for (const relativePath of chunkFiles) {
 }
 
 console.log(
-  `PASS release distribution: ${requiredFiles.length} licenses, ${requiredEntryFiles.length} entries, ${chunkFiles.length} chunks`,
+  `PASS release distribution: ${requiredFiles.length + productionAttributionFileCount} license/notice files, ${requiredEntryFiles.length} entries, ${chunkFiles.length} chunks`,
 );
 
 async function collectJavaScriptFiles(directory, relativeDirectory = '') {
   const entries = await readdir(directory, { withFileTypes: true });
-  const files = await Promise.all(entries.map(async entry => {
-    const relativePath = path.join(relativeDirectory, entry.name);
-    if (entry.isDirectory()) {
-      return collectJavaScriptFiles(path.join(directory, entry.name), relativePath);
-    }
-    return entry.isFile() && entry.name.endsWith('.js') ? [relativePath] : [];
-  }));
+  const files = await Promise.all(
+    entries.map(async entry => {
+      const relativePath = path.join(relativeDirectory, entry.name);
+      if (entry.isDirectory()) {
+        return collectJavaScriptFiles(path.join(directory, entry.name), relativePath);
+      }
+      return entry.isFile() && entry.name.endsWith('.js') ? [relativePath] : [];
+    }),
+  );
   return files.flat();
 }
