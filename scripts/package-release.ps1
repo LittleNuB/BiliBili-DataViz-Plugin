@@ -222,7 +222,7 @@ Assert-NotReparsePoint -Path $artifactRoot
 $token = [guid]::NewGuid().ToString('N')
 $temporaryZipPath = Assert-ChildPath -Root $artifactRoot -Path (Join-Path $artifactRoot ".$zipName.$token.tmp")
 $temporaryShaPath = Assert-ChildPath -Root $artifactRoot -Path "$temporaryZipPath.sha256"
-$systemTempRoot = [IO.Path]::GetFullPath($env:TEMP).TrimEnd([IO.Path]::DirectorySeparatorChar)
+$systemTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar)
 $auditRoot = Assert-ChildPath -Root $systemTempRoot -Path (Join-Path $systemTempRoot ("bili-bill-release-audit-$token"))
 
 try {
