@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getRequiredReleaseEntryFiles } from './release-entry-contract.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distRoot = path.join(repositoryRoot, 'dist');
@@ -13,14 +14,10 @@ const requiredFiles = [
   ['third_party_licenses/BSD-3-Clause-d3.txt', /Copyright 2010-2016 Mike Bostock/],
   ['third_party_licenses/MIT-wordcloud2.txt', /Copyright \(c\) 2011- Timothy Guan-tin Chien/],
 ];
-const requiredEntryFiles = [
-  'background.js',
-  'content/player-monitor.js',
-  'content/sidebar-card.js',
-  'dashboard.js',
-  'popup.js',
-];
 const MAX_MINIFIED_CHUNK_BYTES = 500_000;
+
+const manifest = JSON.parse(await readFile(path.join(distRoot, 'manifest.json'), 'utf8'));
+const requiredEntryFiles = getRequiredReleaseEntryFiles(manifest);
 
 for (const [relativePath, expected] of requiredFiles) {
   const source = await readFile(path.join(distRoot, relativePath), 'utf8');
