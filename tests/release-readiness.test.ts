@@ -21,12 +21,13 @@ async function readRepositoryFile(path: string): Promise<string> {
 }
 
 test("release metadata, permissions, and license stay coherent", async () => {
-  const [packageSource, manifestSource, licenseSource, prdSource] = await Promise.all([
-    readRepositoryFile("package.json"),
-    readRepositoryFile("public/manifest.json"),
-    readRepositoryFile("LICENSE"),
-    readRepositoryFile("docs/PRD.md"),
-  ]);
+  const [packageSource, manifestSource, licenseSource, agentGuideSource] =
+    await Promise.all([
+      readRepositoryFile("package.json"),
+      readRepositoryFile("public/manifest.json"),
+      readRepositoryFile("LICENSE"),
+      readRepositoryFile("AGENTS.md"),
+    ]);
   const packageJson = JSON.parse(packageSource) as {
     name: string;
     version: string;
@@ -46,7 +47,10 @@ test("release metadata, permissions, and license stay coherent", async () => {
   assert.match(licenseSource, /^MIT License/m);
   assert.match(licenseSource, /Bili-Bill contributors/);
   assert.ok(!manifest.permissions.includes("cookies"));
-  assert.match(prdSource, /不申请 `cookies` 权限/);
+  assert.match(
+    agentGuideSource,
+    /Do not add the `cookies` permission unless an accepted issue introduces a reviewed `chrome\.cookies` use case/,
+  );
 });
 
 test("the supported ECharts 6 word-cloud integration is registered", async () => {

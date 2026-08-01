@@ -1,6 +1,6 @@
 # Bili-Bill 0.13 开发计划
 
-状态：待创建 issue，当前仅定义实施顺序、边界和验收，不派发任务。
+状态：历史实施计划。0.13.0-alpha 已完成并发布；现行产品合同以 [`PRD-0.13-release-contract.md`](./PRD-0.13-release-contract.md) 为准。
 
 ## 1. 依据
 
