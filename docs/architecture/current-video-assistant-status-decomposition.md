@@ -68,6 +68,7 @@
 | `src/background/messages/handlers.ts` 及其依赖 | 当前标签重新解析、主要文本授权、完整正文、摘要缓存、QA 持久化、取消注册表、时间戳 operation lease | 页内模块不得把本地 `assistantState.context` 当作后台权威值，不得替换后台二次核验。 |
 | `src/shared/current-video-primary-text.ts` | `CurrentVideoTextSourceIdentity` 和全文 request envelope | 身份包含 BVID/CID/分 P、来源、语言、正文 hash、时间线 hash 和 `sourceIdentityKey`；UI 只能传递/比较它，不能自行简化。 |
 | `src/shared/current-video-subtitle-view.ts` | 纯字幕搜索、来源选择、跟随状态规约、导出格式和行级预览 | 保持为无 DOM/无 runtime 消息的共享逻辑。 |
+| `src/shared/current-video-timestamp-jump.ts` 与 `src/shared/types/current-video-segment-retrieval.ts` | `buildCurrentVideoTimestampJumpPreview`, `CurrentVideoTimestampJumpPreview`, `CurrentVideoSegmentRetrievalCandidate.binding` | 候选绑定和可跳转目标由共享构造器依据当前上下文、候选证据、置信度及真实 `startSeconds` 生成；`segmentPreviewCandidateId` 只控制面板显示哪个已构造预览，不拥有、生成或改写预览绑定与时间点。 |
 
 ## 依赖方向
 
@@ -146,11 +147,11 @@ UI 状态。下表是页内模块当前使用的消息，名称、参数含义�
 | --- | --- | --- |
 | 当前视频证据限定 | `contextStateKey`, `updateAssistantContext`, `currentAssistantVideoIdentity` | 不复用另一个 BVID/CID/分 P 的结果；换分 P 后所有派生预览和请求都作废。 |
 | 来源和版本隔离 | `CurrentVideoTextSourceIdentity`, `contextStateKey`, `summaryActiveRequestStillMatchesCurrent` | 身份继续包含来源、语言、正文/时间线 hash 和 `sourceIdentityKey`；同视频不同文本版本不可互用。 |
-| 真实时间戳 | `CurrentVideoSummaryHighlight.evidenceLineNumbers`, `CurrentVideoFullTextQaCitation`, `CurrentVideoSubtitleLine`, `CurrentVideoTimestampJumpPreview` | 时间只能来自已捕获行/证据的真实范围；不得由 UI 或 AI 新造目标秒数。 |
+| 真实时间戳 | `CurrentVideoSummaryHighlight.evidenceLineNumbers`, `CurrentVideoFullTextQaCitation`, `CurrentVideoSubtitleLine`, `CurrentVideoTimestampJumpPreview`, `buildCurrentVideoTimestampJumpPreview` | 时间只能来自已捕获行/证据的真实范围；共享 builder 只能采用候选的真实 `startSeconds`，面板和 AI 均不得新造或改写目标秒数。 |
 | 失败如实呈现 | `primaryTextSubmissionBlockMessage`, `safeVisibleText`, result status formatter | 没有可靠主要文本时不显示完整视频摘要、亮点或答案；不把 metadata/旧结果包装成完整文本答案。 |
 | 显式 AI 触发 | `generateCurrentVideoSummaryHighlightsFromPage`, `askCurrentVideoFullTextFromPage`, `fullTextQaSubmissionNotice` | 打开、恢复、切换页签、切换视频、读取缓存和启用设置均不提交完整正文；只有用户点击生成/提问才可提交。 |
 | 会话隔离 | `InPageFullTextQaRequest`, `fullTextQaActiveRequestStillMatchesCurrent`, `CurrentVideoQaSessionTurn` | 同一会话可阻塞，同一时刻不同会话不得相互取消；重试、新来源、删除/清空都拒绝迟到写入。 |
-| 预览/确认/返回 | `segmentJumpPreviewPanel`, `summaryHighlightJumpPreview`, `buildCurrentVideoSubtitleJumpPreview`, 各 `confirm*`/`return*` | 预览绝不 seek；确认才传 `confirmed: true`；返回仅在成功记录原位置后显示。 |
+| 预览/确认/返回 | `buildCurrentVideoTimestampJumpPreview`, `segmentJumpPreviewPanel`, `summaryHighlightJumpPreview`, `buildCurrentVideoSubtitleJumpPreview`, 各 `confirm*`/`return*` | shared builder/result 持有候选预览绑定，面板局部状态只选择显示项；预览绝不 seek，确认才传 `confirmed: true` 并由后台重核候选，返回仅在成功记录原位置后显示。 |
 | lease 和播放器重核验 | `src/background/messages/handlers.ts` 的 `requestCurrentVideo*Jump`，`src/content/player-monitor/index.ts` 的 timestamp handlers | UI 不持有可复用跳转许可；错误视频、CID 不匹配、来源变化、过期 lease 或不可用播放器必须失败且不 seek。 |
 | 隐私 | `currentPrimaryTextRequestParams`, `safeVisibleText`, `src/shared/assistant-payload-audit.ts` | 不读/传 Cookie、profile、登录态、Key.txt、完整历史、完整收藏、完整关注或无关数据库行；完整正文只在授权且显式动作时用于当前分 P。 |
 | 中文优先且不泄露工程字段 | `safeVisibleText`, `RAW_FIELD_PATTERN`, `ENGINEERING_VISIBLE_TERM_PATTERN` | 新文案先提供自然中文；页面不可见 `sourceHash`、`segmentId`、`candidateId`、`subtitle_url`、BVID/CID 值、endpoint 或 provider 原始错误。 |
@@ -254,7 +255,9 @@ state/触发 `render()` 的地方；面板只构建 DOM 和调用有名字的 co
 - `src/shared/current-video-primary-text.ts`
 - `src/shared/current-video-primary-text-selection.ts`
 - `src/shared/current-video-subtitle-view.ts`
+- `src/shared/current-video-timestamp-jump.ts`
 - `src/shared/assistant-payload-audit.ts`
+- `src/shared/types/current-video-segment-retrieval.ts`
 - `tests/current-video-primary-text-authorization.test.ts`
 - `tests/current-video-primary-text-selection-store.test.ts`
 - `tests/current-video-summary-highlights.test.ts`
