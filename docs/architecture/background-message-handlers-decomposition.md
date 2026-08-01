@@ -34,7 +34,7 @@ The published protocol is [`RequestAction` (71 actions)](../../src/shared/types/
 | Error envelope | Top-level dispatch preserves `BiliVizResponse`: expected domain failures may be typed data states, validation/concurrency failures may throw stable error codes, and unknown actions return `{ success: false, error: "Unknown action: ..." }`. The top-level listener converts uncaught errors with `errorMessage`. |
 | Dynamic Bill gates | The three action sets at [`handlers.ts` lines 237-279](../../src/background/messages/handlers.ts#L237-L279) remain centralized before any domain handler runs: data-operation serialization plus 0.13 migration; self-gated sync/generate; and migration-only actions. An action must not silently move between these sets. |
 | Tab lifecycle | Both `tabs.onRemoved` and URL-bearing `tabs.onUpdated` clear the in-memory current-video context, temporary transcript ownership, and timestamp leases for that tab. |
-| Public export | `setupMessageHandlers` remains the background bootstrap import. `handleRequest` remains exportable while direct unit tests or development tooling need it; it becomes a delegating facade, not a second dispatcher. |
+| Public export | `setupMessageHandlers` remains the background bootstrap import. `handleRequest` remains exportable while direct unit tests or development tooling need it; a direct call must work before setup and must not register Chrome listeners. It becomes a delegating facade over the same production dispatcher used by the Chrome listeners, not a second dispatcher. |
 
 ### Stable proposed registration seam
 
@@ -54,14 +54,72 @@ interface ContentContext {
 }
 
 interface MessageDispatcher {
-  dispatchRequest(request: BiliVizRequest, context: RequestContext): Promise<BiliVizResponse>;
+  dispatchRequest<T>(request: BiliVizRequest, context: RequestContext): Promise<BiliVizResponse<T>>;
   dispatchContent(message: BiliVizContentMessage, context: ContentContext): Promise<void>;
   onTabRemoved(tabId: number): void;
   onTabUrlChanged(tabId: number): void;
 }
+
+interface ChromeMessageRegistration {
+  register(): void;
+}
 ```
 
-`handlers.ts` should remain a thin host adapter that creates one dispatcher instance, registers it with Chrome, and owns no domain switch. The dispatcher should route each action exactly once through an explicit action-to-family registry. It must reject duplicate registrations during construction and retain exhaustive TypeScript coverage over `RequestAction` and `ContentAction`. There must be no fallback that dispatches both old and new handlers, because duplicate execution would duplicate sync, writes, network calls, or tabs.
+`handlers.ts` should remain a thin host adapter and own no domain switch. The dispatcher should route each action exactly once through an explicit action-to-family registry. It must reject duplicate action ownership during construction and retain exhaustive TypeScript coverage over `RequestAction` and `ContentAction`. There must be no fallback that dispatches both old and new handlers, because duplicate execution would duplicate sync, writes, network calls, or tabs.
+
+#### Executable production construction contract
+
+Use one module-level lazy dispatcher and a separately cached Chrome registration adapter. Dispatcher construction and listener registration are deliberately independent state transitions:
+
+```ts
+let productionDispatcher: MessageDispatcher | null = null;
+let productionRegistration: ChromeMessageRegistration | null = null;
+
+function getDispatcher(): MessageDispatcher {
+  productionDispatcher ??= createMessageDispatcher(createProductionMessageDependencies());
+  return productionDispatcher;
+}
+
+function getChromeRegistration(): ChromeMessageRegistration {
+  productionRegistration ??= createChromeMessageRegistration(chrome, getDispatcher());
+  return productionRegistration;
+}
+
+export function setupMessageHandlers(): void {
+  getChromeRegistration().register();
+}
+
+export function handleRequest<T>(
+  request: BiliVizRequest,
+  requestTabId: number | null = null,
+): Promise<BiliVizResponse<T>> {
+  return getDispatcher().dispatchRequest<T>(request, { requestTabId });
+}
+```
+
+`createMessageDispatcher(dependencies)` belongs in proposed `messages/dispatcher.ts`. `createChromeMessageRegistration(chromeApi, dispatcher)` belongs in proposed `messages/chrome-registration.ts`; it creates stable runtime/tab callback identities, closes over the supplied dispatcher, and owns a private `registered` flag. Its `register()` is idempotent: after the first successful registration, later calls add no runtime, tab-removal, or tab-update listeners. Constructing or directly using the dispatcher never changes that flag and never touches Chrome listener state.
+
+The two call orders therefore have one result:
+
+| Call order | Required outcome |
+| --- | --- |
+| `handleRequest` before `setupMessageHandlers` | Lazily create one production dispatcher, dispatch directly, and register zero Chrome listeners. Later setup creates the registration adapter around that same dispatcher. |
+| `setupMessageHandlers` before direct `handleRequest` | Lazily create the dispatcher and registration adapter, register each listener once, and make the later direct call use the already-created dispatcher. |
+| Repeated `setupMessageHandlers` | Reuse the registration adapter; each Chrome event still has exactly one installed listener. Dispatcher identity and domain state are unchanged. |
+| Mixed direct and runtime requests | Both enter the same `dispatchRequest` method and therefore share action ownership, Dynamic Bill gates, in-memory current-video state, cancellation registries, and all other dispatcher-owned coordination. |
+
+Do not add a production singleton reset export. Isolated dispatcher tests should call `createMessageDispatcher` with fakes; registration tests should call `createChromeMessageRegistration` with a fake Chrome facade. The existing bundled handler test may exercise the exported production facades in one fresh bundle, but it must not create or inject a second production dispatcher.
+
+#### Dispatcher-shell migration and rollback boundary
+
+The shell implementation should be one independently revertible commit and follow this order:
+
+1. Add `dispatch-contract.ts`, `dispatcher.ts`, and `chrome-registration.ts`, initially wrapping the existing `handleRequestExclusive`, content switch, and tab cleanup without moving any domain branch.
+2. Add the lazy `getDispatcher()` and make exported `handleRequest` delegate to it. Characterize direct-before-setup behavior before changing Chrome registration.
+3. Add `getChromeRegistration()` and make `setupMessageHandlers` call its idempotent `register()`. The runtime listener must call its captured dispatcher directly; it must not construct another dispatcher or bounce through a facade backed by different state.
+4. Add shared-instance and single-registration tests, then remove the old inline listener registration only after those tests pass.
+
+Keep the existing switch and helpers available behind the initial dispatcher adapter until direct and runtime parity is proven. Do not split the singleton/facade rewrite from the registration rewrite across mergeable PRs: an intermediate state could construct two dispatchers. If construction identity, direct-call behavior, or listener counts differ, revert the entire dispatcher-shell commit; no domain extraction should have started, and the current inline `setupMessageHandlers` plus `handleRequest` path remains the rollback target.
 
 ## Complete handler-family inventory
 
@@ -143,8 +201,8 @@ Every stage keeps the runtime listener and public request types unchanged. Add o
 
 | Stage | Work and target modules | Entry/exit checks and rollback point |
 | --- | --- | --- |
-| 0. Characterize the boundary | Record action ownership, top-level envelope behavior, Dynamic Bill gate membership, and tab cleanup in `tests/current-video-message-handlers.test.ts` plus focused dynamic tests. | Exit only when each action union member has one documented owner. Roll back by reverting test-only scaffolding if it exposes an incorrect existing assumption. |
-| 1. Introduce the dispatcher shell | Create proposed `messages/dispatcher.ts` and `messages/dispatch-contract.ts`; leave `setupMessageHandlers` and `handleRequest` as facades in `handlers.ts`. Move no domain behavior initially. | Assert one registration, `true` async retention, unknown-action response, and duplicate registry rejection. Roll back by reverting the shell commit; no domain module changes are required. |
+| 0. Characterize the boundary | Record action ownership, top-level envelope behavior, Dynamic Bill gate membership, direct `handleRequest` before setup, and tab cleanup in `tests/current-video-message-handlers.test.ts` plus focused dynamic tests. | Exit only when each action union member has one documented owner and direct dispatch is proven not to register Chrome listeners. Roll back by reverting test-only scaffolding if it exposes an incorrect existing assumption. |
+| 1. Introduce the dispatcher shell | Create proposed `messages/dispatcher.ts`, `messages/dispatch-contract.ts`, and `messages/chrome-registration.ts`; add module-level lazy `getDispatcher()` and separately lazy/idempotent `getChromeRegistration()` in `handlers.ts`. Move no domain behavior initially. | Assert direct-before-setup and setup-before-direct share one dispatcher; two setup calls install one listener per Chrome event; runtime async retention, unknown-action response, and duplicate action-owner rejection remain unchanged. Roll back the complete shell commit before any domain extraction. |
 | 2. Extract low-coupling local reads | Move analytics and simple local/history status/export branches to proposed `analytics-handlers.ts` and `history-handlers.ts`. Keep `SYNC_NOW`/`CANCEL_SYNC` together with their operation controls. | Compare response data and error codes; verify sync-start remains detached and cancellation stays effective. Roll back this commit only, restoring the switch branches. |
 | 3. Extract settings/privacy lifecycle | Move config, AI-health, privacy summary, scoped clears, and index rebuild to proposed `settings-privacy-handlers.ts`. Keep invalidation callbacks and clear coordinators injected from their established modules. | Run config race, clear-readback, cache invalidation, and no-secret-payload tests. Roll back as one lifecycle slice if a clear/write race regresses. |
 | 4. Extract favorites | Move all seven Favorites actions to proposed `favorites-handlers.ts`, retaining the service-level API and QA boundary. | Run favorite sync audit, Smart Favorites QA/payload tests, and related-favorites isolation checks. Roll back without touching the dispatcher shell. |
@@ -159,7 +217,8 @@ The following tests are the minimum mapping for an implementation PR. They are i
 
 | Behavior under extraction | Primary focused tests | Assertions that must not change |
 | --- | --- | --- |
-| Registration, request-tab selection, context update admission, selection readiness, summary/QA cancellation, clear/config races, and timestamp delivery | [`tests/current-video-message-handlers.test.ts`](../../tests/current-video-message-handlers.test.ts) | Sender-tab BVID/page rejection, CID/page revalidation, no transcript body before exact selection, late-write suppression, source-change cancellation, and fail-closed lease authorization. |
+| Dispatcher construction and registration | Add focused cases to [`tests/current-video-message-handlers.test.ts`](../../tests/current-video-message-handlers.test.ts), using one fresh bundled module and fake Chrome listener counters. | Direct `handleRequest` before setup creates no listeners; setup reuses that dispatcher; setup twice leaves exactly one runtime/removed/updated listener; a direct request and a runtime request hit the same dispatcher spy/state. |
+| Request-tab selection, context update admission, selection readiness, summary/QA cancellation, clear/config races, and timestamp delivery | [`tests/current-video-message-handlers.test.ts`](../../tests/current-video-message-handlers.test.ts) | Sender-tab BVID/page rejection, CID/page revalidation, no transcript body before exact selection, late-write suppression, source-change cancellation, and fail-closed lease authorization. |
 | Primary-text selection and clear epochs | [`tests/current-video-primary-text-selection-store.test.ts`](../../tests/current-video-primary-text-selection-store.test.ts), [`tests/current-video-primary-text-selection-clear.test.ts`](../../tests/current-video-primary-text-selection-clear.test.ts) | Interleaved per-part saves persist safely; unknown state is not written; clear blocks/invalidates writes. |
 | Transcript cache and subtitle display | `tests/current-video-transcript-cache.test.ts`, `tests/current-video-subtitle-probe.test.ts`, `tests/current-video-subtitle-view.test.ts`, `tests/current-video-subtitle-diagnostics.test.ts` | Exact source identity/hash, CID/page match, temporary owner isolation, honest unavailable/malformed status, and no stale subtitle view. |
 | Summary/highlights | [`tests/current-video-summary-highlights.test.ts`](../../tests/current-video-summary-highlights.test.ts) | Full-primary-text audit, evidence-derived timestamps, exact cache identity/model binding, authorization/config cancellation, and no late cache write. |
@@ -174,6 +233,8 @@ The following tests are the minimum mapping for an implementation PR. They are i
 | Bad case | Existing protection that must move intact | Regression signal / response |
 | --- | --- | --- |
 | A new action is not registered, or two modules claim it | One explicit action registry and the existing unknown-action envelope | Exhaustiveness/duplicate-registry test; return the established unknown-action response, never fall through. |
+| Direct `handleRequest` and the Chrome listener construct separate dispatchers | Module-level lazy `getDispatcher()` is the only production construction path; registration captures its result | Shared-instance test observes one factory call and shared coordination state. Revert the dispatcher-shell commit before moving any domain action. |
+| `setupMessageHandlers` is called twice and duplicates side effects | A separately cached `ChromeMessageRegistration` owns stable callback identities and idempotent `register()` | Fake Chrome counters remain one for runtime, tab removal, and tab update; no request is handled twice. |
 | A Dynamic Bill branch executes before migration or outside its data-operation lock | Three outer action sets and `handleRequest` gate order | Migration tests fail before DB/network work; revert the Dynamic Bill extraction, not the migration policy. |
 | The active tab changes after a popup request was sent | Request tab takes precedence; fresh matching context resolution | Request-tab race test returns no evidence/no context for the old part rather than using another tab. |
 | Same BVID but a different page/CID leaks text or a jump | URL BVID/page admission, exact CID/page checks, source guard | Page-change and stale-citation tests block/return no evidence; no content-script delivery. |
@@ -190,7 +251,7 @@ The following tests are the minimum mapping for an implementation PR. They are i
 
 These are intentionally independent implementation issues after #216. Each gets one branch, one draft PR, a rollback commit boundary, and no product behavior changes.
 
-1. **Dispatcher shell and action registry.** Add only the injected dispatcher/registry and characterization tests; retain all current handlers as delegates.
+1. **Dispatcher shell, lazy production instance, and Chrome registration.** Add `createMessageDispatcher`, module-level lazy `getDispatcher`, the separately cached idempotent registration adapter, and direct/runtime shared-instance characterization tests; retain all current handlers as delegates and make this one rollback boundary.
 2. **Analytics and history handler extraction.** Move the seven analytics actions and six history/export/status actions, preserving sync controls and response codes.
 3. **Settings and local-data lifecycle extraction.** Move configuration, privacy, clears, and AI health check with config/clear race coverage.
 4. **Favorites handler extraction.** Move Favorites sync/index/search/QA paths without changing provider calls or Smart Favorites evidence boundaries.
@@ -202,6 +263,7 @@ These are intentionally independent implementation issues after #216. Each gets 
 ## Completion criteria for a later implementation series
 
 - `handlers.ts` is a registration facade and has no business-domain switch.
+- Direct `handleRequest` and every Chrome listener resolve to the same lazily constructed production dispatcher; dispatcher construction alone registers nothing, and repeated setup registers each Chrome listener once.
 - All 75 message actions have exactly one registered owner; the dispatcher retains the same async and error behavior.
 - Every current-video body read, AI request, cache/session write, and timestamp operation has the exact existing BVID/CID/page/source/version/session checks.
 - Payload audits remain in the services that build outbound payloads and continue to fail before network transport.
