@@ -1627,7 +1627,7 @@ def run_summary_terminal_state_flow(page, state):
         "disabled": "当前视频 AI 助手未开启，本次没有发送正文。",
         "unconfigured": "AI 服务尚未配置完整，本次没有发送正文。",
         "no_text": "当前没有可用的主要正文，无法生成摘要与亮点。",
-        "invalid": "模型返回的摘要与亮点没有通过校验，旧结果不会被替换。",
+        "invalid": "模型返回内容无法完整引用当前正文，旧结果不会被替换。",
         "error": "摘要与亮点生成失败，旧结果不会被替换。",
     }
     section = open_selected_summary_assistant(page, query_by_state[state])
@@ -1725,7 +1725,7 @@ def run_summary_preview_replacement_race_flow(page):
 def run_summary_prior_refresh_failure_flow(page, failure):
     query = "cachedSummary=1&summaryState=invalid" if failure == "invalid" else "cachedSummary=1&summaryReject=1"
     expected = (
-        "模型返回的摘要与亮点没有通过校验，旧结果不会被替换。"
+        "模型返回内容无法完整引用当前正文，旧结果不会被替换。"
         if failure == "invalid"
         else "摘要与亮点生成失败，请确认当前视频页仍然打开后重试。"
     )

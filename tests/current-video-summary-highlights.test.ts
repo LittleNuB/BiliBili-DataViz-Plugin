@@ -16,6 +16,7 @@ import {
   CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_OUTPUT_LIMITS,
   currentVideoSummaryHighlightBindingFromResult,
   currentVideoSummaryHighlightBindingMatchesRecord,
+  invalidCurrentVideoSummaryHighlights,
   readyCurrentVideoSummaryHighlights,
   requestAuditFromEnvelope,
   requestCurrentVideoSummaryHighlightsAi,
@@ -49,7 +50,7 @@ import type { CurrentVideoContext } from '../src/shared/types/current-video-cont
 import type { CurrentVideoTranscriptSegment } from '../src/shared/types/current-video-transcript.ts';
 import type { CurrentVideoSummaryHighlightsAiOutput } from '../src/shared/current-video-summary-highlights.ts';
 
-test('validates all-or-nothing summary, key points, and highlight evidence ranges', () => {
+test('validates all-or-nothing summary, key points, and highlight evidence references', () => {
   const envelope = fullTextEnvelope();
   const valid = validateCurrentVideoSummaryHighlightsAiOutput(validAiOutput(), envelope);
 
@@ -71,28 +72,6 @@ test('validates all-or-nothing summary, key points, and highlight evidence range
   }, envelope);
   assert.deepEqual(badReference, { ok: false, reason: 'evidence_line_missing' });
 
-  const badTime = validateCurrentVideoSummaryHighlightsAiOutput({
-    ...validAiOutput(),
-    highlights: [
-      { title: '时间不匹配', description: '这个亮点没有覆盖引用行。', startSeconds: 50, endSeconds: 55, evidenceLineNumbers: [1] },
-      { title: '第二亮点', description: '第二个亮点有效。', startSeconds: 10, endSeconds: 19, evidenceLineNumbers: [2] },
-      { title: '第三亮点', description: '第三个亮点有效。', startSeconds: 20, endSeconds: 29, evidenceLineNumbers: [3] },
-      { title: '第四亮点', description: '第四个亮点有效。', startSeconds: 30, endSeconds: 39, evidenceLineNumbers: [4] },
-    ],
-  }, envelope);
-  assert.deepEqual(badTime, { ok: false, reason: 'highlight_evidence_time_mismatch' });
-
-  const malformedTimes = validateCurrentVideoSummaryHighlightsAiOutput({
-    ...validAiOutput(),
-    highlights: [
-      { title: '负数时间', description: '负数时间不能被自动改写。', startSeconds: -1, endSeconds: 9, evidenceLineNumbers: [1] },
-      { title: '第二亮点', description: '第二个亮点有效。', startSeconds: 10, endSeconds: 19, evidenceLineNumbers: [2] },
-      { title: '第三亮点', description: '第三个亮点有效。', startSeconds: 20, endSeconds: 29, evidenceLineNumbers: [3] },
-      { title: '第四亮点', description: '第四个亮点有效。', startSeconds: 30, endSeconds: 39, evidenceLineNumbers: [4] },
-    ],
-  }, envelope);
-  assert.deepEqual(malformedTimes, { ok: false, reason: 'highlight_bounds_invalid' });
-
   const malformedReference = validateCurrentVideoSummaryHighlightsAiOutput({
     ...validAiOutput(),
     summarySentences: [
@@ -102,15 +81,156 @@ test('validates all-or-nothing summary, key points, and highlight evidence range
   }, envelope);
   assert.deepEqual(malformedReference, { ok: false, reason: 'summary_sentences_evidence_missing' });
 
-  const outOfOrderKeyPoints = validateCurrentVideoSummaryHighlightsAiOutput({
-    ...validAiOutput(),
-    keyPoints: [
-      { text: '先引用后半段的方法。', evidenceLineNumbers: [4] },
-      { text: '再倒回开头的问题。', evidenceLineNumbers: [1] },
-      { text: '最后引用结尾结论。', evidenceLineNumbers: [6] },
+});
+
+test('orders key points and highlights locally by their earliest evidence line', () => {
+  const envelope = fullTextEnvelope();
+  const output = validAiOutput();
+  output.keyPoints = [
+    { text: '最后引用结尾结论。', evidenceLineNumbers: [6] },
+    { text: '先引用开头的问题。', evidenceLineNumbers: [1] },
+    { text: '再引用中段的方法。', evidenceLineNumbers: [4] },
+  ];
+  output.highlights = [
+    { title: '结尾', description: '最后给出结论。', evidenceLineNumbers: [6] },
+    { title: '开头', description: '先提出主要问题。', evidenceLineNumbers: [1] },
+    { title: '中段二', description: '继续解释执行过程。', evidenceLineNumbers: [4] },
+    { title: '中段一', description: '开始拆解解决方法。', evidenceLineNumbers: [3] },
+  ];
+
+  const validation = validateCurrentVideoSummaryHighlightsAiOutput(output, envelope);
+
+  assert.equal(validation.ok, true);
+  if (!validation.ok) return;
+  assert.deepEqual(validation.result.keyPoints.map(item => item.text), [
+    '先引用开头的问题。',
+    '再引用中段的方法。',
+    '最后引用结尾结论。',
+  ]);
+  assert.deepEqual(validation.result.highlights.map(item => item.title), [
+    '开头',
+    '中段一',
+    '中段二',
+    '结尾',
+  ]);
+});
+
+test('normalizes positive integer evidence lines returned as JSON strings', () => {
+  const envelope = fullTextEnvelope();
+  const output = validAiOutput();
+  output.summarySentences = [
+    { text: '视频先说明问题背景和约束。', evidenceLineNumbers: ['1', 2, '2'] },
+  ];
+  output.keyPoints = [
+    { text: '中段给出具体方法。', evidenceLineNumbers: ['3', '4'] },
+  ];
+  output.highlights = [
+    { title: '方法拆解', description: '这里集中解释了解决方法。', evidenceLineNumbers: ['3', 4] },
+  ];
+
+  const validation = validateCurrentVideoSummaryHighlightsAiOutput(output, envelope);
+
+  assert.equal(validation.ok, true);
+  if (!validation.ok) return;
+  assert.deepEqual(validation.result.summarySentences[0]?.evidenceLineNumbers, [1, 2]);
+  assert.deepEqual(validation.result.keyPoints[0]?.evidenceLineNumbers, [3, 4]);
+  assert.deepEqual(validation.result.highlights[0]?.evidenceLineNumbers, [3, 4]);
+});
+
+test('applies the evidence reference limit after deterministic de-duplication', () => {
+  const envelope = fullTextEnvelope();
+  const output = validAiOutput();
+  output.summarySentences = [
+    {
+      text: '重复引用同一正文行仍然只算一条证据。',
+      evidenceLineNumbers: Array.from({ length: 13 }, () => '1'),
+    },
+  ];
+
+  const validation = validateCurrentVideoSummaryHighlightsAiOutput(output, envelope);
+
+  assert.equal(validation.ok, true);
+  if (!validation.ok) return;
+  assert.deepEqual(validation.result.summarySentences[0]?.evidenceLineNumbers, [1]);
+});
+
+test('derives highlight time ranges from evidence lines instead of model-provided times', () => {
+  const envelope = fullTextEnvelope();
+  const output = validAiOutput();
+  output.highlights = [
+    {
+      title: '问题提出',
+      description: '开头集中说明要解决的问题。',
+      evidenceLineNumbers: [1, 2, 2],
+    },
+    {
+      title: '方法拆解',
+      description: '中段按步骤解释方案。',
+      startSeconds: 999,
+      endSeconds: 1_000,
+      evidenceLineNumbers: [3, 4],
+    },
+    {
+      title: '结果收束',
+      description: '结尾给出结论和行动。',
+      startSeconds: '00:40',
+      endSeconds: '00:59',
+      evidenceLineNumbers: [5, 6],
+    },
+    {
+      title: '后续行动',
+      description: '最后补充可以继续执行的行动。',
+      evidenceLineNumbers: [6],
+    },
+  ];
+
+  const validation = validateCurrentVideoSummaryHighlightsAiOutput(output, envelope);
+
+  assert.equal(validation.ok, true);
+  if (!validation.ok) return;
+  assert.deepEqual(validation.result.highlights.map(highlight => ({
+    timeRangeLabel: highlight.timeRangeLabel,
+    startSeconds: highlight.startSeconds,
+    endSeconds: highlight.endSeconds,
+    evidenceLineNumbers: highlight.evidenceLineNumbers,
+  })), [
+    { timeRangeLabel: '0:00-0:19', startSeconds: 0, endSeconds: 19, evidenceLineNumbers: [1, 2] },
+    { timeRangeLabel: '0:20-0:39', startSeconds: 20, endSeconds: 39, evidenceLineNumbers: [3, 4] },
+    { timeRangeLabel: '0:40-0:59', startSeconds: 40, endSeconds: 59, evidenceLineNumbers: [5, 6] },
+    { timeRangeLabel: '0:50-0:59', startSeconds: 50, endSeconds: 59, evidenceLineNumbers: [6] },
+  ]);
+});
+
+test('accepts a smaller evidence-backed result but rejects empty sections', () => {
+  const envelope = fullTextEnvelope();
+  const sparseOutput = {
+    summarySentences: [
+      { text: '视频围绕一个主要问题展开说明。', evidenceLineNumbers: [1, 2] },
     ],
-  }, envelope);
-  assert.deepEqual(outOfOrderKeyPoints, { ok: false, reason: 'key_point_order_invalid' });
+    keyPoints: [
+      { text: '核心方法集中在中段。', evidenceLineNumbers: [3, 4] },
+    ],
+    highlights: [
+      { title: '方法演示', description: '这里展示了解决问题的方法。', evidenceLineNumbers: [3, 4] },
+    ],
+  };
+
+  const validation = validateCurrentVideoSummaryHighlightsAiOutput(sparseOutput, envelope);
+
+  assert.equal(validation.ok, true);
+  if (!validation.ok) return;
+  assert.equal(validation.result.summarySentences.length, 1);
+  assert.equal(validation.result.keyPoints.length, 1);
+  assert.equal(validation.result.highlights.length, 1);
+  assert.equal(validation.result.highlights[0]?.timeRangeLabel, '0:20-0:39');
+
+  for (const field of ['summarySentences', 'keyPoints', 'highlights'] as const) {
+    const empty = validateCurrentVideoSummaryHighlightsAiOutput({
+      ...sparseOutput,
+      [field]: [],
+    }, envelope);
+    assert.equal(empty.ok, false, `${field} must not be empty`);
+  }
 });
 
 test('accepts output limits at the boundary and rejects every oversized item', () => {
@@ -123,8 +243,6 @@ test('accepts output limits at the boundary and rejects every oversized item', (
   const highlights = base.highlights as Array<{
     title: string;
     description: string;
-    startSeconds: number;
-    endSeconds: number;
     evidenceLineNumbers: number[];
   }>;
   const maxReferences = Array.from(
@@ -198,14 +316,49 @@ test('accepts output limits at the boundary and rejects every oversized item', (
   }
 });
 
+test('rejects an oversized raw model result even when known fields are valid', () => {
+  const envelope = fullTextEnvelope();
+  const validation = validateCurrentVideoSummaryHighlightsAiOutput({
+    ...validAiOutput(),
+    debug: 'x'.repeat(CURRENT_VIDEO_SUMMARY_HIGHLIGHTS_OUTPUT_LIMITS.rawJsonBytes),
+  }, envelope);
+
+  assert.deepEqual(validation, { ok: false, reason: 'output_too_large' });
+});
+
+test('maps rejected model output to safe Chinese failure categories', () => {
+  const textSize = { lineCount: 6, charCount: 120, utf8Bytes: 360 };
+  const cases = [
+    { reason: 'summary_sentences_not_array', expected: /结构不完整/ },
+    { reason: 'highlight_evidence_line_missing', expected: /引用.*当前正文/ },
+    { reason: 'highlight_description_too_long', expected: /超出.*范围/ },
+    { reason: 'output_too_large', expected: /超出.*范围/ },
+  ];
+
+  for (const testCase of cases) {
+    const result = invalidCurrentVideoSummaryHighlights(
+      '测试视频',
+      'test-model',
+      testCase.reason,
+      textSize,
+      10_000,
+    );
+    const visibleText = [result.message, ...result.limitations, result.ai.note].join('\n');
+    assert.match(visibleText, testCase.expected);
+    assert.doesNotMatch(visibleText, /summary_|key_point|highlight_|evidenceLineNumbers|startSeconds|endSeconds/);
+  }
+});
+
 test('full-primary-text payload is audited and does not include unrelated local ledgers', () => {
   const payload = buildCurrentVideoSummaryHighlightsAiPayload(fullTextEnvelope());
   const raw = JSON.stringify(payload);
   const audit = auditAssistantPayload(payload, currentVideoSummaryHighlightsPayloadContract);
 
-  assert.equal(payload.intent, 'current_video_summary_highlights_v1');
+  assert.equal(payload.intent, 'current_video_summary_highlights_v2');
   assert.equal(payload.textLines.length, 6);
   assert.ok(raw.includes('完整正文第 1 行'));
+  assert.match(payload.outputRules.join('\n'), /只返回.*text.*evidenceLineNumbers.*title.*description/s);
+  assert.doesNotMatch(payload.outputRules.join('\n'), /startSeconds|endSeconds/);
   assert.equal(audit.passed, true, JSON.stringify(audit.violations));
   assertAssistantPayloadAudit(payload, currentVideoSummaryHighlightsPayloadContract);
   assert.doesNotMatch(raw, /watchHistory|favoriteItems|followingList|feedbackRecords|Cookie|Key\.txt|Chrome\\User Data|sourceHash|segmentId|subtitle_url/i);
@@ -305,6 +458,83 @@ test('generation succeeds only after validation and writes exact-identity model 
   assert.equal(cached?.requestAudit.requestId, result.requestId);
   assert.equal(cached?.requestAudit.text.lineCount, 6);
   assert.equal('lines' in (cached?.requestAudit.text ?? {}), false);
+});
+
+test('does not reuse a v1 cache entry after the summary protocol upgrade', async () => {
+  await resetSummaryCache();
+  const context = videoContext();
+  const config = userConfig({ enabled: true, apiKey: 'test-key' });
+  const generated = await generateCurrentVideoSummaryHighlights(context, {
+    config,
+    transcriptSegments: transcriptSegments(),
+    chat: async () => validAiOutput(),
+  });
+  assert.equal(generated.status, 'ready');
+
+  const currentRecord = await db.currentVideoSummaryHighlights.toCollection().first();
+  assert.ok(currentRecord);
+  const legacyCacheKey = currentRecord.cacheKey.replace(
+    'cv-summary-highlights:v2:',
+    'cv-summary-highlights:v1:',
+  );
+  await resetSummaryCache();
+  await putCurrentVideoSummaryHighlightsCache({
+    cacheKey: legacyCacheKey,
+    sourceIdentityKey: currentRecord.sourceIdentityKey,
+    model: currentRecord.model,
+    bvid: currentRecord.bvid,
+    cid: currentRecord.cid,
+    page: currentRecord.page,
+    generatedAt: currentRecord.generatedAt,
+    lastAccessedAt: currentRecord.lastAccessedAt,
+    requestAudit: currentRecord.requestAudit,
+    result: {
+      ...currentRecord.result,
+      cacheKey: legacyCacheKey,
+    },
+  });
+
+  const currentCacheKey = buildCurrentVideoSummaryHighlightsCacheKey({
+    identity: { sourceIdentityKey: context.transcriptEvidence?.sourceIdentityKey ?? '' },
+    model: 'test-model',
+  });
+  assert.match(currentCacheKey, /^cv-summary-highlights:v2:/);
+  const cached = await readCachedCurrentVideoSummaryHighlights(context, { config });
+  assert.equal(cached.status, 'not_requested');
+  assert.equal((await collectCurrentVideoSummaryHighlightsCacheUsage()).count, 1);
+});
+
+test('generation caches a sparse model result after local evidence normalization', async () => {
+  await resetSummaryCache();
+  const context = videoContext();
+  const result = await generateCurrentVideoSummaryHighlights(context, {
+    requestId: 'normalized-sparse-result',
+    config: userConfig({ enabled: true, apiKey: 'test-key' }),
+    transcriptSegments: transcriptSegments(),
+    chat: async () => ({
+      summarySentences: [
+        { text: '视频说明了问题、方法和结论。', evidenceLineNumbers: ['1', '3', '6'] },
+      ],
+      keyPoints: [
+        { text: '结尾给出行动。', evidenceLineNumbers: ['6'] },
+        { text: '开头提出问题。', evidenceLineNumbers: ['1'] },
+      ],
+      highlights: [
+        { title: '结论', description: '这里给出最终行动。', evidenceLineNumbers: ['6'] },
+        { title: '问题', description: '这里提出主要问题。', evidenceLineNumbers: ['1'] },
+      ],
+    }),
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(result.keyPoints.map(item => item.text), ['开头提出问题。', '结尾给出行动。']);
+  assert.deepEqual(result.highlights.map(item => item.timeRangeLabel), ['0:00-0:09', '0:50-0:59']);
+  const cached = await getCurrentVideoSummaryHighlightsCache({
+    identity: { sourceIdentityKey: context.transcriptEvidence?.sourceIdentityKey ?? '' },
+    model: 'test-model',
+  });
+  assert.equal(cached?.result.requestId, 'normalized-sparse-result');
+  assert.deepEqual(cached?.result.highlights.map(item => item.timeRangeLabel), ['0:00-0:09', '0:50-0:59']);
 });
 
 test('late valid output stays on the captured cache identity and is not marked current', async () => {
@@ -429,7 +659,7 @@ test('disabled, unconfigured, and invalid output do not call or replace cache', 
     transcriptSegments: segments,
     chat: async () => ({
       ...validAiOutput(),
-      summarySentences: [{ text: '只有一句摘要。', evidenceLineNumbers: [1] }],
+      summarySentences: [{ text: '引用了不存在正文行的摘要。', evidenceLineNumbers: [99] }],
     }),
   });
 
@@ -824,10 +1054,10 @@ function validAiOutput(options: { suffix?: string } = {}): CurrentVideoSummaryHi
       { text: `最后给出结论。${suffix}`, evidenceLineNumbers: [6] },
     ],
     highlights: [
-      { title: `问题提出${suffix}`, description: `开头集中说明要解决的问题。${suffix}`, startSeconds: 0, endSeconds: 9, evidenceLineNumbers: [1] },
-      { title: `背景约束${suffix}`, description: `这一段补充限制条件。${suffix}`, startSeconds: 10, endSeconds: 19, evidenceLineNumbers: [2] },
-      { title: `方法拆解${suffix}`, description: `中段按步骤解释方案。${suffix}`, startSeconds: 20, endSeconds: 39, evidenceLineNumbers: [3, 4] },
-      { title: `结果收束${suffix}`, description: `结尾给出结论和行动。${suffix}`, startSeconds: 40, endSeconds: 59, evidenceLineNumbers: [5, 6] },
+      { title: `问题提出${suffix}`, description: `开头集中说明要解决的问题。${suffix}`, evidenceLineNumbers: [1] },
+      { title: `背景约束${suffix}`, description: `这一段补充限制条件。${suffix}`, evidenceLineNumbers: [2] },
+      { title: `方法拆解${suffix}`, description: `中段按步骤解释方案。${suffix}`, evidenceLineNumbers: [3, 4] },
+      { title: `结果收束${suffix}`, description: `结尾给出结论和行动。${suffix}`, evidenceLineNumbers: [5, 6] },
     ],
   };
 }
