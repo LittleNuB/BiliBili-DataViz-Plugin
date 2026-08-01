@@ -14,10 +14,10 @@
     "isolatedModules": true,
     "outDir": "dist",
     "rootDir": ".",
-    "baseUrl": ".",
+    "types": ["chrome"],
     "paths": {
-      "@shared/*": ["src/shared/*"],
-      "@background/*": ["src/background/*"]
+      "@shared/*": ["./src/shared/*"],
+      "@background/*": ["./src/background/*"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "popup/**/*.ts", "popup/**/*.tsx", "dashboard/**/*.ts", "dashboard/**/*.tsx"],

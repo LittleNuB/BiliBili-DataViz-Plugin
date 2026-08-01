@@ -27,7 +27,7 @@
     "dexie": "^4.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.5.0",
+    "typescript": "^7.0.2",
     "vite": "^6.4.3",
     "@types/chrome": "^0.0.270",
     "fake-indexeddb": "^6.2.5",
