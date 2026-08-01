@@ -22,15 +22,37 @@ function Assert-ChildPath {
   return $canonicalPath
 }
 
+function Assert-NotReparsePoint {
+  param([Parameter(Mandatory = $true)][string]$Path)
+
+  $item = Get-Item -LiteralPath $Path -Force
+  if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "Release path must not be a reparse point: $($item.FullName)"
+  }
+}
+
 function Get-ReleaseFiles {
   param([Parameter(Mandatory = $true)][string]$Root)
 
-  $files = @(Get-ChildItem -LiteralPath $Root -Recurse -File | Sort-Object FullName)
-  $reparsePoints = @($files | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 })
-  if ($reparsePoints.Count -gt 0) {
-    throw "Release tree contains reparse points: $($reparsePoints.FullName -join ', ')"
+  Assert-NotReparsePoint -Path $Root
+  $pending = [Collections.Generic.Queue[IO.DirectoryInfo]]::new()
+  $files = [Collections.Generic.List[IO.FileInfo]]::new()
+  $pending.Enqueue((Get-Item -LiteralPath $Root -Force))
+  while ($pending.Count -gt 0) {
+    $directory = $pending.Dequeue()
+    foreach ($child in Get-ChildItem -LiteralPath $directory.FullName -Force) {
+      if (($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Release tree contains a reparse point: $($child.FullName)"
+      }
+      if ($child.PSIsContainer) {
+        $pending.Enqueue($child)
+      }
+      else {
+        $files.Add($child)
+      }
+    }
   }
-  return $files
+  return @($files | Sort-Object FullName)
 }
 
 function Get-RelativeReleasePath {
@@ -46,7 +68,7 @@ function Get-RelativeReleasePath {
 function Assert-SafeReleaseTree {
   param([Parameter(Mandatory = $true)][string]$Root)
 
-  $forbiddenPathPattern = '(?i)(^|/)(dist|node_modules|src|tests|\.git)(/|$)|(?i)(^|/)(cookies?(?:\.[^/]*)?|login[-_]?state(?:\.[^/]*)?|credentials?(?:\.[^/]*)?|id_rsa(?:\.pub)?|[^/]*(?:private[-_]?key|secret[-_]?key)[^/]*|[^/]+\.(?:pem|pfx|p12|key))$'
+  $forbiddenPathPattern = '(?i)(^|/)(dist|node_modules|src|tests|\.git|profile|browser[-_]?profile|user[-_]?data|login[-_]?state)(/|$)|(?i)(^|/)(cookies?(?:\.[^/]*)?|credentials?(?:\.[^/]*)?|local state|key\.txt|id_rsa(?:\.pub)?|[^/]*(?:private[-_]?key|secret[-_]?key)[^/]*|[^/]+\.(?:pem|pfx|p12|key))$'
   $secretPatterns = @(
     '-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',
     '\bAKIA[0-9A-Z]{16}\b',
@@ -155,6 +177,7 @@ $manifestPath = Join-Path $distRoot 'manifest.json'
 if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
   throw 'dist/manifest.json is missing. Run npm run build first.'
 }
+Assert-NotReparsePoint -Path $distRoot
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $expectedManifestVersion = $Version -replace '-.*$', ''
 if ($packageMetadata.version -ne $Version -or $manifest.version_name -ne $Version -or $manifest.version -ne $expectedManifestVersion) {
@@ -191,10 +214,11 @@ foreach ($resourceGroup in $manifest.web_accessible_resources) {
 }
 $requiredPaths = @($requiredPaths | Where-Object { $_ } | Sort-Object -Unique)
 
-Assert-RequiredReleaseFiles -Root $distRoot -RelativePaths $requiredPaths
 Assert-SafeReleaseTree -Root $distRoot
+Assert-RequiredReleaseFiles -Root $distRoot -RelativePaths $requiredPaths
 
 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+Assert-NotReparsePoint -Path $artifactRoot
 $token = [guid]::NewGuid().ToString('N')
 $temporaryZipPath = Assert-ChildPath -Root $artifactRoot -Path (Join-Path $artifactRoot ".$zipName.$token.tmp")
 $temporaryShaPath = Assert-ChildPath -Root $artifactRoot -Path "$temporaryZipPath.sha256"
@@ -255,6 +279,7 @@ finally {
     }
   }
   if ((Test-Path -LiteralPath $auditRoot) -and (Assert-ChildPath -Root $systemTempRoot -Path $auditRoot)) {
+    Get-ReleaseFiles -Root $auditRoot | Out-Null
     Remove-Item -LiteralPath $auditRoot -Recurse -Force
   }
 }

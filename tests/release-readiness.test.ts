@@ -93,7 +93,10 @@ test("release packaging builds fresh and promotes only a validated artifact", as
   assert.match(packageJson.scripts["package:release"], /^npm run build && /);
   assert.match(packagerSource, /Invalid release version/);
   assert.match(packagerSource, /Assert-ChildPath/);
+  assert.match(packagerSource, /Assert-NotReparsePoint/);
   assert.match(packagerSource, /Assert-SafeReleaseTree/);
+  assert.match(packagerSource, /browser\[-_\]\?profile/);
+  assert.match(packagerSource, /key\\\.txt/);
   assert.match(packagerSource, /temporaryZipPath/);
   assert.match(packagerSource, /Refusing to replace a different existing release ZIP/);
   assert.match(packagerSource, /Assert-RequiredReleaseFiles/);
