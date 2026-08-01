@@ -182,7 +182,7 @@ Manifest V3：
 - `action` 不配置 `default_popup`，改为 `chrome.action.onClicked` 创建独立窗口。
 - `content/player-monitor.js` 注入 B站视频页。
 - `content/sidebar-card.js` 注入 B站首页。
-- 权限：`cookies`、`storage`、`unlimitedStorage`、`alarms`、`tabs`。
+- 权限：`storage`、`unlimitedStorage`、`alarms`、`tabs`。扩展不使用 `chrome.cookies`，因此不申请 `cookies` 权限；B 站请求只使用当前扩展运行时的浏览器会话能力。
 - AI 服务固定授权 DeepSeek 和 OpenAI 域名；其他 OpenAI 兼容服务通过 `optional_host_permissions` 在用户保存 Base URL 时申请。
 
 ## 7. 关键修复记录

@@ -6,3 +6,4 @@ dist/
 .vscode/
 *.crx
 *.pem
+/release-artifacts/

@@ -1,5 +1,6 @@
 import * as echarts from 'echarts/core';
-import { BarChart, LineChart, PieChart, TreemapChart, HeatmapChart, GaugeChart } from 'echarts/charts';
+import wordCloudCustomSeriesInstaller from '@echarts-x/custom-word-cloud';
+import { BarChart, CustomChart, LineChart, PieChart, TreemapChart, HeatmapChart, GaugeChart } from 'echarts/charts';
 import {
   TitleComponent,
   TooltipComponent,
@@ -11,10 +12,11 @@ import {
   GraphicComponent,
 } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
-import 'echarts-wordcloud';
 
+echarts.use(wordCloudCustomSeriesInstaller);
 echarts.use([
   BarChart,
+  CustomChart,
   LineChart,
   PieChart,
   TreemapChart,
