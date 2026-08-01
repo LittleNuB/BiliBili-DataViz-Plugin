@@ -287,7 +287,8 @@ def run_summary_failure_states(page):
 
     page.goto(f"{POPUP_URL}?summaryInvalid=1")
     page.get_by_role("button", name="生成摘要与亮点").click()
-    expect(page.get_by_text("模型返回的摘要与亮点没有通过校验，旧结果不会被替换。")).to_be_visible()
+    expect(page.get_by_text("模型返回内容无法完整引用当前正文，旧结果不会被替换。")).to_be_visible()
+    expect(page.get_by_text("请重新生成；系统只采用能核对到当前视频正文的内容。")).to_be_visible()
     assert_clean_page(page)
 
     page.goto(f"{POPUP_URL}?summaryError=1")
@@ -412,7 +413,7 @@ def run_prior_refresh_terminal_flow(page, terminal):
         "network": "cachedSummary=1&summaryReject=1",
     }[terminal]
     expected = (
-        "模型返回的摘要与亮点没有通过校验，旧结果不会被替换。"
+        "模型返回内容无法完整引用当前正文，旧结果不会被替换。"
         if terminal == "invalid"
         else "摘要与亮点生成失败，请确认当前 B 站视频页仍然打开后重试。"
     )

@@ -112,7 +112,7 @@ export const currentVideoSummaryPayloadContract: AssistantPayloadAuditContract =
 };
 
 export const currentVideoSummaryHighlightsPayloadContract: AssistantPayloadAuditContract = {
-  name: 'current-video-summary-highlights-v1',
+  name: 'current-video-summary-highlights-v2',
   allowedPaths: [
     '$',
     '$.intent',

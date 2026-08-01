@@ -19,7 +19,7 @@ import {
 } from './assistant-payload-audit.ts';
 
 export interface CurrentVideoSummaryHighlightsAiPayload {
-  intent: 'current_video_summary_highlights_v1';
+  intent: 'current_video_summary_highlights_v2';
   request: {
     requestId: string;
     operation: 'summary_highlights';
@@ -86,6 +86,9 @@ interface TextItemRecord {
 interface HighlightRecord extends TextItemRecord {
   title: string;
   description: string;
+}
+
+interface ValidatedHighlightRecord extends HighlightRecord {
   startSeconds: number;
   endSeconds: number;
 }
@@ -94,7 +97,7 @@ export function buildCurrentVideoSummaryHighlightsAiPayload(
   envelope: CurrentVideoFullTextRequestEnvelope,
 ): CurrentVideoSummaryHighlightsAiPayload {
   return {
-    intent: 'current_video_summary_highlights_v1',
+    intent: 'current_video_summary_highlights_v2',
     request: {
       requestId: envelope.requestId,
       operation: 'summary_highlights',
@@ -120,12 +123,12 @@ export function buildCurrentVideoSummaryHighlightsAiPayload(
       text: line.text,
     })),
     outputRules: [
-      '只返回 JSON 对象，不要 Markdown。',
-      'summarySentences 必须是 2-4 条中文句子，每条包含 text 和 evidenceLineNumbers。',
-      'keyPoints 必须是 3-5 条按正文先后排列的中文要点，每条包含 text 和 evidenceLineNumbers；各项最早引用行号不得倒退。',
-      'highlights 必须是 4-8 条，按出现时间排序；每条包含 title、description、startSeconds、endSeconds、evidenceLineNumbers。',
+      '只返回 JSON 对象，不要 Markdown。结构示例：{"summarySentences":[{"text":"中文摘要","evidenceLineNumbers":[1]}],"keyPoints":[{"text":"中文要点","evidenceLineNumbers":[2]}],"highlights":[{"title":"中文标题","description":"中文概括","evidenceLineNumbers":[3]}]}。',
+      'summarySentences 目标为 2-4 条中文句子；正文信息不足时仍至少返回 1 条。每条只包含 text 和 evidenceLineNumbers。',
+      'keyPoints 目标为 3-5 条中文要点；正文信息不足时仍至少返回 1 条。每条只包含 text 和 evidenceLineNumbers。',
+      'highlights 目标为 4-8 条关键观点、转折或演示结果；正文信息不足时仍至少返回 1 条。每条只包含 title、description 和 evidenceLineNumbers。',
       '所有 evidenceLineNumbers 必须引用 textLines 中存在的 lineNo。',
-      '每个 highlight 的 startSeconds/endSeconds 必须来自引用行附近，且时间范围要与至少一条引用行重叠。',
+      '不要返回任何时间字段；亮点时间由本地根据 evidenceLineNumbers 对应的真实正文时间生成。',
       '不要返回视频身份、分 P 身份、版本号或来源标识。',
     ],
   };
@@ -140,7 +143,7 @@ export function buildCurrentVideoSummaryHighlightsMessages(
       content: [
         '你是当前视频正文摘要助手。你只能依据用户提供的带编号时间行生成内容。',
         '禁止补充未出现在正文中的事实，禁止编造时间戳，禁止返回视频身份或来源标识。',
-        '返回 JSON 对象，字段为 summarySentences、keyPoints、highlights。',
+        '返回 JSON 对象，字段为 summarySentences、keyPoints、highlights；每项只引用存在的正文行，不要计算或返回时间。',
       ].join('\n'),
     },
     {
@@ -168,7 +171,7 @@ export function validateCurrentVideoSummaryHighlightsAiOutput(
     return invalid('output_not_object');
   }
   const record = output as CurrentVideoSummaryHighlightsAiOutput;
-  if (Array.isArray(record.summarySentences) && (record.summarySentences.length < 2 || record.summarySentences.length > 4)) {
+  if (Array.isArray(record.summarySentences) && (record.summarySentences.length < 1 || record.summarySentences.length > 4)) {
     return invalid('summary_sentence_count');
   }
   const summaryItems = normalizeTextRecords(
@@ -178,7 +181,7 @@ export function validateCurrentVideoSummaryHighlightsAiOutput(
   );
   if (!summaryItems.ok) return invalid(summaryItems.reason);
 
-  if (Array.isArray(record.keyPoints) && (record.keyPoints.length < 3 || record.keyPoints.length > 5)) {
+  if (Array.isArray(record.keyPoints) && (record.keyPoints.length < 1 || record.keyPoints.length > 5)) {
     return invalid('key_point_count');
   }
   const keyPointItems = normalizeTextRecords(
@@ -188,7 +191,7 @@ export function validateCurrentVideoSummaryHighlightsAiOutput(
   );
   if (!keyPointItems.ok) return invalid(keyPointItems.reason);
 
-  if (Array.isArray(record.highlights) && (record.highlights.length < 4 || record.highlights.length > 8)) {
+  if (Array.isArray(record.highlights) && (record.highlights.length < 1 || record.highlights.length > 8)) {
     return invalid('highlight_count');
   }
   const highlightItems = normalizeHighlightRecords(record.highlights);
@@ -203,16 +206,9 @@ export function validateCurrentVideoSummaryHighlightsAiOutput(
     }
   }
 
-  let previousKeyPointLine = -1;
-  for (const item of keyPointItems.items) {
-    const firstEvidenceLine = item.evidenceLineNumbers[0];
-    if (firstEvidenceLine < previousKeyPointLine) {
-      return invalid('key_point_order_invalid');
-    }
-    previousKeyPointLine = firstEvidenceLine;
-  }
+  const orderedKeyPoints = [...keyPointItems.items].sort(compareByFirstEvidenceLine);
 
-  let lastHighlightStart = -1;
+  const validatedHighlights: ValidatedHighlightRecord[] = [];
   for (const item of highlightItems.items) {
     if (!hasChineseText(item.title) || !hasChineseText(item.description)) {
       return invalid('non_chinese_highlight');
@@ -220,17 +216,13 @@ export function validateCurrentVideoSummaryHighlightsAiOutput(
     if (!evidenceLinesExist(item.evidenceLineNumbers, lineMap)) {
       return invalid('highlight_evidence_line_missing');
     }
-    if (!validHighlightBounds(item, envelope)) {
+    const timeRange = highlightTimeRangeFromEvidence(item.evidenceLineNumbers, lineMap);
+    if (!timeRange || !validHighlightBounds(timeRange, envelope)) {
       return invalid('highlight_bounds_invalid');
     }
-    if (item.startSeconds < lastHighlightStart) {
-      return invalid('highlight_order_invalid');
-    }
-    if (!highlightOverlapsEvidence(item, lineMap)) {
-      return invalid('highlight_evidence_time_mismatch');
-    }
-    lastHighlightStart = item.startSeconds;
+    validatedHighlights.push({ ...item, ...timeRange });
   }
+  validatedHighlights.sort(compareByFirstEvidenceLine);
 
   return {
     ok: true,
@@ -240,12 +232,12 @@ export function validateCurrentVideoSummaryHighlightsAiOutput(
         text: item.text,
         evidenceLineNumbers: item.evidenceLineNumbers,
       })),
-      keyPoints: keyPointItems.items.map((item, index): CurrentVideoSummaryKeyPoint => ({
+      keyPoints: orderedKeyPoints.map((item, index): CurrentVideoSummaryKeyPoint => ({
         id: `key-point-${index + 1}`,
         text: item.text,
         evidenceLineNumbers: item.evidenceLineNumbers,
       })),
-      highlights: highlightItems.items.map((item, index): CurrentVideoSummaryHighlight => ({
+      highlights: validatedHighlights.map((item, index): CurrentVideoSummaryHighlight => ({
         id: `highlight-${index + 1}`,
         title: item.title,
         description: item.description,
@@ -427,14 +419,15 @@ export function invalidCurrentVideoSummaryHighlights(
   textSize: CurrentVideoSummaryHighlightsTextSize,
   now = Date.now(),
 ): CurrentVideoSummaryHighlightsResult {
+  const visibleFailure = invalidOutputVisibleFailure(reason);
   return baseResult({
     status: 'invalid_output',
     title,
-    message: '模型返回的摘要与亮点没有通过校验，旧结果不会被替换。',
+    message: visibleFailure.message,
     textSize,
     model,
     ai: aiState('invalid_output', model, '已拒绝本次结果。', reason),
-    limitations: ['请稍后重试；系统不会采用缺少证据行或时间不匹配的内容。'],
+    limitations: [visibleFailure.action],
     now,
   });
 }
@@ -606,19 +599,14 @@ function normalizeHighlightRecords(
     }
     const title = normalizeText(record.title);
     const description = normalizeText(record.description);
-    const startSeconds = normalizeSeconds(record.startSeconds);
-    const endSeconds = normalizeSeconds(record.endSeconds);
     const evidenceLineNumbers = normalizeEvidenceLines(record);
     if (!title) return { ok: false, reason: 'highlight_title_missing' };
     if (!description) return { ok: false, reason: 'highlight_description_missing' };
-    if (startSeconds === null || endSeconds === null) return { ok: false, reason: 'highlight_time_missing' };
     if (!evidenceLineNumbers.length) return { ok: false, reason: 'highlight_evidence_missing' };
     items.push({
       text: description,
       title,
       description,
-      startSeconds,
-      endSeconds,
       evidenceLineNumbers,
     });
   }
@@ -627,31 +615,38 @@ function normalizeHighlightRecords(
 
 function evidenceReferenceCount(record: Record<string, unknown>): number {
   const raw = record.evidenceLineNumbers;
-  return Array.isArray(raw) ? raw.length : 0;
+  if (!Array.isArray(raw)) return 0;
+  const normalized = raw.map(normalizeEvidenceLineNumber);
+  if (normalized.some(item => item === null)) return raw.length;
+  return new Set(normalized).size;
 }
 
 function normalizeEvidenceLines(record: Record<string, unknown>): number[] {
   const raw = record.evidenceLineNumbers;
   if (!Array.isArray(raw)) return [];
-  if (raw.some(item => typeof item !== 'number' || !Number.isInteger(item) || item <= 0)) {
-    return [];
-  }
+  const normalized = raw.map(normalizeEvidenceLineNumber);
+  if (normalized.some(item => item === null)) return [];
   const seen = new Set<number>();
-  for (const item of raw) {
+  for (const item of normalized) {
+    if (item === null) continue;
     seen.add(item);
   }
   return Array.from(seen).sort((a, b) => a - b);
+}
+
+function normalizeEvidenceLineNumber(value: unknown): number | null {
+  const numeric = typeof value === 'string' && /^\d+$/.test(value.trim())
+    ? Number(value.trim())
+    : value;
+  return typeof numeric === 'number' && Number.isSafeInteger(numeric) && numeric > 0
+    ? numeric
+    : null;
 }
 
 function normalizeText(value: unknown): string {
   return typeof value === 'string'
     ? value.replace(/\s+/g, ' ').trim()
     : '';
-}
-
-function normalizeSeconds(value: unknown): number | null {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  return Math.round(value * 1000) / 1000;
 }
 
 function evidenceLinesExist(
@@ -662,7 +657,7 @@ function evidenceLinesExist(
 }
 
 function validHighlightBounds(
-  item: HighlightRecord,
+  item: Pick<ValidatedHighlightRecord, 'startSeconds' | 'endSeconds'>,
   envelope: CurrentVideoFullTextRequestEnvelope,
 ): boolean {
   if (!Number.isFinite(item.startSeconds) || !Number.isFinite(item.endSeconds)) return false;
@@ -676,15 +671,44 @@ function validHighlightBounds(
   return true;
 }
 
-function highlightOverlapsEvidence(
-  item: HighlightRecord,
+function highlightTimeRangeFromEvidence(
+  lineNumbers: number[],
   lineMap: Map<number, CurrentVideoFullTextRequestEnvelope['text']['lines'][number]>,
-): boolean {
-  return item.evidenceLineNumbers.some((lineNo) => {
-    const line = lineMap.get(lineNo);
-    if (!line) return false;
-    return Math.max(item.startSeconds, line.startSeconds) < Math.min(item.endSeconds, line.endSeconds);
-  });
+): { startSeconds: number; endSeconds: number } | null {
+  const lines = lineNumbers
+    .map(lineNo => lineMap.get(lineNo))
+    .filter((line): line is CurrentVideoFullTextRequestEnvelope['text']['lines'][number] => Boolean(line));
+  if (!lines.length) return null;
+  return {
+    startSeconds: Math.min(...lines.map(line => line.startSeconds)),
+    endSeconds: Math.max(...lines.map(line => line.endSeconds)),
+  };
+}
+
+function compareByFirstEvidenceLine(
+  left: Pick<TextItemRecord, 'evidenceLineNumbers'>,
+  right: Pick<TextItemRecord, 'evidenceLineNumbers'>,
+): number {
+  return left.evidenceLineNumbers[0] - right.evidenceLineNumbers[0];
+}
+
+function invalidOutputVisibleFailure(reason: string): { message: string; action: string } {
+  if (/too_long|too_many/.test(reason)) {
+    return {
+      message: '模型返回内容超出可接受范围，旧结果不会被替换。',
+      action: '请重新生成；系统不会采用异常过长或数量过多的内容。',
+    };
+  }
+  if (/evidence|bounds/.test(reason)) {
+    return {
+      message: '模型返回内容无法完整引用当前正文，旧结果不会被替换。',
+      action: '请重新生成；系统只采用能核对到当前视频正文的内容。',
+    };
+  }
+  return {
+    message: '模型返回的摘要与亮点结构不完整，旧结果不会被替换。',
+    action: '请重新生成；本次返回缺少可用的摘要、要点或亮点。',
+  };
 }
 
 function hasChineseText(text: string): boolean {
