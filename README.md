@@ -156,4 +156,4 @@ npm run qa:preference-word-cloud # 生产词云桌面/移动端浏览器回归
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](./LICENSE)。构建产物同时包含 [第三方许可与归属说明](./THIRD_PARTY_NOTICES.txt)。

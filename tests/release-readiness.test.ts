@@ -58,3 +58,25 @@ test("the supported ECharts 6 word-cloud integration is registered", async () =>
   assert.match(preferenceSource, /renderItem: 'wordCloud'/);
   assert.ok(!preferenceSource.includes("type: 'wordCloud'"));
 });
+
+test("release builds carry project and third-party licenses", async () => {
+  const [packageSource, noticesSource, apacheSource, d3Source, wordCloudSource] =
+    await Promise.all([
+      readRepositoryFile("package.json"),
+      readRepositoryFile("THIRD_PARTY_NOTICES.txt"),
+      readRepositoryFile("third_party/licenses/Apache-2.0.txt"),
+      readRepositoryFile("third_party/licenses/BSD-3-Clause-d3.txt"),
+      readRepositoryFile("third_party/licenses/MIT-wordcloud2.txt"),
+    ]);
+  const packageJson = JSON.parse(packageSource) as {
+    scripts: Record<string, string>;
+  };
+
+  assert.match(packageJson.scripts.build, /copy-release-licenses\.mjs/);
+  assert.match(packageJson.scripts.build, /verify-release-dist\.mjs/);
+  assert.match(noticesSource, /Apache ECharts 6\.1\.0/);
+  assert.match(noticesSource, /ECharts WordCloud Custom Series 1\.0\.1/);
+  assert.match(apacheSource, /Apache License\s+Version 2\.0/);
+  assert.match(d3Source, /Copyright 2010-2016 Mike Bostock/);
+  assert.match(wordCloudSource, /Copyright \(c\) 2011- Timothy Guan-tin Chien/);
+});

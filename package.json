@@ -6,11 +6,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite build --watch --mode development",
-    "build": "tsc --noEmit && vite build && vite build --config vite.player-monitor.config.ts",
+    "build": "tsc --noEmit && vite build && vite build --config vite.player-monitor.config.ts && node scripts/copy-release-licenses.mjs && node scripts/verify-release-dist.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.ts",
     "audit:high": "npm audit --audit-level=high",
     "qa:preference-word-cloud": "python tests/preference-word-cloud.real-mock-qa.py",
+    "verify:release-dist": "node scripts/verify-release-dist.mjs",
     "test:experiments": "node --test tests/experiment-blind-boxes.test.ts",
     "test:favorites": "node --test tests/favorite-sync-audit.test.ts tests/favorite-folder-gap-probe.test.ts tests/favorite-itemkey-persistence.test.ts tests/smart-favorite-index.test.ts tests/smart-favorites-qa.test.ts",
     "test:current-video-transcript": "node --test tests/current-video-transcript-cache.test.ts tests/current-video-subtitle-diagnostics.test.ts",
