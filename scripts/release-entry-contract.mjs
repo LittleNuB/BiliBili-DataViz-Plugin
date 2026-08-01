@@ -8,10 +8,8 @@ export function collectManifestEntryFiles(manifest) {
   const entries = new Set();
 
   addEntry(entries, manifest.background?.service_worker);
-  for (const contentScript of manifest.content_scripts ?? []) {
-    for (const script of contentScript.js ?? []) {
-      addEntry(entries, script);
-    }
+  for (const script of collectManifestContentScriptFiles(manifest)) {
+    addEntry(entries, script);
   }
 
   addEntry(entries, manifest.action?.default_popup);
@@ -35,6 +33,16 @@ export function collectManifestEntryFiles(manifest) {
   }
 
   return [...entries].sort();
+}
+
+export function collectManifestContentScriptFiles(manifest) {
+  const scripts = new Set();
+  for (const contentScript of manifest.content_scripts ?? []) {
+    for (const script of contentScript.js ?? []) {
+      addEntry(scripts, script);
+    }
+  }
+  return [...scripts].sort();
 }
 
 export function getRequiredReleaseEntryFiles(manifest) {

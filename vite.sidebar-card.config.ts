@@ -28,7 +28,7 @@ export default defineConfig({
     emptyOutDir: false,
     rolldownOptions: {
       input: {
-        'content/player-monitor': 'src/content/player-monitor/index.ts',
+        'content/sidebar-card': 'src/content/sidebar-card/index.ts',
       },
       output: {
         entryFileNames: '[name].js',
