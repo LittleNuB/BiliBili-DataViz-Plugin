@@ -1,5 +1,5 @@
-import { RATE_LIMIT_TOKENS_PER_SEC, RATE_LIMIT_MAX_BURST } from '../../shared/constants';
-import { abortableDelay } from '../utils/abortable-delay';
+import { RATE_LIMIT_TOKENS_PER_SEC, RATE_LIMIT_MAX_BURST } from '../../shared/constants.ts';
+import { abortableDelay } from '../utils/abortable-delay.ts';
 
 export class RateLimiter {
   private tokens: number;

@@ -1,8 +1,8 @@
-import { API_BASE } from '../../shared/constants';
+import { API_BASE } from '../../shared/constants.ts';
 import type { BiliApiResponse } from '../../shared/types/video-info';
-import { apiRateLimiter } from './rate-limiter';
-import { signWbi } from './wbi-sign';
-import { abortableDelay } from '../utils/abortable-delay';
+import { apiRateLimiter } from './rate-limiter.ts';
+import { signWbi } from './wbi-sign.ts';
+import { abortableDelay } from '../utils/abortable-delay.ts';
 
 const WBI_REQUIRED_CODES = [-403, -400];
 const REQUEST_TIMEOUT_MS = 30_000;

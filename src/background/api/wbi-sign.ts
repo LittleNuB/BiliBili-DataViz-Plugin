@@ -1,5 +1,5 @@
-import { NAV_ENDPOINT } from '../../shared/constants';
-import { biliGet } from './client';
+import { NAV_ENDPOINT } from '../../shared/constants.ts';
+import { biliGet } from './client.ts';
 
 const MIXIN_KEY_ENC_TAB = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,

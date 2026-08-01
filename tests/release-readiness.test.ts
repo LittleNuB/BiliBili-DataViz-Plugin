@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import {
+  collectManifestEntryFiles,
+  getRequiredReleaseEntryFiles,
+  REQUIRED_BUILD_ENTRY_FILES,
+} from "../scripts/release-entry-contract.mjs";
 
 async function readRepositoryFile(path: string): Promise<string> {
   return readFile(new URL(`../${path}`, import.meta.url), "utf8");
@@ -57,6 +62,84 @@ test("the supported ECharts 6 word-cloud integration is registered", async () =>
   assert.match(preferenceSource, /type: 'custom'/);
   assert.match(preferenceSource, /renderItem: 'wordCloud'/);
   assert.ok(!preferenceSource.includes("type: 'wordCloud'"));
+});
+
+test("production build keeps chart vendors bounded and background imports consistent", async () => {
+  const [viteConfigSource, blindBoxSource, transcriptCacheSource, verificationSource] = await Promise.all([
+    readRepositoryFile("vite.config.ts"),
+    readRepositoryFile("src/background/api/video-blind-box-candidates.ts"),
+    readRepositoryFile("src/background/current-video-transcript-cache.ts"),
+    readRepositoryFile("scripts/verify-release-dist.mjs"),
+  ]);
+
+  assert.match(viteConfigSource, /manualChunks: buildVendorChunk/);
+  assert.match(viteConfigSource, /echarts-word-cloud/);
+  assert.match(viteConfigSource, /echarts-renderer/);
+  assert.match(viteConfigSource, /return 'echarts';/);
+  assert.doesNotMatch(viteConfigSource, /chunkSizeWarningLimit/);
+  assert.match(blindBoxSource, /import \{ biliGet \} from '\.\/client\.ts';/);
+  assert.doesNotMatch(blindBoxSource, /await import\('\.\/client\.ts'\)/);
+  assert.match(transcriptCacheSource, /import \{ biliGet \} from '\.\/api\/client\.ts';/);
+  assert.match(
+    transcriptCacheSource,
+    /import \{ upsertCurrentVideoTranscriptEvidence \} from '\.\/storage\/current-video-transcript-repo\.ts';/,
+  );
+  assert.doesNotMatch(transcriptCacheSource, /await import\('\.\/api\/client\.ts'\)/);
+  assert.doesNotMatch(
+    transcriptCacheSource,
+    /await import\('\.\/storage\/current-video-transcript-repo\.ts'\)/,
+  );
+  assert.match(verificationSource, /MAX_MINIFIED_CHUNK_BYTES = 500_000/);
+  assert.match(verificationSource, /getRequiredReleaseEntryFiles\(manifest\)/);
+});
+
+test("release entry contract covers every manifest-declared runtime entry", async () => {
+  const manifestSource = await readRepositoryFile("public/manifest.json");
+  const manifest = JSON.parse(manifestSource) as {
+    background?: { service_worker?: string };
+    content_scripts?: Array<{ js?: string[] }>;
+    action?: { default_popup?: string };
+    options_page?: string;
+    options_ui?: { page?: string };
+    side_panel?: { default_path?: string };
+    devtools_page?: string;
+    chrome_url_overrides?: Record<string, string>;
+    sandbox?: { pages?: string[] };
+    web_accessible_resources?: Array<{ resources?: string[] }>;
+  };
+  const expectedManifestEntries = [
+    manifest.background?.service_worker,
+    ...(manifest.content_scripts ?? []).flatMap(entry => entry.js ?? []),
+    manifest.action?.default_popup,
+    manifest.options_page,
+    manifest.options_ui?.page,
+    manifest.side_panel?.default_path,
+    manifest.devtools_page,
+    ...Object.values(manifest.chrome_url_overrides ?? {}),
+    ...(manifest.sandbox?.pages ?? []),
+    ...(manifest.web_accessible_resources ?? [])
+      .flatMap(entry => entry.resources ?? [])
+      .filter(resource => !resource.includes("*")),
+  ].filter((entry): entry is string => Boolean(entry)).sort();
+
+  assert.deepEqual(collectManifestEntryFiles(manifest), expectedManifestEntries);
+  assert.deepEqual(
+    getRequiredReleaseEntryFiles(manifest),
+    [...new Set([...expectedManifestEntries, ...REQUIRED_BUILD_ENTRY_FILES])].sort(),
+  );
+});
+
+test("release entry contract ignores wildcard web resources but keeps concrete pages", () => {
+  const manifest = {
+    web_accessible_resources: [{
+      resources: ["assets/*", "dashboard/index.html"],
+    }],
+  };
+
+  assert.deepEqual(collectManifestEntryFiles(manifest), ["dashboard/index.html"]);
+  const requiredEntries = getRequiredReleaseEntryFiles(manifest);
+  assert.ok(requiredEntries.includes("dashboard/index.html"));
+  assert.ok(!requiredEntries.includes("assets/*"));
 });
 
 test("release builds carry project and third-party licenses", async () => {

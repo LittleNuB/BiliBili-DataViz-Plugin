@@ -7,6 +7,7 @@ import type {
 } from '../../shared/types/analytics';
 import type { FollowedCreator } from '../../shared/types/dynamic-bill';
 import type { WatchHistoryRecord } from '../../shared/types/watch-event';
+import { biliGet } from './client.ts';
 
 const DAY_MS = 86_400_000;
 const RELATED_VIDEO_ENDPOINT = '/x/web-interface/archive/related';
@@ -222,8 +223,6 @@ export async function fetchRelatedVideoCandidates(
   const candidates: ExperimentRealVideoCandidate[] = [];
   const failures: ExperimentRealCandidateFailure[] = [];
   const seenBvids = new Set(selectedSeeds.map(seed => seed.bvid));
-  const { biliGet } = await import('./client.ts');
-
   for (const seed of selectedSeeds) {
     if (options.signal?.aborted) throw new Error('SYNC_CANCELLED');
     const seedController = new AbortController();
@@ -501,8 +500,6 @@ export async function fetchCreatorArchiveCandidatePool(
   let requestFailureCount = 0;
   let excludedRecentSubmissionCount = 0;
   let excludedInvalidCandidateCount = 0;
-  const { biliGet } = await import('./client.ts');
-
   for (const seed of selectedSeeds) {
     try {
       const data = await biliGet<SpaceArchiveResponse>(
@@ -767,7 +764,6 @@ async function requestCrossRegionCandidates(
   params: Record<string, string>,
   signal?: AbortSignal,
 ): Promise<BiliRegionResponse> {
-  const { biliGet } = await import('./client.ts');
   return biliGet<BiliRegionResponse>(endpoint, params, 2, false, signal);
 }
 
