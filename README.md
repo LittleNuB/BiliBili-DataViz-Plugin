@@ -1,22 +1,47 @@
-# Bili-Bill
+<h1 align="center">Bili-Bill</h1>
 
-**0.13.0-alpha 预发布版本**
+<p align="center"><strong>把 B站观看历史和收藏，整理成一份保存在浏览器里的个人内容账单。</strong></p>
 
-看完一个视频很容易。过几个月再问自己最近把时间花在了哪里，答案往往只剩几个模糊的标题。收藏夹也一样，视频越攒越多，真想找回某一条时，通常只记得一句话或一个画面。
+<p align="center">
+  <img alt="Version 0.13.0-alpha" src="https://img.shields.io/badge/version-0.13.0--alpha-f59e0b?style=flat-square">
+  <img alt="Chrome and Edge" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-4285f4?style=flat-square">
+  <img alt="Local first" src="https://img.shields.io/badge/data-local--first-16a34a?style=flat-square">
+  <img alt="MIT License" src="https://img.shields.io/badge/license-MIT-64748b?style=flat-square">
+</p>
 
-Bili-Bill 是一个 Chrome 和 Edge 扩展。它把 B站当前可获取的观看历史与本机网页播放行为整理成个人内容账单，也能给收藏视频建立本地索引。AI 只在用户主动触发时参与分类、整理与问答，入选、排序、状态推进和数据清理仍由本地规则负责。
+<p align="center">
+  <a href="https://github.com/LittleNuB/BiliBili-DataViz-Plugin/releases/tag/v0.13.0-alpha">下载预发布包</a>
+  · <a href="#安装">安装</a>
+  · <a href="#隐私边界">隐私</a>
+  · <a href="#已知限制">限制</a>
+</p>
 
-[下载 0.13.0-alpha 预发布包](https://github.com/LittleNuB/BiliBili-DataViz-Plugin/releases/tag/v0.13.0-alpha)
+看过的视频会慢慢沉进历史记录，收藏夹也会越攒越多。Bili-Bill 把这些分散的信息留在本地，重新整理成可以查看、搜索和追问的个人资料。
 
-## 一次普通使用
+| 看清时间花在哪里 | 找回收藏里的视频 | 追问正在看的内容 |
+| --- | --- | --- |
+| 查看本周、本月、连续观看时段与设备分布 | 用模糊描述搜索收藏，回答附带引用 | 生成摘要与亮点，用时间引用核对答案 |
+| 每项统计显示实际覆盖日期和记录数 | AI 整理分类，本地索引负责候选范围 | 跳转时间点前先预览，再由用户确认 |
 
-1. 在同一个浏览器 Profile 登录 B站，点击扩展图标打开持久小窗。
-2. 手动同步当前账号可获取的历史记录。Bili-Bill 会把跨设备历史与扩展运行后的本机播放事件合并，重复记录只算一次。
-3. 打开完整面板，查看本周、本月、连续观看时段与设备分布。每项统计都会显示自己实际覆盖的日期与记录数。
-4. 同步收藏夹后，可以生成 AI 分类树，也可以用一句模糊描述找回视频。问答先从本地索引找候选，回答必须列出引用的视频和相关理由。
-5. 在视频页打开当前视频助手。可靠的主要文本存在时，它可以生成摘要、亮点和带时间引用的回答。跳到某个时间点前，界面会先预览并等待确认。
+## 它怎样工作
 
-数据没有覆盖到的地方会直接留下空白。B站接口不再提供的早期历史、扩展安装前没有采到的本机播放时长，以及没有可靠正文的视频，都不会被补成一个看起来完整的结论。
+```mermaid
+flowchart LR
+    A[同步历史与收藏] --> B[本地去重与索引]
+    B --> C[内容账单]
+    B --> D[收藏搜索与问答]
+    E[当前视频主要文本] --> F[摘要、亮点与引用问答]
+    D --> G[用户核对来源]
+    F --> G
+```
+
+AI 只在用户主动触发时参与分类、整理与问答。入选、排序、状态推进和数据清理由本地规则负责。数据没有覆盖到的地方会留下空白，早期历史、未采到的播放时长和缺少可靠正文的视频不会被补成完整结论。
+
+## 三步开始使用
+
+1. 在同一个浏览器 Profile 登录 B站，安装扩展并打开持久小窗。
+2. 手动同步当前账号可获取的历史记录和收藏夹。
+3. 打开完整面板查看账单，或在收藏与当前视频页面使用搜索、摘要和问答。
 
 ## AI 在哪里工作
 
