@@ -136,6 +136,7 @@ export async function runFixtureLifecycleAfterRestart(config, checkpoint) {
     selectedRemoval: false,
     fullClear: false,
     quotaFailure: false,
+    restorePreflightAllow: false,
     warmStart: checkpoint.warmStartCompleteGenerationVerified,
   };
   let database = null;
@@ -178,6 +179,7 @@ export async function runFixtureLifecycleAfterRestart(config, checkpoint) {
     const restore = await runAdmission(database, config, "restore_staging");
     operations.push(restore.operation);
     checks.restore = restore.readbackVerified;
+    checks.restorePreflightAllow = restore.preflightBoundaryVerified;
 
     const quotaFailure = await runQuotaFailure(database, config);
     operations.push(quotaFailure);
@@ -224,7 +226,8 @@ export async function runFixtureLifecycleAfterRestart(config, checkpoint) {
     committedRowsVisibleTogether: checks.admission && checks.restore,
     orphanRowsHiddenAndCleanable: checks.atomicRollback && checks.cancellation,
     cleanupReadbackVerified: checks.fullClear && checks.databaseDeleted,
-    restorePreflightBoundaryVerified: checks.quotaFailure,
+    restorePreflightBoundaryVerified:
+      checks.quotaFailure && checks.restorePreflightAllow,
     warmStartCompleteGenerationVerified: checks.warmStart,
   };
   const readbackVerified =
@@ -289,31 +292,27 @@ async function runRestartRecovery(config, operationId) {
   try {
     database = await openDatabase(config.databaseName);
     const stateReadStartedAt = performance.now();
-    const [operationState, visible] = await Promise.all([
-      requestResult(
-        database
-          .transaction("operations", "readonly")
-          .objectStore("operations")
-          .get(operationId),
-      ),
-      readVisibleGraph(database),
-    ]);
-    const stateReadDurationMs = performance.now() - stateReadStartedAt;
+    const operationState = await requestResult(
+      database
+        .transaction("operations", "readonly")
+        .objectStore("operations")
+        .get(operationId),
+    );
     const harnessReadyMs = Math.max(
       0,
       config.restartHarnessReadyEpochMs - config.restartStartedEpochMs,
     );
     const ledgerConsistency = await readLedgerConsistency(database);
+    const stateReadDurationMs = performance.now() - stateReadStartedAt;
     const stateVisibleMs = Math.max(
       0,
       Date.now() - config.restartStartedEpochMs,
     );
     const durableStateVerified =
       operationState?.state === "committed" &&
-      visible.versionCount === config.expectedVersionCount &&
-      visible.segmentCount === config.expectedSegmentCount &&
-      visible.canonicalBytes === config.expectedCanonicalBytes &&
-      ledgerConsistency.matches;
+      ledgerConsistency.matches &&
+      ledgerConsistency.visibleVersionCount === config.expectedVersionCount &&
+      ledgerConsistency.visibleCanonicalBytes === config.expectedCanonicalBytes;
     const normalizationOperation = await runMarkerNormalization(
       database,
       config,
@@ -408,23 +407,69 @@ async function runAdmission(database, config, operationKind) {
   let commitMeasurement;
   let invisibleRead;
   let visibleRead;
+  let restoreArtifactResponse = null;
+  let restorePreflightEvidence = null;
+  let preflightBoundaryVerified = operationKind !== "restore_staging";
   const operation = await measureOperation(
     database,
     operationKind,
     "increase",
     async (context) => {
+      if (operationKind === "restore_staging") {
+        const estimate = await readStorageEstimate();
+        if (estimate === null) {
+          throw new Error("fixture_restore_preflight_metric_unavailable");
+        }
+        const availableFreeQuotaBytes = Math.max(
+          0,
+          estimate.quotaBytes - estimate.usageBytes,
+        );
+        const requiredFreeQuotaBytes = config.expectedCanonicalBytes;
+        const measuredQuotaAllowed = restorePreflightAllows(
+          availableFreeQuotaBytes,
+          requiredFreeQuotaBytes,
+        );
+        if (!measuredQuotaAllowed) {
+          throw new Error("fixture_restore_preflight_quota_refused");
+        }
+        const exactBoundaryProbe = await beginRestoreAfterPreflight(
+          artifactUrl,
+          requiredFreeQuotaBytes,
+          requiredFreeQuotaBytes,
+          { retainResponse: true },
+        );
+        restoreArtifactResponse = exactBoundaryProbe.response;
+        preflightBoundaryVerified =
+          exactBoundaryProbe.allowed &&
+          exactBoundaryProbe.artifactFetchAttempted &&
+          restoreArtifactResponse instanceof Response;
+        restorePreflightEvidence = {
+          measuredAvailableFreeQuotaBytes: availableFreeQuotaBytes,
+          requiredFreeQuotaBytes,
+          measuredQuotaAllowed,
+          exactBoundaryAvailableFreeQuotaBytes: requiredFreeQuotaBytes,
+          exactBoundaryAllowed: exactBoundaryProbe.allowed,
+          artifactFetchAttempted: exactBoundaryProbe.artifactFetchAttempted,
+        };
+        if (!preflightBoundaryVerified) {
+          throw new Error("fixture_restore_preflight_exact_boundary_refused");
+        }
+      }
       await createOperation(database, operationId, config);
       const writeResult = await writeFixture(
         database,
         operationId,
         { ...config, artifactUrl },
         context.metrics,
+        restoreArtifactResponse,
       );
       const progressEventOffsetsMs = [
         ...writeResult.progressEventOffsetsMs,
         performance.now() - context.startedAt,
       ];
-      invisibleRead = await readVisibleGraph(database);
+      invisibleRead = await readVisibleGraph(database, () => {
+        progressEventOffsetsMs.push(performance.now() - context.startedAt);
+      });
       const invisibleLedgerConsistency = await readLedgerConsistency(database);
       progressEventOffsetsMs.push(performance.now() - context.startedAt);
       commitMeasurement = await measureOperation(
@@ -450,7 +495,9 @@ async function runAdmission(database, config, operationKind) {
         },
       );
       progressEventOffsetsMs.push(performance.now() - context.startedAt);
-      visibleRead = await readVisibleGraph(database);
+      visibleRead = await readVisibleGraph(database, () => {
+        progressEventOffsetsMs.push(performance.now() - context.startedAt);
+      });
       progressEventOffsetsMs.push(performance.now() - context.startedAt);
       return {
         batchDurationsMs: writeResult.batchDurationsMs,
@@ -471,6 +518,11 @@ async function runAdmission(database, config, operationKind) {
           invisibleLedgerConsistencyVerified:
             invisibleLedgerConsistency.matches,
           visibleRead,
+          restorePreflightExactBoundaryAllowed:
+            operationKind === "restore_staging"
+              ? preflightBoundaryVerified
+              : null,
+          restorePreflightEvidence,
         },
       };
     },
@@ -479,6 +531,8 @@ async function runAdmission(database, config, operationKind) {
     operationId,
     operation,
     commitOperation: commitMeasurement,
+    preflightBoundaryVerified:
+      preflightBoundaryVerified && operation.readbackVerified,
     readbackVerified:
       operation.readbackVerified && commitMeasurement.readbackVerified,
   };
@@ -580,7 +634,12 @@ async function runMarkerNormalization(database, config, operationId) {
       await transactionPromise(database, ["operations"], (transaction) => {
         transaction.objectStore("operations").delete(operationId);
       });
-      const visible = await readVisibleGraph(database);
+      const readbackProgressEventOffsetsMs = [];
+      const visible = await readVisibleGraph(database, () => {
+        readbackProgressEventOffsetsMs.push(
+          performance.now() - context.startedAt,
+        );
+      });
       return {
         batchDurationsMs: [
           ...versions.batchDurationsMs,
@@ -589,6 +648,7 @@ async function runMarkerNormalization(database, config, operationId) {
         progressEventOffsetsMs: [
           ...versions.progressEventOffsetsMs,
           ...segments.progressEventOffsetsMs,
+          ...readbackProgressEventOffsetsMs,
         ],
         readbackVerified:
           visible.versionCount === config.expectedVersionCount &&
@@ -669,6 +729,67 @@ async function runCapacityBoundary(database, config) {
     "capacity_boundary",
     "stable",
     async (context) => {
+      if (config.expectedCanonicalBytes === MAX_MANAGED_BYTES) {
+        const ledgerBefore = await requestResult(
+          database
+            .transaction("state", "readonly")
+            .objectStore("state")
+            .get("managed-full-text-ledger"),
+        );
+        const overOperationId = crypto.randomUUID();
+        await createOperation(database, overOperationId, config);
+        const startedAt = performance.now();
+        let overBoundaryRefused = false;
+        try {
+          await commitOperation(database, overOperationId, 1, 1);
+        } catch (error) {
+          if (error?.message !== "fixture_commit_aborted") {
+            throw error;
+          }
+          overBoundaryRefused = true;
+        }
+        const batchDurationMs = performance.now() - startedAt;
+        await transactionPromise(database, ["operations"], (transaction) => {
+          transaction.objectStore("operations").delete(overOperationId);
+        });
+        const ledgerAfter = await requestResult(
+          database
+            .transaction("state", "readonly")
+            .objectStore("state")
+            .get("managed-full-text-ledger"),
+        );
+        const readbackProgressEventOffsetsMs = [];
+        const visible = await readVisibleGraph(database, () => {
+          readbackProgressEventOffsetsMs.push(
+            performance.now() - context.startedAt,
+          );
+        });
+        const exactBoundaryCommitted =
+          ledgerBefore?.canonicalBytes === MAX_MANAGED_BYTES &&
+          ledgerBefore?.versionCount === config.expectedVersionCount &&
+          visible.canonicalBytes === MAX_MANAGED_BYTES &&
+          visible.versionCount === config.expectedVersionCount &&
+          visible.segmentCount === config.expectedSegmentCount;
+        return {
+          batchDurationsMs: [batchDurationMs],
+          progressEventOffsetsMs: [
+            ...readbackProgressEventOffsetsMs,
+            performance.now() - context.startedAt,
+          ],
+          readbackVerified:
+            exactBoundaryCommitted &&
+            overBoundaryRefused &&
+            ledgerAfter?.canonicalBytes === MAX_MANAGED_BYTES &&
+            ledgerAfter?.versionCount === config.expectedVersionCount,
+          detail: {
+            exactBoundaryCommitted,
+            positiveByteBeyondRefused: overBoundaryRefused,
+            existingCanonicalBytes: visible.canonicalBytes,
+            boundaryPath: "actual_fixture_commit",
+          },
+        };
+      }
+
       const probeDatabaseName = `${config.databaseName}-capacity-${crypto.randomUUID()}`;
       const probeDatabase = await openDatabase(probeDatabaseName);
       const batchDurationsMs = [];
@@ -715,10 +836,18 @@ async function runCapacityBoundary(database, config) {
             .objectStore("operations")
             .get(exactOperationId),
         );
-        const visible = await readVisibleGraph(database);
+        const readbackProgressEventOffsetsMs = [];
+        const visible = await readVisibleGraph(database, () => {
+          readbackProgressEventOffsetsMs.push(
+            performance.now() - context.startedAt,
+          );
+        });
         return {
           batchDurationsMs,
-          progressEventOffsetsMs: [performance.now() - context.startedAt],
+          progressEventOffsetsMs: [
+            ...readbackProgressEventOffsetsMs,
+            performance.now() - context.startedAt,
+          ],
           readbackVerified:
             exactLedger?.canonicalBytes === MAX_MANAGED_BYTES &&
             exactLedger?.versionCount === 1 &&
@@ -793,10 +922,18 @@ async function runAtomicVersionRollback(database, config) {
             .get([versionId, 0]),
         ),
       ]);
-      const visible = await readVisibleGraph(database);
+      const readbackProgressEventOffsetsMs = [];
+      const visible = await readVisibleGraph(database, () => {
+        readbackProgressEventOffsetsMs.push(
+          performance.now() - context.startedAt,
+        );
+      });
       return {
         batchDurationsMs: [duration],
-        progressEventOffsetsMs: [performance.now() - context.startedAt],
+        progressEventOffsetsMs: [
+          ...readbackProgressEventOffsetsMs,
+          performance.now() - context.startedAt,
+        ],
         readbackVerified:
           aborted &&
           version === undefined &&
@@ -871,7 +1008,9 @@ async function runCancellation(database, config) {
         context.startedAt,
         progressEventOffsetsMs,
       );
-      const visibleBeforeCleanup = await readVisibleGraph(database);
+      const visibleBeforeCleanup = await readVisibleGraph(database, () => {
+        progressEventOffsetsMs.push(performance.now() - context.startedAt);
+      });
       const cleanup = await cleanupStagedOperation(
         database,
         operationId,
@@ -884,7 +1023,9 @@ async function runCancellation(database, config) {
         database,
         operationId,
       );
-      const visible = await readVisibleGraph(database);
+      const visible = await readVisibleGraph(database, () => {
+        progressEventOffsetsMs.push(performance.now() - context.startedAt);
+      });
       return {
         batchDurationsMs: [
           ...copyResult.batchDurationsMs,
@@ -1107,7 +1248,12 @@ async function runSelectedVersionRemoval(database, config) {
         transaction.objectStore("versions").delete(selected.versionId);
       });
       batchDurationsMs.push(performance.now() - startedAt);
-      const visible = await readVisibleGraph(database);
+      const readbackProgressEventOffsetsMs = [];
+      const visible = await readVisibleGraph(database, () => {
+        readbackProgressEventOffsetsMs.push(
+          performance.now() - context.startedAt,
+        );
+      });
       const ledger = await requestResult(
         database
           .transaction("state", "readonly")
@@ -1121,6 +1267,7 @@ async function runSelectedVersionRemoval(database, config) {
         ],
         progressEventOffsetsMs: [
           ...deletedSegments.progressEventOffsetsMs,
+          ...readbackProgressEventOffsetsMs,
           performance.now() - context.startedAt,
         ],
         readbackVerified:
@@ -1211,7 +1358,11 @@ async function runFullClear(database, config) {
     batchDurationsMs.push(performance.now() - startedAt);
     const [visible, versionCount, segmentCount, operationCount, ledger] =
       await Promise.all([
-        readVisibleGraph(database),
+        readVisibleGraph(database, () => {
+          versions.progressEventOffsetsMs.push(
+            performance.now() - context.startedAt,
+          );
+        }),
         getStoreCount(database, "versions"),
         getStoreCount(database, "segments"),
         getStoreCount(database, "operations"),
@@ -1277,9 +1428,6 @@ async function runQuotaFailure(database, config) {
               availableBytes,
               requestedBytes,
             );
-      const nearLimitAllowed =
-        availableBytes !== null &&
-        restorePreflightAllows(availableBytes, availableBytes);
       const afterCounts = await Promise.all([
         getStoreCount(database, "versions"),
         getStoreCount(database, "segments"),
@@ -1290,7 +1438,6 @@ async function runQuotaFailure(database, config) {
         readbackVerified:
           refusalProbe.refusedBeforeWrite &&
           !refusalProbe.artifactFetchAttempted &&
-          nearLimitAllowed &&
           beforeCounts[0] === afterCounts[0] &&
           beforeCounts[1] === afterCounts[1] &&
           afterCounts[0] === config.expectedVersionCount &&
@@ -1301,7 +1448,6 @@ async function runQuotaFailure(database, config) {
           requestedBytes,
           refusedBeforeWrite: refusalProbe.refusedBeforeWrite,
           artifactFetchAttempted: refusalProbe.artifactFetchAttempted,
-          nearLimitAllowed,
         },
       };
     },
@@ -1312,6 +1458,7 @@ async function beginRestoreAfterPreflight(
   artifactUrl,
   availableFreeQuotaBytes,
   requiredFreeQuotaBytes,
+  options = {},
 ) {
   const allowed = restorePreflightAllows(
     availableFreeQuotaBytes,
@@ -1328,11 +1475,17 @@ async function beginRestoreAfterPreflight(
     cache: "no-store",
     credentials: "omit",
   });
-  await response.body?.cancel();
+  if (!response.ok || !response.body) {
+    throw new Error("fixture_restore_fetch_failed");
+  }
+  if (!options.retainResponse) {
+    await response.body.cancel();
+  }
   return {
     allowed: true,
     refusedBeforeWrite: false,
     artifactFetchAttempted: true,
+    response: options.retainResponse ? response : null,
   };
 }
 
@@ -1347,7 +1500,10 @@ async function measureOperation(database, operation, expectedDirection, task) {
   const metrics = startBrowserMetrics();
   const startedAt = performance.now();
   const result = await task({ startedAt, metrics });
-  const ledgerConsistency = await readLedgerConsistency(database);
+  const progressEventOffsetsMs = result.progressEventOffsetsMs;
+  const ledgerConsistency = await readLedgerConsistency(database, () => {
+    progressEventOffsetsMs.push(performance.now() - startedAt);
+  });
   const totalDurationMs = performance.now() - startedAt;
   const storageAfter =
     expectedDirection === "increase" || expectedDirection === "decrease"
@@ -1360,7 +1516,7 @@ async function measureOperation(database, operation, expectedDirection, task) {
     totalDurationMs,
     batchDurationsMs: result.batchDurationsMs,
     progressEventOffsetsMs: normalizeProgressEvents(
-      result.progressEventOffsetsMs,
+      progressEventOffsetsMs,
       totalDurationMs,
     ),
     cancellation: result.cancellation ?? { attempted: false },
@@ -1410,11 +1566,19 @@ async function confirmDatabaseDeleted(databaseName) {
   return !databases.some((database) => database.name === databaseName);
 }
 
-async function writeFixture(database, operationId, config, metrics) {
-  const response = await fetch(config.artifactUrl, {
-    cache: "no-store",
-    credentials: "omit",
-  });
+async function writeFixture(
+  database,
+  operationId,
+  config,
+  metrics,
+  preparedResponse = null,
+) {
+  const response =
+    preparedResponse ??
+    (await fetch(config.artifactUrl, {
+      cache: "no-store",
+      credentials: "omit",
+    }));
   if (!response.ok || !response.body) {
     throw new Error("fixture_fetch_failed");
   }
@@ -1450,6 +1614,7 @@ async function writeFixture(database, operationId, config, metrics) {
 
   for await (const line of readLines(response.body)) {
     const lineBytes = TEXT_ENCODER.encode(`${line}\n`).byteLength;
+    assertFixtureRecordFitsCandidate(config.candidate, lineBytes);
     const record = parseFixtureLine(line);
     if (
       shouldFlushFixtureBatch(
@@ -1523,6 +1688,16 @@ export function shouldFlushFixtureBatch(
     (batchRecordCount >= candidate.recordCap ||
       batchBytes + nextRecordBytes > candidate.byteCapBytes)
   );
+}
+
+export function assertFixtureRecordFitsCandidate(candidate, recordBytes) {
+  if (
+    !Number.isSafeInteger(recordBytes) ||
+    recordBytes < 1 ||
+    recordBytes > candidate.byteCapBytes
+  ) {
+    throw new Error("fixture_record_exceeds_candidate_byte_cap");
+  }
 }
 
 function writeCommands(database, operationId, commands) {
@@ -1664,7 +1839,8 @@ function canCommitCanonicalBytes(
   );
 }
 
-async function readVisibleGraph(database) {
+async function readVisibleGraph(database, onProgress = null) {
+  const reportCursorProgress = createCursorProgressReporter(onProgress);
   const visibility = await requestResult(
     database
       .transaction("state", "readonly")
@@ -1676,10 +1852,12 @@ async function readVisibleGraph(database) {
   }
   const committedOperationIds = await collectCommittedOperationIds(
     database.transaction("operations", "readonly").objectStore("operations"),
+    reportCursorProgress,
   );
   const versions = await collectVisibleVersions(
     database.transaction("versions", "readonly").objectStore("versions"),
     committedOperationIds,
+    reportCursorProgress,
   );
   const segmentCount =
     versions.versionIds.length === 0
@@ -1687,6 +1865,7 @@ async function readVisibleGraph(database) {
       : await countVisibleSegments(
           database.transaction("segments", "readonly").objectStore("segments"),
           new Set(versions.versionIds),
+          reportCursorProgress,
         );
   return {
     versionCount: versions.versionIds.length,
@@ -1695,7 +1874,22 @@ async function readVisibleGraph(database) {
   };
 }
 
-async function readLedgerConsistency(database) {
+function createCursorProgressReporter(onProgress) {
+  let lastProgressAt = performance.now();
+  return () => {
+    if (typeof onProgress !== "function") {
+      return;
+    }
+    const now = performance.now();
+    if (now - lastProgressAt >= 500) {
+      lastProgressAt = now;
+      onProgress();
+    }
+  };
+}
+
+async function readLedgerConsistency(database, onProgress = null) {
+  const reportCursorProgress = createCursorProgressReporter(onProgress);
   const visibility = await requestResult(
     database
       .transaction("state", "readonly")
@@ -1713,10 +1907,12 @@ async function readLedgerConsistency(database) {
   if (visibility?.hideAll !== true) {
     const committedOperationIds = await collectCommittedOperationIds(
       database.transaction("operations", "readonly").objectStore("operations"),
+      reportCursorProgress,
     );
     const versions = await collectVisibleVersions(
       database.transaction("versions", "readonly").objectStore("versions"),
       committedOperationIds,
+      reportCursorProgress,
     );
     visibleVersionCount = versions.versionIds.length;
     visibleCanonicalBytes = versions.canonicalBytes;
@@ -1734,7 +1930,7 @@ async function readLedgerConsistency(database) {
   };
 }
 
-function collectCommittedOperationIds(store) {
+function collectCommittedOperationIds(store, reportProgress = null) {
   return new Promise((resolve, reject) => {
     const ids = new Set();
     const request = store.openCursor();
@@ -1747,13 +1943,18 @@ function collectCommittedOperationIds(store) {
       if (["committed", "normalized"].includes(cursor.value.state)) {
         ids.add(cursor.value.id);
       }
+      reportProgress?.();
       cursor.continue();
     };
     request.onerror = () => reject(new Error("fixture_operation_scan_failed"));
   });
 }
 
-function collectVisibleVersions(store, committedOperationIds) {
+function collectVisibleVersions(
+  store,
+  committedOperationIds,
+  reportProgress = null,
+) {
   return new Promise((resolve, reject) => {
     const versionIds = [];
     let canonicalBytes = 0;
@@ -1771,13 +1972,14 @@ function collectVisibleVersions(store, committedOperationIds) {
         versionIds.push(cursor.value.versionId);
         canonicalBytes += cursor.value.canonicalBytes;
       }
+      reportProgress?.();
       cursor.continue();
     };
     request.onerror = () => reject(new Error("fixture_version_sum_failed"));
   });
 }
 
-function countVisibleSegments(store, visibleVersionIds) {
+function countVisibleSegments(store, visibleVersionIds, reportProgress = null) {
   return new Promise((resolve, reject) => {
     let count = 0;
     const request = store.openCursor();
@@ -1790,6 +1992,7 @@ function countVisibleSegments(store, visibleVersionIds) {
       if (visibleVersionIds.has(cursor.value.versionId)) {
         count += 1;
       }
+      reportProgress?.();
       cursor.continue();
     };
     request.onerror = () => reject(new Error("fixture_segment_scan_failed"));

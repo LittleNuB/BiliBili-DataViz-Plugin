@@ -771,11 +771,14 @@ function createSummaryMarkdown(report) {
 }
 
 export async function verifyB1ReportArtifacts() {
-  const [environmentText, rawText, reportText] = await Promise.all([
-    readFile(ENVIRONMENT_REPORT_PATH, "utf8"),
-    readFile(RAW_OPERATIONS_REPORT_PATH, "utf8"),
-    readFile(REPORT_PATH, "utf8"),
-  ]);
+  const [environmentText, rawText, reportText, summaryText] = await Promise.all(
+    [
+      readFile(ENVIRONMENT_REPORT_PATH, "utf8"),
+      readFile(RAW_OPERATIONS_REPORT_PATH, "utf8"),
+      readFile(REPORT_PATH, "utf8"),
+      readFile(SUMMARY_PATH, "utf8"),
+    ],
+  );
   const environment = JSON.parse(environmentText);
   const { contract, ...environmentInput } = environment;
   if (contract !== "gate-014-b1-environment-v1") {
@@ -804,6 +807,9 @@ export async function verifyB1ReportArtifacts() {
   });
   if (serializeB1Report(evaluated) !== reportText) {
     throw new Error("B1 report artifact verification mismatch");
+  }
+  if (createSummaryMarkdown(evaluated) !== summaryText) {
+    throw new Error("B1 summary artifact verification mismatch");
   }
   return Object.freeze({
     status: "pass",

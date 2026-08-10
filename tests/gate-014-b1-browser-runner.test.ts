@@ -10,7 +10,10 @@ import {
   removeB1TemporaryProfile,
   validateSmokeResult,
 } from "../scripts/gate-014-b1-browser-runner.mjs";
-import { shouldFlushFixtureBatch } from "./fixtures/gate-014/b1-extension/storage-harness.js";
+import {
+  assertFixtureRecordFitsCandidate,
+  shouldFlushFixtureBatch,
+} from "./fixtures/gate-014/b1-extension/storage-harness.js";
 import { restorePreflightAllows } from "./fixtures/gate-014/b1-extension/restore-preflight.js";
 
 test("GATE-014-B1 bounds a single browser lifecycle without masking gate thresholds", () => {
@@ -25,6 +28,14 @@ test("GATE-014-B1 flushes before the next fixture record would cross either cand
   assert.equal(
     shouldFlushFixtureBatch(candidate, 0, 0, 2 * 1024 * 1024),
     false,
+  );
+  assert.doesNotThrow(() =>
+    assertFixtureRecordFitsCandidate(candidate, candidate.byteCapBytes),
+  );
+  assert.throws(
+    () =>
+      assertFixtureRecordFitsCandidate(candidate, candidate.byteCapBytes + 1),
+    /fixture_record_exceeds_candidate_byte_cap/,
   );
 });
 

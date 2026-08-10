@@ -67,4 +67,6 @@ git diff --check
 
 `navigator.storage.estimate()` 的物理空间回收可能晚于 IndexedDB 数据库删除。报告会同时记录配额估算与数据库枚举/readback；延迟回收不会被伪写成清理失败，但数据库残留、逻辑可见性错误或缺少 readback 均会失败关闭。
 
-恢复预检的 `required - 1` 与 `exact required` 边界由浏览器 harness 和报告推导器共用同一函数。故意不足的路径必须在请求夹具或写入 IndexedDB 前拒绝；服务器请求计数和前后 store 计数共同证明没有隐藏读取或写入。允许结论本身不能授权提交，最终 restore 写入、可见性和台账 readback 仍是权威结果。
+恢复预检的 `required - 1` 与 `exact required` 边界由浏览器 harness 和报告推导器共用同一函数。故意不足的路径必须在请求夹具或写入 IndexedDB 前拒绝；服务器请求计数和前后 store 计数共同证明没有隐藏读取或写入。允许路径先核对浏览器实测可用空间不少于本次全文字节数，再以 `available = required` 的策略边界通过同一预检函数，只有通过后才发起该轮唯一一次 restore 夹具请求并完成真实写入、可见性和台账 readback。
+
+这里验证的是应用预检策略的包含边界，不声称把 Chrome 的物理剩余配额人为压到刚好相等。完整矩阵结束后，报告仍会依据 40 次实测 restore 收据推导临时冗余量，并逐次核对真实可用空间；允许结论本身不能替代写入和 readback 证据。
