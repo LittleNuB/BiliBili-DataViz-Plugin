@@ -42,6 +42,9 @@ const ENVIRONMENT_INPUT = {
     flavor: "chrome_for_testing_stable",
     version: "151.0.7922.77",
     channel: "stable",
+    officialStableVersion: "151.0.7922.77",
+    stableVersionSource:
+      "official_last_known_good_versions_with_downloads_json",
     headlessMode: "new",
     sandboxEnabled: true,
   },
@@ -57,6 +60,17 @@ const ENVIRONMENT_INPUT = {
     externalNetworkUsed: false,
     realUserProfileRead: false,
     bilibiliLoginUsed: false,
+    browserObservation: {
+      contract: "gate-014-b1-browser-observation-v1",
+      browserLaunchCount: 722,
+      networkMetricAvailable: true,
+      networkRequestCount: 1_000,
+      loopbackRequestCount: 600,
+      extensionRequestCount: 400,
+      externalRequestCount: 0,
+      consoleMetricAvailable: true,
+      consoleErrorCount: 0,
+    },
   },
   a2CalibrationStatus: "insufficient_evidence",
   storesSensitiveText: false,
@@ -70,6 +84,31 @@ test("GATE-014-B1 environment receipt is deterministic and rejects local paths",
 
   assert.equal(receipt.contract, "gate-014-b1-environment-v1");
   assert.equal(hashB1EnvironmentReceipt(receipt), ENVIRONMENT_SHA_256);
+  assert.throws(
+    () =>
+      createB1EnvironmentReceipt({
+        ...ENVIRONMENT_INPUT,
+        browser: {
+          ...ENVIRONMENT_INPUT.browser,
+          officialStableVersion: "151.0.7922.76",
+        },
+      }),
+    /must match official stable/,
+  );
+  assert.throws(
+    () =>
+      createB1EnvironmentReceipt({
+        ...ENVIRONMENT_INPUT,
+        execution: {
+          ...ENVIRONMENT_INPUT.execution,
+          browserObservation: {
+            ...ENVIRONMENT_INPUT.execution.browserObservation,
+            externalRequestCount: 1,
+          },
+        },
+      }),
+    /externalRequestCount/,
+  );
   assert.equal(serializeB1EnvironmentReceipt(receipt).endsWith("\n"), true);
   assert.throws(
     () =>
@@ -98,6 +137,10 @@ function passingOperation(overrides = {}) {
     operation: "admission",
     totalDurationMs: 900_000,
     committedBatchCount: 20,
+    committedBatchDurationsMs: [
+      ...Array.from({ length: 19 }, () => 2_000),
+      5_000,
+    ],
     batchDurationsMs: [...Array.from({ length: 19 }, () => 2_000), 5_000],
     progressEventOffsetsMs: Array.from(
       { length: 450 },
@@ -184,8 +227,17 @@ test("GATE-014-B1 records delayed quota reclamation without overriding cleanup r
 test("GATE-014-B1 operation receipt fails when any measured threshold is exceeded", () => {
   const cases = [
     { totalDurationMs: 900_001 },
-    { batchDurationsMs: Array.from({ length: 20 }, () => 2_001) },
-    { batchDurationsMs: [...Array.from({ length: 19 }, () => 1), 5_001] },
+    {
+      committedBatchDurationsMs: Array.from({ length: 20 }, () => 2_001),
+      batchDurationsMs: Array.from({ length: 20 }, () => 2_001),
+    },
+    {
+      committedBatchDurationsMs: [
+        ...Array.from({ length: 19 }, () => 1),
+        5_001,
+      ],
+      batchDurationsMs: [...Array.from({ length: 19 }, () => 1), 5_001],
+    },
     {
       progressEventOffsetsMs: [
         2_001,
@@ -269,19 +321,52 @@ test("GATE-014-B1 records committed writes separately from instrumented batch ti
   const receipt = createB1OperationReceipt(
     passingOperation({
       committedBatchCount: 0,
+      committedBatchDurationsMs: [],
       batchDurationsMs: [10, 20, 30],
     }),
   );
 
   assert.equal(receipt.status, "pass");
   assert.equal(receipt.committedBatchCount, 0);
-  assert.equal(receipt.batchDurationMaximumMs, 30);
+  assert.equal(receipt.batchDurationMaximumMs, null);
+  assert.equal(receipt.instrumentedBatchCount, 3);
+  assert.equal(receipt.instrumentedBatchDurationMaximumMs, 30);
   assert.throws(
     () =>
       createB1OperationReceipt(
         passingOperation({ committedBatchCount: undefined }),
       ),
     /committedBatchCount/,
+  );
+  assert.throws(
+    () =>
+      createB1OperationReceipt(
+        passingOperation({
+          committedBatchCount: 1,
+          committedBatchDurationsMs: [],
+        }),
+      ),
+    /must match/,
+  );
+  assert.throws(
+    () =>
+      createB1OperationReceipt(
+        passingOperation({
+          committedBatchCount: 1,
+          committedBatchDurationsMs: [9_999],
+        }),
+      ),
+    /subset/,
+  );
+  assert.equal(
+    createB1OperationReceipt(
+      passingOperation({
+        committedBatchCount: 0,
+        committedBatchDurationsMs: [],
+        batchDurationsMs: [6_000],
+      }),
+    ).status,
+    "pass",
   );
 });
 
@@ -294,6 +379,14 @@ function reportOperation({
   runOrdinal,
   operation,
 }) {
+  const committedBatchCount = [
+    "ordered_read",
+    "restart",
+    "atomic_version",
+    "quota_failure",
+  ].includes(operation)
+    ? 0
+    : 1;
   return passingOperation({
     fixtureId,
     fixtureReceiptSha256,
@@ -302,6 +395,8 @@ function reportOperation({
     runOrdinal,
     operation,
     totalDurationMs: 1_000,
+    committedBatchCount,
+    committedBatchDurationsMs: committedBatchCount === 0 ? [] : [100],
     batchDurationsMs: [100],
     progressEventOffsetsMs: [],
     restart:

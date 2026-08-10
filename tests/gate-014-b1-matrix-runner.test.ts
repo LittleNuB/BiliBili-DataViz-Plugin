@@ -27,6 +27,11 @@ function lifecycleResult() {
       committedBatchCount: ["admission", "restore_staging"].includes(operation)
         ? 1
         : 0,
+      committedBatchDurationsMs: ["admission", "restore_staging"].includes(
+        operation,
+      )
+        ? [10]
+        : [],
       batchDurationsMs: [10],
       progressEventOffsetsMs: [],
       restart:

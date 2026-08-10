@@ -166,6 +166,8 @@ export function createB1EnvironmentReceipt(input) {
     "flavor",
     "version",
     "channel",
+    "officialStableVersion",
+    "stableVersionSource",
     "headlessMode",
     "sandboxEnabled",
   ]);
@@ -181,6 +183,16 @@ export function createB1EnvironmentReceipt(input) {
       "browser.version",
     ),
     channel: assertEnum(input.browser.channel, ["stable"], "browser.channel"),
+    officialStableVersion: assertPattern(
+      input.browser.officialStableVersion,
+      /^\d+\.\d+\.\d+\.\d+$/,
+      "browser.officialStableVersion",
+    ),
+    stableVersionSource: assertEnum(
+      input.browser.stableVersionSource,
+      ["official_last_known_good_versions_with_downloads_json"],
+      "browser.stableVersionSource",
+    ),
     headlessMode: assertEnum(
       input.browser.headlessMode,
       ["new"],
@@ -192,6 +204,9 @@ export function createB1EnvironmentReceipt(input) {
       "browser.sandboxEnabled",
     ),
   };
+  if (browser.version !== browser.officialStableVersion) {
+    throw new Error("browser version must match official stable version");
+  }
 
   assertPlainObject(input.execution, "execution");
   assertAllowedFields(input.execution, [
@@ -205,6 +220,7 @@ export function createB1EnvironmentReceipt(input) {
     "externalNetworkUsed",
     "realUserProfileRead",
     "bilibiliLoginUsed",
+    "browserObservation",
   ]);
   const execution = {
     commandId: assertEnum(
@@ -256,6 +272,9 @@ export function createB1EnvironmentReceipt(input) {
       input.execution.bilibiliLoginUsed,
       false,
       "execution.bilibiliLoginUsed",
+    ),
+    browserObservation: validateBrowserObservation(
+      input.execution.browserObservation,
     ),
   };
 
@@ -489,6 +508,7 @@ export function createB1OperationReceipt(input) {
     "operation",
     "totalDurationMs",
     "committedBatchCount",
+    "committedBatchDurationsMs",
     "batchDurationsMs",
     "progressEventOffsetsMs",
     "restart",
@@ -524,12 +544,27 @@ export function createB1OperationReceipt(input) {
     input.committedBatchCount,
     "committedBatchCount",
   );
+  const committedBatchDurationsMs = validateNumberArray(
+    input.committedBatchDurationsMs,
+    "committedBatchDurationsMs",
+    { minimumLength: 0 },
+  );
+  if (committedBatchDurationsMs.length !== committedBatchCount) {
+    throw new Error(
+      "committedBatchCount must match committedBatchDurationsMs length",
+    );
+  }
   const batchDurationsMs = validateNumberArray(
     input.batchDurationsMs,
     "batchDurationsMs",
     {
       minimumLength: 1,
     },
+  );
+  assertNumberMultisetSubset(
+    committedBatchDurationsMs,
+    batchDurationsMs,
+    "committedBatchDurationsMs",
   );
   const progressEventOffsetsMs = validateNumberArray(
     input.progressEventOffsetsMs,
@@ -544,12 +579,32 @@ export function createB1OperationReceipt(input) {
   const indexedDb = validateIndexedDb(input.indexedDb);
   const assertions = validateAssertions(input.assertions);
 
-  const sortedBatchDurations = [...batchDurationsMs].sort(
+  const sortedCommittedBatchDurations = [...committedBatchDurationsMs].sort(
     (left, right) => left - right,
   );
-  const batchDurationMedianMs = percentile(sortedBatchDurations, 0.5);
-  const batchDurationP95Ms = percentile(sortedBatchDurations, 0.95);
-  const batchDurationMaximumMs = sortedBatchDurations.at(-1);
+  const sortedInstrumentedBatchDurations = [...batchDurationsMs].sort(
+    (left, right) => left - right,
+  );
+  const batchDurationMedianMs =
+    sortedCommittedBatchDurations.length === 0
+      ? null
+      : percentile(sortedCommittedBatchDurations, 0.5);
+  const batchDurationP95Ms =
+    sortedCommittedBatchDurations.length === 0
+      ? null
+      : percentile(sortedCommittedBatchDurations, 0.95);
+  const batchDurationMaximumMs =
+    sortedCommittedBatchDurations.at(-1) ?? null;
+  const instrumentedBatchDurationMedianMs = percentile(
+    sortedInstrumentedBatchDurations,
+    0.5,
+  );
+  const instrumentedBatchDurationP95Ms = percentile(
+    sortedInstrumentedBatchDurations,
+    0.95,
+  );
+  const instrumentedBatchDurationMaximumMs =
+    sortedInstrumentedBatchDurations.at(-1);
   const progress = calculateProgressMetrics(
     progressEventOffsetsMs,
     totalDurationMs,
@@ -561,10 +616,16 @@ export function createB1OperationReceipt(input) {
   if (totalDurationLimitMs !== null && totalDurationMs > totalDurationLimitMs) {
     failures.push("total_duration_exceeded");
   }
-  if (batchDurationP95Ms > MAX_BATCH_P95_MS) {
+  if (
+    batchDurationP95Ms !== null &&
+    batchDurationP95Ms > MAX_BATCH_P95_MS
+  ) {
     failures.push("batch_p95_exceeded");
   }
-  if (batchDurationMaximumMs > MAX_BATCH_DURATION_MS) {
+  if (
+    batchDurationMaximumMs !== null &&
+    batchDurationMaximumMs > MAX_BATCH_DURATION_MS
+  ) {
     failures.push("batch_maximum_exceeded");
   }
   if (totalDurationMs > MAX_PROGRESS_GAP_MS) {
@@ -645,6 +706,10 @@ export function createB1OperationReceipt(input) {
     batchDurationMedianMs,
     batchDurationP95Ms,
     batchDurationMaximumMs,
+    instrumentedBatchCount: batchDurationsMs.length,
+    instrumentedBatchDurationMedianMs,
+    instrumentedBatchDurationP95Ms,
+    instrumentedBatchDurationMaximumMs,
     firstProgressEventLatencyMs: progress.firstLatencyMs,
     maximumProgressEventGapMs: progress.maximumGapMs,
     restart,
@@ -1428,6 +1493,87 @@ function validateNumberArray(value, label, { minimumLength }) {
   return value.map((item, index) =>
     assertNonNegativeFiniteNumber(item, `${label}[${index}]`),
   );
+}
+
+function validateBrowserObservation(value) {
+  assertPlainObject(value, "execution.browserObservation");
+  assertAllowedFields(value, [
+    "contract",
+    "browserLaunchCount",
+    "networkMetricAvailable",
+    "networkRequestCount",
+    "loopbackRequestCount",
+    "extensionRequestCount",
+    "externalRequestCount",
+    "consoleMetricAvailable",
+    "consoleErrorCount",
+  ]);
+  const observation = {
+    contract: assertEnum(
+      value.contract,
+      ["gate-014-b1-browser-observation-v1"],
+      "execution.browserObservation.contract",
+    ),
+    browserLaunchCount: assertPositiveSafeInteger(
+      value.browserLaunchCount,
+      "execution.browserObservation.browserLaunchCount",
+    ),
+    networkMetricAvailable: assertExactBoolean(
+      value.networkMetricAvailable,
+      true,
+      "execution.browserObservation.networkMetricAvailable",
+    ),
+    networkRequestCount: assertNonNegativeSafeInteger(
+      value.networkRequestCount,
+      "execution.browserObservation.networkRequestCount",
+    ),
+    loopbackRequestCount: assertNonNegativeSafeInteger(
+      value.loopbackRequestCount,
+      "execution.browserObservation.loopbackRequestCount",
+    ),
+    extensionRequestCount: assertNonNegativeSafeInteger(
+      value.extensionRequestCount,
+      "execution.browserObservation.extensionRequestCount",
+    ),
+    externalRequestCount: assertExactInteger(
+      value.externalRequestCount,
+      0,
+      "execution.browserObservation.externalRequestCount",
+    ),
+    consoleMetricAvailable: assertExactBoolean(
+      value.consoleMetricAvailable,
+      true,
+      "execution.browserObservation.consoleMetricAvailable",
+    ),
+    consoleErrorCount: assertExactInteger(
+      value.consoleErrorCount,
+      0,
+      "execution.browserObservation.consoleErrorCount",
+    ),
+  };
+  if (
+    observation.loopbackRequestCount + observation.extensionRequestCount >
+    observation.networkRequestCount
+  ) {
+    throw new Error(
+      "execution.browserObservation classified requests exceed total",
+    );
+  }
+  return observation;
+}
+
+function assertNumberMultisetSubset(subset, superset, label) {
+  const available = new Map();
+  for (const value of superset) {
+    available.set(value, (available.get(value) ?? 0) + 1);
+  }
+  for (const value of subset) {
+    const remaining = available.get(value) ?? 0;
+    if (remaining < 1) {
+      throw new Error(`${label} must be a subset of batchDurationsMs`);
+    }
+    available.set(value, remaining - 1);
+  }
 }
 
 function assertPublicSafeId(value, label) {

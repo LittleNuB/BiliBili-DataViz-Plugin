@@ -53,8 +53,8 @@ No dependency enters production `package.json` during the spike. The report reco
 ## Environment And Repetition
 
 - Begin B1 after the reviewed A1 fixture receipts are available. Begin C/D only after A1, A2, and B1 pass.
-- Run as an unpacked production build in current stable Chrome on Windows, using a fresh temporary test profile with no Bilibili login, Cookie import, browser-profile read, user database, API key, or network dependency.
-- Record OS build, CPU, logical cores, memory, free disk, Chrome version, extension commit, Node version, package lock hash, candidate versions, fixture hashes, storage estimate, run start/end time, and whether memory metrics were available.
+- Run as an unpacked production build in the exact official Chrome for Testing Stable version declared from the pre-run last-known-good metadata on Windows, using a fresh temporary test profile with no Bilibili login, Cookie import, browser-profile read, user database, API key, or runtime network dependency. Product identity and version mismatch fail closed.
+- Record OS build, CPU, logical cores, memory, free disk, actual and declared Stable Chrome versions, extension commit, Node version, package lock hash, candidate versions, fixture hashes, storage estimate, run start/end time, and whether memory metrics were available. Per-launch CDP network and console observation must be available; any external HTTP(S) request or console error fails the run, while persisted receipts retain counts only.
 - Use at least three clean cold runs and five warm runs per candidate and fixture size. Cold means a fresh index generation and reopened extension; warm means an already opened complete generation with caches allowed by the candidate contract.
 - Record median and p95 where applicable. An unavailable required metric is `insufficient_evidence`, never zero or a pass.
 
@@ -64,7 +64,7 @@ Measure admission, exact-byte ledger update, ordered read, selected-version remo
 
 Test transaction/batch candidates of 256, 512, and 1,024 records, each additionally capped at 1, 2, or 4 MiB of canonical payload. Select the largest combination that satisfies every latency, memory, cancellation, and restart constraint; record rejected combinations rather than averaging them away.
 
-Every B1 operation receipt records fixture ID, batch candidate, operation kind, total duration, committed batch count, batch-duration median/p95/maximum, first progress-event latency, maximum progress-event gap, restart-state visibility latency, cancellation acknowledgement, post-cancellation writes, main-thread maximum, and peak measurable heap growth. A missing required measurement is `insufficient_evidence`.
+Every B1 operation receipt records fixture ID, batch candidate, operation kind, total duration, committed batch count, committed-batch duration median/p95/maximum, separate all-instrumented-batch diagnostics, first progress-event latency, maximum progress-event gap, restart-state visibility latency, cancellation acknowledgement, post-cancellation writes, main-thread maximum, and peak measurable heap growth. Only successfully committed write transactions enter the committed-batch thresholds; read-only and deliberately aborted transactions remain diagnostic. The committed count must equal the committed-duration evidence length. A missing required measurement is `insufficient_evidence`.
 
 Synthetic-only numeric pass criteria:
 
@@ -84,7 +84,7 @@ Required assertions:
 - any UI-main-thread task stays at or below 200 ms;
 - peak measurable JavaScript-heap growth above idle stays at or below 256 MiB.
 
-The B1 restore preflight baseline uses the highest observed clean-run staging amplification rounded up to the next 0.25, plus at least 25% safety margin, and a fixed reserve of at least 64 MiB. It must early-refuse a deliberately insufficient-quota fixture, allow every passing near-limit fixture, and still treat the final write/readback as authoritative. If no finite rule can do both across required synthetic runs, restore is `insufficient_evidence` and runtime work remains blocked. A later calibrated run may raise this conservative parameter before GATE-014-E; it cannot weaken any B1 correctness assertion.
+The B1 restore preflight baseline uses the highest observed clean-run staging amplification rounded up to the next 0.25, plus at least 25% safety margin, and a fixed reserve of at least 64 MiB. It must early-refuse a deliberately insufficient-quota fixture before artifact fetch and before any count change in the operations, versions, segments, or state stores, allow every passing near-limit fixture, and still treat the final write/readback as authoritative. If no finite rule can do both across required synthetic runs, restore is `insufficient_evidence` and runtime work remains blocked. A later calibrated run may raise this conservative parameter before GATE-014-E; it cannot weaken any B1 correctness assertion.
 
 ## Search Pass Criteria
 

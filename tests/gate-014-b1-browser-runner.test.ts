@@ -6,8 +6,11 @@ import {
   B1_HARNESS_EXTENSION_ID,
   B1_LIFECYCLE_EVALUATION_TIMEOUT_MS,
   buildChromeArguments,
+  combineBrowserExecutionObservations,
   createB1TemporaryProfile,
   removeB1TemporaryProfile,
+  validateBrowserExecutionObservation,
+  validateChromeForTestingMetadata,
   validateSmokeResult,
 } from "../scripts/gate-014-b1-browser-runner.mjs";
 import {
@@ -71,6 +74,75 @@ test("GATE-014-B1 Chrome arguments isolate a fresh profile and block external na
   assert.equal(
     argumentsList.some((argument) => argument.includes("User Data")),
     false,
+  );
+});
+
+test("GATE-014-B1 requires the executable version to match the declared official CFT stable", () => {
+  const metadata = validateChromeForTestingMetadata(
+    {
+      productName: "Google Chrome for Testing",
+      productVersion: "151.0.7922.77",
+    },
+    "151.0.7922.77",
+  );
+  assert.equal(metadata.version, metadata.officialStableVersion);
+  assert.equal(
+    metadata.stableVersionSource,
+    "official_last_known_good_versions_with_downloads_json",
+  );
+  assert.throws(
+    () =>
+      validateChromeForTestingMetadata(
+        {
+          productName: "Google Chrome for Testing",
+          productVersion: "151.0.7922.76",
+        },
+        "151.0.7922.77",
+      ),
+    /stable_version_mismatch/,
+  );
+  assert.throws(
+    () =>
+      validateChromeForTestingMetadata(
+        { productName: "Google Chrome", productVersion: "151.0.7922.77" },
+        "151.0.7922.77",
+      ),
+    /official_chrome_for_testing_required/,
+  );
+});
+
+test("GATE-014-B1 browser observation fails closed on external requests or console errors", () => {
+  const passing = {
+    contract: "gate-014-b1-browser-observation-v1",
+    browserLaunchCount: 1,
+    networkMetricAvailable: true,
+    networkRequestCount: 2,
+    loopbackRequestCount: 1,
+    extensionRequestCount: 1,
+    externalRequestCount: 0,
+    consoleMetricAvailable: true,
+    consoleErrorCount: 0,
+  };
+  assert.equal(validateBrowserExecutionObservation(passing).browserLaunchCount, 1);
+  assert.equal(
+    combineBrowserExecutionObservations(passing, passing).browserLaunchCount,
+    2,
+  );
+  assert.throws(
+    () =>
+      validateBrowserExecutionObservation({
+        ...passing,
+        externalRequestCount: 1,
+      }),
+    /observation_failed/,
+  );
+  assert.throws(
+    () =>
+      validateBrowserExecutionObservation({
+        ...passing,
+        consoleErrorCount: 1,
+      }),
+    /observation_failed/,
   );
 });
 

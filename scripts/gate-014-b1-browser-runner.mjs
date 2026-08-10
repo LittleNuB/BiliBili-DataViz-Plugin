@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile as execFileCallback, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
@@ -6,6 +6,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import {
   FIXTURE_DEFINITIONS,
@@ -18,6 +19,9 @@ import { B1_OPERATION_KINDS } from "./gate-014-b1-receipt.mjs";
 export const B1_HARNESS_EXTENSION_ID = "aeangaiofkodlenmmejflbojmomlamoj";
 export const B1_LIFECYCLE_EVALUATION_TIMEOUT_MS = 45 * 60 * 1_000;
 const B1_CDP_SETUP_TIMEOUT_MS = 30_000;
+const execFile = promisify(execFileCallback);
+const CFT_STABLE_VERSION_SOURCE =
+  "official_last_known_good_versions_with_downloads_json";
 
 const MANAGED_PROFILE_DIRECTORIES = new Set();
 
@@ -122,6 +126,111 @@ export async function resolveChromeExecutable(explicitPath) {
   throw new Error("stable_chrome_not_found");
 }
 
+export function validateChromeForTestingMetadata(
+  metadata,
+  expectedStableVersion,
+) {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(expectedStableVersion ?? "")) {
+    throw new Error("official_cft_stable_version_required");
+  }
+  const version = metadata?.productVersion
+    ?.match(/\d+\.\d+\.\d+\.\d+/)?.[0];
+  if (!/Chrome for Testing/i.test(metadata?.productName ?? "") || !version) {
+    throw new Error("official_chrome_for_testing_required");
+  }
+  if (version !== expectedStableVersion) {
+    throw new Error("chrome_for_testing_stable_version_mismatch");
+  }
+  return Object.freeze({
+    flavor: "chrome_for_testing_stable",
+    version,
+    channel: "stable",
+    officialStableVersion: expectedStableVersion,
+    stableVersionSource: CFT_STABLE_VERSION_SOURCE,
+    headlessMode: "new",
+    sandboxEnabled: true,
+  });
+}
+
+export async function readChromeForTestingMetadata(
+  chromePath,
+  expectedStableVersion = process.env.GATE_014_B1_CFT_STABLE_VERSION,
+) {
+  const script = [
+    "$item = Get-Item -LiteralPath $env:GATE_014_B1_BROWSER_EXECUTABLE",
+    "$info = $item.VersionInfo",
+    "Write-Output ($info.ProductName + '|' + $info.ProductVersion)",
+  ].join("; ");
+  const { stdout } = await execFile(
+    "powershell.exe",
+    ["-NoProfile", "-Command", script],
+    {
+      windowsHide: true,
+      timeout: 10_000,
+      env: { ...process.env, GATE_014_B1_BROWSER_EXECUTABLE: chromePath },
+    },
+  );
+  const [productName, productVersion] = stdout.trim().split("|");
+  return validateChromeForTestingMetadata(
+    { productName, productVersion },
+    expectedStableVersion,
+  );
+}
+
+export function validateBrowserExecutionObservation(observation) {
+  const integerFields = [
+    "browserLaunchCount",
+    "networkRequestCount",
+    "loopbackRequestCount",
+    "extensionRequestCount",
+    "externalRequestCount",
+    "consoleErrorCount",
+  ];
+  if (
+    observation?.contract !== "gate-014-b1-browser-observation-v1" ||
+    observation.networkMetricAvailable !== true ||
+    observation.consoleMetricAvailable !== true ||
+    integerFields.some(
+      (field) =>
+        !Number.isSafeInteger(observation[field]) || observation[field] < 0,
+    ) ||
+    observation.browserLaunchCount < 1 ||
+    observation.externalRequestCount !== 0 ||
+    observation.consoleErrorCount !== 0
+  ) {
+    throw new Error("browser_execution_observation_failed");
+  }
+  return Object.freeze({ ...observation });
+}
+
+export function combineBrowserExecutionObservations(...observations) {
+  const combined = {
+    contract: "gate-014-b1-browser-observation-v1",
+    browserLaunchCount: 0,
+    networkMetricAvailable: true,
+    networkRequestCount: 0,
+    loopbackRequestCount: 0,
+    extensionRequestCount: 0,
+    externalRequestCount: 0,
+    consoleMetricAvailable: true,
+    consoleErrorCount: 0,
+  };
+  for (const observation of observations.flat()) {
+    const validated = validateBrowserExecutionObservation(observation);
+    for (const field of [
+      "browserLaunchCount",
+      "networkRequestCount",
+      "loopbackRequestCount",
+      "extensionRequestCount",
+      "externalRequestCount",
+      "consoleErrorCount",
+    ]) {
+      combined[field] += validated[field];
+    }
+  }
+  return validateBrowserExecutionObservation(combined);
+}
+
 export function validateSmokeResult(result) {
   if (result === null || typeof result !== "object" || Array.isArray(result)) {
     throw new Error("browser_smoke_result_invalid");
@@ -146,12 +255,15 @@ export function validateSmokeResult(result) {
 }
 
 export async function runBrowserSmoke(options = {}) {
-  const result = await evaluateInHarness(
+  const execution = await evaluateInHarness(
     options,
     "globalThis.runGate014B1Smoke()",
     "browser_smoke_evaluation_failed",
   );
-  return validateSmokeResult(result);
+  return Object.freeze({
+    ...validateSmokeResult(execution.value),
+    executionObservation: execution.observation,
+  });
 }
 
 export async function runBrowserFixtureSmoke(options = {}) {
@@ -180,16 +292,19 @@ export async function runBrowserFixtureSmoke(options = {}) {
         byteCapBytes: options.byteCapBytes ?? 4 * 1024 * 1024,
       },
     };
-    const result = await evaluateInHarness(
+    const execution = await evaluateInHarness(
       options,
       `globalThis.runGate014B1FixtureSmoke(${JSON.stringify(config)})`,
       "browser_fixture_smoke_evaluation_failed",
     );
-    const validated = validateFixtureSmokeResult(result, config);
+    const validated = validateFixtureSmokeResult(execution.value, config);
     if (server.getRequestCount() !== 1) {
       throw new Error("browser_fixture_server_request_count_invalid");
     }
-    return validated;
+    return Object.freeze({
+      ...validated,
+      executionObservation: execution.observation,
+    });
   } finally {
     await server.close();
     await cleanupGeneratedFixtureArtifacts({ repositoryRoot: REPOSITORY_ROOT });
@@ -268,16 +383,17 @@ export async function runBrowserFixtureLifecycleWithPreparedFixture(
         byteCapBytes: options.byteCapBytes ?? 4 * 1024 * 1024,
       },
     };
-    const beforeRestart = await evaluateInHarnessProfile(
+    const beforeExecution = await evaluateInHarnessProfile(
       options,
       profileDirectory,
       `globalThis.runGate014B1FixtureLifecycleBeforeRestart(${JSON.stringify(config)})`,
       "browser_fixture_lifecycle_before_restart_failed",
     );
+    const beforeRestart = beforeExecution.value;
     validateLifecycleBeforeRestart(beforeRestart, config);
 
     const restartStartedEpochMs = Date.now();
-    const afterRestart = await evaluateInHarnessProfile(
+    const afterExecution = await evaluateInHarnessProfile(
       options,
       profileDirectory,
       ({ harnessReadyEpochMs }) => {
@@ -292,6 +408,7 @@ export async function runBrowserFixtureLifecycleWithPreparedFixture(
       },
       "browser_fixture_lifecycle_after_restart_failed",
     );
+    const afterRestart = afterExecution.value;
     validateLifecycleAfterRestart(afterRestart, config);
     const expectedAdmissionRequestCount = config.runMode === "warm" ? 2 : 1;
     if (
@@ -322,6 +439,10 @@ export async function runBrowserFixtureLifecycleWithPreparedFixture(
         finalCleanupStorage: afterRestart.finalCleanupStorage,
         readbackVerified:
           beforeRestart.status === "pass" && afterRestart.readbackVerified,
+        executionObservation: combineBrowserExecutionObservations(
+          beforeExecution.observation,
+          afterExecution.observation,
+        ),
         storesSensitiveText: false,
       },
       config,
@@ -372,6 +493,7 @@ export function validateFixtureLifecycleResult(result, config) {
   ) {
     throw new Error("browser_fixture_lifecycle_status_invalid");
   }
+  validateBrowserExecutionObservation(result.executionObservation);
   return Object.freeze({ ...result });
 }
 
@@ -525,6 +647,10 @@ async function evaluateInHarnessProfile(
   evaluationErrorCode,
 ) {
   const chromeExecutable = await resolveChromeExecutable(options.chromePath);
+  await readChromeForTestingMetadata(
+    chromeExecutable,
+    options.expectedStableVersion,
+  );
   const productionExtension = path.resolve(
     options.productionExtension ?? path.join(REPOSITORY_ROOT, "dist"),
   );
@@ -585,8 +711,21 @@ async function evaluateInHarnessProfile(
         undefined,
         B1_CDP_SETUP_TIMEOUT_MS,
       );
+      const observation = createCdpExecutionObservation(client, sessionId);
       await client.send(
         "Runtime.enable",
+        {},
+        sessionId,
+        B1_CDP_SETUP_TIMEOUT_MS,
+      );
+      await client.send(
+        "Network.enable",
+        {},
+        sessionId,
+        B1_CDP_SETUP_TIMEOUT_MS,
+      );
+      await client.send(
+        "Log.enable",
         {},
         sessionId,
         B1_CDP_SETUP_TIMEOUT_MS,
@@ -618,7 +757,11 @@ async function evaluateInHarnessProfile(
         }
         throw new Error(evaluationErrorCode);
       }
-      return evaluation.result?.value;
+      const observationReceipt = observation.finish();
+      return {
+        value: evaluation.result?.value,
+        observation: validateBrowserExecutionObservation(observationReceipt),
+      };
     } finally {
       client.close();
     }
@@ -633,6 +776,64 @@ async function evaluateInHarnessProfile(
     }
     await waitForProcessExit(chrome);
   }
+}
+
+function createCdpExecutionObservation(client, sessionId) {
+  const counts = {
+    networkRequestCount: 0,
+    loopbackRequestCount: 0,
+    extensionRequestCount: 0,
+    externalRequestCount: 0,
+    consoleErrorCount: 0,
+  };
+  const unsubscribe = client.onEvent((message) => {
+    if (message.sessionId !== sessionId) {
+      return;
+    }
+    if (message.method === "Network.requestWillBeSent") {
+      counts.networkRequestCount += 1;
+      const url = message.params?.request?.url;
+      try {
+        const parsed = new URL(url);
+        if (
+          parsed.protocol === "http:" ||
+          parsed.protocol === "https:"
+        ) {
+          if (["127.0.0.1", "localhost", "::1"].includes(parsed.hostname)) {
+            counts.loopbackRequestCount += 1;
+          } else {
+            counts.externalRequestCount += 1;
+          }
+        } else if (parsed.protocol === "chrome-extension:") {
+          counts.extensionRequestCount += 1;
+        }
+      } catch {
+        counts.externalRequestCount += 1;
+      }
+      return;
+    }
+    if (
+      message.method === "Runtime.exceptionThrown" ||
+      (message.method === "Runtime.consoleAPICalled" &&
+        ["error", "assert"].includes(message.params?.type)) ||
+      (message.method === "Log.entryAdded" &&
+        message.params?.entry?.level === "error")
+    ) {
+      counts.consoleErrorCount += 1;
+    }
+  });
+  return {
+    finish() {
+      unsubscribe();
+      return {
+        contract: "gate-014-b1-browser-observation-v1",
+        browserLaunchCount: 1,
+        networkMetricAvailable: true,
+        ...counts,
+        consoleMetricAvailable: true,
+      };
+    },
+  };
 }
 
 async function serveFixture(artifactPath, fixtureId) {
@@ -768,9 +969,16 @@ class CdpClient {
     this.socket = socket;
     this.nextId = 1;
     this.pending = new Map();
+    this.eventListeners = new Set();
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
-      if (!message.id || !this.pending.has(message.id)) {
+      if (!message.id) {
+        for (const listener of this.eventListeners) {
+          listener(message);
+        }
+        return;
+      }
+      if (!this.pending.has(message.id)) {
         return;
       }
       const { resolve, reject, timeoutId } = this.pending.get(message.id);
@@ -789,6 +997,11 @@ class CdpClient {
       }
       this.pending.clear();
     });
+  }
+
+  onEvent(listener) {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
   }
 
   send(method, params = {}, sessionId, timeoutMs = B1_CDP_SETUP_TIMEOUT_MS) {
@@ -867,6 +1080,7 @@ function delay(milliseconds) {
 async function main() {
   const result = await runBrowserSmoke({
     chromePath: process.env.GATE_014_B1_CHROME_PATH,
+    expectedStableVersion: process.env.GATE_014_B1_CFT_STABLE_VERSION,
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }

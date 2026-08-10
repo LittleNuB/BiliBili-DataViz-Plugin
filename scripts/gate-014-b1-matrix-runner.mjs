@@ -16,9 +16,12 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import {
+  combineBrowserExecutionObservations,
   createB1TemporaryProfile,
+  readChromeForTestingMetadata,
   removeB1TemporaryProfile,
   runBrowserFixtureLifecycleWithPreparedFixture,
+  validateBrowserExecutionObservation,
 } from "./gate-014-b1-browser-runner.mjs";
 import {
   FIXTURE_DEFINITIONS,
@@ -154,6 +157,9 @@ export function mapB1LifecycleToRawOperations(lifecycle, metadata) {
       operation: operation.operation,
       totalDurationMs: operation.totalDurationMs,
       committedBatchCount: operation.committedBatchCount,
+      committedBatchDurationsMs: [
+        ...operation.committedBatchDurationsMs,
+      ],
       batchDurationsMs: [...operation.batchDurationsMs],
       progressEventOffsetsMs: [...operation.progressEventOffsetsMs],
       restart: { ...operation.restart },
@@ -182,11 +188,17 @@ export async function runB1Matrix(options = {}) {
     throw new Error("GATE_014_B1_CHROME_PATH is required");
   }
   await access(chromePath);
+  const expectedStableVersion =
+    options.expectedStableVersion ??
+    process.env.GATE_014_B1_CFT_STABLE_VERSION;
   const maxNewRuns =
     options.maxNewRuns === undefined
       ? Number.POSITIVE_INFINITY
       : assertPositiveSafeInteger(options.maxNewRuns, "maxNewRuns");
-  const environmentCore = await collectEnvironmentCore(chromePath);
+  const environmentCore = await collectEnvironmentCore(
+    chromePath,
+    expectedStableVersion,
+  );
   const environmentFingerprintSha256 = sha256Text(
     stableStringify(environmentCore),
   );
@@ -217,6 +229,7 @@ export async function runB1Matrix(options = {}) {
   const recordRun = async (preparedFixture, profile, spec) => {
     const lifecycle = await runBrowserFixtureLifecycleWithPreparedFixture({
       chromePath,
+      expectedStableVersion,
       fixtureId: spec.fixtureId,
       recordCap: spec.candidate.recordCap,
       byteCapBytes: spec.candidate.byteCapBytes,
@@ -239,6 +252,7 @@ export async function runB1Matrix(options = {}) {
       runMode: spec.runMode,
       runOrdinal: spec.runOrdinal,
       rawOperations,
+      browserObservation: lifecycle.executionObservation,
       storesSensitiveText: false,
     };
     validateCheckpoint(
@@ -360,11 +374,17 @@ export async function runB1Matrix(options = {}) {
     });
   }
 
+  const matrixBrowserObservation = combineBrowserExecutionObservations(
+    [...checkpoints.values()].map(
+      (checkpoint) => checkpoint.browserObservation,
+    ),
+  );
   const preliminaryEnvironmentInput = buildEnvironmentInput(environmentCore, {
     startedAtEpochMs: session.startedAtEpochMs,
     completedAtEpochMs: Date.now(),
     freeDiskBytesAtStart: session.freeDiskBytesAtStart,
     freeDiskBytesAtEnd: await readFreeDiskBytes(),
+    browserObservation: matrixBrowserObservation,
   });
   const preliminaryEnvironment = createB1EnvironmentReceipt(
     preliminaryEnvironmentInput,
@@ -402,12 +422,13 @@ export async function runB1Matrix(options = {}) {
   const requiredFreeQuotaBytes =
     preliminaryReport.provisionalRestoreHeadroom.nearLimitProbe
       ?.requiredFreeQuotaBytes;
-  const restorePreflightValidation =
+  const restorePreflightRun =
     provisionalCandidate &&
     Number.isSafeInteger(requiredFreeQuotaBytes) &&
     preliminaryReport.provisionalRestoreHeadroom.allMeasuredRunsAllowed === true
       ? await runDerivedRestorePreflightValidation({
           chromePath,
+          expectedStableVersion,
           environmentReceiptSha256: preliminaryEnvironmentReceiptSha256,
           fixtureReceiptDetails,
           fixtureReceipts,
@@ -415,11 +436,18 @@ export async function runB1Matrix(options = {}) {
           requiredFreeQuotaBytes,
         })
       : null;
+  const finalBrowserObservation = restorePreflightRun
+    ? combineBrowserExecutionObservations(
+        matrixBrowserObservation,
+        restorePreflightRun.browserObservation,
+      )
+    : matrixBrowserObservation;
   const environmentInput = buildEnvironmentInput(environmentCore, {
     startedAtEpochMs: session.startedAtEpochMs,
     completedAtEpochMs: Date.now(),
     freeDiskBytesAtStart: session.freeDiskBytesAtStart,
     freeDiskBytesAtEnd: await readFreeDiskBytes(),
+    browserObservation: finalBrowserObservation,
   });
   const environment = createB1EnvironmentReceipt(environmentInput);
   const environmentReceiptSha256 = hashB1EnvironmentReceipt(environment);
@@ -427,9 +455,9 @@ export async function runB1Matrix(options = {}) {
     ...operation,
     environmentReceiptSha256,
   }));
-  const finalRestorePreflightValidation = restorePreflightValidation
+  const finalRestorePreflightValidation = restorePreflightRun
     ? rebindRestorePreflightValidation(
-        restorePreflightValidation,
+        restorePreflightRun.receipt,
         environmentReceiptSha256,
       )
     : null;
@@ -492,6 +520,7 @@ async function runDerivedRestorePreflightValidation(options) {
   try {
     const lifecycle = await runBrowserFixtureLifecycleWithPreparedFixture({
       chromePath: options.chromePath,
+      expectedStableVersion: options.expectedStableVersion,
       fixtureId,
       recordCap: options.candidate.recordCap,
       byteCapBytes: options.candidate.byteCapBytes,
@@ -500,14 +529,17 @@ async function runDerivedRestorePreflightValidation(options) {
       runMode: "cold",
       restorePreflightRequiredFreeQuotaBytes: options.requiredFreeQuotaBytes,
     });
-    return createB1RestorePreflightValidationFromLifecycle(lifecycle, {
-      fixtureId,
-      fixtureReceiptSha256: options.fixtureReceipts[fixtureId],
-      environmentReceiptSha256: options.environmentReceiptSha256,
-      candidate: options.candidate,
-      startedAtEpochMs,
-      completedAtEpochMs: Date.now(),
-      requiredFreeQuotaBytes: options.requiredFreeQuotaBytes,
+    return Object.freeze({
+      receipt: createB1RestorePreflightValidationFromLifecycle(lifecycle, {
+        fixtureId,
+        fixtureReceiptSha256: options.fixtureReceipts[fixtureId],
+        environmentReceiptSha256: options.environmentReceiptSha256,
+        candidate: options.candidate,
+        startedAtEpochMs,
+        completedAtEpochMs: Date.now(),
+        requiredFreeQuotaBytes: options.requiredFreeQuotaBytes,
+      }),
+      browserObservation: lifecycle.executionObservation,
     });
   } finally {
     await removeB1TemporaryProfile(profile);
@@ -595,14 +627,14 @@ function createExpectedRunSpecs() {
 
 class MatrixPause extends Error {}
 
-async function collectEnvironmentCore(chromePath) {
+async function collectEnvironmentCore(chromePath, expectedStableVersion) {
   await access(path.join(REPOSITORY_ROOT, "dist", "manifest.json"));
   const [{ stdout: commitStdout }, browser] = await Promise.all([
     execFile("git", ["rev-parse", "HEAD"], {
       cwd: REPOSITORY_ROOT,
       windowsHide: true,
     }),
-    readBrowserMetadata(chromePath),
+    readChromeForTestingMetadata(chromePath, expectedStableVersion),
   ]);
   const repositoryCommitSha = commitStdout.trim();
   if (!/^[a-f0-9]{40}$/.test(repositoryCommitSha)) {
@@ -652,35 +684,6 @@ async function collectEnvironmentCore(chromePath) {
   };
 }
 
-async function readBrowserMetadata(chromePath) {
-  const script = [
-    "$item = Get-Item -LiteralPath $env:GATE_014_B1_BROWSER_EXECUTABLE",
-    "$info = $item.VersionInfo",
-    "Write-Output ($info.ProductName + '|' + $info.ProductVersion)",
-  ].join("; ");
-  const { stdout } = await execFile(
-    "powershell.exe",
-    ["-NoProfile", "-Command", script],
-    {
-      windowsHide: true,
-      timeout: 10_000,
-      env: { ...process.env, GATE_014_B1_BROWSER_EXECUTABLE: chromePath },
-    },
-  );
-  const [productName, productVersion] = stdout.trim().split("|");
-  const version = productVersion?.match(/\d+\.\d+\.\d+\.\d+/)?.[0];
-  if (!/Chrome for Testing/i.test(productName ?? "") || !version) {
-    throw new Error("full matrix requires official Chrome for Testing stable");
-  }
-  return {
-    flavor: "chrome_for_testing_stable",
-    version,
-    channel: "stable",
-    headlessMode: "new",
-    sandboxEnabled: true,
-  };
-}
-
 function buildEnvironmentInput(environmentCore, run) {
   return {
     startedAtEpochMs: run.startedAtEpochMs,
@@ -698,7 +701,12 @@ function buildEnvironmentInput(environmentCore, run) {
     },
     runtime: { ...environmentCore.runtime },
     browser: { ...environmentCore.browser },
-    execution: { ...environmentCore.execution },
+    execution: {
+      ...environmentCore.execution,
+      browserObservation: validateBrowserExecutionObservation(
+        run.browserObservation,
+      ),
+    },
     a2CalibrationStatus: environmentCore.a2CalibrationStatus,
     storesSensitiveText: false,
   };
@@ -843,10 +851,16 @@ function validateCheckpoint(
       "runMode",
       "runOrdinal",
       "rawOperations",
+      "browserObservation",
       "storesSensitiveText",
     ],
     "checkpoint",
   );
+  try {
+    validateBrowserExecutionObservation(checkpoint.browserObservation);
+  } catch {
+    throw new Error("B1 checkpoint browser observation mismatch");
+  }
   if (
     checkpoint.contract !== "gate-014-b1-run-checkpoint-v1" ||
     checkpoint.environmentFingerprintSha256 !== environmentFingerprintSha256 ||
@@ -964,6 +978,7 @@ export async function verifyB1ReportArtifacts() {
   }
   const environmentReceiptSha256 =
     hashB1EnvironmentReceipt(validatedEnvironment);
+  await verifyCurrentArtifactBindings(validatedEnvironment);
   const rawOperations = rawText
     .trim()
     .split(/\r?\n/)
@@ -973,6 +988,21 @@ export async function verifyB1ReportArtifacts() {
     throw new Error("B1 raw operation artifact serialization mismatch");
   }
   const committedReport = JSON.parse(reportText);
+  const goldenVerification = await verifyGoldenFixtureReceipts({
+    repositoryRoot: REPOSITORY_ROOT,
+  });
+  const currentFixtureReceipts = Object.fromEntries(
+    goldenVerification.receipts.map((receipt) => [
+      receipt.fixtureId,
+      receipt.receiptSha256,
+    ]),
+  );
+  if (
+    stableStringify(currentFixtureReceipts) !==
+    stableStringify(committedReport.fixtureReceipts)
+  ) {
+    throw new Error("B1 fixture receipt binding mismatch");
+  }
   const evaluated = evaluateB1Report({
     environment: environmentInput,
     environmentReceiptSha256,
@@ -991,7 +1021,46 @@ export async function verifyB1ReportArtifacts() {
     gateStatus: evaluated.status,
     operationCount: rawOperations.length,
     environmentReceiptSha256,
+    currentArtifactBindingsVerified: true,
   });
+}
+
+async function verifyCurrentArtifactBindings(environment) {
+  const [benchmarkSourceSha256, packageLockSha256, productionDistSha256] =
+    await Promise.all([
+      hashKnownFiles(BENCHMARK_SOURCE_FILES),
+      hashFile(path.join(REPOSITORY_ROOT, "package-lock.json")),
+      hashDirectory(path.join(REPOSITORY_ROOT, "dist")),
+    ]);
+  if (benchmarkSourceSha256 !== environment.benchmarkSourceSha256) {
+    throw new Error("B1 benchmark source binding mismatch");
+  }
+  if (packageLockSha256 !== environment.packageLockSha256) {
+    throw new Error("B1 package-lock binding mismatch");
+  }
+  if (productionDistSha256 !== environment.productionDistSha256) {
+    throw new Error("B1 production dist binding mismatch");
+  }
+  if (environment.fixtureGeneratorVersion !== GENERATOR_VERSION) {
+    throw new Error("B1 fixture generator binding mismatch");
+  }
+  const { stdout: headStdout } = await execFile("git", ["rev-parse", "HEAD"], {
+    cwd: REPOSITORY_ROOT,
+    windowsHide: true,
+  });
+  const headSha = headStdout.trim();
+  if (!/^[a-f0-9]{40}$/.test(headSha)) {
+    throw new Error("B1 current repository commit unavailable");
+  }
+  try {
+    await execFile(
+      "git",
+      ["merge-base", "--is-ancestor", environment.repositoryCommitSha, headSha],
+      { cwd: REPOSITORY_ROOT, windowsHide: true },
+    );
+  } catch {
+    throw new Error("B1 benchmark commit is not an ancestor of current HEAD");
+  }
 }
 
 export async function cleanupB1Checkpoints() {
@@ -1249,6 +1318,8 @@ async function main() {
   } else if (args.run) {
     result = await runB1Matrix({
       chromePath: process.env.GATE_014_B1_CHROME_PATH,
+      expectedStableVersion:
+        process.env.GATE_014_B1_CFT_STABLE_VERSION,
       maxNewRuns: args.maxNewRuns,
     });
   } else {
