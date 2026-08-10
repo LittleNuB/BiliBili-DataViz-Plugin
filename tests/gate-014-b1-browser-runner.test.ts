@@ -61,9 +61,14 @@ test("GATE-014-B1 uses one restore preflight boundary in browser and report code
 test("GATE-014-B1 reads the final restart ledger only after normalization and preserves duplicate timings", async () => {
   const phases = [];
   let nowMs = 0;
-  const result = await runNormalizationThenFinalLedgerRead({
+  let releaseNormalization = () => {};
+  const normalizationBarrier = new Promise<void>((resolve) => {
+    releaseNormalization = resolve;
+  });
+  const resultPromise = runNormalizationThenFinalLedgerRead({
     async normalize() {
       phases.push("normalization_started");
+      await normalizationBarrier;
       nowMs = 7;
       phases.push("normalization_completed");
       return { operation: "marker_normalization", readbackVerified: true };
@@ -75,6 +80,9 @@ test("GATE-014-B1 reads the final restart ledger only after normalization and pr
     },
     now: () => nowMs,
   });
+  assert.deepEqual(phases, ["normalization_started"]);
+  releaseNormalization();
+  const result = await resultPromise;
   assert.deepEqual(phases, [
     "normalization_started",
     "normalization_completed",
@@ -540,6 +548,49 @@ test("GATE-014-B1 keeps a cached production attachment inside the shared setup d
     /runtime_identity_failed/,
   );
   assert.equal(runtimeIdentityCount, 1);
+  observer.completeSetup();
+  await observer.stop();
+});
+
+test("GATE-014-B1 rejects an initial target attachment that outlives the setup deadline", async () => {
+  const extensionId = "b".repeat(32);
+  const workerTarget = {
+    targetId: "slow-production-worker",
+    type: "service_worker",
+    url: `chrome-extension://${extensionId}/background.js`,
+  };
+  let attachmentCompleted = false;
+  const client = {
+    onEvent() {
+      return () => {};
+    },
+    async send(method) {
+      if (method === "Target.setDiscoverTargets") {
+        return {};
+      }
+      if (method === "Target.getTargets") {
+        return { targetInfos: [workerTarget] };
+      }
+      if (method === "Target.attachToTarget") {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        attachmentCompleted = true;
+        return { sessionId: "late-initial-session" };
+      }
+      if (["Runtime.enable", "Network.enable", "Log.enable"].includes(method)) {
+        return {};
+      }
+      throw new Error(`unexpected_method:${method}`);
+    },
+  };
+  const observer = createExtensionTargetObserver(client, {
+    observeSession() {},
+  });
+  await assert.rejects(
+    () => observer.start({ deadlineEpochMs: Date.now() + 5 }),
+    /cdp_command_timeout/,
+  );
+  assert.equal(attachmentCompleted, false);
+  await new Promise((resolve) => setTimeout(resolve, 35));
   observer.completeSetup();
   await observer.stop();
 });
