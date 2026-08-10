@@ -4,12 +4,15 @@ import {
   PUBLIC_SAFE_ID_PATTERN,
   SENSITIVE_RECEIPT_TOKEN_PATTERN,
 } from "./gate-014-receipt-helpers.mjs";
+import { restorePreflightAllows } from "../tests/fixtures/gate-014/b1-extension/restore-preflight.js";
 
 export const B1_RECEIPT_CONTRACT = "gate-014-b1-operation-v1";
 export const B1_ENVIRONMENT_CONTRACT = "gate-014-b1-environment-v1";
 export const B1_MAX_HEAP_GROWTH_BYTES = 256 * 1024 * 1024;
 export const B1_RECORD_CAPS = deepFreeze([256, 512, 1024]);
-export const B1_BYTE_CAPS = deepFreeze([1, 2, 4].map(value => value * 1024 * 1024));
+export const B1_BYTE_CAPS = deepFreeze(
+  [1, 2, 4].map((value) => value * 1024 * 1024),
+);
 export const B1_REQUIRED_FIXTURE_IDS = deepFreeze([
   "managed-full-text-100mib",
   "managed-full-text-400mib",
@@ -60,6 +63,8 @@ const ASSERTION_FIELDS = Object.freeze([
   "committedRowsVisibleTogether",
   "orphanRowsHiddenAndCleanable",
   "cleanupReadbackVerified",
+  "restorePreflightBoundaryVerified",
+  "warmStartCompleteGenerationVerified",
 ]);
 
 export function createB1EnvironmentReceipt(input) {
@@ -80,17 +85,34 @@ export function createB1EnvironmentReceipt(input) {
     "a2CalibrationStatus",
     "storesSensitiveText",
   ]);
-  const startedAtEpochMs = assertPositiveSafeInteger(input.startedAtEpochMs, "startedAtEpochMs");
-  const completedAtEpochMs = assertPositiveSafeInteger(input.completedAtEpochMs, "completedAtEpochMs");
+  const startedAtEpochMs = assertPositiveSafeInteger(
+    input.startedAtEpochMs,
+    "startedAtEpochMs",
+  );
+  const completedAtEpochMs = assertPositiveSafeInteger(
+    input.completedAtEpochMs,
+    "completedAtEpochMs",
+  );
   if (completedAtEpochMs < startedAtEpochMs) {
     throw new Error("completedAtEpochMs must not precede startedAtEpochMs");
   }
 
   assertPlainObject(input.operatingSystem, "operatingSystem");
-  assertAllowedFields(input.operatingSystem, ["platform", "release", "architecture"]);
+  assertAllowedFields(input.operatingSystem, [
+    "platform",
+    "release",
+    "architecture",
+  ]);
   const operatingSystem = {
-    platform: assertEnum(input.operatingSystem.platform, ["win32"], "operatingSystem.platform"),
-    release: assertPublicSafeText(input.operatingSystem.release, "operatingSystem.release"),
+    platform: assertEnum(
+      input.operatingSystem.platform,
+      ["win32"],
+      "operatingSystem.platform",
+    ),
+    release: assertPublicSafeText(
+      input.operatingSystem.release,
+      "operatingSystem.release",
+    ),
     architecture: assertEnum(
       input.operatingSystem.architecture,
       ["x64", "arm64"],
@@ -107,12 +129,18 @@ export function createB1EnvironmentReceipt(input) {
     "freeDiskBytesAtEnd",
   ]);
   const hardware = {
-    cpuModel: assertPublicSafeText(input.hardware.cpuModel, "hardware.cpuModel"),
+    cpuModel: assertPublicSafeText(
+      input.hardware.cpuModel,
+      "hardware.cpuModel",
+    ),
     logicalCoreCount: assertPositiveSafeInteger(
       input.hardware.logicalCoreCount,
       "hardware.logicalCoreCount",
     ),
-    totalMemoryBytes: assertPositiveSafeInteger(input.hardware.totalMemoryBytes, "hardware.totalMemoryBytes"),
+    totalMemoryBytes: assertPositiveSafeInteger(
+      input.hardware.totalMemoryBytes,
+      "hardware.totalMemoryBytes",
+    ),
     freeDiskBytesAtStart: assertPositiveSafeInteger(
       input.hardware.freeDiskBytesAtStart,
       "hardware.freeDiskBytesAtStart",
@@ -126,7 +154,11 @@ export function createB1EnvironmentReceipt(input) {
   assertPlainObject(input.runtime, "runtime");
   assertAllowedFields(input.runtime, ["nodeVersion"]);
   const runtime = {
-    nodeVersion: assertPattern(input.runtime.nodeVersion, /^v\d+\.\d+\.\d+$/, "runtime.nodeVersion"),
+    nodeVersion: assertPattern(
+      input.runtime.nodeVersion,
+      /^v\d+\.\d+\.\d+$/,
+      "runtime.nodeVersion",
+    ),
   };
 
   assertPlainObject(input.browser, "browser");
@@ -143,10 +175,22 @@ export function createB1EnvironmentReceipt(input) {
       ["chrome_for_testing_stable"],
       "browser.flavor",
     ),
-    version: assertPattern(input.browser.version, /^\d+\.\d+\.\d+\.\d+$/, "browser.version"),
+    version: assertPattern(
+      input.browser.version,
+      /^\d+\.\d+\.\d+\.\d+$/,
+      "browser.version",
+    ),
     channel: assertEnum(input.browser.channel, ["stable"], "browser.channel"),
-    headlessMode: assertEnum(input.browser.headlessMode, ["new"], "browser.headlessMode"),
-    sandboxEnabled: assertExactBoolean(input.browser.sandboxEnabled, true, "browser.sandboxEnabled"),
+    headlessMode: assertEnum(
+      input.browser.headlessMode,
+      ["new"],
+      "browser.headlessMode",
+    ),
+    sandboxEnabled: assertExactBoolean(
+      input.browser.sandboxEnabled,
+      true,
+      "browser.sandboxEnabled",
+    ),
   };
 
   assertPlainObject(input.execution, "execution");
@@ -163,7 +207,11 @@ export function createB1EnvironmentReceipt(input) {
     "bilibiliLoginUsed",
   ]);
   const execution = {
-    commandId: assertEnum(input.execution.commandId, ["gate014_b1_full_matrix"], "execution.commandId"),
+    commandId: assertEnum(
+      input.execution.commandId,
+      ["gate014_b1_full_matrix"],
+      "execution.commandId",
+    ),
     productionExtensionMode: assertEnum(
       input.execution.productionExtensionMode,
       ["unpacked"],
@@ -181,7 +229,7 @@ export function createB1EnvironmentReceipt(input) {
     ),
     warmProfilePolicy: assertEnum(
       input.execution.warmProfilePolicy,
-      ["temporary_profile_reused_for_five_runs_per_candidate_fixture"],
+      ["opened_complete_seed_generation_with_group_profile_reuse"],
       "execution.warmProfilePolicy",
     ),
     coldRunsPerCandidateFixture: assertExactInteger(
@@ -215,10 +263,22 @@ export function createB1EnvironmentReceipt(input) {
     contract: B1_ENVIRONMENT_CONTRACT,
     startedAtEpochMs,
     completedAtEpochMs,
-    repositoryCommitSha: assertGitSha(input.repositoryCommitSha, "repositoryCommitSha"),
-    benchmarkSourceSha256: assertSha256(input.benchmarkSourceSha256, "benchmarkSourceSha256"),
-    packageLockSha256: assertSha256(input.packageLockSha256, "packageLockSha256"),
-    productionDistSha256: assertSha256(input.productionDistSha256, "productionDistSha256"),
+    repositoryCommitSha: assertGitSha(
+      input.repositoryCommitSha,
+      "repositoryCommitSha",
+    ),
+    benchmarkSourceSha256: assertSha256(
+      input.benchmarkSourceSha256,
+      "benchmarkSourceSha256",
+    ),
+    packageLockSha256: assertSha256(
+      input.packageLockSha256,
+      "packageLockSha256",
+    ),
+    productionDistSha256: assertSha256(
+      input.productionDistSha256,
+      "productionDistSha256",
+    ),
     fixtureGeneratorVersion: assertPublicSafeId(
       input.fixtureGeneratorVersion,
       "fixtureGeneratorVersion",
@@ -233,7 +293,11 @@ export function createB1EnvironmentReceipt(input) {
       ["insufficient_evidence"],
       "a2CalibrationStatus",
     ),
-    storesSensitiveText: assertExactBoolean(input.storesSensitiveText, false, "storesSensitiveText"),
+    storesSensitiveText: assertExactBoolean(
+      input.storesSensitiveText,
+      false,
+      "storesSensitiveText",
+    ),
   };
   assertPublicSafeValue(receipt);
   return deepFreeze(receipt);
@@ -241,14 +305,18 @@ export function createB1EnvironmentReceipt(input) {
 
 export function serializeB1EnvironmentReceipt(receipt) {
   if (!receipt || receipt.contract !== B1_ENVIRONMENT_CONTRACT) {
-    throw new Error("serializeB1EnvironmentReceipt requires a validated environment receipt");
+    throw new Error(
+      "serializeB1EnvironmentReceipt requires a validated environment receipt",
+    );
   }
   assertPublicSafeValue(receipt);
   return `${JSON.stringify(sortObjectKeys(receipt), null, 2)}\n`;
 }
 
 export function hashB1EnvironmentReceipt(receipt) {
-  return createHash("sha256").update(serializeB1EnvironmentReceipt(receipt), "utf8").digest("hex");
+  return createHash("sha256")
+    .update(serializeB1EnvironmentReceipt(receipt), "utf8")
+    .digest("hex");
 }
 
 export function createB1OperationReceipt(input) {
@@ -273,7 +341,10 @@ export function createB1OperationReceipt(input) {
   ]);
 
   const fixtureId = assertPublicSafeId(input.fixtureId, "fixtureId");
-  const fixtureReceiptSha256 = assertSha256(input.fixtureReceiptSha256, "fixtureReceiptSha256");
+  const fixtureReceiptSha256 = assertSha256(
+    input.fixtureReceiptSha256,
+    "fixtureReceiptSha256",
+  );
   const environmentReceiptSha256 = assertSha256(
     input.environmentReceiptSha256,
     "environmentReceiptSha256",
@@ -281,11 +352,22 @@ export function createB1OperationReceipt(input) {
   const candidate = validateCandidate(input.candidate);
   const runMode = assertEnum(input.runMode, ["cold", "warm"], "runMode");
   const runOrdinal = assertPositiveSafeInteger(input.runOrdinal, "runOrdinal");
-  const operation = assertEnum(input.operation, [...OPERATION_KINDS], "operation");
-  const totalDurationMs = assertNonNegativeFiniteNumber(input.totalDurationMs, "totalDurationMs");
-  const batchDurationsMs = validateNumberArray(input.batchDurationsMs, "batchDurationsMs", {
-    minimumLength: 1,
-  });
+  const operation = assertEnum(
+    input.operation,
+    [...OPERATION_KINDS],
+    "operation",
+  );
+  const totalDurationMs = assertNonNegativeFiniteNumber(
+    input.totalDurationMs,
+    "totalDurationMs",
+  );
+  const batchDurationsMs = validateNumberArray(
+    input.batchDurationsMs,
+    "batchDurationsMs",
+    {
+      minimumLength: 1,
+    },
+  );
   const progressEventOffsetsMs = validateNumberArray(
     input.progressEventOffsetsMs,
     "progressEventOffsetsMs",
@@ -299,11 +381,16 @@ export function createB1OperationReceipt(input) {
   const indexedDb = validateIndexedDb(input.indexedDb);
   const assertions = validateAssertions(input.assertions);
 
-  const sortedBatchDurations = [...batchDurationsMs].sort((left, right) => left - right);
+  const sortedBatchDurations = [...batchDurationsMs].sort(
+    (left, right) => left - right,
+  );
   const batchDurationMedianMs = percentile(sortedBatchDurations, 0.5);
   const batchDurationP95Ms = percentile(sortedBatchDurations, 0.95);
   const batchDurationMaximumMs = sortedBatchDurations.at(-1);
-  const progress = calculateProgressMetrics(progressEventOffsetsMs, totalDurationMs);
+  const progress = calculateProgressMetrics(
+    progressEventOffsetsMs,
+    totalDurationMs,
+  );
 
   const failures = [];
   const insufficientEvidence = [];
@@ -333,7 +420,10 @@ export function createB1OperationReceipt(input) {
     if (restart.stateVisibleMs > MAX_RESTART_VISIBILITY_MS) {
       failures.push("restart_state_visibility_exceeded");
     }
-    if (restart.remainingWork && restart.nextProgressMs > MAX_RESTART_PROGRESS_MS) {
+    if (
+      restart.remainingWork &&
+      restart.nextProgressMs > MAX_RESTART_PROGRESS_MS
+    ) {
       failures.push("restart_progress_exceeded");
     }
     if (!restart.readbackVerified) {
@@ -369,11 +459,12 @@ export function createB1OperationReceipt(input) {
     }
   }
 
-  const status = failures.length > 0
-    ? "fail"
-    : insufficientEvidence.length > 0
-      ? "insufficient_evidence"
-      : "pass";
+  const status =
+    failures.length > 0
+      ? "fail"
+      : insufficientEvidence.length > 0
+        ? "insufficient_evidence"
+        : "pass";
   const receipt = {
     contract: B1_RECEIPT_CONTRACT,
     fixtureId,
@@ -396,7 +487,9 @@ export function createB1OperationReceipt(input) {
     restart,
     cancellation,
     mainThread,
-    mainThreadMaxTaskMs: mainThread.metricAvailable ? mainThread.maximumTaskMs : null,
+    mainThreadMaxTaskMs: mainThread.metricAvailable
+      ? mainThread.maximumTaskMs
+      : null,
     memory,
     indexedDb,
     assertions,
@@ -434,14 +527,18 @@ export function evaluateB1Report(input) {
   for (const rawOperation of input.rawOperations) {
     const receipt = createB1OperationReceipt(rawOperation);
     if (fixtureReceipts[receipt.fixtureId] !== receipt.fixtureReceiptSha256) {
-      throw new Error(`fixture receipt SHA-256 mismatch for ${receipt.fixtureId}`);
+      throw new Error(
+        `fixture receipt SHA-256 mismatch for ${receipt.fixtureId}`,
+      );
     }
     if (receipt.environmentReceiptSha256 !== environmentReceiptSha256) {
       throw new Error("operation environment receipt SHA-256 mismatch");
     }
     const identity = operationIdentity(receipt);
     if (!expectedIdentities.has(identity)) {
-      throw new Error(`B1 operation identity is outside the required matrix: ${identity}`);
+      throw new Error(
+        `B1 operation identity is outside the required matrix: ${identity}`,
+      );
     }
     if (seen.has(identity)) {
       throw new Error(`duplicate B1 operation identity: ${identity}`);
@@ -450,65 +547,78 @@ export function evaluateB1Report(input) {
     operations.push(receipt);
   }
 
-  const missingOperationIdentities = [...expectedIdentities].filter(identity => !seen.has(identity));
+  const missingOperationIdentities = [...expectedIdentities].filter(
+    (identity) => !seen.has(identity),
+  );
   const candidates = [];
   for (const recordCap of B1_RECORD_CAPS) {
     for (const byteCapBytes of B1_BYTE_CAPS) {
-      const candidateOperations = operations.filter(receipt =>
-        receipt.candidate.recordCap === recordCap
-          && receipt.candidate.byteCapBytes === byteCapBytes,
+      const candidateOperations = operations.filter(
+        (receipt) =>
+          receipt.candidate.recordCap === recordCap &&
+          receipt.candidate.byteCapBytes === byteCapBytes,
       );
-      const missingOperationCount = missingOperationIdentities.filter(identity =>
-        identity.startsWith(`${recordCap}:${byteCapBytes}:`),
+      const missingOperationCount = missingOperationIdentities.filter(
+        (identity) => identity.startsWith(`${recordCap}:${byteCapBytes}:`),
       ).length;
-      const failedOperationCount = candidateOperations.filter(receipt => receipt.status === "fail").length;
+      const failedOperationCount = candidateOperations.filter(
+        (receipt) => receipt.status === "fail",
+      ).length;
       const insufficientOperationCount = candidateOperations.filter(
-        receipt => receipt.status === "insufficient_evidence",
+        (receipt) => receipt.status === "insufficient_evidence",
       ).length;
-      const status = missingOperationCount > 0 || insufficientOperationCount > 0
-        ? "insufficient_evidence"
-        : failedOperationCount > 0
-          ? "fail"
-          : "pass";
-      candidates.push(deepFreeze({
-        recordCap,
-        byteCapBytes,
-        status,
-        measuredOperationCount: candidateOperations.length,
-        missingOperationCount,
-        failedOperationCount,
-        insufficientOperationCount,
-      }));
+      const status =
+        missingOperationCount > 0 || insufficientOperationCount > 0
+          ? "insufficient_evidence"
+          : failedOperationCount > 0
+            ? "fail"
+            : "pass";
+      candidates.push(
+        deepFreeze({
+          recordCap,
+          byteCapBytes,
+          status,
+          measuredOperationCount: candidateOperations.length,
+          missingOperationCount,
+          failedOperationCount,
+          insufficientOperationCount,
+        }),
+      );
     }
   }
 
   const coverageComplete = missingOperationIdentities.length === 0;
-  const candidateEvidenceComplete = candidates.every(candidate =>
-    candidate.status !== "insufficient_evidence",
+  const candidateEvidenceComplete = candidates.every(
+    (candidate) => candidate.status !== "insufficient_evidence",
   );
   const passingCandidates = candidates
-    .filter(candidate => candidate.status === "pass")
-    .sort((left, right) =>
-      right.recordCap - left.recordCap || right.byteCapBytes - left.byteCapBytes,
+    .filter((candidate) => candidate.status === "pass")
+    .sort(
+      (left, right) =>
+        right.recordCap - left.recordCap ||
+        right.byteCapBytes - left.byteCapBytes,
     );
-  const baseStatus = !coverageComplete || !candidateEvidenceComplete
-    ? "insufficient_evidence"
-    : passingCandidates.length === 0
-      ? "fail"
-      : "pass";
-  const performanceCandidate = baseStatus === "pass"
-    ? deepFreeze({
-        recordCap: passingCandidates[0].recordCap,
-        byteCapBytes: passingCandidates[0].byteCapBytes,
-      })
-    : null;
+  const baseStatus =
+    !coverageComplete || !candidateEvidenceComplete
+      ? "insufficient_evidence"
+      : passingCandidates.length === 0
+        ? "fail"
+        : "pass";
+  const performanceCandidate =
+    baseStatus === "pass"
+      ? deepFreeze({
+          recordCap: passingCandidates[0].recordCap,
+          byteCapBytes: passingCandidates[0].byteCapBytes,
+        })
+      : null;
   const provisionalRestoreHeadroom = deriveB1RestoreHeadroom(
     operations,
     performanceCandidate,
   );
-  const status = baseStatus === "pass" && provisionalRestoreHeadroom.status !== "pass"
-    ? "insufficient_evidence"
-    : baseStatus;
+  const status =
+    baseStatus === "pass" && provisionalRestoreHeadroom.status !== "pass"
+      ? "insufficient_evidence"
+      : baseStatus;
   const selectedCandidate = status === "pass" ? performanceCandidate : null;
   const report = {
     contract: "gate-014-b1-report-v1",
@@ -555,21 +665,23 @@ export function deriveB1RestoreHeadroom(operations, selectedCandidate) {
       reasonCode: "passing_candidate_unavailable",
     });
   }
-  const restoreOperations = operations.filter(receipt =>
-    receipt.operation === "restore_staging"
-      && receipt.candidate.recordCap === selectedCandidate.recordCap
-      && receipt.candidate.byteCapBytes === selectedCandidate.byteCapBytes,
+  const restoreOperations = operations.filter(
+    (receipt) =>
+      receipt.operation === "restore_staging" &&
+      receipt.candidate.recordCap === selectedCandidate.recordCap &&
+      receipt.candidate.byteCapBytes === selectedCandidate.byteCapBytes,
   );
-  const expectedRestoreCount = B1_REQUIRED_FIXTURE_IDS.length
-    * (B1_RUN_COUNTS.cold + B1_RUN_COUNTS.warm);
+  const expectedRestoreCount =
+    B1_REQUIRED_FIXTURE_IDS.length * (B1_RUN_COUNTS.cold + B1_RUN_COUNTS.warm);
   if (
-    restoreOperations.length !== expectedRestoreCount
-      || restoreOperations.some(receipt =>
-        receipt.status !== "pass"
-          || !receipt.indexedDb.metricAvailable
-          || !Number.isFinite(receipt.indexedDb.stagingAmplificationRatio)
-          || receipt.indexedDb.stagingAmplificationRatio <= 0
-      )
+    restoreOperations.length !== expectedRestoreCount ||
+    restoreOperations.some(
+      (receipt) =>
+        receipt.status !== "pass" ||
+        !receipt.indexedDb.metricAvailable ||
+        !Number.isFinite(receipt.indexedDb.stagingAmplificationRatio) ||
+        receipt.indexedDb.stagingAmplificationRatio <= 0,
+    )
   ) {
     return deepFreeze({
       status: "insufficient_evidence",
@@ -577,16 +689,20 @@ export function deriveB1RestoreHeadroom(operations, selectedCandidate) {
     });
   }
 
-  const highestObservedAmplificationRatio = Math.max(...restoreOperations.map(
-    receipt => receipt.indexedDb.stagingAmplificationRatio,
-  ));
-  const roundedAmplificationRatio = Math.ceil(highestObservedAmplificationRatio * 4) / 4;
+  const highestObservedAmplificationRatio = Math.max(
+    ...restoreOperations.map(
+      (receipt) => receipt.indexedDb.stagingAmplificationRatio,
+    ),
+  );
+  const roundedAmplificationRatio =
+    Math.ceil(highestObservedAmplificationRatio * 4) / 4;
   const safetyMarginRatio = 1.25;
   const provisionalMultiplier = roundedAmplificationRatio * safetyMarginRatio;
   const fixedReserveBytes = 64 * 1024 * 1024;
-  const actualRuns = restoreOperations.map(receipt => {
+  const actualRuns = restoreOperations.map((receipt) => {
     const requiredFreeQuotaBytes = Math.ceil(
-      receipt.indexedDb.sourceCanonicalBytes * provisionalMultiplier + fixedReserveBytes,
+      receipt.indexedDb.sourceCanonicalBytes * provisionalMultiplier +
+        fixedReserveBytes,
     );
     const observedFreeQuotaBytes = receipt.indexedDb.freeQuotaBeforeBytes;
     return {
@@ -596,10 +712,15 @@ export function deriveB1RestoreHeadroom(operations, selectedCandidate) {
       requiredFreeQuotaBytes,
       observedFreeQuotaBytes,
       marginBytes: observedFreeQuotaBytes - requiredFreeQuotaBytes,
-      allowed: restorePreflightAllows(observedFreeQuotaBytes, requiredFreeQuotaBytes),
+      allowed: restorePreflightAllows(
+        observedFreeQuotaBytes,
+        requiredFreeQuotaBytes,
+      ),
     };
   });
-  const maximumRequiredFreeQuotaBytes = Math.max(...actualRuns.map(run => run.requiredFreeQuotaBytes));
+  const maximumRequiredFreeQuotaBytes = Math.max(
+    ...actualRuns.map((run) => run.requiredFreeQuotaBytes),
+  );
   const deliberatelyInsufficientProbe = {
     availableFreeQuotaBytes: maximumRequiredFreeQuotaBytes - 1,
     requiredFreeQuotaBytes: maximumRequiredFreeQuotaBytes,
@@ -616,37 +737,46 @@ export function deriveB1RestoreHeadroom(operations, selectedCandidate) {
       maximumRequiredFreeQuotaBytes,
     ),
   };
-  const allMeasuredRunsAllowed = actualRuns.every(run => run.allowed);
-  const probesVerified = deliberatelyInsufficientProbe.allowed === false && nearLimitProbe.allowed === true;
+  const allMeasuredRunsAllowed = actualRuns.every((run) => run.allowed);
+  const probesVerified =
+    deliberatelyInsufficientProbe.allowed === false &&
+    nearLimitProbe.allowed === true;
   return deepFreeze({
-    status: allMeasuredRunsAllowed && probesVerified ? "pass" : "insufficient_evidence",
+    status:
+      allMeasuredRunsAllowed && probesVerified
+        ? "pass"
+        : "insufficient_evidence",
     highestObservedAmplificationRatio,
     roundedAmplificationRatio,
     safetyMarginRatio,
     provisionalMultiplier,
     fixedReserveBytes,
     measuredRestoreRunCount: restoreOperations.length,
-    maximumTemporaryOverheadBytes: Math.max(...restoreOperations.map(
-      receipt => receipt.indexedDb.temporaryOverheadBytes,
-    )),
-    minimumMeasuredQuotaMarginBytes: Math.min(...actualRuns.map(run => run.marginBytes)),
+    maximumTemporaryOverheadBytes: Math.max(
+      ...restoreOperations.map(
+        (receipt) => receipt.indexedDb.temporaryOverheadBytes,
+      ),
+    ),
+    minimumMeasuredQuotaMarginBytes: Math.min(
+      ...actualRuns.map((run) => run.marginBytes),
+    ),
     allMeasuredRunsAllowed,
     deliberatelyInsufficientProbe,
     nearLimitProbe,
   });
 }
 
-function restorePreflightAllows(availableFreeQuotaBytes, requiredFreeQuotaBytes) {
-  return availableFreeQuotaBytes >= requiredFreeQuotaBytes;
-}
-
 function validateFixtureReceiptMap(input) {
   assertPlainObject(input, "fixtureReceipts");
   assertAllowedFields(input, B1_REQUIRED_FIXTURE_IDS);
-  return deepFreeze(Object.fromEntries(B1_REQUIRED_FIXTURE_IDS.map(fixtureId => [
-    fixtureId,
-    assertSha256(input[fixtureId], `fixtureReceipts.${fixtureId}`),
-  ])));
+  return deepFreeze(
+    Object.fromEntries(
+      B1_REQUIRED_FIXTURE_IDS.map((fixtureId) => [
+        fixtureId,
+        assertSha256(input[fixtureId], `fixtureReceipts.${fixtureId}`),
+      ]),
+    ),
+  );
 }
 
 function createExpectedOperationIdentities() {
@@ -657,14 +787,16 @@ function createExpectedOperationIdentities() {
         for (const [runMode, count] of Object.entries(B1_RUN_COUNTS)) {
           for (let runOrdinal = 1; runOrdinal <= count; runOrdinal += 1) {
             for (const operation of B1_OPERATION_KINDS) {
-              identities.add([
-                recordCap,
-                byteCapBytes,
-                fixtureId,
-                runMode,
-                runOrdinal,
-                operation,
-              ].join(":"));
+              identities.add(
+                [
+                  recordCap,
+                  byteCapBytes,
+                  fixtureId,
+                  runMode,
+                  runOrdinal,
+                  operation,
+                ].join(":"),
+              );
             }
           }
         }
@@ -691,7 +823,9 @@ function sortObjectKeys(value) {
   }
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.keys(value).sort().map(key => [key, sortObjectKeys(value[key])]),
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, sortObjectKeys(value[key])]),
     );
   }
   return value;
@@ -700,8 +834,14 @@ function sortObjectKeys(value) {
 function validateCandidate(input) {
   assertPlainObject(input, "candidate");
   assertAllowedFields(input, ["recordCap", "byteCapBytes"]);
-  const recordCap = assertPositiveSafeInteger(input.recordCap, "candidate.recordCap");
-  const byteCapBytes = assertPositiveSafeInteger(input.byteCapBytes, "candidate.byteCapBytes");
+  const recordCap = assertPositiveSafeInteger(
+    input.recordCap,
+    "candidate.recordCap",
+  );
+  const byteCapBytes = assertPositiveSafeInteger(
+    input.byteCapBytes,
+    "candidate.byteCapBytes",
+  );
   if (!B1_RECORD_CAPS.includes(recordCap)) {
     throw new Error("candidate.recordCap is not part of the B1 matrix");
   }
@@ -728,13 +868,25 @@ function validateRestart(input, operation) {
     "nextProgressMs",
     "readbackVerified",
   ]);
-  const remainingWork = assertBoolean(input.remainingWork, "restart.remainingWork");
+  const remainingWork = assertBoolean(
+    input.remainingWork,
+    "restart.remainingWork",
+  );
   const result = {
     attempted: true,
-    stateVisibleMs: assertNonNegativeFiniteNumber(input.stateVisibleMs, "restart.stateVisibleMs"),
+    stateVisibleMs: assertNonNegativeFiniteNumber(
+      input.stateVisibleMs,
+      "restart.stateVisibleMs",
+    ),
     remainingWork,
-    nextProgressMs: assertNonNegativeFiniteNumber(input.nextProgressMs, "restart.nextProgressMs"),
-    readbackVerified: assertBoolean(input.readbackVerified, "restart.readbackVerified"),
+    nextProgressMs: assertNonNegativeFiniteNumber(
+      input.nextProgressMs,
+      "restart.nextProgressMs",
+    ),
+    readbackVerified: assertBoolean(
+      input.readbackVerified,
+      "restart.readbackVerified",
+    ),
   };
   if (!remainingWork && result.nextProgressMs !== 0) {
     throw new Error("restart.nextProgressMs must be zero when no work remains");
@@ -748,11 +900,17 @@ function validateCancellation(input, operation) {
   if (!attempted) {
     assertAllowedFields(input, ["attempted"]);
     if (operation === "cancellation") {
-      throw new Error("cancellation operation must attempt cancellation measurement");
+      throw new Error(
+        "cancellation operation must attempt cancellation measurement",
+      );
     }
     return deepFreeze({ attempted: false });
   }
-  assertAllowedFields(input, ["attempted", "acknowledgementMs", "writesAfterTwoSeconds"]);
+  assertAllowedFields(input, [
+    "attempted",
+    "acknowledgementMs",
+    "writesAfterTwoSeconds",
+  ]);
   return deepFreeze({
     attempted: true,
     acknowledgementMs: assertNonNegativeFiniteNumber(
@@ -768,7 +926,10 @@ function validateCancellation(input, operation) {
 
 function validateMemory(input) {
   assertPlainObject(input, "memory");
-  const metricAvailable = assertBoolean(input.metricAvailable, "memory.metricAvailable");
+  const metricAvailable = assertBoolean(
+    input.metricAvailable,
+    "memory.metricAvailable",
+  );
   if (!metricAvailable) {
     assertAllowedFields(input, ["metricAvailable", "reasonCode"]);
     return deepFreeze({
@@ -792,7 +953,10 @@ function validateMemory(input) {
 
 function validateMainThread(input) {
   assertPlainObject(input, "mainThread");
-  const metricAvailable = assertBoolean(input.metricAvailable, "mainThread.metricAvailable");
+  const metricAvailable = assertBoolean(
+    input.metricAvailable,
+    "mainThread.metricAvailable",
+  );
   if (!metricAvailable) {
     assertAllowedFields(input, ["metricAvailable", "reasonCode"]);
     return deepFreeze({
@@ -816,7 +980,10 @@ function validateMainThread(input) {
 
 function validateIndexedDb(input) {
   assertPlainObject(input, "indexedDb");
-  const metricAvailable = assertBoolean(input.metricAvailable, "indexedDb.metricAvailable");
+  const metricAvailable = assertBoolean(
+    input.metricAvailable,
+    "indexedDb.metricAvailable",
+  );
   if (!metricAvailable) {
     assertAllowedFields(input, ["metricAvailable", "reasonCode"]);
     return deepFreeze({
@@ -873,18 +1040,23 @@ function validateIndexedDb(input) {
     input.sourceCanonicalBytes,
     "indexedDb.sourceCanonicalBytes",
   );
-  const readbackVerified = assertBoolean(input.readbackVerified, "indexedDb.readbackVerified");
+  const readbackVerified = assertBoolean(
+    input.readbackVerified,
+    "indexedDb.readbackVerified",
+  );
   const usageDeltaBytes = usageAfterBytes - usageBeforeBytes;
-  const directionMatches = expectedDirection === "increase"
-    ? usageDeltaBytes > 0
-    : expectedDirection === "decrease"
-      ? usageDeltaBytes < 0
-      : true;
-  const metricsConsistent = usageBeforeBytes <= quotaBeforeBytes
-    && usageAfterBytes <= quotaAfterBytes
-    && cleanupUsageBytes <= cleanupQuotaBytes
-    && directionMatches
-    && readbackVerified;
+  const directionMatches =
+    expectedDirection === "increase"
+      ? usageDeltaBytes > 0
+      : expectedDirection === "decrease"
+        ? usageDeltaBytes < 0
+        : true;
+  const metricsConsistent =
+    usageBeforeBytes <= quotaBeforeBytes &&
+    usageAfterBytes <= quotaAfterBytes &&
+    cleanupUsageBytes <= cleanupQuotaBytes &&
+    directionMatches &&
+    readbackVerified;
   return deepFreeze({
     metricAvailable: true,
     expectedDirection,
@@ -896,12 +1068,14 @@ function validateIndexedDb(input) {
     quotaAfterBytes,
     freeQuotaAfterBytes: quotaAfterBytes - usageAfterBytes,
     usageDeltaBytes,
-    stagingAmplificationRatio: expectedDirection === "increase"
-      ? usageDeltaBytes / sourceCanonicalBytes
-      : null,
-    temporaryOverheadBytes: expectedDirection === "increase"
-      ? Math.max(0, usageDeltaBytes - sourceCanonicalBytes)
-      : null,
+    stagingAmplificationRatio:
+      expectedDirection === "increase"
+        ? usageDeltaBytes / sourceCanonicalBytes
+        : null,
+    temporaryOverheadBytes:
+      expectedDirection === "increase"
+        ? Math.max(0, usageDeltaBytes - sourceCanonicalBytes)
+        : null,
     cleanupUsageBytes,
     cleanupQuotaBytes,
     cleanupFreeQuotaBytes: cleanupQuotaBytes - cleanupUsageBytes,
@@ -913,9 +1087,14 @@ function validateIndexedDb(input) {
 function validateAssertions(input) {
   assertPlainObject(input, "assertions");
   assertAllowedFields(input, ASSERTION_FIELDS);
-  return deepFreeze(Object.fromEntries(
-    ASSERTION_FIELDS.map(field => [field, assertBoolean(input[field], `assertions.${field}`)]),
-  ));
+  return deepFreeze(
+    Object.fromEntries(
+      ASSERTION_FIELDS.map((field) => [
+        field,
+        assertBoolean(input[field], `assertions.${field}`),
+      ]),
+    ),
+  );
 }
 
 function calculateProgressMetrics(offsets, totalDurationMs) {
@@ -942,7 +1121,9 @@ function assertStrictlyIncreasingOffsets(offsets, totalDurationMs) {
   let previous = -1;
   for (const offset of offsets) {
     if (offset <= previous || offset > totalDurationMs) {
-      throw new Error("progressEventOffsetsMs must be strictly increasing and within totalDurationMs");
+      throw new Error(
+        "progressEventOffsetsMs must be strictly increasing and within totalDurationMs",
+      );
     }
     previous = offset;
   }
@@ -950,9 +1131,13 @@ function assertStrictlyIncreasingOffsets(offsets, totalDurationMs) {
 
 function validateNumberArray(value, label, { minimumLength }) {
   if (!Array.isArray(value) || value.length < minimumLength) {
-    throw new Error(`${label} must be an array with at least ${minimumLength} item(s)`);
+    throw new Error(
+      `${label} must be an array with at least ${minimumLength} item(s)`,
+    );
   }
-  return value.map((item, index) => assertNonNegativeFiniteNumber(item, `${label}[${index}]`));
+  return value.map((item, index) =>
+    assertNonNegativeFiniteNumber(item, `${label}[${index}]`),
+  );
 }
 
 function assertPublicSafeId(value, label) {
@@ -985,11 +1170,11 @@ function assertPattern(value, pattern, label) {
 
 function assertPublicSafeText(value, label) {
   if (
-    typeof value !== "string"
-      || value.length < 1
-      || value.length > 200
-      || containsUnsafeLocalPath(value)
-      || SENSITIVE_RECEIPT_TOKEN_PATTERN.test(JSON.stringify(value))
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 200 ||
+    containsUnsafeLocalPath(value) ||
+    SENSITIVE_RECEIPT_TOKEN_PATTERN.test(JSON.stringify(value))
   ) {
     throw new Error(`${label} must be public-safe text`);
   }
@@ -1072,7 +1257,10 @@ function assertAllowedFields(value, fields) {
 
 function assertPublicSafeValue(value) {
   const serialized = JSON.stringify(value);
-  if (containsUnsafeLocalPath(value) || SENSITIVE_RECEIPT_TOKEN_PATTERN.test(serialized)) {
+  if (
+    containsUnsafeLocalPath(value) ||
+    SENSITIVE_RECEIPT_TOKEN_PATTERN.test(serialized)
+  ) {
     throw new Error("B1 receipt contains a sensitive token or path");
   }
 }

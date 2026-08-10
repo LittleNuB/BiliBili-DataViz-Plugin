@@ -24,13 +24,33 @@ const MANAGED_PROFILE_DIRECTORIES = new Set();
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = path.resolve(SCRIPT_DIRECTORY, "..");
 const DEFAULT_CHROME_PATHS = [
-  path.join(process.env.ProgramFiles ?? "", "Google", "Chrome", "Application", "chrome.exe"),
-  path.join(process.env["ProgramFiles(x86)"] ?? "", "Google", "Chrome", "Application", "chrome.exe"),
-  path.join(process.env.LOCALAPPDATA ?? "", "Google", "Chrome", "Application", "chrome.exe"),
+  path.join(
+    process.env.ProgramFiles ?? "",
+    "Google",
+    "Chrome",
+    "Application",
+    "chrome.exe",
+  ),
+  path.join(
+    process.env["ProgramFiles(x86)"] ?? "",
+    "Google",
+    "Chrome",
+    "Application",
+    "chrome.exe",
+  ),
+  path.join(
+    process.env.LOCALAPPDATA ?? "",
+    "Google",
+    "Chrome",
+    "Application",
+    "chrome.exe",
+  ),
 ];
 
 export async function createB1TemporaryProfile() {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "bili-bill-gate-014-b1-profile-"));
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "bili-bill-gate-014-b1-profile-"),
+  );
   MANAGED_PROFILE_DIRECTORIES.add(directory);
   return Object.freeze({
     contract: "gate-014-b1-temporary-profile-v1",
@@ -41,13 +61,22 @@ export async function createB1TemporaryProfile() {
 export async function removeB1TemporaryProfile(profile) {
   const directory = requireManagedProfile(profile);
   try {
-    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
+    await rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 250,
+    });
   } finally {
     MANAGED_PROFILE_DIRECTORIES.delete(directory);
   }
 }
 
-export function buildChromeArguments({ profileDirectory, productionExtension, harnessExtension }) {
+export function buildChromeArguments({
+  profileDirectory,
+  productionExtension,
+  harnessExtension,
+}) {
   for (const [label, value] of Object.entries({
     profileDirectory,
     productionExtension,
@@ -79,7 +108,9 @@ export function buildChromeArguments({ profileDirectory, productionExtension, ha
 }
 
 export async function resolveChromeExecutable(explicitPath) {
-  const candidates = explicitPath ? [path.resolve(explicitPath)] : DEFAULT_CHROME_PATHS;
+  const candidates = explicitPath
+    ? [path.resolve(explicitPath)]
+    : DEFAULT_CHROME_PATHS;
   for (const candidate of candidates) {
     try {
       await access(candidate);
@@ -101,7 +132,11 @@ export function validateSmokeResult(result) {
   if (result.extensionId !== B1_HARNESS_EXTENSION_ID) {
     throw new Error("browser_smoke_extension_identity_mismatch");
   }
-  if (result.status !== "pass" || !result.indexedDbAvailable || !result.readbackVerified) {
+  if (
+    result.status !== "pass" ||
+    !result.indexedDbAvailable ||
+    !result.readbackVerified
+  ) {
     throw new Error("browser_smoke_failed");
   }
   if (result.storesSensitiveText !== false) {
@@ -121,11 +156,15 @@ export async function runBrowserSmoke(options = {}) {
 
 export async function runBrowserFixtureSmoke(options = {}) {
   const fixtureId = options.fixtureId ?? "high-fragmentation-pathological";
-  const definition = FIXTURE_DEFINITIONS.find(candidate => candidate.id === fixtureId);
+  const definition = FIXTURE_DEFINITIONS.find(
+    (candidate) => candidate.id === fixtureId,
+  );
   if (!definition) {
     throw new Error("browser_fixture_smoke_fixture_unknown");
   }
-  const generated = await writeFixtureArtifact(definition, { repositoryRoot: REPOSITORY_ROOT });
+  const generated = await writeFixtureArtifact(definition, {
+    repositoryRoot: REPOSITORY_ROOT,
+  });
   const server = await serveFixture(generated.artifactPath, fixtureId);
   try {
     const receipt = generated.receipt;
@@ -159,12 +198,16 @@ export async function runBrowserFixtureSmoke(options = {}) {
 
 export async function runBrowserFixtureLifecycle(options = {}) {
   const fixtureId = options.fixtureId ?? "high-fragmentation-pathological";
-  const definition = FIXTURE_DEFINITIONS.find(candidate => candidate.id === fixtureId);
+  const definition = FIXTURE_DEFINITIONS.find(
+    (candidate) => candidate.id === fixtureId,
+  );
   if (!definition) {
     throw new Error("browser_fixture_lifecycle_fixture_unknown");
   }
   await cleanupGeneratedFixtureArtifacts({ repositoryRoot: REPOSITORY_ROOT });
-  const generated = await writeFixtureArtifact(definition, { repositoryRoot: REPOSITORY_ROOT });
+  const generated = await writeFixtureArtifact(definition, {
+    repositoryRoot: REPOSITORY_ROOT,
+  });
   const profile = await createB1TemporaryProfile();
   try {
     return await runBrowserFixtureLifecycleWithPreparedFixture({
@@ -179,16 +222,29 @@ export async function runBrowserFixtureLifecycle(options = {}) {
   }
 }
 
-export async function runBrowserFixtureLifecycleWithPreparedFixture(options = {}) {
+export async function runBrowserFixtureLifecycleWithPreparedFixture(
+  options = {},
+) {
   const fixtureId = options.fixtureId ?? "high-fragmentation-pathological";
-  const definition = FIXTURE_DEFINITIONS.find(candidate => candidate.id === fixtureId);
+  const definition = FIXTURE_DEFINITIONS.find(
+    (candidate) => candidate.id === fixtureId,
+  );
   if (!definition) {
     throw new Error("browser_fixture_lifecycle_fixture_unknown");
   }
-  const preparedFixture = await validatePreparedFixture(options.preparedFixture, definition);
+  const preparedFixture = await validatePreparedFixture(
+    options.preparedFixture,
+    definition,
+  );
   const profileDirectory = requireManagedProfile(options.profile);
-  const admissionServer = await serveFixture(preparedFixture.artifactPath, fixtureId);
-  const restoreServer = await serveFixture(preparedFixture.artifactPath, fixtureId);
+  const admissionServer = await serveFixture(
+    preparedFixture.artifactPath,
+    fixtureId,
+  );
+  const restoreServer = await serveFixture(
+    preparedFixture.artifactPath,
+    fixtureId,
+  );
   try {
     const receipt = preparedFixture.receipt;
     const config = {
@@ -200,6 +256,7 @@ export async function runBrowserFixtureLifecycleWithPreparedFixture(options = {}
       expectedRecordCount: receipt.canonical.recordCount,
       expectedVersionCount: receipt.canonical.versionCount,
       expectedSegmentCount: receipt.canonical.segmentCount,
+      runMode: options.runMode ?? "cold",
       candidate: {
         recordCap: options.recordCap ?? 1024,
         byteCapBytes: options.byteCapBytes ?? 4 * 1024 * 1024,
@@ -230,24 +287,39 @@ export async function runBrowserFixtureLifecycleWithPreparedFixture(options = {}
       "browser_fixture_lifecycle_after_restart_failed",
     );
     validateLifecycleAfterRestart(afterRestart, config);
-    if (admissionServer.getRequestCount() !== 1 || restoreServer.getRequestCount() !== 1) {
+    const expectedAdmissionRequestCount = config.runMode === "warm" ? 2 : 1;
+    if (
+      admissionServer.getRequestCount() !== expectedAdmissionRequestCount ||
+      restoreServer.getRequestCount() !== 1
+    ) {
       throw new Error("browser_fixture_lifecycle_server_request_count_invalid");
     }
-    return validateFixtureLifecycleResult({
-      contract: "gate-014-b1-browser-lifecycle-v1",
-      status: beforeRestart.status === "pass" && afterRestart.status === "pass" ? "pass" : "fail",
-      fixtureId,
-      candidate: config.candidate,
-      sourceCanonicalBytes: config.expectedCanonicalBytes,
-      operations: [...beforeRestart.operations, ...afterRestart.operations].map(operation => ({
-        ...operation,
-        cleanupUsageBytes: afterRestart.finalCleanupStorage?.usageBytes ?? null,
-      })),
-      assertions: afterRestart.assertions,
-      finalCleanupStorage: afterRestart.finalCleanupStorage,
-      readbackVerified: beforeRestart.status === "pass" && afterRestart.readbackVerified,
-      storesSensitiveText: false,
-    }, config);
+    return validateFixtureLifecycleResult(
+      {
+        contract: "gate-014-b1-browser-lifecycle-v1",
+        status:
+          beforeRestart.status === "pass" && afterRestart.status === "pass"
+            ? "pass"
+            : "fail",
+        fixtureId,
+        candidate: config.candidate,
+        sourceCanonicalBytes: config.expectedCanonicalBytes,
+        operations: [
+          ...beforeRestart.operations,
+          ...afterRestart.operations,
+        ].map((operation) => ({
+          ...operation,
+          cleanupUsageBytes:
+            afterRestart.finalCleanupStorage?.usageBytes ?? null,
+        })),
+        assertions: afterRestart.assertions,
+        finalCleanupStorage: afterRestart.finalCleanupStorage,
+        readbackVerified:
+          beforeRestart.status === "pass" && afterRestart.readbackVerified,
+        storesSensitiveText: false,
+      },
+      config,
+    );
   } finally {
     await Promise.all([admissionServer.close(), restoreServer.close()]);
   }
@@ -258,26 +330,40 @@ export function validateFixtureLifecycleResult(result, config) {
   if (result.contract !== "gate-014-b1-browser-lifecycle-v1") {
     throw new Error("browser_fixture_lifecycle_contract_mismatch");
   }
-  if (result.fixtureId !== config.fixtureId || result.storesSensitiveText !== false) {
+  if (
+    result.fixtureId !== config.fixtureId ||
+    result.storesSensitiveText !== false
+  ) {
     throw new Error("browser_fixture_lifecycle_public_safety_failed");
   }
   if (
-    !Number.isSafeInteger(result.sourceCanonicalBytes)
-      || result.sourceCanonicalBytes !== config.expectedCanonicalBytes
+    !Number.isSafeInteger(result.sourceCanonicalBytes) ||
+    result.sourceCanonicalBytes !== config.expectedCanonicalBytes
   ) {
     throw new Error("browser_fixture_lifecycle_source_bytes_invalid");
   }
-  if (!Array.isArray(result.operations) || result.operations.length !== B1_OPERATION_KINDS.length) {
+  if (
+    !Array.isArray(result.operations) ||
+    result.operations.length !== B1_OPERATION_KINDS.length
+  ) {
     throw new Error("browser_fixture_lifecycle_operation_count_invalid");
   }
-  const operationKinds = result.operations.map(operation => operation?.operation).sort();
+  const operationKinds = result.operations
+    .map((operation) => operation?.operation)
+    .sort();
   if (operationKinds.join("|") !== [...B1_OPERATION_KINDS].sort().join("|")) {
     throw new Error("browser_fixture_lifecycle_operation_set_invalid");
   }
-  if (!result.finalCleanupStorage || !Number.isSafeInteger(result.finalCleanupStorage.usageBytes)) {
+  if (
+    !result.finalCleanupStorage ||
+    !Number.isSafeInteger(result.finalCleanupStorage.usageBytes)
+  ) {
     throw new Error("browser_fixture_lifecycle_cleanup_metric_invalid");
   }
-  if (typeof result.readbackVerified !== "boolean" || !["pass", "fail"].includes(result.status)) {
+  if (
+    typeof result.readbackVerified !== "boolean" ||
+    !["pass", "fail"].includes(result.status)
+  ) {
     throw new Error("browser_fixture_lifecycle_status_invalid");
   }
   return Object.freeze({ ...result });
@@ -286,35 +372,41 @@ export function validateFixtureLifecycleResult(result, config) {
 function validateLifecycleBeforeRestart(result, config) {
   assertPlainObject(result, "browser_fixture_lifecycle_before_result_invalid");
   if (
-    result.contract !== "gate-014-b1-browser-lifecycle-before-restart-v1"
-      || result.fixtureId !== config.fixtureId
-      || result.storesSensitiveText !== false
-      || result.status !== "pass"
+    result.contract !== "gate-014-b1-browser-lifecycle-before-restart-v1" ||
+    result.fixtureId !== config.fixtureId ||
+    result.storesSensitiveText !== false ||
+    result.status !== "pass"
   ) {
     throw new Error("browser_fixture_lifecycle_before_result_failed");
   }
   if (
-    !Array.isArray(result.operations)
-      || result.operations.length !== 2
-      || result.operations[0]?.operation !== "admission"
-      || result.operations[1]?.operation !== "commit_visibility"
+    !Array.isArray(result.operations) ||
+    result.operations.length !== 2 ||
+    result.operations[0]?.operation !== "admission" ||
+    result.operations[1]?.operation !== "commit_visibility"
   ) {
     throw new Error("browser_fixture_lifecycle_before_operations_invalid");
   }
-  assertPlainObject(result.checkpoint, "browser_fixture_lifecycle_checkpoint_invalid");
+  assertPlainObject(
+    result.checkpoint,
+    "browser_fixture_lifecycle_checkpoint_invalid",
+  );
   return result;
 }
 
 function validateLifecycleAfterRestart(result, config) {
   assertPlainObject(result, "browser_fixture_lifecycle_after_result_invalid");
   if (
-    result.contract !== "gate-014-b1-browser-lifecycle-v1"
-      || result.fixtureId !== config.fixtureId
-      || result.storesSensitiveText !== false
+    result.contract !== "gate-014-b1-browser-lifecycle-v1" ||
+    result.fixtureId !== config.fixtureId ||
+    result.storesSensitiveText !== false
   ) {
     throw new Error("browser_fixture_lifecycle_after_result_failed");
   }
-  if (!Array.isArray(result.operations) || result.operations.length !== B1_OPERATION_KINDS.length - 2) {
+  if (
+    !Array.isArray(result.operations) ||
+    result.operations.length !== B1_OPERATION_KINDS.length - 2
+  ) {
     throw new Error("browser_fixture_lifecycle_after_operations_invalid");
   }
   return result;
@@ -322,27 +414,34 @@ function validateLifecycleAfterRestart(result, config) {
 
 function assertPlainObject(value, errorCode) {
   if (
-    value === null
-      || typeof value !== "object"
-      || Array.isArray(value)
-      || Object.getPrototypeOf(value) !== Object.prototype
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
   ) {
     throw new Error(errorCode);
   }
 }
 
 async function validatePreparedFixture(preparedFixture, definition) {
-  assertPlainObject(preparedFixture, "browser_fixture_prepared_fixture_invalid");
-  assertPlainObject(preparedFixture.receipt, "browser_fixture_prepared_receipt_invalid");
+  assertPlainObject(
+    preparedFixture,
+    "browser_fixture_prepared_fixture_invalid",
+  );
+  assertPlainObject(
+    preparedFixture.receipt,
+    "browser_fixture_prepared_receipt_invalid",
+  );
   const expectedArtifactPath = path.resolve(
     REPOSITORY_ROOT,
     GENERATED_FIXTURE_RELATIVE_DIR,
     `${definition.id}.jsonl`,
   );
   if (
-    path.resolve(preparedFixture.artifactPath) !== expectedArtifactPath
-      || preparedFixture.receipt.fixture?.id !== definition.id
-      || preparedFixture.artifactSha256 !== preparedFixture.receipt.canonical?.fixtureSha256
+    path.resolve(preparedFixture.artifactPath) !== expectedArtifactPath ||
+    preparedFixture.receipt.fixture?.id !== definition.id ||
+    preparedFixture.artifactSha256 !==
+      preparedFixture.receipt.canonical?.fixtureSha256
   ) {
     throw new Error("browser_fixture_prepared_fixture_mismatch");
   }
@@ -352,10 +451,10 @@ async function validatePreparedFixture(preparedFixture, definition) {
 
 function requireManagedProfile(profile) {
   if (
-    !profile
-      || profile.contract !== "gate-014-b1-temporary-profile-v1"
-      || typeof profile.directory !== "string"
-      || !MANAGED_PROFILE_DIRECTORIES.has(profile.directory)
+    !profile ||
+    profile.contract !== "gate-014-b1-temporary-profile-v1" ||
+    typeof profile.directory !== "string" ||
+    !MANAGED_PROFILE_DIRECTORIES.has(profile.directory)
   ) {
     throw new Error("browser_fixture_profile_not_managed");
   }
@@ -369,13 +468,17 @@ export function validateFixtureSmokeResult(result, config) {
   if (result.contract !== "gate-014-b1-browser-fixture-smoke-v1") {
     throw new Error("browser_fixture_smoke_contract_mismatch");
   }
-  if (result.status !== "pass" || !result.readbackVerified || !result.databaseDeleted) {
+  if (
+    result.status !== "pass" ||
+    !result.readbackVerified ||
+    !result.databaseDeleted
+  ) {
     throw new Error("browser_fixture_smoke_failed");
   }
   if (
-    result.fixtureId !== config.fixtureId
-      || result.receivedCanonicalBytes !== config.expectedCanonicalBytes
-      || result.receivedRecordCount !== config.expectedRecordCount
+    result.fixtureId !== config.fixtureId ||
+    result.receivedCanonicalBytes !== config.expectedCanonicalBytes ||
+    result.receivedRecordCount !== config.expectedRecordCount
   ) {
     throw new Error("browser_fixture_smoke_receipt_mismatch");
   }
@@ -389,19 +492,45 @@ export function validateFixtureSmokeResult(result, config) {
 }
 
 async function evaluateInHarness(options, expression, evaluationErrorCode) {
-  const profileDirectory = await mkdtemp(path.join(os.tmpdir(), "bili-bill-gate-014-b1-profile-"));
+  const profileDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "bili-bill-gate-014-b1-profile-"),
+  );
   try {
-    return await evaluateInHarnessProfile(options, profileDirectory, expression, evaluationErrorCode);
+    return await evaluateInHarnessProfile(
+      options,
+      profileDirectory,
+      expression,
+      evaluationErrorCode,
+    );
   } finally {
-    await rm(profileDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 250 });
+    await rm(profileDirectory, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 250,
+    });
   }
 }
 
-async function evaluateInHarnessProfile(options, profileDirectory, expression, evaluationErrorCode) {
+async function evaluateInHarnessProfile(
+  options,
+  profileDirectory,
+  expression,
+  evaluationErrorCode,
+) {
   const chromeExecutable = await resolveChromeExecutable(options.chromePath);
-  const productionExtension = path.resolve(options.productionExtension ?? path.join(REPOSITORY_ROOT, "dist"));
+  const productionExtension = path.resolve(
+    options.productionExtension ?? path.join(REPOSITORY_ROOT, "dist"),
+  );
   const harnessExtension = path.resolve(
-    options.harnessExtension ?? path.join(REPOSITORY_ROOT, "tests", "fixtures", "gate-014", "b1-extension"),
+    options.harnessExtension ??
+      path.join(
+        REPOSITORY_ROOT,
+        "tests",
+        "fixtures",
+        "gate-014",
+        "b1-extension",
+      ),
   );
   await Promise.all([
     access(path.join(productionExtension, "manifest.json")),
@@ -419,41 +548,66 @@ async function evaluateInHarnessProfile(options, profileDirectory, expression, e
   });
   let stderr = "";
   chrome.stderr.setEncoding("utf8");
-  chrome.stderr.on("data", chunk => {
+  chrome.stderr.on("data", (chunk) => {
     stderr = `${stderr}${chunk}`.slice(-8_192);
   });
 
   try {
-    const { port, browserPath } = await waitForDevToolsPort(profileDirectory, chrome);
+    const { port, browserPath } = await waitForDevToolsPort(
+      profileDirectory,
+      chrome,
+    );
     const discoveredExtensionId = await discoverHarnessExtensionId(port);
     if (discoveredExtensionId !== B1_HARNESS_EXTENSION_ID) {
       throw new Error("browser_smoke_extension_identity_mismatch");
     }
-    const client = await CdpClient.connect(`ws://127.0.0.1:${port}${browserPath}`);
+    const client = await CdpClient.connect(
+      `ws://127.0.0.1:${port}${browserPath}`,
+    );
     try {
-      const { targetId } = await client.send("Target.createTarget", {
-        url: `chrome-extension://${B1_HARNESS_EXTENSION_ID}/runner.html`,
-      }, undefined, B1_CDP_SETUP_TIMEOUT_MS);
+      const { targetId } = await client.send(
+        "Target.createTarget",
+        {
+          url: `chrome-extension://${B1_HARNESS_EXTENSION_ID}/runner.html`,
+        },
+        undefined,
+        B1_CDP_SETUP_TIMEOUT_MS,
+      );
       const { sessionId } = await client.send(
         "Target.attachToTarget",
         { targetId, flatten: true },
         undefined,
         B1_CDP_SETUP_TIMEOUT_MS,
       );
-      await client.send("Runtime.enable", {}, sessionId, B1_CDP_SETUP_TIMEOUT_MS);
+      await client.send(
+        "Runtime.enable",
+        {},
+        sessionId,
+        B1_CDP_SETUP_TIMEOUT_MS,
+      );
       await waitForHarnessReady(client, sessionId);
-      const resolvedExpression = typeof expression === "function"
-        ? expression({ harnessReadyEpochMs: Date.now() })
-        : expression;
-      const evaluation = await client.send("Runtime.evaluate", {
-        expression: resolvedExpression,
-        awaitPromise: true,
-        returnByValue: true,
-      }, sessionId, B1_LIFECYCLE_EVALUATION_TIMEOUT_MS);
+      const resolvedExpression =
+        typeof expression === "function"
+          ? expression({ harnessReadyEpochMs: Date.now() })
+          : expression;
+      const evaluation = await client.send(
+        "Runtime.evaluate",
+        {
+          expression: resolvedExpression,
+          awaitPromise: true,
+          returnByValue: true,
+        },
+        sessionId,
+        B1_LIFECYCLE_EVALUATION_TIMEOUT_MS,
+      );
       if (evaluation.exceptionDetails) {
         if (process.env.GATE_014_B1_DEBUG === "1") {
-          const description = evaluation.exceptionDetails.exception?.description ?? "unknown_exception";
-          const safeCode = description.match(/Error: ([a-z0-9_:-]+)/i)?.[1] ?? "unknown_exception";
+          const description =
+            evaluation.exceptionDetails.exception?.description ??
+            "unknown_exception";
+          const safeCode =
+            description.match(/Error: ([a-z0-9_:-]+)/i)?.[1] ??
+            "unknown_exception";
           process.stderr.write(`Harness exception code: ${safeCode}\n`);
         }
         throw new Error(evaluationErrorCode);
@@ -486,11 +640,13 @@ async function serveFixture(artifactPath, fixtureId) {
       return;
     }
     if (
-      request.headers.origin
-        && request.headers.origin !== `chrome-extension://${B1_HARNESS_EXTENSION_ID}`
+      request.headers.origin &&
+      request.headers.origin !== `chrome-extension://${B1_HARNESS_EXTENSION_ID}`
     ) {
       if (process.env.GATE_014_B1_DEBUG === "1") {
-        process.stderr.write(`Fixture request origin: ${request.headers.origin ?? "none"}\n`);
+        process.stderr.write(
+          `Fixture request origin: ${request.headers.origin ?? "none"}\n`,
+        );
       }
       response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
       response.end("forbidden");
@@ -520,18 +676,22 @@ async function serveFixture(artifactPath, fixtureId) {
       return requestCount;
     },
     async close() {
-      await new Promise(resolve => server.close(resolve));
+      await new Promise((resolve) => server.close(resolve));
     },
   };
 }
 
 async function discoverHarnessExtensionId(port) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+    const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
+      signal: AbortSignal.timeout(B1_CDP_SETUP_TIMEOUT_MS),
+    });
     const targets = await response.json();
-    const target = targets.find(candidate =>
-      candidate.type === "service_worker"
-        && /^chrome-extension:\/\/[a-p]{32}\/service-worker\.js$/.test(candidate.url),
+    const target = targets.find(
+      (candidate) =>
+        candidate.type === "service_worker" &&
+        candidate.url ===
+          `chrome-extension://${B1_HARNESS_EXTENSION_ID}/service-worker.js`,
     );
     if (target) {
       return new URL(target.url).hostname;
@@ -544,15 +704,20 @@ async function discoverHarnessExtensionId(port) {
 async function waitForHarnessReady(client, sessionId) {
   let lastState = null;
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    const evaluation = await client.send("Runtime.evaluate", {
-      expression: `({
+    const evaluation = await client.send(
+      "Runtime.evaluate",
+      {
+        expression: `({
         ready: typeof globalThis.runGate014B1Smoke === "function",
         href: location.href,
         readyState: document.readyState,
         scriptCount: document.scripts.length,
       })`,
-      returnByValue: true,
-    }, sessionId, B1_CDP_SETUP_TIMEOUT_MS);
+        returnByValue: true,
+      },
+      sessionId,
+      B1_CDP_SETUP_TIMEOUT_MS,
+    );
     lastState = evaluation.result?.value ?? null;
     if (!evaluation.exceptionDetails && lastState?.ready === true) {
       return;
@@ -569,8 +734,26 @@ class CdpClient {
   static async connect(url) {
     const socket = new WebSocket(url);
     await new Promise((resolve, reject) => {
-      socket.addEventListener("open", resolve, { once: true });
-      socket.addEventListener("error", () => reject(new Error("cdp_connection_failed")), { once: true });
+      const timeoutId = setTimeout(() => {
+        socket.close();
+        reject(new Error("cdp_connection_timeout"));
+      }, B1_CDP_SETUP_TIMEOUT_MS);
+      socket.addEventListener(
+        "open",
+        () => {
+          clearTimeout(timeoutId);
+          resolve();
+        },
+        { once: true },
+      );
+      socket.addEventListener(
+        "error",
+        () => {
+          clearTimeout(timeoutId);
+          reject(new Error("cdp_connection_failed"));
+        },
+        { once: true },
+      );
     });
     return new CdpClient(socket);
   }
@@ -579,7 +762,7 @@ class CdpClient {
     this.socket = socket;
     this.nextId = 1;
     this.pending = new Map();
-    socket.addEventListener("message", event => {
+    socket.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
       if (!message.id || !this.pending.has(message.id)) {
         return;
@@ -642,9 +825,15 @@ async function waitForDevToolsPort(profileDirectory, chrome) {
       throw new Error("chrome_exited_before_devtools_ready");
     }
     try {
-      const [portLine, browserPath] = (await readFile(activePortPath, "utf8")).trim().split(/\r?\n/);
+      const [portLine, browserPath] = (await readFile(activePortPath, "utf8"))
+        .trim()
+        .split(/\r?\n/);
       const port = Number(portLine);
-      if (Number.isInteger(port) && port > 0 && browserPath?.startsWith("/devtools/browser/")) {
+      if (
+        Number.isInteger(port) &&
+        port > 0 &&
+        browserPath?.startsWith("/devtools/browser/")
+      ) {
         return { port, browserPath };
       }
     } catch {
@@ -659,14 +848,14 @@ function waitForProcessExit(child) {
   if (child.exitCode !== null) {
     return Promise.resolve();
   }
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     child.once("exit", resolve);
     setTimeout(resolve, 5_000).unref();
   });
 }
 
 function delay(milliseconds) {
-  return new Promise(resolve => setTimeout(resolve, milliseconds));
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 async function main() {
@@ -676,9 +865,14 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
   main().catch(() => {
-    process.stderr.write("GATE-014-B1 browser smoke failed. Set GATE_014_B1_DEBUG=1 for Chrome diagnostics.\n");
+    process.stderr.write(
+      "GATE-014-B1 browser smoke failed. Set GATE_014_B1_DEBUG=1 for Chrome diagnostics.\n",
+    );
     process.exitCode = 1;
   });
 }

@@ -12,12 +12,15 @@ globalThis.runGate014B1Smoke = async () => {
   const database = await openSmokeDatabase();
   let readbackVerified = false;
   try {
-    await transactionComplete(database, "readwrite", store => {
+    await transactionComplete(database, "readwrite", (store) => {
       store.put({ id: "public-safe-smoke", value: "合成验证" });
     });
-    const stored = await requestResult(database.transaction("rows", "readonly").objectStore("rows").get(
-      "public-safe-smoke",
-    ));
+    const stored = await requestResult(
+      database
+        .transaction("rows", "readonly")
+        .objectStore("rows")
+        .get("public-safe-smoke"),
+    );
     readbackVerified = stored?.value === "合成验证";
   } finally {
     database.close();
@@ -32,7 +35,10 @@ globalThis.runGate014B1Smoke = async () => {
     extensionId: chrome.runtime.id,
     indexedDbAvailable: typeof indexedDB === "object",
     readbackVerified,
-    storageEstimateAvailable: storageBefore !== null && storageAfter !== null && storageCleanup !== null,
+    storageEstimateAvailable:
+      storageBefore !== null &&
+      storageAfter !== null &&
+      storageCleanup !== null,
     storageBefore,
     storageAfter,
     storageCleanup,
@@ -44,8 +50,10 @@ globalThis.runGate014B1Smoke = async () => {
 };
 
 globalThis.runGate014B1FixtureSmoke = runFixtureSmoke;
-globalThis.runGate014B1FixtureLifecycleBeforeRestart = runFixtureLifecycleBeforeRestart;
-globalThis.runGate014B1FixtureLifecycleAfterRestart = runFixtureLifecycleAfterRestart;
+globalThis.runGate014B1FixtureLifecycleBeforeRestart =
+  runFixtureLifecycleBeforeRestart;
+globalThis.runGate014B1FixtureLifecycleAfterRestart =
+  runFixtureLifecycleAfterRestart;
 
 function openSmokeDatabase() {
   return new Promise((resolve, reject) => {
@@ -81,7 +89,8 @@ function deleteDatabase(name) {
     const request = indexedDB.deleteDatabase(name);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(new Error("smoke_database_cleanup_failed"));
-    request.onblocked = () => reject(new Error("smoke_database_cleanup_blocked"));
+    request.onblocked = () =>
+      reject(new Error("smoke_database_cleanup_blocked"));
   });
 }
 

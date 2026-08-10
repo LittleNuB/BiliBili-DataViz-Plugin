@@ -24,7 +24,11 @@ const ENVIRONMENT_INPUT = {
   packageLockSha256: "c".repeat(64),
   productionDistSha256: "d".repeat(64),
   fixtureGeneratorVersion: "gate-014-fixture-generator-v5",
-  operatingSystem: { platform: "win32", release: "10.0.26200", architecture: "x64" },
+  operatingSystem: {
+    platform: "win32",
+    release: "10.0.26200",
+    architecture: "x64",
+  },
   hardware: {
     cpuModel: "Synthetic CPU",
     logicalCoreCount: 24,
@@ -45,7 +49,8 @@ const ENVIRONMENT_INPUT = {
     productionExtensionMode: "unpacked",
     networkPolicy: "loopback_only_external_dns_blocked",
     coldProfilePolicy: "fresh_temporary_profile_per_run",
-    warmProfilePolicy: "temporary_profile_reused_for_five_runs_per_candidate_fixture",
+    warmProfilePolicy:
+      "opened_complete_seed_generation_with_group_profile_reuse",
     coldRunsPerCandidateFixture: 3,
     warmRunsPerCandidateFixture: 5,
     externalNetworkUsed: false,
@@ -55,7 +60,9 @@ const ENVIRONMENT_INPUT = {
   a2CalibrationStatus: "insufficient_evidence",
   storesSensitiveText: false,
 };
-const ENVIRONMENT_SHA_256 = hashB1EnvironmentReceipt(createB1EnvironmentReceipt(ENVIRONMENT_INPUT));
+const ENVIRONMENT_SHA_256 = hashB1EnvironmentReceipt(
+  createB1EnvironmentReceipt(ENVIRONMENT_INPUT),
+);
 
 test("GATE-014-B1 environment receipt is deterministic and rejects local paths", () => {
   const receipt = createB1EnvironmentReceipt(ENVIRONMENT_INPUT);
@@ -64,13 +71,14 @@ test("GATE-014-B1 environment receipt is deterministic and rejects local paths",
   assert.equal(hashB1EnvironmentReceipt(receipt), ENVIRONMENT_SHA_256);
   assert.equal(serializeB1EnvironmentReceipt(receipt).endsWith("\n"), true);
   assert.throws(
-    () => createB1EnvironmentReceipt({
-      ...structuredClone(ENVIRONMENT_INPUT),
-      hardware: {
-        ...ENVIRONMENT_INPUT.hardware,
-        cpuModel: "C:\\Users\\person\\cpu",
-      },
-    }),
+    () =>
+      createB1EnvironmentReceipt({
+        ...structuredClone(ENVIRONMENT_INPUT),
+        hardware: {
+          ...ENVIRONMENT_INPUT.hardware,
+          cpuModel: "C:\\Users\\person\\cpu",
+        },
+      }),
     /public-safe text/,
   );
 });
@@ -89,7 +97,10 @@ function passingOperation(overrides = {}) {
     operation: "admission",
     totalDurationMs: 900_000,
     batchDurationsMs: [...Array.from({ length: 19 }, () => 2_000), 5_000],
-    progressEventOffsetsMs: Array.from({ length: 450 }, (_, index) => (index + 1) * 2_000),
+    progressEventOffsetsMs: Array.from(
+      { length: 450 },
+      (_, index) => (index + 1) * 2_000,
+    ),
     restart: {
       attempted: false,
     },
@@ -124,6 +135,8 @@ function passingOperation(overrides = {}) {
       committedRowsVisibleTogether: true,
       orphanRowsHiddenAndCleanable: true,
       cleanupReadbackVerified: true,
+      restorePreflightBoundaryVerified: true,
+      warmStartCompleteGenerationVerified: true,
     },
     ...overrides,
   };
@@ -145,20 +158,22 @@ test("GATE-014-B1 operation receipt passes at every inclusive numeric boundary",
 });
 
 test("GATE-014-B1 records delayed quota reclamation without overriding cleanup readback", () => {
-  const receipt = createB1OperationReceipt(passingOperation({
-    indexedDb: {
-      metricAvailable: true,
-      expectedDirection: "increase",
-      sourceCanonicalBytes: 524_288_000,
-      usageBeforeBytes: 1_000,
-      quotaBeforeBytes: 2_000_000_000,
-      usageAfterBytes: 524_289_000,
-      quotaAfterBytes: 2_000_000_000,
-      cleanupUsageBytes: 524_300_000,
-      cleanupQuotaBytes: 2_000_000_000,
-      readbackVerified: true,
-    },
-  }));
+  const receipt = createB1OperationReceipt(
+    passingOperation({
+      indexedDb: {
+        metricAvailable: true,
+        expectedDirection: "increase",
+        sourceCanonicalBytes: 524_288_000,
+        usageBeforeBytes: 1_000,
+        quotaBeforeBytes: 2_000_000_000,
+        usageAfterBytes: 524_289_000,
+        quotaAfterBytes: 2_000_000_000,
+        cleanupUsageBytes: 524_300_000,
+        cleanupQuotaBytes: 2_000_000_000,
+        readbackVerified: true,
+      },
+    }),
+  );
 
   assert.equal(receipt.status, "pass");
   assert.equal(receipt.indexedDb.cleanupUsageBytes, 524_300_000);
@@ -170,7 +185,10 @@ test("GATE-014-B1 operation receipt fails when any measured threshold is exceede
     { batchDurationsMs: Array.from({ length: 20 }, () => 2_001) },
     { batchDurationsMs: [...Array.from({ length: 19 }, () => 1), 5_001] },
     {
-      progressEventOffsetsMs: [2_001, ...Array.from({ length: 449 }, (_, index) => 4_000 + index * 1_999)],
+      progressEventOffsetsMs: [
+        2_001,
+        ...Array.from({ length: 449 }, (_, index) => 4_000 + index * 1_999),
+      ],
     },
     {
       mainThread: {
@@ -187,32 +205,41 @@ test("GATE-014-B1 operation receipt fails when any measured threshold is exceede
   ];
 
   for (const overrides of cases) {
-    assert.equal(createB1OperationReceipt(passingOperation(overrides)).status, "fail");
+    assert.equal(
+      createB1OperationReceipt(passingOperation(overrides)).status,
+      "fail",
+    );
   }
 });
 
 test("GATE-014-B1 operation receipt fails closed when a required metric is unavailable", () => {
-  const receipt = createB1OperationReceipt(passingOperation({
-    memory: {
-      metricAvailable: false,
-      reasonCode: "browser_metric_unavailable",
-    },
-  }));
+  const receipt = createB1OperationReceipt(
+    passingOperation({
+      memory: {
+        metricAvailable: false,
+        reasonCode: "browser_metric_unavailable",
+      },
+    }),
+  );
 
   assert.equal(receipt.status, "insufficient_evidence");
   assert.deepEqual(receipt.insufficientEvidence, ["memory_metric_unavailable"]);
 });
 
 test("GATE-014-B1 operation receipt rejects an unavailable main-thread metric", () => {
-  const receipt = createB1OperationReceipt(passingOperation({
-    mainThread: {
-      metricAvailable: false,
-      reasonCode: "browser_metric_unavailable",
-    },
-  }));
+  const receipt = createB1OperationReceipt(
+    passingOperation({
+      mainThread: {
+        metricAvailable: false,
+        reasonCode: "browser_metric_unavailable",
+      },
+    }),
+  );
 
   assert.equal(receipt.status, "insufficient_evidence");
-  assert.deepEqual(receipt.insufficientEvidence, ["main_thread_metric_unavailable"]);
+  assert.deepEqual(receipt.insufficientEvidence, [
+    "main_thread_metric_unavailable",
+  ]);
 });
 
 test("GATE-014-B1 receipt rejects unknown fields, unsafe identities, and non-plain input", () => {
@@ -221,11 +248,17 @@ test("GATE-014-B1 receipt rejects unknown fields, unsafe identities, and non-pla
     /unsupported field: unexpected/,
   );
   assert.throws(
-    () => createB1OperationReceipt(passingOperation({ fixtureId: "C:\\Users\\person\\fixture" })),
+    () =>
+      createB1OperationReceipt(
+        passingOperation({ fixtureId: "C:\\Users\\person\\fixture" }),
+      ),
     /fixtureId/,
   );
   assert.throws(
-    () => createB1OperationReceipt(Object.assign(Object.create({ polluted: true }), passingOperation())),
+    () =>
+      createB1OperationReceipt(
+        Object.assign(Object.create({ polluted: true }), passingOperation()),
+      ),
     /plain object/,
   );
 });
@@ -249,22 +282,24 @@ function reportOperation({
     totalDurationMs: 1_000,
     batchDurationsMs: [100],
     progressEventOffsetsMs: [],
-    restart: operation === "restart"
-      ? {
-          attempted: true,
-          stateVisibleMs: 5_000,
-          remainingWork: true,
-          nextProgressMs: 2_000,
-          readbackVerified: true,
-        }
-      : { attempted: false },
-    cancellation: operation === "cancellation"
-      ? {
-          attempted: true,
-          acknowledgementMs: 1_000,
-          writesAfterTwoSeconds: 0,
-        }
-      : { attempted: false },
+    restart:
+      operation === "restart"
+        ? {
+            attempted: true,
+            stateVisibleMs: 5_000,
+            remainingWork: true,
+            nextProgressMs: 2_000,
+            readbackVerified: true,
+          }
+        : { attempted: false },
+    cancellation:
+      operation === "cancellation"
+        ? {
+            attempted: true,
+            acknowledgementMs: 1_000,
+            writesAfterTwoSeconds: 0,
+          }
+        : { attempted: false },
     indexedDb: {
       metricAvailable: true,
       expectedDirection: ["admission", "restore_staging"].includes(operation)
@@ -281,7 +316,9 @@ function reportOperation({
           ? 500
           : 1_000,
       quotaAfterBytes: 100_000_000,
-      cleanupUsageBytes: ["admission", "restore_staging"].includes(operation) ? 1_000 : 500,
+      cleanupUsageBytes: ["admission", "restore_staging"].includes(operation)
+        ? 1_000
+        : 500,
       cleanupQuotaBytes: 100_000_000,
       readbackVerified: true,
     },
@@ -299,18 +336,23 @@ function completeReportInput() {
   for (const recordCap of B1_RECORD_CAPS) {
     for (const byteCapBytes of B1_BYTE_CAPS) {
       for (const fixtureId of B1_REQUIRED_FIXTURE_IDS) {
-        for (const [runMode, count] of [["cold", 3], ["warm", 5]]) {
+        for (const [runMode, count] of [
+          ["cold", 3],
+          ["warm", 5],
+        ]) {
           for (let runOrdinal = 1; runOrdinal <= count; runOrdinal += 1) {
             for (const operation of B1_OPERATION_KINDS) {
-              rawOperations.push(reportOperation({
-                fixtureId,
-                fixtureReceiptSha256: fixtureReceipts[fixtureId],
-                recordCap,
-                byteCapBytes,
-                runMode,
-                runOrdinal,
-                operation,
-              }));
+              rawOperations.push(
+                reportOperation({
+                  fixtureId,
+                  fixtureReceiptSha256: fixtureReceipts[fixtureId],
+                  recordCap,
+                  byteCapBytes,
+                  runMode,
+                  runOrdinal,
+                  operation,
+                }),
+              );
             }
           }
         }
@@ -334,15 +376,27 @@ test("GATE-014-B1 report requires complete raw coverage and selects the largest 
     recordCap: 1024,
     byteCapBytes: 4 * 1024 * 1024,
   });
-  assert.equal(report.coverage.expectedOperationCount, input.rawOperations.length);
+  assert.equal(
+    report.coverage.expectedOperationCount,
+    input.rawOperations.length,
+  );
   assert.equal(report.coverage.missingOperationCount, 0);
-  assert.equal(report.realBilibiliSubtitleRepresentativeness, "insufficient_evidence");
+  assert.equal(
+    report.realBilibiliSubtitleRepresentativeness,
+    "insufficient_evidence",
+  );
   assert.equal(report.maximumMeasuredSegmentCountTail, "insufficient_evidence");
   assert.equal(report.provisionalRestoreHeadroom.status, "pass");
   assert.equal(report.provisionalRestoreHeadroom.roundedAmplificationRatio, 1);
   assert.equal(report.provisionalRestoreHeadroom.provisionalMultiplier, 1.25);
-  assert.equal(report.provisionalRestoreHeadroom.fixedReserveBytes, 64 * 1024 * 1024);
-  assert.equal(report.provisionalRestoreHeadroom.deliberatelyInsufficientProbe.allowed, false);
+  assert.equal(
+    report.provisionalRestoreHeadroom.fixedReserveBytes,
+    64 * 1024 * 1024,
+  );
+  assert.equal(
+    report.provisionalRestoreHeadroom.deliberatelyInsufficientProbe.allowed,
+    false,
+  );
   assert.equal(report.provisionalRestoreHeadroom.nearLimitProbe.allowed, true);
   assert.match(serializeB1Report(report), /"selectedCandidate"/);
   assert.equal(serializeB1Report(report).endsWith("\n"), true);
@@ -361,26 +415,31 @@ test("GATE-014-B1 report stays insufficient when any required raw operation is a
 
 test("GATE-014-B1 report stays insufficient when provisional restore headroom rejects a measured run", () => {
   const input = completeReportInput();
-  const restore = input.rawOperations.find(operation =>
-    operation.candidate.recordCap === 1024
-      && operation.candidate.byteCapBytes === 4 * 1024 * 1024
-      && operation.operation === "restore_staging",
+  const restore = input.rawOperations.find(
+    (operation) =>
+      operation.candidate.recordCap === 1024 &&
+      operation.candidate.byteCapBytes === 4 * 1024 * 1024 &&
+      operation.operation === "restore_staging",
   );
   restore.indexedDb.quotaBeforeBytes = 60_000_000;
   const report = evaluateB1Report(input);
 
   assert.equal(report.status, "insufficient_evidence");
   assert.equal(report.selectedCandidate, null);
-  assert.equal(report.provisionalRestoreHeadroom.status, "insufficient_evidence");
+  assert.equal(
+    report.provisionalRestoreHeadroom.status,
+    "insufficient_evidence",
+  );
   assert.equal(report.provisionalRestoreHeadroom.allMeasuredRunsAllowed, false);
 });
 
 test("GATE-014-B1 candidate tie-break records rejected combinations instead of averaging failures", () => {
   const input = completeReportInput();
-  const target = input.rawOperations.find(operation =>
-    operation.candidate.recordCap === 1024
-      && operation.candidate.byteCapBytes === 4 * 1024 * 1024
-      && operation.operation === "admission",
+  const target = input.rawOperations.find(
+    (operation) =>
+      operation.candidate.recordCap === 1024 &&
+      operation.candidate.byteCapBytes === 4 * 1024 * 1024 &&
+      operation.operation === "admission",
   );
   target.mainThread.maximumTaskMs = 201;
   const report = evaluateB1Report(input);
@@ -391,8 +450,10 @@ test("GATE-014-B1 candidate tie-break records rejected combinations instead of a
     byteCapBytes: 2 * 1024 * 1024,
   });
   assert.equal(
-    report.candidates.find(candidate =>
-      candidate.recordCap === 1024 && candidate.byteCapBytes === 4 * 1024 * 1024,
+    report.candidates.find(
+      (candidate) =>
+        candidate.recordCap === 1024 &&
+        candidate.byteCapBytes === 4 * 1024 * 1024,
     ).status,
     "fail",
   );
@@ -401,11 +462,17 @@ test("GATE-014-B1 candidate tie-break records rejected combinations instead of a
 test("GATE-014-B1 report rejects duplicate run identities and fixture hash drift", () => {
   const duplicate = completeReportInput();
   duplicate.rawOperations.push(duplicate.rawOperations[0]);
-  assert.throws(() => evaluateB1Report(duplicate), /duplicate B1 operation identity/);
+  assert.throws(
+    () => evaluateB1Report(duplicate),
+    /duplicate B1 operation identity/,
+  );
 
   const drift = completeReportInput();
   drift.rawOperations[0].fixtureReceiptSha256 = "f".repeat(64);
-  assert.throws(() => evaluateB1Report(drift), /fixture receipt SHA-256 mismatch/);
+  assert.throws(
+    () => evaluateB1Report(drift),
+    /fixture receipt SHA-256 mismatch/,
+  );
 
   const environmentDrift = completeReportInput();
   environmentDrift.rawOperations[0].environmentReceiptSha256 = "e".repeat(64);
