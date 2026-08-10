@@ -7,6 +7,7 @@ import {
   B1_HARNESS_EXTENSION_ID,
   B1_LIFECYCLE_EVALUATION_TIMEOUT_MS,
   buildChromeArguments,
+  classifyObservedErrorEvent,
   combineBrowserExecutionObservations,
   createB1TemporaryProfile,
   createExtensionTargetObserver,
@@ -261,9 +262,50 @@ test("GATE-014-B1 process exit observation fails closed on timeout", async () =>
   assert.equal(await exitPromise, true);
 });
 
+test("GATE-014-B1 attributes extension errors without treating Chrome internal logs as extension failures", () => {
+  assert.equal(
+    classifyObservedErrorEvent({ method: "Runtime.exceptionThrown" }),
+    "extension_error",
+  );
+  assert.equal(
+    classifyObservedErrorEvent({
+      method: "Runtime.consoleAPICalled",
+      params: { type: "error" },
+    }),
+    "extension_error",
+  );
+  assert.equal(
+    classifyObservedErrorEvent({
+      method: "Log.entryAdded",
+      params: {
+        entry: {
+          level: "error",
+          source: "network",
+          url: `chrome-extension://${B1_HARNESS_EXTENSION_ID}/runner.js`,
+        },
+      },
+    }),
+    "extension_error",
+  );
+  assert.equal(
+    classifyObservedErrorEvent({
+      method: "Log.entryAdded",
+      params: { entry: { level: "error", source: "other" } },
+    }),
+    "unattributed_log_error",
+  );
+  assert.equal(
+    classifyObservedErrorEvent({
+      method: "Log.entryAdded",
+      params: { entry: { level: "warning", source: "other" } },
+    }),
+    null,
+  );
+});
+
 test("GATE-014-B1 browser observation fails closed on external requests or console errors", () => {
   const passing = {
-    contract: "gate-014-b1-browser-observation-v1",
+    contract: "gate-014-b1-browser-observation-v2",
     browserLaunchCount: 1,
     observationScope: "all_loaded_extension_targets_after_devtools_attach",
     preAttachEventsObserved: false,
@@ -278,6 +320,7 @@ test("GATE-014-B1 browser observation fails closed on external requests or conso
     externalResponseCount: 0,
     consoleMetricAvailable: true,
     consoleErrorCount: 0,
+    unattributedLogErrorCount: 1,
   };
   assert.equal(
     validateBrowserExecutionObservation(passing).browserLaunchCount,

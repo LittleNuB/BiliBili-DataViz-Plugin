@@ -66,7 +66,7 @@ const ENVIRONMENT_INPUT = {
     realUserProfileRead: false,
     bilibiliLoginUsed: false,
     browserObservation: {
-      contract: "gate-014-b1-browser-observation-v1",
+      contract: "gate-014-b1-browser-observation-v2",
       browserLaunchCount: 722,
       observationScope: "all_loaded_extension_targets_after_devtools_attach",
       preAttachEventsObserved: false,
@@ -81,6 +81,7 @@ const ENVIRONMENT_INPUT = {
       externalResponseCount: 0,
       consoleMetricAvailable: true,
       consoleErrorCount: 0,
+      unattributedLogErrorCount: 2,
     },
   },
   a2CalibrationStatus: "insufficient_evidence",

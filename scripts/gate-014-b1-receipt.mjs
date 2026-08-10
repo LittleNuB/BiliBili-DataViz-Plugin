@@ -1773,11 +1773,12 @@ function validateBrowserObservation(value) {
     "externalResponseCount",
     "consoleMetricAvailable",
     "consoleErrorCount",
+    "unattributedLogErrorCount",
   ]);
   const observation = {
     contract: assertEnum(
       value.contract,
-      ["gate-014-b1-browser-observation-v1"],
+      ["gate-014-b1-browser-observation-v2"],
       "execution.browserObservation.contract",
     ),
     browserLaunchCount: assertPositiveSafeInteger(
@@ -1841,6 +1842,10 @@ function validateBrowserObservation(value) {
       value.consoleErrorCount,
       0,
       "execution.browserObservation.consoleErrorCount",
+    ),
+    unattributedLogErrorCount: assertNonNegativeSafeInteger(
+      value.unattributedLogErrorCount,
+      "execution.browserObservation.unattributedLogErrorCount",
     ),
   };
   if (

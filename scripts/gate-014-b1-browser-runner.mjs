@@ -259,6 +259,7 @@ export function validateBrowserExecutionObservation(observation) {
     "externalResponseCount",
     "consoleMetricAvailable",
     "consoleErrorCount",
+    "unattributedLogErrorCount",
   ].sort();
   if (Object.keys(observation).sort().join("|") !== expectedFields.join("|")) {
     throw new Error("browser_execution_observation_failed");
@@ -274,9 +275,10 @@ export function validateBrowserExecutionObservation(observation) {
     "externalRequestAttemptCount",
     "externalResponseCount",
     "consoleErrorCount",
+    "unattributedLogErrorCount",
   ];
   if (
-    observation?.contract !== "gate-014-b1-browser-observation-v1" ||
+    observation?.contract !== "gate-014-b1-browser-observation-v2" ||
     observation.observationScope !==
       "all_loaded_extension_targets_after_devtools_attach" ||
     observation.preAttachEventsObserved !== false ||
@@ -308,7 +310,7 @@ export function validateBrowserExecutionObservation(observation) {
 
 export function combineBrowserExecutionObservations(...observations) {
   const combined = {
-    contract: "gate-014-b1-browser-observation-v1",
+    contract: "gate-014-b1-browser-observation-v2",
     browserLaunchCount: 0,
     observationScope: "all_loaded_extension_targets_after_devtools_attach",
     preAttachEventsObserved: false,
@@ -323,6 +325,7 @@ export function combineBrowserExecutionObservations(...observations) {
     externalResponseCount: 0,
     consoleMetricAvailable: true,
     consoleErrorCount: 0,
+    unattributedLogErrorCount: 0,
   };
   for (const observation of observations.flat()) {
     const validated = validateBrowserExecutionObservation(observation);
@@ -337,6 +340,7 @@ export function combineBrowserExecutionObservations(...observations) {
       "externalRequestAttemptCount",
       "externalResponseCount",
       "consoleErrorCount",
+      "unattributedLogErrorCount",
     ]) {
       combined[field] += validated[field];
     }
@@ -1005,6 +1009,7 @@ function createCdpExecutionObservation(client) {
     externalRequestAttemptCount: 0,
     externalResponseCount: 0,
     consoleErrorCount: 0,
+    unattributedLogErrorCount: 0,
   };
   const unsubscribe = client.onEvent((message) => {
     if (!observedSessionIds.has(message.sessionId)) {
@@ -1031,14 +1036,11 @@ function createCdpExecutionObservation(client) {
       }
       return;
     }
-    if (
-      message.method === "Runtime.exceptionThrown" ||
-      (message.method === "Runtime.consoleAPICalled" &&
-        ["error", "assert"].includes(message.params?.type)) ||
-      (message.method === "Log.entryAdded" &&
-        message.params?.entry?.level === "error")
-    ) {
+    const errorClassification = classifyObservedErrorEvent(message);
+    if (errorClassification === "extension_error") {
       counts.consoleErrorCount += 1;
+    } else if (errorClassification === "unattributed_log_error") {
+      counts.unattributedLogErrorCount += 1;
     }
   });
   return {
@@ -1069,7 +1071,7 @@ function createCdpExecutionObservation(client) {
       unsubscribe();
       const extensionIds = [...observedExtensionIds.values()];
       return {
-        contract: "gate-014-b1-browser-observation-v1",
+        contract: "gate-014-b1-browser-observation-v2",
         browserLaunchCount: 1,
         observationScope: "all_loaded_extension_targets_after_devtools_attach",
         preAttachEventsObserved: false,
@@ -1088,6 +1090,26 @@ function createCdpExecutionObservation(client) {
       };
     },
   };
+}
+
+export function classifyObservedErrorEvent(message) {
+  if (
+    message?.method === "Runtime.exceptionThrown" ||
+    (message?.method === "Runtime.consoleAPICalled" &&
+      ["error", "assert"].includes(message.params?.type))
+  ) {
+    return "extension_error";
+  }
+  if (
+    message?.method !== "Log.entryAdded" ||
+    message.params?.entry?.level !== "error"
+  ) {
+    return null;
+  }
+  const extensionId = getExtensionIdFromTargetUrl(message.params.entry.url);
+  return EXTENSION_ID_PATTERN.test(extensionId ?? "")
+    ? "extension_error"
+    : "unattributed_log_error";
 }
 
 function classifyNetworkUrl(value) {
