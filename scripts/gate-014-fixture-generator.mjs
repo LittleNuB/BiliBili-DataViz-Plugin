@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { lstat, mkdir, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -13,8 +13,8 @@ import {
 
 export const MIB = 1024 * 1024;
 export const DEFAULT_SEED = 'gate-014-public-safe-seed-v1';
-export const GENERATOR_VERSION = 'gate-014-fixture-generator-v1';
-export const RECEIPT_CONTRACT = 'gate-014-fixture-receipt-v1';
+export const GENERATOR_VERSION = 'gate-014-fixture-generator-v2';
+export const RECEIPT_CONTRACT = 'gate-014-fixture-receipt-v2';
 export const MANAGED_FULL_TEXT_CONTRACT = 'managed-full-text-v1';
 export const GENERATED_FIXTURE_RELATIVE_DIR = 'tests/fixtures/gate-014/generated';
 export const GOLDEN_RECEIPT_RELATIVE_DIR = 'tests/fixtures/gate-014/receipts';
@@ -24,16 +24,45 @@ const BASE_CAPTURED_AT = 1_788_220_800_000;
 const BASE_CREATED_AT = 1_788_220_860_000;
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLEANUP_OPERATION_ID = 'cleanup-generated-artifacts';
+const FIXTURE_DEFINITION_FIELDS = Object.freeze([
+  'id',
+  'description',
+  'targetCanonicalBytes',
+  'targetKind',
+  'profileKey',
+  'profileName',
+  'exactVersionCount',
+]);
+const TARGET_KIND_BY_PROFILE = Object.freeze({
+  baseline: 'managed_full_text_total',
+  singleVersionStress: 'single_version_full_text',
+  highFragmentation: 'pathological_high_fragmentation',
+});
+const TARGET_KIND_DESCRIPTIONS = Object.freeze({
+  managed_full_text_total: 'synthetic managed-full-text gate fixture',
+  single_version_full_text: 'synthetic single-version full-text stress fixture',
+  pathological_high_fragmentation: 'synthetic pathological high-fragmentation fixture',
+});
 
-export const MALFORMED_CANDIDATE_SUITE = Object.freeze([
-  malformedCandidate('malformed-empty-text', 'empty_text', 'text'),
-  malformedCandidate('malformed-reversed-timing', 'invalid_timing', 'timing'),
-  malformedCandidate('malformed-zero-duration', 'invalid_timing', 'timing'),
-  malformedCandidate('malformed-non-finite-start', 'non_finite_timing', 'startSeconds'),
-  malformedCandidate('malformed-negative-zero-start', 'negative_zero', 'startSeconds'),
-  malformedCandidate('malformed-lone-surrogate-text', 'lone_surrogate', 'text'),
-  malformedCandidate('malformed-invalid-bvid', 'invalid_identity', 'bvid'),
-  malformedCandidate('malformed-invalid-cid', 'invalid_identity', 'cid'),
+export const MALFORMED_CANDIDATE_SUITE = deepFreeze([
+  malformedCandidate('malformed-empty-text', 'empty_text', { text: '' }),
+  malformedCandidate('malformed-reversed-timing', 'invalid_timing', {
+    startSeconds: 2,
+    endSeconds: 1,
+  }),
+  malformedCandidate('malformed-zero-duration', 'invalid_timing', {
+    startSeconds: 1,
+    endSeconds: 1,
+  }),
+  malformedCandidate('malformed-non-finite-start', 'non_finite_timing', {
+    startSeconds: Number.POSITIVE_INFINITY,
+  }),
+  malformedCandidate('malformed-negative-zero-start', 'negative_zero', {
+    startSeconds: -0,
+  }),
+  malformedCandidate('malformed-lone-surrogate-text', 'lone_surrogate', { text: '\ud800' }),
+  malformedCandidate('malformed-invalid-bvid', 'invalid_identity', { bvid: 'invalid_bvid' }),
+  malformedCandidate('malformed-invalid-cid', 'invalid_identity', { cid: 0 }),
 ]);
 
 const PROFILE_DEFINITIONS = Object.freeze({
@@ -87,36 +116,30 @@ const PROFILE_DEFINITIONS = Object.freeze({
 export const FIXTURE_DEFINITIONS = Object.freeze([
   createCustomFixtureDefinition({
     id: 'managed-full-text-100mib',
-    description: 'Exact 100 MiB synthetic managed-full-text gate fixture.',
     targetCanonicalBytes: 100 * MIB,
     profile: 'baseline',
     targetKind: 'managed_full_text_total',
   }),
   createCustomFixtureDefinition({
     id: 'managed-full-text-400mib',
-    description: 'Exact 400 MiB warning-boundary synthetic managed-full-text gate fixture.',
     targetCanonicalBytes: 400 * MIB,
     profile: 'baseline',
     targetKind: 'managed_full_text_total',
   }),
   createCustomFixtureDefinition({
     id: 'managed-full-text-500mib',
-    description: 'Exact 500 MiB hard-boundary synthetic managed-full-text gate fixture.',
     targetCanonicalBytes: 500 * MIB,
     profile: 'baseline',
     targetKind: 'managed_full_text_total',
   }),
   createCustomFixtureDefinition({
     id: 'single-version-64mib',
-    description: 'Exact 64 MiB single-version stress fixture.',
     targetCanonicalBytes: 64 * MIB,
     profile: 'singleVersionStress',
     targetKind: 'single_version_full_text',
-    exactVersionCount: 1,
   }),
   createCustomFixtureDefinition({
     id: 'high-fragmentation-pathological',
-    description: 'Exact 16 MiB high-fragmentation pathological fixture.',
     targetCanonicalBytes: 16 * MIB,
     profile: 'highFragmentation',
     targetKind: 'pathological_high_fragmentation',
@@ -124,28 +147,60 @@ export const FIXTURE_DEFINITIONS = Object.freeze([
 ]);
 
 export function createCustomFixtureDefinition(input) {
+  assertAllowedObjectFields(input, [
+    'id',
+    'targetCanonicalBytes',
+    'profile',
+    'targetKind',
+  ], 'fixture definition');
   const profile = PROFILE_DEFINITIONS[input.profile];
   if (!profile) {
     throw new Error(`Unknown GATE-014 fixture profile: ${input.profile}`);
   }
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(input.id)) {
+  if (typeof input.id !== 'string' || !/^[a-z0-9][a-z0-9-]*$/.test(input.id)) {
     throw new Error('fixture id must be lowercase kebab-case');
   }
+  assertPublicSafeId(input.id, 'fixture id');
   if (!Number.isSafeInteger(input.targetCanonicalBytes) || input.targetCanonicalBytes <= 0) {
     throw new Error('targetCanonicalBytes must be a positive safe integer');
   }
-  return Object.freeze({
+  if (!Object.hasOwn(TARGET_KIND_DESCRIPTIONS, input.targetKind)) {
+    throw new Error('fixture definition must use a closed targetKind');
+  }
+  if (TARGET_KIND_BY_PROFILE[input.profile] !== input.targetKind) {
+    throw new Error('fixture targetKind does not match profile');
+  }
+  const description = `Exact ${input.targetCanonicalBytes}-byte ${TARGET_KIND_DESCRIPTIONS[input.targetKind]} ${input.id}.`;
+  return deepFreeze({
     id: input.id,
-    description: input.description,
+    description,
     targetCanonicalBytes: input.targetCanonicalBytes,
     targetKind: input.targetKind,
     profileKey: input.profile,
     profileName: profile.name,
-    exactVersionCount: input.exactVersionCount ?? null,
+    exactVersionCount: input.targetKind === 'single_version_full_text' ? 1 : null,
   });
 }
 
+function validateFixtureDefinition(definition) {
+  assertAllowedObjectFields(definition, FIXTURE_DEFINITION_FIELDS, 'fixture definition');
+  const expected = createCustomFixtureDefinition({
+    id: definition.id,
+    targetCanonicalBytes: definition.targetCanonicalBytes,
+    profile: definition.profileKey,
+    targetKind: definition.targetKind,
+  });
+  for (const field of FIXTURE_DEFINITION_FIELDS) {
+    if (definition[field] !== expected[field]) {
+      throw new Error(`fixture definition ${field} does not match its controlled value`);
+    }
+  }
+  return expected;
+}
+
 export async function createFixtureReceipt(definition, options = {}) {
+  assertAllowedObjectFields(options, ['seed'], 'createFixtureReceipt options');
+  definition = validateFixtureDefinition(definition);
   const seed = assertPublicSafeId(options.seed ?? DEFAULT_SEED, 'seed');
   const builder = new FixtureReceiptBuilder(definition, seed);
   await buildFixture(definition, seed, { builder });
@@ -153,11 +208,23 @@ export async function createFixtureReceipt(definition, options = {}) {
 }
 
 export async function writeFixtureArtifact(definition, options = {}) {
+  assertAllowedObjectFields(options, [
+    'seed',
+    'repositoryRoot',
+    'injectFailureAt',
+  ], 'writeFixtureArtifact options');
+  definition = validateFixtureDefinition(definition);
   const seed = assertPublicSafeId(options.seed ?? DEFAULT_SEED, 'seed');
-  const outputDirectory = path.resolve(
-    options.outputDirectory ?? path.join(REPOSITORY_ROOT, GENERATED_FIXTURE_RELATIVE_DIR),
+  assertInjectionPoint(options.injectFailureAt, [
+    'after-temp-open',
+    'after-first-record',
+    'after-close-before-publish',
+  ], 'artifact');
+  const outputDirectory = await resolveKnownRepositoryDirectory(
+    options.repositoryRoot,
+    GENERATED_FIXTURE_RELATIVE_DIR,
+    'Refusing to use unsafe GATE-014 generated fixture directory',
   );
-  await mkdir(outputDirectory, { recursive: true });
 
   const artifactPath = path.join(outputDirectory, `${definition.id}.jsonl`);
   let tempPath = path.join(outputDirectory, `.${definition.id}.${process.pid}.${randomUUID()}.tmp`);
@@ -207,11 +274,11 @@ export async function writeFixtureArtifact(definition, options = {}) {
 
     await rename(tempPath, artifactPath);
     tempPath = null;
-    return {
+    return deepFreeze({
       artifactPath,
       artifactSha256: readback.sha256,
       receipt,
-    };
+    });
   } catch (error) {
     await closeArtifactStreamAfterFailure(stream);
     if (tempPath) {
@@ -221,7 +288,83 @@ export async function writeFixtureArtifact(definition, options = {}) {
   }
 }
 
+export async function writeGoldenFixtureReceipt(definition, options = {}) {
+  assertAllowedObjectFields(options, [
+    'seed',
+    'repositoryRoot',
+    'injectFailureAt',
+  ], 'writeGoldenFixtureReceipt options');
+  definition = validateFixtureDefinition(definition);
+  const seed = assertPublicSafeId(options.seed ?? DEFAULT_SEED, 'seed');
+  const receipt = await createFixtureReceipt(definition, { seed });
+  return publishGoldenReceipt(definition, receipt, options);
+}
+
+async function publishGoldenReceipt(definition, receipt, options = {}) {
+  assertInjectionPoint(options.injectFailureAt, [
+    'after-temp-write',
+    'after-readback-before-publish',
+  ], 'receipt');
+  const receiptDirectory = await resolveKnownRepositoryDirectory(
+    options.repositoryRoot,
+    GOLDEN_RECEIPT_RELATIVE_DIR,
+    'Refusing to use unsafe GATE-014 golden receipt directory',
+  );
+  const receiptPath = path.join(receiptDirectory, `${definition.id}.receipt.json`);
+  let tempPath = path.join(
+    receiptDirectory,
+    `.${definition.id}.receipt.${process.pid}.${randomUUID()}.tmp`,
+  );
+  while (await pathExists(tempPath)) {
+    tempPath = path.join(
+      receiptDirectory,
+      `.${definition.id}.receipt.${process.pid}.${randomUUID()}.tmp`,
+    );
+  }
+  const serialized = `${JSON.stringify(receipt, null, 2)}\n`;
+  const expectedSha256 = sha256Hex(serialized);
+  const expectedBytes = byteLength(serialized);
+
+  try {
+    await writeFile(tempPath, serialized, { encoding: 'utf8', flag: 'wx' });
+    if (options.injectFailureAt === 'after-temp-write') {
+      throw injectedReceiptFailure(options.injectFailureAt);
+    }
+
+    const readback = await hashFile(tempPath);
+    if (readback.bytes !== expectedBytes || readback.sha256 !== expectedSha256) {
+      throw new Error('Golden receipt readback hash or byte mismatch');
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(await readFile(tempPath, 'utf8'));
+    } catch {
+      throw new Error('Golden receipt readback JSON parse failed');
+    }
+    if (JSON.stringify(parsed) !== JSON.stringify(receipt)) {
+      throw new Error('Golden receipt readback content mismatch');
+    }
+    if (options.injectFailureAt === 'after-readback-before-publish') {
+      throw injectedReceiptFailure(options.injectFailureAt);
+    }
+
+    await rename(tempPath, receiptPath);
+    tempPath = null;
+    return deepFreeze({
+      receiptPath,
+      receiptSha256: expectedSha256,
+      receipt,
+    });
+  } catch (error) {
+    if (tempPath) {
+      await rm(tempPath, { force: true });
+    }
+    throw error;
+  }
+}
+
 export async function cleanupGeneratedFixtureArtifacts(options = {}) {
+  assertAllowedObjectFields(options, ['repositoryRoot'], 'cleanupGeneratedFixtureArtifacts options');
   const outputDirectory = await resolveCleanupDirectory(options);
   const entries = await readdir(outputDirectory);
   const knownNames = new Set(FIXTURE_DEFINITIONS.map(definition => `${definition.id}.jsonl`));
@@ -229,6 +372,7 @@ export async function cleanupGeneratedFixtureArtifacts(options = {}) {
     knownNames.has(name) || isKnownGeneratedTempArtifactName(name)
   ));
 
+  let removedFileCount = 0;
   for (const name of candidates) {
     const target = path.join(outputDirectory, name);
     const targetStats = await lstat(target);
@@ -236,6 +380,7 @@ export async function cleanupGeneratedFixtureArtifacts(options = {}) {
       throw new Error('Refusing to clean unsafe GATE-014 fixture directory entry');
     }
     await rm(target, { force: false });
+    removedFileCount += 1;
   }
 
   const readbackEntries = await readdir(outputDirectory);
@@ -246,7 +391,7 @@ export async function cleanupGeneratedFixtureArtifacts(options = {}) {
     fixtureId: 'gate-014-generated-fixtures',
     operation: CLEANUP_OPERATION_ID,
     beforeFileCount: candidates.length,
-    removedFileCount: candidates.length,
+    removedFileCount,
     afterFileCount: remainingKnownNames.length + remainingTempNames.length,
     tempFileCountAfterCleanup: remainingTempNames.length,
     finalFileCountAfterCleanup: remainingKnownNames.length,
@@ -265,6 +410,10 @@ async function closeArtifactStreamAfterFailure(stream) {
 
 function injectedArtifactFailure(injectionPoint) {
   return new Error(`Injected GATE-014 artifact failure at ${injectionPoint}`);
+}
+
+function injectedReceiptFailure(injectionPoint) {
+  return new Error(`Injected GATE-014 receipt failure at ${injectionPoint}`);
 }
 
 async function buildFixture(definition, seed, options) {
@@ -834,7 +983,7 @@ class FixtureReceiptBuilder {
       .map(query => canonicalLine(query))
       .join('\n');
 
-    return {
+    return deepFreeze({
       receiptContract: RECEIPT_CONTRACT,
       generatorVersion: GENERATOR_VERSION,
       seed: this.seed,
@@ -888,11 +1037,16 @@ class FixtureReceiptBuilder {
         },
         {
           status: INSUFFICIENT_EVIDENCE,
+          subject: 'maximum_measured_segment_count_tail',
+          reason: 'No public-safe measured segment-count tail was supplied to this generator run.',
+        },
+        {
+          status: INSUFFICIENT_EVIDENCE,
           subject: 'browser_timing_memory_indexeddb_restart_failure_metrics',
           reason: 'This receipt freezes deterministic fixture bytes; browser gate runs must fill measurement receipts later.',
         },
       ],
-    };
+    });
   }
 }
 
@@ -922,6 +1076,10 @@ class DistributionAccumulator {
       realBilibiliSubtitleRepresentativeness: {
         status: INSUFFICIENT_EVIDENCE,
         reason: 'Synthetic public-safe generation was used; no measured public-safe Bilibili subtitle sample is attached.',
+      },
+      maximumMeasuredSegmentCountTail: {
+        status: INSUFFICIENT_EVIDENCE,
+        reason: 'Synthetic high-fragmentation stress is not a measured real-subtitle maximum tail.',
       },
       segmentLengthBytes: {
         ...this.segmentLengthBytes.toReceipt(),
@@ -1236,33 +1394,130 @@ function summarizeQueries(queries) {
   };
 }
 
-function malformedCandidate(candidateId, reasonCode, invalidField) {
-  return Object.freeze({
+function malformedCandidate(candidateId, expectedReasonCode, overrides) {
+  return {
     candidateId,
-    reasonCode,
-    invalidField,
-    excludedBeforeCanonicalBytes: true,
+    expectedReasonCode,
+    candidate: {
+      bvid: 'BV014GATEA0000000',
+      cid: 1_400_001,
+      ordinal: 0,
+      startSeconds: 0,
+      endSeconds: 1,
+      text: '公开安全 malformed control 01',
+      ...overrides,
+    },
+  };
+}
+
+export function validateManagedFullTextCandidate(candidate) {
+  assertAllowedObjectFields(candidate, [
+    'bvid',
+    'cid',
+    'ordinal',
+    'startSeconds',
+    'endSeconds',
+    'text',
+  ], 'managed full-text candidate', 'unsupported candidate field');
+
+  let reasonCode = null;
+  if (
+    typeof candidate.bvid !== 'string'
+    || !/^BV[0-9A-Za-z]{1,62}$/.test(candidate.bvid)
+    || !Number.isSafeInteger(candidate.cid)
+    || candidate.cid < 1
+    || !Number.isSafeInteger(candidate.ordinal)
+    || candidate.ordinal < 0
+  ) {
+    reasonCode = 'invalid_identity';
+  } else if (typeof candidate.text !== 'string' || candidate.text.length === 0) {
+    reasonCode = 'empty_text';
+  } else if (!isWellFormedString(candidate.text)) {
+    reasonCode = 'lone_surrogate';
+  } else if (
+    typeof candidate.startSeconds !== 'number'
+    || typeof candidate.endSeconds !== 'number'
+    || !Number.isFinite(candidate.startSeconds)
+    || !Number.isFinite(candidate.endSeconds)
+  ) {
+    reasonCode = 'non_finite_timing';
+  } else if (Object.is(candidate.startSeconds, -0) || Object.is(candidate.endSeconds, -0)) {
+    reasonCode = 'negative_zero';
+  } else if (
+    candidate.startSeconds < 0
+    || candidate.endSeconds < 0
+    || candidate.endSeconds <= candidate.startSeconds
+  ) {
+    reasonCode = 'invalid_timing';
+  }
+
+  if (reasonCode) {
+    return deepFreeze({
+      accepted: false,
+      reasonCode,
+      canonicalLine: null,
+      canonicalBytes: 0,
+    });
+  }
+
+  const serialized = canonicalLine({
+    record: 'segment',
+    contract: MANAGED_FULL_TEXT_CONTRACT,
+    ordinal: candidate.ordinal,
+    startSeconds: candidate.startSeconds,
+    endSeconds: candidate.endSeconds,
+    text: candidate.text,
+  });
+  return deepFreeze({
+    accepted: true,
+    reasonCode: null,
+    canonicalLine: serialized,
+    canonicalBytes: byteLengthWithLf(serialized),
   });
 }
 
 function malformedRowExclusionReceipt() {
   const byReason = {};
-  for (const candidate of MALFORMED_CANDIDATE_SUITE) {
-    byReason[candidate.reasonCode] = (byReason[candidate.reasonCode] ?? 0) + 1;
+  const publicSafeProjection = [];
+  let actualRejectedCount = 0;
+  let emittedRecordCount = 0;
+  let emittedCanonicalBytes = 0;
+  for (const testCase of MALFORMED_CANDIDATE_SUITE) {
+    const result = validateManagedFullTextCandidate(testCase.candidate);
+    if (result.accepted) {
+      emittedRecordCount += 1;
+      emittedCanonicalBytes += result.canonicalBytes;
+      continue;
+    }
+    if (result.reasonCode !== testCase.expectedReasonCode) {
+      throw new Error(`Malformed candidate classification drifted: ${testCase.candidateId}`);
+    }
+    actualRejectedCount += 1;
+    byReason[result.reasonCode] = (byReason[result.reasonCode] ?? 0) + 1;
+    publicSafeProjection.push({
+      candidateId: testCase.candidateId,
+      reasonCode: result.reasonCode,
+    });
   }
-  const suiteBody = MALFORMED_CANDIDATE_SUITE
+  if (emittedRecordCount !== 0 || emittedCanonicalBytes !== 0) {
+    throw new Error('Malformed candidate suite emitted canonical records');
+  }
+  const suiteBody = publicSafeProjection
     .map(candidate => canonicalLine(candidate))
     .join('\n');
 
   return {
-    suiteContract: 'gate-014-malformed-candidate-suite-v1',
-    total: MALFORMED_CANDIDATE_SUITE.length,
+    suiteContract: 'gate-014-malformed-candidate-suite-v2',
+    candidateCount: MALFORMED_CANDIDATE_SUITE.length,
+    actualRejectedCount,
+    total: actualRejectedCount,
     byReason,
-    candidateIds: MALFORMED_CANDIDATE_SUITE.map(candidate => candidate.candidateId),
-    emittedRecordCount: 0,
-    emittedCanonicalBytes: 0,
+    candidateIds: publicSafeProjection.map(candidate => candidate.candidateId),
+    emittedRecordCount,
+    emittedCanonicalBytes,
     candidateSuiteSha256: sha256Hex(`${suiteBody}\n`),
     exclusionStage: 'pre_canonical_validation',
+    hashProjectionFields: ['candidateId', 'reasonCode'],
   };
 }
 
@@ -1520,37 +1775,103 @@ async function pathExists(targetPath) {
 }
 
 async function resolveCleanupDirectory(options) {
-  const intendedDirectory = path.resolve(REPOSITORY_ROOT, GENERATED_FIXTURE_RELATIVE_DIR);
-  const outputDirectory = path.resolve(options.outputDirectory ?? intendedDirectory);
-  const allowCustomOutputDirectoryForTests = options.allowCustomOutputDirectoryForTests === true;
-
-  if (
-    isUnsafeCleanupDirectory(outputDirectory)
-    || (!allowCustomOutputDirectoryForTests && outputDirectory !== intendedDirectory)
-  ) {
-    throw new Error('Refusing to clean unsafe GATE-014 fixture directory');
-  }
-
-  await mkdir(outputDirectory, { recursive: true });
-  const directoryStats = await lstat(outputDirectory);
-  if (!directoryStats.isDirectory() || directoryStats.isSymbolicLink()) {
-    throw new Error('Refusing to clean unsafe GATE-014 fixture directory');
-  }
-
-  const parentRealPath = await realpath(path.dirname(outputDirectory));
-  const directoryRealPath = await realpath(outputDirectory);
-  const expectedRealPath = path.join(parentRealPath, path.basename(outputDirectory));
-  if (normalizePathForCompare(directoryRealPath) !== normalizePathForCompare(expectedRealPath)) {
-    throw new Error('Refusing to clean unsafe GATE-014 fixture directory');
-  }
-  return outputDirectory;
+  return resolveKnownRepositoryDirectory(
+    options.repositoryRoot,
+    GENERATED_FIXTURE_RELATIVE_DIR,
+    'Refusing to clean unsafe GATE-014 fixture directory',
+  );
 }
 
-function isUnsafeCleanupDirectory(outputDirectory) {
-  const root = path.parse(outputDirectory).root;
-  return normalizePathForCompare(outputDirectory) === normalizePathForCompare(root)
-    || normalizePathForCompare(outputDirectory) === normalizePathForCompare(REPOSITORY_ROOT)
-    || normalizePathForCompare(outputDirectory) === normalizePathForCompare(path.dirname(REPOSITORY_ROOT));
+async function resolveKnownRepositoryDirectory(repositoryRootOption, relativeDirectory, errorMessage) {
+  const repositoryRoot = path.resolve(repositoryRootOption ?? REPOSITORY_ROOT);
+  if (normalizePathForCompare(repositoryRoot) === normalizePathForCompare(path.parse(repositoryRoot).root)) {
+    throw new Error(errorMessage);
+  }
+
+  let repositoryStats;
+  try {
+    repositoryStats = await lstat(repositoryRoot);
+  } catch {
+    throw new Error(errorMessage);
+  }
+  if (!repositoryStats.isDirectory() || repositoryStats.isSymbolicLink()) {
+    throw new Error(errorMessage);
+  }
+
+  const repositoryRealPath = await realpath(repositoryRoot);
+  await assertRepositoryRootMarker(repositoryRoot, repositoryRealPath, errorMessage);
+  const components = relativeDirectory.split('/');
+  if (components.some(component => !component || component === '.' || component === '..')) {
+    throw new Error(errorMessage);
+  }
+  let currentPath = repositoryRoot;
+  let expectedRealPath = repositoryRealPath;
+  for (const component of components) {
+    currentPath = path.join(currentPath, component);
+    expectedRealPath = path.join(expectedRealPath, component);
+    try {
+      await mkdir(currentPath);
+    } catch (error) {
+      if (!error || error.code !== 'EEXIST') {
+        throw new Error(errorMessage);
+      }
+    }
+    const stats = await lstat(currentPath);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw new Error(errorMessage);
+    }
+    const currentRealPath = await realpath(currentPath);
+    if (normalizePathForCompare(currentRealPath) !== normalizePathForCompare(expectedRealPath)) {
+      throw new Error(errorMessage);
+    }
+  }
+
+  const finalRealPath = await realpath(currentPath);
+  const realRelativePath = path.relative(repositoryRealPath, finalRealPath);
+  if (
+    path.isAbsolute(realRelativePath)
+    || realRelativePath === '..'
+    || realRelativePath.startsWith(`..${path.sep}`)
+    || normalizePathForCompare(realRelativePath) !== normalizePathForCompare(relativeDirectory)
+  ) {
+    throw new Error(errorMessage);
+  }
+  return currentPath;
+}
+
+async function assertRepositoryRootMarker(repositoryRoot, repositoryRealPath, errorMessage) {
+  const packagePath = path.join(repositoryRoot, 'package.json');
+  let packageStats;
+  try {
+    packageStats = await lstat(packagePath);
+  } catch {
+    throw new Error(errorMessage);
+  }
+  if (!packageStats.isFile() || packageStats.isSymbolicLink()) {
+    throw new Error(errorMessage);
+  }
+  const packageRealPath = await realpath(packagePath);
+  if (
+    normalizePathForCompare(packageRealPath)
+    !== normalizePathForCompare(path.join(repositoryRealPath, 'package.json'))
+  ) {
+    throw new Error(errorMessage);
+  }
+  let packageMetadata;
+  try {
+    packageMetadata = JSON.parse(await readFile(packagePath, 'utf8'));
+  } catch {
+    throw new Error(errorMessage);
+  }
+  if (
+    !packageMetadata
+    || typeof packageMetadata !== 'object'
+    || Array.isArray(packageMetadata)
+    || packageMetadata.name !== 'bili-bill'
+    || packageMetadata.private !== true
+  ) {
+    throw new Error(errorMessage);
+  }
 }
 
 function normalizePathForCompare(targetPath) {
@@ -1558,27 +1879,77 @@ function normalizePathForCompare(targetPath) {
 }
 
 function isKnownGeneratedTempArtifactName(name) {
+  const uuidPattern = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
   for (const definition of FIXTURE_DEFINITIONS) {
-    if (name.startsWith(`.${definition.id}.`) && name.endsWith('.tmp')) {
+    const escapedId = definition.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`^\\.${escapedId}\\.[0-9]+\\.${uuidPattern}\\.tmp$`, 'i').test(name)) {
       return true;
     }
   }
   return false;
 }
 
+function assertInjectionPoint(value, allowedValues, label) {
+  if (value === undefined) {
+    return;
+  }
+  if (typeof value !== 'string' || !allowedValues.includes(value)) {
+    throw new Error(`${label} injection point must use a closed value`);
+  }
+}
+
 function assertWellFormedString(value) {
+  if (!isWellFormedString(value)) {
+    throw new Error('Synthetic text contains a lone surrogate');
+  }
+}
+
+function isWellFormedString(value) {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
     if (code >= 0xd800 && code <= 0xdbff) {
       const next = value.charCodeAt(index + 1);
       if (!(next >= 0xdc00 && next <= 0xdfff)) {
-        throw new Error('Synthetic text contains a lone high surrogate');
+        return false;
       }
       index += 1;
     } else if (code >= 0xdc00 && code <= 0xdfff) {
-      throw new Error('Synthetic text contains a lone low surrogate');
+      return false;
     }
   }
+  return true;
+}
+
+function assertAllowedObjectFields(
+  value,
+  allowedFields,
+  label,
+  unsupportedFieldPrefix = `${label} received unsupported field`,
+) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error(`${label} must be a plain object`);
+  }
+  const allowed = new Set(allowedFields);
+  for (const field of Object.keys(value)) {
+    if (!allowed.has(field)) {
+      throw new Error(`${unsupportedFieldPrefix}: ${field}`);
+    }
+  }
+}
+
+function deepFreeze(value, seen = new WeakSet()) {
+  if (value === null || typeof value !== 'object' || seen.has(value)) {
+    return value;
+  }
+  seen.add(value);
+  for (const key of Reflect.ownKeys(value)) {
+    deepFreeze(value[key], seen);
+  }
+  return Object.freeze(value);
 }
 
 async function main(argv) {
@@ -1589,9 +1960,7 @@ async function main(argv) {
   }
 
   if (args.cleanupGenerated) {
-    const receipt = await cleanupGeneratedFixtureArtifacts({
-      outputDirectory: path.resolve(REPOSITORY_ROOT, args.outputDir),
-    });
+    const receipt = await cleanupGeneratedFixtureArtifacts();
     console.log(JSON.stringify({
       generatorVersion: GENERATOR_VERSION,
       cleanupGenerated: true,
@@ -1607,25 +1976,22 @@ async function main(argv) {
     throw new Error(`Unknown fixture id: ${args.fixture}`);
   }
 
-  const receiptDirectory = path.resolve(REPOSITORY_ROOT, args.receiptDir);
-  await mkdir(receiptDirectory, { recursive: true });
   const summaries = [];
   for (const definition of definitions) {
-    const result = args.writeArtifacts
-      ? await writeFixtureArtifact(definition, {
-        seed: args.seed,
-        outputDirectory: path.resolve(REPOSITORY_ROOT, args.outputDir),
-      })
-      : { receipt: await createFixtureReceipt(definition, { seed: args.seed }) };
-    const receiptPath = path.join(receiptDirectory, `${definition.id}.receipt.json`);
-    await writeFile(receiptPath, `${JSON.stringify(result.receipt, null, 2)}\n`, 'utf8');
+    const artifactResult = args.writeArtifacts
+      ? await writeFixtureArtifact(definition, { seed: args.seed })
+      : null;
+    const receiptResult = artifactResult
+      ? await publishGoldenReceipt(definition, artifactResult.receipt)
+      : await writeGoldenFixtureReceipt(definition, { seed: args.seed });
     summaries.push({
       fixtureId: definition.id,
-      receiptPath: path.relative(REPOSITORY_ROOT, receiptPath).replaceAll('\\', '/'),
-      bytes: result.receipt.canonical.totalBytes,
-      sha256: result.receipt.canonical.fixtureSha256,
-      artifactPath: result.artifactPath
-        ? path.relative(REPOSITORY_ROOT, result.artifactPath).replaceAll('\\', '/')
+      receiptPath: path.relative(REPOSITORY_ROOT, receiptResult.receiptPath).replaceAll('\\', '/'),
+      receiptSha256: receiptResult.receiptSha256,
+      bytes: receiptResult.receipt.canonical.totalBytes,
+      sha256: receiptResult.receipt.canonical.fixtureSha256,
+      artifactPath: artifactResult
+        ? path.relative(REPOSITORY_ROOT, artifactResult.artifactPath).replaceAll('\\', '/')
         : null,
     });
   }
@@ -1641,8 +2007,6 @@ function parseArgs(argv) {
   const result = {
     fixture: 'all',
     seed: DEFAULT_SEED,
-    receiptDir: GOLDEN_RECEIPT_RELATIVE_DIR,
-    outputDir: GENERATED_FIXTURE_RELATIVE_DIR,
     writeArtifacts: false,
     cleanupGenerated: false,
     help: false,
@@ -1655,10 +2019,6 @@ function parseArgs(argv) {
       result.fixture = argv[++index];
     } else if (arg === '--seed') {
       result.seed = argv[++index];
-    } else if (arg === '--receipt-dir') {
-      result.receiptDir = argv[++index];
-    } else if (arg === '--output-dir') {
-      result.outputDir = argv[++index];
     } else if (arg === '--write-artifacts') {
       result.writeArtifacts = true;
     } else if (arg === '--cleanup-generated') {
@@ -1676,14 +2036,12 @@ function printHelp() {
 Options:
   --fixture <id|all>       Fixture to generate receipts for. Default: all
   --seed <seed>            Deterministic public-safe seed. Default: ${DEFAULT_SEED}
-  --receipt-dir <path>     Receipt output directory. Default: ${GOLDEN_RECEIPT_RELATIVE_DIR}
-  --write-artifacts        Also write generated JSONL fixtures under --output-dir. Opt-in only.
+  --write-artifacts        Also write JSONL fixtures under ${GENERATED_FIXTURE_RELATIVE_DIR}. Opt-in only.
   --cleanup-generated      Remove only known generated GATE-014 JSONL/temp artifacts.
-  --output-dir <path>      Generated artifact directory. Default: ${GENERATED_FIXTURE_RELATIVE_DIR}
 `);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2)).catch(error => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

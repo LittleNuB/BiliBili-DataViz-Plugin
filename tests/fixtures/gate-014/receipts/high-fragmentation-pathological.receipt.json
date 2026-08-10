@@ -1,10 +1,10 @@
 {
-  "receiptContract": "gate-014-fixture-receipt-v1",
-  "generatorVersion": "gate-014-fixture-generator-v1",
+  "receiptContract": "gate-014-fixture-receipt-v2",
+  "generatorVersion": "gate-014-fixture-generator-v2",
   "seed": "gate-014-public-safe-seed-v1",
   "fixture": {
     "id": "high-fragmentation-pathological",
-    "description": "Exact 16 MiB high-fragmentation pathological fixture.",
+    "description": "Exact 16777216-byte synthetic pathological high-fragmentation fixture high-fragmentation-pathological.",
     "targetKind": "pathological_high_fragmentation",
     "targetCanonicalBytes": 16777216,
     "profileName": "public_safe_high_fragmentation_pathological_v1",
@@ -114,6 +114,10 @@
     "realBilibiliSubtitleRepresentativeness": {
       "status": "insufficient_evidence",
       "reason": "Synthetic public-safe generation was used; no measured public-safe Bilibili subtitle sample is attached."
+    },
+    "maximumMeasuredSegmentCountTail": {
+      "status": "insufficient_evidence",
+      "reason": "Synthetic high-fragmentation stress is not a measured real-subtitle maximum tail."
     },
     "segmentLengthBytes": {
       "accumulator": "bounded_histogram_v1",
@@ -273,7 +277,9 @@
     }
   },
   "malformedRowExclusions": {
-    "suiteContract": "gate-014-malformed-candidate-suite-v1",
+    "suiteContract": "gate-014-malformed-candidate-suite-v2",
+    "candidateCount": 8,
+    "actualRejectedCount": 8,
     "total": 8,
     "byReason": {
       "empty_text": 1,
@@ -295,8 +301,12 @@
     ],
     "emittedRecordCount": 0,
     "emittedCanonicalBytes": 0,
-    "candidateSuiteSha256": "fcbd445962c70ac0bdc812a43fa817262d0a11fdde689a186473b2158421f060",
-    "exclusionStage": "pre_canonical_validation"
+    "candidateSuiteSha256": "805ecd0bdf775d16b2f18d5b9c5ef9d1193b2d9fc5e3940d53ac5128ed56f52c",
+    "exclusionStage": "pre_canonical_validation",
+    "hashProjectionFields": [
+      "candidateId",
+      "reasonCode"
+    ]
   },
   "querySuiteSummary": {
     "total": 145,
@@ -3070,7 +3080,7 @@
   ],
   "reusableReceiptHelpers": [
     {
-      "contract": "gate-014-receipt-helper-v1",
+      "contract": "gate-014-receipt-helper-v2",
       "helper": "createTimingReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3084,7 +3094,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v1",
+      "contract": "gate-014-receipt-helper-v2",
       "helper": "createMemoryReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3093,13 +3103,16 @@
         "heapUsedBytes",
         "heapTotalBytes",
         "rssBytes",
-        "peakHeapGrowthBytes"
+        "peakHeapGrowthBytes",
+        "peakHeapGrowthLimitBytes",
+        "metricsConsistent",
+        "withinGateLimit"
       ],
       "unavailableMetricStatus": "insufficient_evidence",
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v1",
+      "contract": "gate-014-receipt-helper-v2",
       "helper": "createIndexedDbUsageReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3107,13 +3120,14 @@
         "metricAvailable",
         "storageEstimateUsageBytes",
         "storageEstimateQuotaBytes",
-        "indexedDbDeltaBytes"
+        "indexedDbDeltaBytes",
+        "metricsConsistent"
       ],
       "unavailableMetricStatus": "insufficient_evidence",
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v1",
+      "contract": "gate-014-receipt-helper-v2",
       "helper": "createPersistedIndexSizeReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3121,13 +3135,16 @@
         "metricAvailable",
         "managedSourceBytes",
         "persistedIndexBytes",
-        "indexToSourceRatioPermille"
+        "indexToSourceRatioPermille",
+        "maximumIndexToSourceRatioPermille",
+        "metricsConsistent",
+        "withinGateLimit"
       ],
       "unavailableMetricStatus": "insufficient_evidence",
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v1",
+      "contract": "gate-014-receipt-helper-v2",
       "helper": "createRestartReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3135,13 +3152,20 @@
         "attempted",
         "completed",
         "preRestartCheckpoint",
-        "postRestartCheckpoint"
+        "postRestartCheckpoint",
+        "replayedBatchCount",
+        "checkpointRegressionBatchCount",
+        "checkpointProgressionValid",
+        "readbackVerified",
+        "mixedGenerationVisible",
+        "duplicatePostingsDetected",
+        "fullRebuildStarted"
       ],
       "unavailableMetricStatus": "insufficient_evidence",
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v1",
+      "contract": "gate-014-receipt-helper-v2",
       "helper": "createFailureInjectionReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3151,13 +3175,15 @@
         "completed",
         "visibleRowsAfterFailure",
         "cleanupRequired",
+        "cleanupCompleted",
+        "cleanupSatisfied",
         "readbackVerified"
       ],
       "unavailableMetricStatus": "insufficient_evidence",
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v1",
+      "contract": "gate-014-receipt-helper-v2",
       "helper": "createCleanupReadbackReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3167,7 +3193,8 @@
         "afterFileCount",
         "tempFileCountAfterCleanup",
         "finalFileCountAfterCleanup",
-        "readbackVerified"
+        "readbackVerified",
+        "countsConsistent"
       ],
       "unavailableMetricStatus": "insufficient_evidence",
       "storesSensitiveText": false
@@ -3178,6 +3205,11 @@
       "status": "insufficient_evidence",
       "subject": "real_bilibili_subtitle_representativeness",
       "reason": "No public-safe measured subtitle distribution was supplied to this generator run."
+    },
+    {
+      "status": "insufficient_evidence",
+      "subject": "maximum_measured_segment_count_tail",
+      "reason": "No public-safe measured segment-count tail was supplied to this generator run."
     },
     {
       "status": "insufficient_evidence",
