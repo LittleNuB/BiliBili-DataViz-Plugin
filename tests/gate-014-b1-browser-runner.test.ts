@@ -17,6 +17,7 @@ import {
   validateLoadedExtensionInventory,
   validateOfficialCftStableMetadata,
   validateSmokeResult,
+  waitForProductionExtensionReady,
   waitForProcessExit,
 } from "../scripts/gate-014-b1-browser-runner.mjs";
 import {
@@ -376,6 +377,55 @@ test("GATE-014-B1 binds production runtime proof only to its service worker and 
     "production-worker-session",
   );
   assert.equal(discoveryCount, 2);
+
+  let lateTargetAttached = false;
+  const lateClient = {
+    async send() {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return { targetInfos: [workerTarget] };
+    },
+  };
+  assert.equal(
+    await findProductionServiceWorkerSession(
+      lateClient,
+      {
+        async ensureServiceWorkerTargetId() {
+          lateTargetAttached = true;
+          return "late-session";
+        },
+      },
+      productionExtensionId,
+      { timeoutMs: 5, pollIntervalMs: 0 },
+    ),
+    null,
+  );
+  assert.equal(lateTargetAttached, false);
+
+  const expectedProduction = {
+    name: "Bili-Bill",
+    version: "0.13.0",
+    versionName: "0.13.0-alpha",
+  };
+  await assert.rejects(
+    () =>
+      waitForProductionExtensionReady(
+        {
+          async send() {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            return {
+              result: {
+                value: { id: productionExtensionId, ...expectedProduction },
+              },
+            };
+          },
+        },
+        "production-worker-session",
+        productionExtensionId,
+        expectedProduction,
+        { timeoutMs: 5, pollIntervalMs: 0 },
+      ),
+    /runtime_identity_failed/,
+  );
 });
 
 test("GATE-014-B1 browser smoke accepts only the fixed public-safe harness identity", () => {

@@ -319,7 +319,7 @@ async function runRestartRecovery(config, operationId) {
       0,
       config.restartHarnessReadyEpochMs - config.restartStartedEpochMs,
     );
-    const ledgerConsistency = await readLedgerConsistency(database);
+    const initialLedgerConsistency = await readLedgerConsistency(database);
     const stateReadDurationMs = performance.now() - stateReadStartedAt;
     if (stateReadDurationMs <= 0) {
       throw new Error("fixture_read_timing_unavailable");
@@ -330,29 +330,46 @@ async function runRestartRecovery(config, operationId) {
     );
     const durableStateVerified =
       operationState?.state === "committed" &&
-      ledgerConsistency.matches &&
-      ledgerConsistency.visibleVersionCount === config.expectedVersionCount &&
-      ledgerConsistency.visibleCanonicalBytes === config.expectedCanonicalBytes;
+      initialLedgerConsistency.matches &&
+      initialLedgerConsistency.visibleVersionCount ===
+        config.expectedVersionCount &&
+      initialLedgerConsistency.visibleCanonicalBytes ===
+        config.expectedCanonicalBytes;
     const normalizationOperation = await runMarkerNormalization(
       database,
       config,
       operationId,
     );
+    const finalReadStartedAt = performance.now();
+    const finalLedgerConsistency = await readLedgerConsistency(database);
+    const finalReadDurationMs = performance.now() - finalReadStartedAt;
+    if (finalReadDurationMs <= 0) {
+      throw new Error("fixture_read_timing_unavailable");
+    }
     const firstNormalizationProgressMs =
       normalizationOperation.progressEventOffsetsMs[0];
     if (!Number.isFinite(firstNormalizationProgressMs)) {
       throw new Error("fixture_restart_progress_missing");
     }
     const nextProgressMs = Math.max(0, firstNormalizationProgressMs);
+    const normalizationProgressOffsetsMs =
+      normalizationOperation.progressEventOffsetsMs.map(
+        (offset) => stateVisibleMs + offset,
+      );
+    const completedElapsedMs = Math.max(
+      0,
+      Date.now() - config.restartStartedEpochMs,
+    );
     const operationDurationMs = Math.max(
       stateVisibleMs,
-      stateVisibleMs + nextProgressMs,
+      completedElapsedMs,
+      ...normalizationProgressOffsetsMs,
     );
     metrics.sampleHeap();
     const browserMetrics = metrics.stop();
     const storageAfter = await readStorageEstimate();
     const progressEventOffsetsMs = normalizeProgressEvents(
-      [harnessReadyMs, stateVisibleMs, stateVisibleMs + nextProgressMs],
+      [harnessReadyMs, stateVisibleMs, ...normalizationProgressOffsetsMs],
       operationDurationMs,
     );
     return {
@@ -364,9 +381,9 @@ async function runRestartRecovery(config, operationId) {
         totalDurationMs: operationDurationMs,
         committedBatchCount: 0,
         committedBatchDurationsMs: [],
-        readBatchDurationsMs: [stateReadDurationMs],
+        readBatchDurationsMs: [stateReadDurationMs, finalReadDurationMs],
         readTimingEvidence: {
-          finalLedgerAndVisibleReadbackMs: stateReadDurationMs,
+          finalLedgerAndVisibleReadbackMs: finalReadDurationMs,
           preCommitVisibleGraphMs: null,
           preCommitLedgerAndVisibleReadbackMs: null,
           postCommitVisibleGraphMs: null,
@@ -374,6 +391,7 @@ async function runRestartRecovery(config, operationId) {
         batchDurationsMs: [
           stateReadDurationMs,
           normalizationOperation.batchDurationsMs[0],
+          finalReadDurationMs,
         ],
         progressEventOffsetsMs,
         restart: {
@@ -384,7 +402,7 @@ async function runRestartRecovery(config, operationId) {
           readbackVerified:
             durableStateVerified &&
             normalizationOperation.readbackVerified &&
-            ledgerConsistency.matches,
+            finalLedgerConsistency.matches,
         },
         cancellation: { attempted: false },
         mainThread: browserMetrics.mainThreadMetricAvailable
@@ -407,16 +425,17 @@ async function runRestartRecovery(config, operationId) {
             },
         storageBefore,
         storageAfter,
-        ledgerConsistencyVerified: ledgerConsistency.matches,
+        ledgerConsistencyVerified: finalLedgerConsistency.matches,
         readbackVerified:
           durableStateVerified &&
           normalizationOperation.readbackVerified &&
-          ledgerConsistency.matches,
+          finalLedgerConsistency.matches,
         detail: {
           durableStateVerified,
           harnessReadyMs,
           normalizationReadbackVerified:
             normalizationOperation.readbackVerified,
+          finalLedgerConsistencyVerified: finalLedgerConsistency.matches,
         },
       },
     };

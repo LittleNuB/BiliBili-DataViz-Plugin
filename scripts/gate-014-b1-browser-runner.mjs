@@ -911,10 +911,13 @@ async function evaluateInHarnessProfile(
         productionExtensionId,
         harnessExtensionId: B1_HARNESS_EXTENSION_ID,
       });
+      const productionProofDeadlineEpochMs =
+        Date.now() + B1_CDP_SETUP_TIMEOUT_MS;
       const productionSessionId = await findProductionServiceWorkerSession(
         client,
         targetObserver,
         productionExtensionId,
+        { deadlineEpochMs: productionProofDeadlineEpochMs },
       );
       if (!productionSessionId) {
         throw new Error("browser_production_extension_target_not_observed");
@@ -924,6 +927,7 @@ async function evaluateInHarnessProfile(
         productionSessionId,
         productionExtensionId,
         productionIdentity,
+        { deadlineEpochMs: productionProofDeadlineEpochMs },
       );
       const resolvedExpression =
         typeof expression === "function"
@@ -1123,7 +1127,7 @@ function createExtensionTargetObserver(client, observation) {
     typeof targetInfo?.url === "string" &&
     targetInfo.url.startsWith("chrome-extension://");
 
-  const ensureTarget = (targetInfo) => {
+  const ensureTarget = (targetInfo, timeoutMs = B1_CDP_SETUP_TIMEOUT_MS) => {
     if (!shouldObserve(targetInfo)) {
       return Promise.resolve(null);
     }
@@ -1134,6 +1138,7 @@ function createExtensionTargetObserver(client, observation) {
       client,
       observation,
       targetInfo,
+      timeoutMs,
     ).catch((error) => {
       attachmentFailure = error;
       throw error;
@@ -1193,12 +1198,16 @@ function createExtensionTargetObserver(client, observation) {
       );
       return ensureTarget(targetInfo);
     },
-    async ensureServiceWorkerTargetId(targetId, extensionId) {
+    async ensureServiceWorkerTargetId(
+      targetId,
+      extensionId,
+      timeoutMs = B1_CDP_SETUP_TIMEOUT_MS,
+    ) {
       const { targetInfo } = await client.send(
         "Target.getTargetInfo",
         { targetId },
         undefined,
-        B1_CDP_SETUP_TIMEOUT_MS,
+        timeoutMs,
       );
       if (
         targetInfo?.type !== "service_worker" ||
@@ -1206,7 +1215,7 @@ function createExtensionTargetObserver(client, observation) {
       ) {
         throw new Error("browser_production_service_worker_target_invalid");
       }
-      return ensureTarget(targetInfo);
+      return ensureTarget(targetInfo, timeoutMs);
     },
     async settle() {
       await settleAttachments();
@@ -1225,17 +1234,22 @@ function createExtensionTargetObserver(client, observation) {
   };
 }
 
-async function attachObservedTarget(client, observation, targetInfo) {
+async function attachObservedTarget(
+  client,
+  observation,
+  targetInfo,
+  timeoutMs = B1_CDP_SETUP_TIMEOUT_MS,
+) {
   const { sessionId } = await client.send(
     "Target.attachToTarget",
     { targetId: targetInfo.targetId, flatten: true },
     undefined,
-    B1_CDP_SETUP_TIMEOUT_MS,
+    timeoutMs,
   );
   observation.observeSession(sessionId, new URL(targetInfo.url).hostname);
   await Promise.all(
     ["Runtime.enable", "Network.enable", "Log.enable"].map((method) =>
-      client.send(method, {}, sessionId, B1_CDP_SETUP_TIMEOUT_MS),
+      client.send(method, {}, sessionId, timeoutMs),
     ),
   );
   return sessionId;
@@ -1275,24 +1289,42 @@ async function readLoadedExtensionInventory(client, sessionId) {
   return evaluation.result.value;
 }
 
-async function waitForProductionExtensionReady(
+export async function waitForProductionExtensionReady(
   client,
   sessionId,
   expectedExtensionId,
   expectedIdentity,
+  options = {},
 ) {
-  const deadline = Date.now() + B1_CDP_SETUP_TIMEOUT_MS;
+  const deadline = resolveSetupDeadline(options);
+  const pollIntervalMs = validatePollInterval(options.pollIntervalMs);
   while (Date.now() < deadline) {
-    const evaluation = await client.send(
-      "Runtime.evaluate",
-      {
-        expression:
-          "(() => { const manifest = chrome.runtime.getManifest(); return { id: chrome.runtime.id, name: manifest.name, version: manifest.version, versionName: manifest.version_name ?? null }; })()",
-        returnByValue: true,
-      },
-      sessionId,
-      B1_CDP_SETUP_TIMEOUT_MS,
-    );
+    const remainingMs = deadline - Date.now();
+    let evaluation;
+    try {
+      evaluation = await settleWithin(
+        client.send(
+          "Runtime.evaluate",
+          {
+            expression:
+              "(() => { const manifest = chrome.runtime.getManifest(); return { id: chrome.runtime.id, name: manifest.name, version: manifest.version, versionName: manifest.version_name ?? null }; })()",
+            returnByValue: true,
+          },
+          sessionId,
+          remainingMs,
+        ),
+        remainingMs,
+      );
+    } catch {
+      if (Date.now() >= deadline) {
+        break;
+      }
+      await delay(Math.min(pollIntervalMs, deadline - Date.now()));
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      break;
+    }
     const identity = evaluation.result?.value;
     if (
       !evaluation.exceptionDetails &&
@@ -1303,7 +1335,7 @@ async function waitForProductionExtensionReady(
     ) {
       return;
     }
-    await delay(50);
+    await delay(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));
   }
   throw new Error("browser_production_extension_runtime_identity_failed");
 }
@@ -1329,43 +1361,96 @@ export async function findProductionServiceWorkerSession(
   extensionId,
   options = {},
 ) {
-  const timeoutMs = options.timeoutMs ?? B1_CDP_SETUP_TIMEOUT_MS;
-  const pollIntervalMs = options.pollIntervalMs ?? 50;
-  if (
-    !Number.isSafeInteger(timeoutMs) ||
-    timeoutMs < 1 ||
-    !Number.isSafeInteger(pollIntervalMs) ||
-    pollIntervalMs < 0
-  ) {
-    throw new Error("browser_production_service_worker_poll_invalid");
-  }
-  const deadline = Date.now() + timeoutMs;
-  do {
-    const { targetInfos = [] } = await client.send(
-      "Target.getTargets",
-      {},
-      undefined,
-      B1_CDP_SETUP_TIMEOUT_MS,
-    );
+  const deadline = resolveSetupDeadline(options);
+  const pollIntervalMs = validatePollInterval(options.pollIntervalMs);
+  while (Date.now() < deadline) {
+    const remainingMs = deadline - Date.now();
+    let targetInfos;
+    try {
+      ({ targetInfos = [] } = await settleWithin(
+        client.send("Target.getTargets", {}, undefined, remainingMs),
+        remainingMs,
+      ));
+    } catch {
+      if (Date.now() >= deadline) {
+        return null;
+      }
+      await delay(Math.min(pollIntervalMs, deadline - Date.now()));
+      continue;
+    }
+    if (Date.now() > deadline) {
+      return null;
+    }
     const target = selectProductionServiceWorkerTarget(
       targetInfos,
       extensionId,
     );
     if (target) {
+      const attachRemainingMs = deadline - Date.now();
+      if (attachRemainingMs <= 0) {
+        return null;
+      }
       try {
-        return await targetObserver.ensureServiceWorkerTargetId(
-          target.targetId,
-          extensionId,
+        const sessionId = await settleWithin(
+          targetObserver.ensureServiceWorkerTargetId(
+            target.targetId,
+            extensionId,
+            attachRemainingMs,
+          ),
+          attachRemainingMs,
         );
+        return Date.now() < deadline ? sessionId : null;
       } catch {
         // A Manifest V3 worker can stop between discovery and attachment.
       }
     }
     if (Date.now() < deadline) {
-      await delay(pollIntervalMs);
+      await delay(Math.min(pollIntervalMs, deadline - Date.now()));
     }
-  } while (Date.now() < deadline);
+  }
   return null;
+}
+
+function resolveSetupDeadline(options) {
+  if (options.deadlineEpochMs !== undefined) {
+    if (!Number.isSafeInteger(options.deadlineEpochMs)) {
+      throw new Error("browser_production_service_worker_poll_invalid");
+    }
+    return options.deadlineEpochMs;
+  }
+  const timeoutMs = options.timeoutMs ?? B1_CDP_SETUP_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+    throw new Error("browser_production_service_worker_poll_invalid");
+  }
+  return Date.now() + timeoutMs;
+}
+
+function validatePollInterval(value) {
+  const pollIntervalMs = value ?? 50;
+  if (!Number.isSafeInteger(pollIntervalMs) || pollIntervalMs < 0) {
+    throw new Error("browser_production_service_worker_poll_invalid");
+  }
+  return pollIntervalMs;
+}
+
+async function settleWithin(promise, timeoutMs) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("cdp_command_timeout");
+  }
+  let timeoutId;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error("cdp_command_timeout")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function getExtensionIdFromTargetUrl(value) {
