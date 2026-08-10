@@ -65,16 +65,7 @@ const OPERATIONS_REQUIRING_COMMITTED_WRITE_TIMING = new Set([
   "full_clear",
   "restore_staging",
 ]);
-const OPERATIONS_REQUIRING_READ_BATCH_TIMING = new Set([
-  "restart",
-  "marker_normalization",
-  "ordered_read",
-  "ledger_repair",
-  "cancellation",
-  "selected_version_removal",
-  "full_clear",
-  "quota_failure",
-]);
+const OPERATIONS_REQUIRING_READ_BATCH_TIMING = new Set(B1_OPERATION_KINDS);
 
 const ASSERTION_FIELDS = Object.freeze([
   "atomicVersionCommitOrRollback",
@@ -693,6 +684,15 @@ export function createB1OperationReceipt(input) {
     batchDurationsMs.length
   ) {
     failures.push("classified_batch_count_exceeds_instrumented_count");
+  }
+  if (
+    !isDurationMultisetIncluded(
+      batchDurationsMs,
+      committedBatchDurationsMs,
+      readBatchDurationsMs,
+    )
+  ) {
+    failures.push("classified_batch_timing_missing_from_instrumented");
   }
   const totalDurationLimitMs = TOTAL_DURATION_LIMITS_MS[operation] ?? null;
   if (totalDurationLimitMs !== null && totalDurationMs > totalDurationLimitMs) {
@@ -1655,6 +1655,24 @@ function validateNumberArray(value, label, { minimumLength }) {
   );
 }
 
+function isDurationMultisetIncluded(
+  instrumentedDurations,
+  ...classifiedDurationGroups
+) {
+  const available = new Map();
+  for (const duration of instrumentedDurations) {
+    available.set(duration, (available.get(duration) ?? 0) + 1);
+  }
+  for (const duration of classifiedDurationGroups.flat()) {
+    const remaining = available.get(duration) ?? 0;
+    if (remaining === 0) {
+      return false;
+    }
+    available.set(duration, remaining - 1);
+  }
+  return true;
+}
+
 function validateBrowserObservation(value) {
   assertPlainObject(value, "execution.browserObservation");
   assertAllowedFields(value, [
@@ -1663,6 +1681,8 @@ function validateBrowserObservation(value) {
     "observationScope",
     "preAttachEventsObserved",
     "observedTargetCount",
+    "productionExtensionTargetCount",
+    "harnessExtensionTargetCount",
     "networkMetricAvailable",
     "networkRequestCount",
     "loopbackRequestCount",
@@ -1695,6 +1715,14 @@ function validateBrowserObservation(value) {
     observedTargetCount: assertPositiveSafeInteger(
       value.observedTargetCount,
       "execution.browserObservation.observedTargetCount",
+    ),
+    productionExtensionTargetCount: assertPositiveSafeInteger(
+      value.productionExtensionTargetCount,
+      "execution.browserObservation.productionExtensionTargetCount",
+    ),
+    harnessExtensionTargetCount: assertPositiveSafeInteger(
+      value.harnessExtensionTargetCount,
+      "execution.browserObservation.harnessExtensionTargetCount",
     ),
     networkMetricAvailable: assertExactBoolean(
       value.networkMetricAvailable,
@@ -1734,10 +1762,16 @@ function validateBrowserObservation(value) {
     ),
   };
   if (
+    observation.productionExtensionTargetCount <
+      observation.browserLaunchCount ||
+    observation.harnessExtensionTargetCount < observation.browserLaunchCount ||
+    observation.productionExtensionTargetCount +
+      observation.harnessExtensionTargetCount >
+      observation.observedTargetCount ||
     observation.loopbackRequestCount +
       observation.extensionRequestCount +
       observation.externalRequestAttemptCount >
-    observation.networkRequestCount
+      observation.networkRequestCount
   ) {
     throw new Error(
       "execution.browserObservation classified requests exceed total",

@@ -19,6 +19,9 @@ import { B1_OPERATION_KINDS } from "./gate-014-b1-receipt.mjs";
 export const B1_HARNESS_EXTENSION_ID = "aeangaiofkodlenmmejflbojmomlamoj";
 export const B1_LIFECYCLE_EVALUATION_TIMEOUT_MS = 45 * 60 * 1_000;
 const B1_CDP_SETUP_TIMEOUT_MS = 30_000;
+const B1_HARNESS_EXTENSION_NAME = "Bili-Bill GATE-014-B1 Harness";
+const B1_HARNESS_EXTENSION_VERSION = "1.0.0";
+const EXTENSION_ID_PATTERN = /^[a-p]{32}$/;
 const execFile = promisify(execFileCallback);
 const CFT_STABLE_VERSION_SOURCE =
   "official_last_known_good_versions_with_downloads_json";
@@ -245,6 +248,8 @@ export function validateBrowserExecutionObservation(observation) {
     "observationScope",
     "preAttachEventsObserved",
     "observedTargetCount",
+    "productionExtensionTargetCount",
+    "harnessExtensionTargetCount",
     "networkMetricAvailable",
     "networkRequestCount",
     "loopbackRequestCount",
@@ -260,6 +265,8 @@ export function validateBrowserExecutionObservation(observation) {
   const integerFields = [
     "browserLaunchCount",
     "observedTargetCount",
+    "productionExtensionTargetCount",
+    "harnessExtensionTargetCount",
     "networkRequestCount",
     "loopbackRequestCount",
     "extensionRequestCount",
@@ -280,6 +287,12 @@ export function validateBrowserExecutionObservation(observation) {
     ) ||
     observation.browserLaunchCount < 1 ||
     observation.observedTargetCount < 1 ||
+    observation.productionExtensionTargetCount <
+      observation.browserLaunchCount ||
+    observation.harnessExtensionTargetCount < observation.browserLaunchCount ||
+    observation.productionExtensionTargetCount +
+      observation.harnessExtensionTargetCount >
+      observation.observedTargetCount ||
     observation.loopbackRequestCount +
       observation.extensionRequestCount +
       observation.externalRequestAttemptCount >
@@ -299,6 +312,8 @@ export function combineBrowserExecutionObservations(...observations) {
     observationScope: "all_loaded_extension_targets_after_devtools_attach",
     preAttachEventsObserved: false,
     observedTargetCount: 0,
+    productionExtensionTargetCount: 0,
+    harnessExtensionTargetCount: 0,
     networkMetricAvailable: true,
     networkRequestCount: 0,
     loopbackRequestCount: 0,
@@ -313,6 +328,8 @@ export function combineBrowserExecutionObservations(...observations) {
     for (const field of [
       "browserLaunchCount",
       "observedTargetCount",
+      "productionExtensionTargetCount",
+      "harnessExtensionTargetCount",
       "networkRequestCount",
       "loopbackRequestCount",
       "extensionRequestCount",
@@ -324,6 +341,64 @@ export function combineBrowserExecutionObservations(...observations) {
     }
   }
   return validateBrowserExecutionObservation(combined);
+}
+
+export function validateLoadedExtensionInventory(
+  inventory,
+  expectedProduction,
+) {
+  if (!Array.isArray(inventory)) {
+    throw new Error("browser_loaded_extension_inventory_invalid");
+  }
+  const validatedExpectedProduction =
+    validateExpectedProductionExtensionIdentity(expectedProduction);
+  const enabledExtensions = inventory.filter(
+    (extension) =>
+      extension &&
+      typeof extension === "object" &&
+      !Array.isArray(extension) &&
+      extension.enabled === true &&
+      extension.type === "extension" &&
+      EXTENSION_ID_PATTERN.test(extension.id ?? ""),
+  );
+  const harnessMatches = enabledExtensions.filter(
+    (extension) =>
+      extension.id === B1_HARNESS_EXTENSION_ID &&
+      extension.name === B1_HARNESS_EXTENSION_NAME &&
+      extension.version === B1_HARNESS_EXTENSION_VERSION,
+  );
+  const productionMatches = enabledExtensions.filter(
+    (extension) =>
+      extension.id !== B1_HARNESS_EXTENSION_ID &&
+      extension.name === validatedExpectedProduction.name &&
+      extension.version === validatedExpectedProduction.version &&
+      extension.versionName === validatedExpectedProduction.versionName,
+  );
+  if (harnessMatches.length !== 1 || productionMatches.length !== 1) {
+    throw new Error("browser_required_extensions_not_loaded");
+  }
+  return Object.freeze({
+    productionExtensionId: productionMatches[0].id,
+  });
+}
+
+function validateExpectedProductionExtensionIdentity(expectedProduction) {
+  const expectedFields = ["name", "version", "versionName"];
+  if (
+    expectedProduction === null ||
+    typeof expectedProduction !== "object" ||
+    Array.isArray(expectedProduction) ||
+    Object.keys(expectedProduction).sort().join("|") !==
+      expectedFields.sort().join("|") ||
+    typeof expectedProduction.name !== "string" ||
+    expectedProduction.name.length === 0 ||
+    !/^\d+\.\d+\.\d+$/.test(expectedProduction.version ?? "") ||
+    typeof expectedProduction.versionName !== "string" ||
+    expectedProduction.versionName.length === 0
+  ) {
+    throw new Error("browser_production_extension_identity_invalid");
+  }
+  return Object.freeze({ ...expectedProduction });
 }
 
 export function validateSmokeResult(result) {
@@ -779,6 +854,8 @@ async function evaluateInHarnessProfile(
     access(path.join(productionExtension, "manifest.json")),
     access(path.join(harnessExtension, "manifest.json")),
   ]);
+  const productionIdentity =
+    await readProductionExtensionIdentity(productionExtension);
   await rm(path.join(profileDirectory, "DevToolsActivePort"), { force: true });
   const chromeArguments = buildChromeArguments({
     profileDirectory,
@@ -824,6 +901,29 @@ async function evaluateInHarnessProfile(
         throw new Error("browser_runner_target_not_observed");
       }
       await waitForHarnessReady(client, sessionId);
+      const inventory = await readLoadedExtensionInventory(client, sessionId);
+      const { productionExtensionId } = validateLoadedExtensionInventory(
+        inventory,
+        productionIdentity,
+      );
+      observation.setRequiredExtensionIds({
+        productionExtensionId,
+        harnessExtensionId: B1_HARNESS_EXTENSION_ID,
+      });
+      const productionSessionId = await findExtensionTargetSession(
+        client,
+        targetObserver,
+        productionExtensionId,
+      );
+      if (!productionSessionId) {
+        throw new Error("browser_production_extension_target_not_observed");
+      }
+      await waitForProductionExtensionReady(
+        client,
+        productionSessionId,
+        productionExtensionId,
+        productionIdentity,
+      );
       const resolvedExpression =
         typeof expression === "function"
           ? expression({ harnessReadyEpochMs: Date.now() })
@@ -877,6 +977,8 @@ async function evaluateInHarnessProfile(
 
 function createCdpExecutionObservation(client) {
   const observedSessionIds = new Set();
+  const observedExtensionIds = new Map();
+  let requiredExtensionIds = null;
   const counts = {
     networkRequestCount: 0,
     loopbackRequestCount: 0,
@@ -921,20 +1023,46 @@ function createCdpExecutionObservation(client) {
     }
   });
   return {
-    observeSession(sessionId) {
+    observeSession(sessionId, extensionId) {
       if (typeof sessionId !== "string" || sessionId.length === 0) {
         throw new Error("browser_observation_session_invalid");
       }
+      if (!EXTENSION_ID_PATTERN.test(extensionId ?? "")) {
+        throw new Error("browser_observation_extension_identity_invalid");
+      }
       observedSessionIds.add(sessionId);
+      observedExtensionIds.set(sessionId, extensionId);
+    },
+    setRequiredExtensionIds({ productionExtensionId, harnessExtensionId }) {
+      if (
+        !EXTENSION_ID_PATTERN.test(productionExtensionId ?? "") ||
+        !EXTENSION_ID_PATTERN.test(harnessExtensionId ?? "") ||
+        productionExtensionId === harnessExtensionId
+      ) {
+        throw new Error("browser_observation_required_identity_invalid");
+      }
+      requiredExtensionIds = { productionExtensionId, harnessExtensionId };
     },
     finish() {
+      if (!requiredExtensionIds) {
+        throw new Error("browser_observation_required_identity_missing");
+      }
       unsubscribe();
+      const extensionIds = [...observedExtensionIds.values()];
       return {
         contract: "gate-014-b1-browser-observation-v1",
         browserLaunchCount: 1,
         observationScope: "all_loaded_extension_targets_after_devtools_attach",
         preAttachEventsObserved: false,
         observedTargetCount: observedSessionIds.size,
+        productionExtensionTargetCount: extensionIds.filter(
+          (extensionId) =>
+            extensionId === requiredExtensionIds.productionExtensionId,
+        ).length,
+        harnessExtensionTargetCount: extensionIds.filter(
+          (extensionId) =>
+            extensionId === requiredExtensionIds.harnessExtensionId,
+        ).length,
         networkMetricAvailable: true,
         ...counts,
         consoleMetricAvailable: true,
@@ -1004,7 +1132,7 @@ function createExtensionTargetObserver(client, observation) {
     const attachment = attachObservedTarget(
       client,
       observation,
-      targetInfo.targetId,
+      targetInfo,
     ).catch((error) => {
       attachmentFailure = error;
       throw error;
@@ -1081,20 +1209,108 @@ function createExtensionTargetObserver(client, observation) {
   };
 }
 
-async function attachObservedTarget(client, observation, targetId) {
+async function attachObservedTarget(client, observation, targetInfo) {
   const { sessionId } = await client.send(
     "Target.attachToTarget",
-    { targetId, flatten: true },
+    { targetId: targetInfo.targetId, flatten: true },
     undefined,
     B1_CDP_SETUP_TIMEOUT_MS,
   );
-  observation.observeSession(sessionId);
+  observation.observeSession(sessionId, new URL(targetInfo.url).hostname);
   await Promise.all(
     ["Runtime.enable", "Network.enable", "Log.enable"].map((method) =>
       client.send(method, {}, sessionId, B1_CDP_SETUP_TIMEOUT_MS),
     ),
   );
   return sessionId;
+}
+
+async function readProductionExtensionIdentity(productionExtension) {
+  let manifest;
+  try {
+    manifest = JSON.parse(
+      await readFile(path.join(productionExtension, "manifest.json"), "utf8"),
+    );
+  } catch {
+    throw new Error("browser_production_extension_manifest_invalid");
+  }
+  const identity = {
+    name: manifest?.name,
+    version: manifest?.version,
+    versionName: manifest?.version_name,
+  };
+  return validateExpectedProductionExtensionIdentity(identity);
+}
+
+async function readLoadedExtensionInventory(client, sessionId) {
+  const evaluation = await client.send(
+    "Runtime.evaluate",
+    {
+      expression: "globalThis.runGate014B1LoadedExtensionInventory()",
+      awaitPromise: true,
+      returnByValue: true,
+    },
+    sessionId,
+    B1_CDP_SETUP_TIMEOUT_MS,
+  );
+  if (evaluation.exceptionDetails || !Array.isArray(evaluation.result?.value)) {
+    throw new Error("browser_loaded_extension_inventory_failed");
+  }
+  return evaluation.result.value;
+}
+
+async function waitForProductionExtensionReady(
+  client,
+  sessionId,
+  expectedExtensionId,
+  expectedIdentity,
+) {
+  const deadline = Date.now() + B1_CDP_SETUP_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const evaluation = await client.send(
+      "Runtime.evaluate",
+      {
+        expression:
+          "(() => { const manifest = chrome.runtime.getManifest(); return { id: chrome.runtime.id, name: manifest.name, version: manifest.version, versionName: manifest.version_name ?? null }; })()",
+        returnByValue: true,
+      },
+      sessionId,
+      B1_CDP_SETUP_TIMEOUT_MS,
+    );
+    const identity = evaluation.result?.value;
+    if (
+      !evaluation.exceptionDetails &&
+      identity?.id === expectedExtensionId &&
+      identity?.name === expectedIdentity.name &&
+      identity?.version === expectedIdentity.version &&
+      identity?.versionName === expectedIdentity.versionName
+    ) {
+      return;
+    }
+    await delay(50);
+  }
+  throw new Error("browser_production_extension_runtime_identity_failed");
+}
+
+async function findExtensionTargetSession(client, targetObserver, extensionId) {
+  const { targetInfos = [] } = await client.send(
+    "Target.getTargets",
+    {},
+    undefined,
+    B1_CDP_SETUP_TIMEOUT_MS,
+  );
+  const target = targetInfos.find((candidate) => {
+    try {
+      return (
+        ["page", "background_page", "service_worker", "shared_worker"].includes(
+          candidate?.type,
+        ) && new URL(candidate.url).hostname === extensionId
+      );
+    } catch {
+      return false;
+    }
+  });
+  return target ? targetObserver.ensureTargetId(target.targetId) : null;
 }
 
 async function serveFixture(artifactPath, fixtureId) {

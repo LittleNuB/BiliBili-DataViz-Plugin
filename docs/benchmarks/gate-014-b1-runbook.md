@@ -17,7 +17,7 @@ GATE-014-B1 只验证确定性合成数据在 Chrome MV3 + IndexedDB 环境中�
 
 浏览器必须使用官方 Chrome for Testing Stable，并同时加载本次构建的 `dist` 与固定 ID 的公开安全测试扩展。执行前保存 Chrome for Testing 官方 `last-known-good-versions-with-downloads.json` 原文；runner 会校验 Stable channel、revision、时间戳、Win64 下载地址和原文 SHA-256，再要求可执行文件的 ProductName 精确等于 `Google Chrome for Testing`、ProductVersion 精确为与元数据一致的四段数字版本，不接受前后缀、再品牌版本、普通 Chrome、缺少官方元数据或版本不一致。执行参数启用 Chrome 沙箱，并在整个 Chrome 进程中阻断除 `127.0.0.1` 外的域名解析，因此矩阵没有外部运行时网络依赖；夹具通过带一次性令牌的本机环回地址逐次提供。
 
-DevTools 接通后，runner 会观测当时已加载及随后出现的全部扩展 page、background page、service worker 和 shared worker 目标。生产扩展正常启动时可能尝试访问 B 站 API；这类外部请求尝试会被 DNS 策略阻断并如实计数，不作为“外部依赖已使用”。任何观测期内的外部 HTTP(S) 响应或控制台错误都会立即失败；检查点和环境收据只保留观测范围、目标数和分类计数，不保存 URL、本机路径或错误正文。Chrome 启动到 DevTools 附加之前的事件无法由该 CDP 观测器回溯，收据明确记录 `preAttachEventsObserved: false`；零外部响应或零控制台错误只描述附加后的观测范围，不冒充完整启动期证明。
+DevTools 接通后，runner 会观测当时已加载及随后出现的全部扩展 page、background page、service worker 和 shared worker 目标。公开安全 harness 只在本轮全新的临时 profile 中使用 `chrome.management`，要求固定 harness 与本次 `dist/manifest.json` 声明的生产扩展各精确出现一次，再通过已经加载的生产 service worker 目标内的 `chrome.runtime` 复核 ID、名称和版本；它不会为证明加载而额外打开 dashboard 或改变被测工作负载，枚举结果与扩展 ID也不写入收据。每次浏览器启动的收据只记录生产扩展目标数和 harness 目标数，二者都必须至少为 1，防止 harness-only 运行冒充生产构建基准。生产扩展正常启动时可能尝试访问 B 站 API；这类外部请求尝试会被 DNS 策略阻断并如实计数，不作为“外部依赖已使用”。任何观测期内的外部 HTTP(S) 响应或控制台错误都会立即失败；检查点和环境收据只保留观测范围、目标数和分类计数，不保存 URL、本机路径或错误正文。Chrome 启动到 DevTools 附加之前的事件无法由该 CDP 观测器回溯，收据明确记录 `preAttachEventsObserved: false`；零外部响应或零控制台错误只描述附加后的观测范围，不冒充完整启动期证明。
 
 每次浏览器阶段结束时，runner 必须终止整个 Chrome 进程树并观察到父进程退出；仅发出 kill、只结束父进程或等待超时都不算成功。进程身份不可用、进程树终止失败或 5 秒内未退出均使该轮失败关闭，避免残留子进程污染后续冷/暖运行。
 
@@ -71,7 +71,7 @@ git diff --check
 
 ## 判定说明
 
-任何必需指标缺失都返回 `insufficient_evidence`。500 MiB 写入/恢复不得超过 15 分钟；顺序读、账本修复和完整清理不得超过 10 分钟；已成功提交的纯写事务分批 p95 不得超过 2 秒、单批不得超过 5 秒。每项操作分别提交 `readBatchDurationsMs`、`committedBatchDurationsMs` 和包含两者的全量诊断数组，报告分别输出读取与已提交写事务的计数、median、p95 和 maximum。扫描读取与随后写入不得合并成一次写入计时；只读批次和主动回滚批次只进入独立诊断统计，不冒充已提交写事务。admission、commit visibility、marker normalization、ledger repair、capacity boundary、cancellation、full clear、restore staging 和 selected-version removal 必须具有非零的已提交写事务证据；restart、marker normalization、ordered read、ledger repair、cancellation、full clear、quota refusal 和 selected-version removal 必须具有非零的读取证据。每项操作的提交计数必须与提交时长数组一一对应，分类后的读取数与提交数不得超过全量诊断数。报告还按 9 个候选、5 个夹具、13 项操作及冷/暖模式生成固定 1170 组重复运行中位数与 p95。进度、重启、取消、主线程、堆增长、原子提交和容量边界按门禁合同逐项判定，不以平均值掩盖失败。
+任何必需指标缺失都返回 `insufficient_evidence`。500 MiB 写入/恢复不得超过 15 分钟；顺序读、账本修复和完整清理不得超过 10 分钟；已成功提交的纯写事务分批 p95 不得超过 2 秒、单批不得超过 5 秒。每项操作分别提交 `readBatchDurationsMs`、`committedBatchDurationsMs` 和包含两者的全量诊断数组，报告分别输出读取与已提交写事务的计数、median、p95 和 maximum。扫描读取与随后写入不得合并成一次写入计时；只读批次和主动回滚批次只进入独立诊断统计，不冒充已提交写事务。admission、commit visibility、marker normalization、ledger repair、capacity boundary、cancellation、full clear、restore staging 和 selected-version removal 必须具有非零的已提交写事务证据；全部 13 项操作都必须具有非零的读取证据，至少覆盖该操作结束前的账本与可见版本 readback，admission/restore 还必须单独记录提交前后可见性扫描。每项操作的提交计数必须与提交时长数组一一对应；分类后的读取与提交时长必须按数值及重复次数完整包含在全量诊断数组中，而不只是数量不超限。报告还按 9 个候选、5 个夹具、13 项操作及冷/暖模式生成固定 1170 组重复运行中位数与 p95。进度、重启、取消、主线程、堆增长、原子提交和容量边界按门禁合同逐项判定，不以平均值掩盖失败。
 
 主线程指标使用浏览器 Long Tasks API。若观察到长任务则记录最大实测时长；若没有事件，只能证明任务低于该 API 的 50 ms 报告阈值，因此收据保守记录 50 ms，而不伪写为 0 ms。该边界仍显著低于 200 ms 门槛。
 

@@ -435,6 +435,7 @@ async function runAdmission(database, config, operationKind) {
     operationKind,
     "increase",
     async (context) => {
+      const readBatchDurationsMs = [];
       if (operationKind === "restore_staging") {
         const estimate = await readStorageEstimate();
         if (estimate === null) {
@@ -492,10 +493,14 @@ async function runAdmission(database, config, operationKind) {
         ...writeResult.progressEventOffsetsMs,
         performance.now() - context.startedAt,
       ];
+      let readStartedAt = performance.now();
       invisibleRead = await readVisibleGraph(database, () => {
         progressEventOffsetsMs.push(performance.now() - context.startedAt);
       });
+      readBatchDurationsMs.push(performance.now() - readStartedAt);
+      readStartedAt = performance.now();
       const invisibleLedgerConsistency = await readLedgerConsistency(database);
+      readBatchDurationsMs.push(performance.now() - readStartedAt);
       progressEventOffsetsMs.push(performance.now() - context.startedAt);
       commitMeasurement = await measureOperation(
         database,
@@ -523,9 +528,11 @@ async function runAdmission(database, config, operationKind) {
         },
       );
       progressEventOffsetsMs.push(performance.now() - context.startedAt);
+      readStartedAt = performance.now();
       visibleRead = await readVisibleGraph(database, () => {
         progressEventOffsetsMs.push(performance.now() - context.startedAt);
       });
+      readBatchDurationsMs.push(performance.now() - readStartedAt);
       progressEventOffsetsMs.push(performance.now() - context.startedAt);
       return {
         committedBatchCount: writeResult.batchDurationsMs.length + 1,
@@ -533,10 +540,11 @@ async function runAdmission(database, config, operationKind) {
           operationCreateDurationMs,
           ...writeResult.batchDurationsMs,
         ],
-        readBatchDurationsMs: [],
+        readBatchDurationsMs,
         batchDurationsMs: [
           operationCreateDurationMs,
           ...writeResult.batchDurationsMs,
+          ...readBatchDurationsMs,
         ],
         progressEventOffsetsMs,
         readbackVerified:
@@ -1896,23 +1904,39 @@ async function measureOperation(database, operation, expectedDirection, task) {
   const result = await task({ startedAt, metrics });
   const committedBatchCount = result.committedBatchCount;
   const committedBatchDurationsMs = result.committedBatchDurationsMs;
-  const readBatchDurationsMs = result.readBatchDurationsMs ?? [];
+  const taskReadBatchDurationsMs = result.readBatchDurationsMs ?? [];
   if (
     !Number.isSafeInteger(committedBatchCount) ||
     committedBatchCount < 0 ||
     !Array.isArray(committedBatchDurationsMs) ||
     committedBatchDurationsMs.length !== committedBatchCount ||
-    !Array.isArray(readBatchDurationsMs) ||
-    readBatchDurationsMs.some(
+    !Array.isArray(taskReadBatchDurationsMs) ||
+    taskReadBatchDurationsMs.some(
       (duration) => !Number.isFinite(duration) || duration < 0,
     )
   ) {
     throw new Error("fixture_committed_batch_evidence_mismatch");
   }
   const progressEventOffsetsMs = result.progressEventOffsetsMs;
+  const ledgerReadStartedAt = performance.now();
   const ledgerConsistency = await readLedgerConsistency(database, () => {
     progressEventOffsetsMs.push(performance.now() - startedAt);
   });
+  const ledgerReadDurationMs = performance.now() - ledgerReadStartedAt;
+  const readBatchDurationsMs = [
+    ...taskReadBatchDurationsMs,
+    ledgerReadDurationMs,
+  ];
+  const batchDurationsMs = [...result.batchDurationsMs, ledgerReadDurationMs];
+  if (
+    !isDurationMultisetIncluded(
+      batchDurationsMs,
+      committedBatchDurationsMs,
+      readBatchDurationsMs,
+    )
+  ) {
+    throw new Error("fixture_classified_batch_evidence_mismatch");
+  }
   const totalDurationMs = performance.now() - startedAt;
   const storageAfter =
     expectedDirection === "increase" || expectedDirection === "decrease"
@@ -1926,7 +1950,7 @@ async function measureOperation(database, operation, expectedDirection, task) {
     committedBatchCount,
     committedBatchDurationsMs: [...committedBatchDurationsMs],
     readBatchDurationsMs: [...readBatchDurationsMs],
-    batchDurationsMs: result.batchDurationsMs,
+    batchDurationsMs,
     progressEventOffsetsMs: normalizeProgressEvents(
       progressEventOffsetsMs,
       totalDurationMs,
@@ -1957,6 +1981,24 @@ async function measureOperation(database, operation, expectedDirection, task) {
       visibleVersionCount: ledgerConsistency.visibleVersionCount,
     },
   };
+}
+
+function isDurationMultisetIncluded(
+  instrumentedDurations,
+  ...classifiedDurationGroups
+) {
+  const available = new Map();
+  for (const duration of instrumentedDurations) {
+    available.set(duration, (available.get(duration) ?? 0) + 1);
+  }
+  for (const duration of classifiedDurationGroups.flat()) {
+    const remaining = available.get(duration) ?? 0;
+    if (remaining === 0) {
+      return false;
+    }
+    available.set(duration, remaining - 1);
+  }
+  return true;
 }
 
 function normalizeProgressEvents(offsets, totalDurationMs) {

@@ -71,6 +71,8 @@ const ENVIRONMENT_INPUT = {
       observationScope: "all_loaded_extension_targets_after_devtools_attach",
       preAttachEventsObserved: false,
       observedTargetCount: 1_444,
+      productionExtensionTargetCount: 722,
+      harnessExtensionTargetCount: 722,
       networkMetricAvailable: true,
       networkRequestCount: 1_004,
       loopbackRequestCount: 600,
@@ -150,8 +152,12 @@ function passingOperation(overrides = {}) {
       ...Array.from({ length: 19 }, () => 2_000),
       5_000,
     ],
-    readBatchDurationsMs: [],
-    batchDurationsMs: [...Array.from({ length: 19 }, () => 2_000), 5_000],
+    readBatchDurationsMs: [1_000],
+    batchDurationsMs: [
+      ...Array.from({ length: 19 }, () => 2_000),
+      5_000,
+      1_000,
+    ],
     progressEventOffsetsMs: Array.from(
       { length: 450 },
       (_, index) => (index + 1) * 2_000,
@@ -351,6 +357,7 @@ test("GATE-014-B1 records committed writes separately from instrumented batch ti
     passingOperation({
       committedBatchCount: 0,
       committedBatchDurationsMs: [],
+      readBatchDurationsMs: [10],
       batchDurationsMs: [10],
     }),
   );
@@ -394,18 +401,32 @@ test("GATE-014-B1 records committed writes separately from instrumented batch ti
     passingOperation({
       committedBatchCount: 1,
       committedBatchDurationsMs: [1_500],
+      readBatchDurationsMs: [800],
+      batchDurationsMs: [800, 900, 1_500],
+    }),
+  );
+  assert.equal(separateWriteTiming.status, "pass");
+  assert.equal(separateWriteTiming.batchDurationMaximumMs, 1_500);
+  assert.equal(separateWriteTiming.instrumentedBatchDurationMaximumMs, 1_500);
+  const mismatchedClassifiedTiming = createB1OperationReceipt(
+    passingOperation({
+      committedBatchCount: 1,
+      committedBatchDurationsMs: [1_500],
+      readBatchDurationsMs: [800],
       batchDurationsMs: [800, 900],
     }),
   );
-  assert.equal(separateWriteTiming.batchDurationMaximumMs, 1_500);
-  assert.equal(separateWriteTiming.instrumentedBatchDurationMaximumMs, 900);
+  assert.equal(mismatchedClassifiedTiming.status, "fail");
+  assert.deepEqual(mismatchedClassifiedTiming.failures, [
+    "classified_batch_timing_missing_from_instrumented",
+  ]);
   assert.equal(
     createB1OperationReceipt(
       passingOperation({
         operation: "atomic_version",
         committedBatchCount: 0,
         committedBatchDurationsMs: [],
-        readBatchDurationsMs: [],
+        readBatchDurationsMs: [6_000],
         batchDurationsMs: [6_000],
       }),
     ).status,
@@ -430,18 +451,7 @@ function reportOperation({
   ].includes(operation)
     ? 0
     : 1;
-  const readBatchDurationsMs = [
-    "restart",
-    "marker_normalization",
-    "ordered_read",
-    "ledger_repair",
-    "cancellation",
-    "selected_version_removal",
-    "full_clear",
-    "quota_failure",
-  ].includes(operation)
-    ? [80]
-    : [];
+  const readBatchDurationsMs = [80];
   const committedBatchDurationsMs = committedBatchCount === 0 ? [] : [100];
   return passingOperation({
     fixtureId,

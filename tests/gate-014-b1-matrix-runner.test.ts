@@ -32,8 +32,12 @@ function lifecycleResult() {
       )
         ? [10]
         : [],
-      readBatchDurationsMs: [],
-      batchDurationsMs: [10],
+      readBatchDurationsMs: [5],
+      batchDurationsMs: [
+        ...(["admission", "restore_staging"].includes(operation) ? [10] : []),
+        5,
+        ...(["admission", "restore_staging"].includes(operation) ? [] : [10]),
+      ],
       progressEventOffsetsMs: [],
       restart:
         operation === "restart"

@@ -55,6 +55,21 @@ globalThis.runGate014B1FixtureLifecycleBeforeRestart =
 globalThis.runGate014B1FixtureLifecycleAfterRestart =
   runFixtureLifecycleAfterRestart;
 
+globalThis.runGate014B1LoadedExtensionInventory = async () => {
+  if (typeof chrome.management?.getAll !== "function") {
+    throw new Error("fixture_extension_inventory_unavailable");
+  }
+  const extensions = await chrome.management.getAll();
+  return extensions.map((extension) => ({
+    id: extension.id,
+    name: extension.name,
+    version: extension.version,
+    versionName: extension.versionName ?? null,
+    enabled: extension.enabled,
+    type: extension.type,
+  }));
+};
+
 function openSmokeDatabase() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(SMOKE_DATABASE, 1);

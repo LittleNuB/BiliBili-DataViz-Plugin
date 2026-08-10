@@ -12,6 +12,7 @@ import {
   removeB1TemporaryProfile,
   validateBrowserExecutionObservation,
   validateChromeForTestingMetadata,
+  validateLoadedExtensionInventory,
   validateOfficialCftStableMetadata,
   validateSmokeResult,
   waitForProcessExit,
@@ -210,6 +211,8 @@ test("GATE-014-B1 browser observation fails closed on external requests or conso
     observationScope: "all_loaded_extension_targets_after_devtools_attach",
     preAttachEventsObserved: false,
     observedTargetCount: 2,
+    productionExtensionTargetCount: 1,
+    harnessExtensionTargetCount: 1,
     networkMetricAvailable: true,
     networkRequestCount: 3,
     loopbackRequestCount: 1,
@@ -226,6 +229,19 @@ test("GATE-014-B1 browser observation fails closed on external requests or conso
   assert.equal(
     combineBrowserExecutionObservations(passing, passing).browserLaunchCount,
     2,
+  );
+  assert.equal(
+    combineBrowserExecutionObservations(passing, passing)
+      .productionExtensionTargetCount,
+    2,
+  );
+  assert.throws(
+    () =>
+      validateBrowserExecutionObservation({
+        ...passing,
+        productionExtensionTargetCount: 0,
+      }),
+    /observation_failed/,
   );
   assert.throws(
     () =>
@@ -251,6 +267,58 @@ test("GATE-014-B1 browser observation fails closed on external requests or conso
       }),
     /observation_failed/,
   );
+});
+
+test("GATE-014-B1 proves the expected production and harness extensions are loaded", () => {
+  const expectedProduction = {
+    name: "Bili-Bill",
+    version: "0.13.0",
+    versionName: "0.13.0-alpha",
+  };
+  const productionExtensionId = "b".repeat(32);
+  const harness = {
+    id: B1_HARNESS_EXTENSION_ID,
+    name: "Bili-Bill GATE-014-B1 Harness",
+    version: "1.0.0",
+    versionName: null,
+    enabled: true,
+    type: "extension",
+  };
+  const production = {
+    id: productionExtensionId,
+    ...expectedProduction,
+    enabled: true,
+    type: "extension",
+  };
+  assert.deepEqual(
+    validateLoadedExtensionInventory(
+      [
+        {
+          id: "c".repeat(32),
+          name: "Unrelated component",
+          version: "1.0.0",
+          versionName: null,
+          enabled: true,
+          type: "extension",
+        },
+        harness,
+        production,
+      ],
+      expectedProduction,
+    ),
+    { productionExtensionId },
+  );
+  for (const inventory of [
+    [harness],
+    [production],
+    [harness, { ...production, enabled: false }],
+    [harness, production, { ...production, id: "d".repeat(32) }],
+  ]) {
+    assert.throws(
+      () => validateLoadedExtensionInventory(inventory, expectedProduction),
+      /required_extensions_not_loaded/,
+    );
+  }
 });
 
 test("GATE-014-B1 browser smoke accepts only the fixed public-safe harness identity", () => {
