@@ -14,7 +14,7 @@
 
 | ID | 场景 | 预期结果 |
 | --- | --- | --- |
-| GT-01 | 100/400/500 MiB managed-full-text gate | 每档完整记录环境、运行次数、内存、时间、索引和 ZIP 指标；缺测为 insufficient_evidence |
+| GT-01 | B1 合成 100/400/500 MiB managed-full-text 基准 | 每档完整记录环境、运行次数、总耗时、批次 median/p95/maximum、进度间隔、重启、内存、容量台账和 restore staging；按 Gate 数值门槛裁决，缺测为 insufficient_evidence，结果不得表述为真实工作负载分位数 |
 | GT-02 | 64 MiB 单全文版本 | 一个版本的 metadata + 全部分段原子提交或回滚；不得增加隐藏时长上限 |
 | GT-03 | 自建 IndexedDB 与 FlexSearch 候选 | 至少一项通过全部构建、查询、持久化、增删、取消和 MV3 恢复标准后才冻结搜索 schema |
 | GT-04 | zip.js 与 fflate 候选 | 至少一项通过流式写读、backpressure、畸形输入、取消、CSP、license、build 和 chunk 标准 |
@@ -22,9 +22,10 @@
 | GT-06 | 精确 400/500 MiB 边界 | 400 MiB 开始预警；恰好 500 MiB 成功并显示已满；再加 1 byte 拒绝 |
 | GT-07 | worker 中断与检查点 | 搜索最多重做一批；恢复只续跑清理并要求重新选文件；导出不声称可续传 |
 | GT-08 | 依赖审计 | 版本、integrity、许可证、worker/WASM、CSP、bundle 与 release license 全部可追溯 |
-| GT-09 | 字幕统计轮廓与高碎片 fixture | 固定分段长度/数量、重叠、中英文、标点和时长分布收据；病态样本不依赖友好分段 |
-| GT-10 | restore staging headroom | 冻结倍率+reserve 可提前拒绝不足配额且不误拒全部 passing fixtures；最终 write/readback 仍为权威 |
+| GT-09 | 合成统计轮廓与高碎片 fixture | 固定合成分段长度/数量、重叠、中英文、标点和时长分布收据；病态样本不依赖友好分段，真实代表性保持 insufficient_evidence |
+| GT-10 | restore staging headroom | B1 只选择可提前拒绝不足配额且不误拒全部 passing fixtures 的合成基线倍率+reserve；最终 write/readback 仍为权威，最终参数只由 A2/C/D 后的 E 冻结 |
 | GT-11 | operation state/phase 中断矩阵 | 每个合法 phase 可恢复或清理；非法组合拒绝；journal 无正文、路径、handle 或 raw exception |
+| GT-12 | 公开安全真实字幕分布校准 | 缺少合法且有代表性的聚合证据时不阻塞 B1，但继续阻塞 C/D、真实工作负载结论和最终参数冻结 |
 
 ## 3. 数据库迁移
 

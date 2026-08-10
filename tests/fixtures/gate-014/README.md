@@ -2,7 +2,7 @@
 
 This directory commits only small public-safe receipts for deterministic 0.14 gate fixtures.
 
-This is the synthetic fixture and receipt foundation only. GATE-014-A2 remains responsible for measured public-safe Bilibili-subtitle calibration, and these receipts do not unblock GATE-014-B by themselves.
+This is the synthetic fixture and receipt foundation only. After review, these receipts may unblock synthetic-only GATE-014-B1. GATE-014-A2 remains responsible for measured public-safe Bilibili-subtitle calibration and continues to block GATE-014-C/D, real-workload claims, and final parameter freezing.
 
 - `receipts/*.receipt.json` freezes generator version, seed, canonical byte totals, SHA-256 values, counts, distribution profile, planted retrieval targets, and reusable receipt-helper contracts.
 - Receipt files use canonical two-space JSON with a trailing LF. `.gitattributes` fixes their checkout EOL to LF, and read-only verification rejects whitespace, field-order, or EOL drift before returning the receipt SHA-256.

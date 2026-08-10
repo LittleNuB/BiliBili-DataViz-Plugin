@@ -1,8 +1,11 @@
 ---
 status: accepted
+amended_by: 0090-run-the-synthetic-storage-baseline-before-calibration
 ---
 
 # Split synthetic fixtures from measured subtitle calibration
+
+This decision remains accepted and is amended by [ADR 0090](./0090-run-the-synthetic-storage-baseline-before-calibration.md). The A1/A2 evidence separation, provenance rules, receipt binding, and privacy boundary remain in force; ADR 0090 replaces only the dependency edge below that made A2 block the synthetic storage baseline.
 
 GATE-014-A is split into two independently reviewed blockers. A1 builds deterministic public-safe synthetic fixtures and fail-closed receipt formats. A2 supplies a separately reviewed public-safe aggregate Bilibili-subtitle distribution, including provenance, authorization or license, sample method, exclusions, limitations, and the maximum measured segment-count tail. Passing A1 never turns its synthetic distributions into evidence of real Bilibili representativeness.
 

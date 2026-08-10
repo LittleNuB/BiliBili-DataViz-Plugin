@@ -36,13 +36,15 @@ No dependency enters production `package.json` during the spike. The report reco
 
 - **GATE-014-A1** builds deterministic public-safe synthetic fixtures and reusable receipt formats. Its pass establishes reproducibility, exact byte boundaries, cleanup, and fail-closed receipt behavior; it does not establish real Bilibili-subtitle representativeness.
 - **GATE-014-A2** separately records the measured public-safe aggregate profile, provenance, license or authorization, selection method, exclusions, and limitations. It retains no source wording, BVID/CID list, account identifier, local path, Cookie, profile, login state, history, or key material.
-- GATE-014-B and every candidate run remain blocked until both A1 and A2 pass. A1 success alone leaves real-distribution claims and the maximum measured segment-count tail at `insufficient_evidence`.
+- **GATE-014-B1** may begin after A1 passes. It proves capacity, transaction, restart, cancellation, ledger, cleanup, and restore-staging behavior only against the declared synthetic load and pathological fixtures. A2 is not an entry dependency for B1.
+- GATE-014-C, GATE-014-D, and every claim of real Bilibili-subtitle representativeness remain blocked until A2 passes. B1 success alone leaves real-distribution claims and the maximum measured segment-count tail at `insufficient_evidence`.
 
 ## Deterministic Fixtures
 
 - A1 builds public-safe seeded synthetic fixtures at exactly 100 MiB, 400 MiB, and 500 MiB under `managed-full-text-v1`. Before A2 passes, they are deterministic load and edge-case fixtures only and cannot be described as reproducing real Bilibili subtitles.
 - A2 commits a separate aggregate calibration receipt for segment-length percentiles, segments-per-video percentiles, overlap rate and duration, CJK/Latin/number/punctuation proportions, video-duration buckets, and exclusions. The receipt records reproducible provenance and contains no source wording or user/account data.
-- After A2 passes, calibrate the A1 distribution receipt and bind the high-fragmentation fixture's short segments to the maximum measured segment-count tail. Each B/C/D candidate run record pins the A2 calibration-receipt SHA-256, the derived fixture-configuration version and SHA-256, and the actual fixture-receipt SHA-256; merely attaching separate receipts is not a binding. Until then, both representativeness and the maximum measured tail remain `insufficient_evidence`.
+- A B1 run performed before A2 passes pins the exact A1 fixture receipt and records both representativeness and the maximum measured tail as `insufficient_evidence`; it cannot describe its latency, memory, or headroom results as real-workload percentiles.
+- After A2 passes, derive a separate calibrated fixture configuration without rewriting the frozen A1 receipts, and bind its high-fragmentation fixture's short segments to the maximum measured segment-count tail. Each C/D candidate run and any later calibrated B1 parameter-confirmation run pins the A2 calibration-receipt SHA-256, the derived fixture-configuration version and SHA-256, and the actual fixture-receipt SHA-256 in one run record; merely attaching separate receipts is not a binding. Calibration may revise selected performance parameters before GATE-014-E, but it does not erase B1's already established synthetic correctness results.
 - Include one 64-MiB single-version stress fixture because long videos cannot be excluded merely to make transactions easy. Failure returns the atomic-version contract to review; it does not introduce an undocumented video-duration cap.
 - Include current, historical, restored-pending, multi-part, multi-language, duplicate-source, changed-timeline, and Unicode edge cases. Future `local_transcript` rows are synthetic schema/load fixtures only and never claim an ASR capability.
 - Every fixture has a seed, generator version, canonical byte receipt, record counts, SHA-256 values, and planted retrieval targets. Generated fixtures are not committed when their size is impractical; the generator and small golden receipts are.
@@ -50,29 +52,39 @@ No dependency enters production `package.json` during the spike. The report reco
 
 ## Environment And Repetition
 
-- Begin B/C/D candidate runs only after the reviewed A1 fixture receipts and A2 calibration receipt are both available.
+- Begin B1 after the reviewed A1 fixture receipts are available. Begin C/D only after A1, A2, and B1 pass.
 - Run as an unpacked production build in current stable Chrome on Windows, using a fresh temporary test profile with no Bilibili login, Cookie import, browser-profile read, user database, API key, or network dependency.
 - Record OS build, CPU, logical cores, memory, free disk, Chrome version, extension commit, Node version, package lock hash, candidate versions, fixture hashes, storage estimate, run start/end time, and whether memory metrics were available.
 - Use at least three clean cold runs and five warm runs per candidate and fixture size. Cold means a fresh index generation and reopened extension; warm means an already opened complete generation with caches allowed by the candidate contract.
 - Record median and p95 where applicable. An unavailable required metric is `insufficient_evidence`, never zero or a pass.
 
-## Managed-Full-Text And IndexedDB Matrix
+## GATE-014-B1: Managed-Full-Text And IndexedDB Matrix
 
-Measure admission, exact-byte ledger update, ordered read, selected-version removal, ledger repair, full clear, restore staging, commit visibility, marker normalization, and extension restart at 100, 400, and 500 MiB. Restore runs record source canonical bytes, staged IndexedDB usage delta, temporary search/metadata overhead, free quota before/after cleanup, and the highest observed amplification ratio.
+Measure admission, exact-byte ledger update, ordered read, selected-version removal, ledger repair, full clear, restore staging, commit visibility, marker normalization, and extension restart at 100, 400, and 500 MiB. Restore runs record source canonical bytes, staged IndexedDB usage delta, temporary search/metadata overhead, free quota before/after cleanup, and the highest observed amplification ratio. Every result in this section is explicitly labeled as a synthetic engineering baseline until A2 supplies a reviewed calibration receipt.
 
 Test transaction/batch candidates of 256, 512, and 1,024 records, each additionally capped at 1, 2, or 4 MiB of canonical payload. Select the largest combination that satisfies every latency, memory, cancellation, and restart constraint; record rejected combinations rather than averaging them away.
+
+Every B1 operation receipt records fixture ID, batch candidate, operation kind, total duration, committed batch count, batch-duration median/p95/maximum, first progress-event latency, maximum progress-event gap, restart-state visibility latency, cancellation acknowledgement, post-cancellation writes, main-thread maximum, and peak measurable heap growth. A missing required measurement is `insufficient_evidence`.
+
+Synthetic-only numeric pass criteria:
+
+- exact 500-MiB admission and restore staging each complete within 15 minutes; a complete ordered read, ledger repair, and full clear each complete within 10 minutes;
+- committed batch-duration p95 is at most 2 seconds and no committed batch exceeds 5 seconds;
+- an operation lasting more than 2 seconds emits its first instrumented progress event within 2 seconds and leaves no later progress gap above 2 seconds;
+- after extension restart, the durable operation state becomes observable within 5 seconds and, when cleanup or resume work remains, its next progress event arrives within another 2 seconds;
+- if more than one candidate passes every criterion, select the largest record cap and then the largest byte cap; if none passes, B1 fails rather than selecting an unmeasured fallback.
 
 Required assertions:
 
 - one version's metadata and complete segment set commits or rolls back together, including the 64-MiB stress version;
 - aggregate ledger and sum of per-version bytes agree after every mutation, injected abort, restart, and repair;
-- exact 500 MiB commits, any positive byte beyond it refuses, and existing data remains readable/exportable;
+- exact 500 MiB commits, any positive byte beyond it refuses, and existing data remains fully readable and enumerable through the storage boundary without requiring an archive-export implementation;
 - no ordinary read sees pre-commit restore rows; committed rows become visible together; orphan-marked rows remain hidden and cleanable;
 - cancellation is acknowledged within 1 second and produces no writes after 2 seconds;
 - any UI-main-thread task stays at or below 200 ms;
 - peak measurable JavaScript-heap growth above idle stays at or below 256 MiB.
 
-The selected restore preflight rule uses the highest observed clean-run staging amplification rounded up to the next 0.25, plus at least 25% safety margin, and a fixed reserve of at least 64 MiB. It must early-refuse a deliberately insufficient-quota fixture, allow every passing near-limit fixture, and still treat the final write/readback as authoritative. If no finite rule can do both across required runs, restore is `insufficient_evidence` and runtime work remains blocked.
+The B1 restore preflight baseline uses the highest observed clean-run staging amplification rounded up to the next 0.25, plus at least 25% safety margin, and a fixed reserve of at least 64 MiB. It must early-refuse a deliberately insufficient-quota fixture, allow every passing near-limit fixture, and still treat the final write/readback as authoritative. If no finite rule can do both across required synthetic runs, restore is `insufficient_evidence` and runtime work remains blocked. A later calibrated run may raise this conservative parameter before GATE-014-E; it cannot weaken any B1 correctness assertion.
 
 ## Search Pass Criteria
 
@@ -108,11 +120,11 @@ The verified threshold applies to estimated uncompressed entry bytes, not compre
 
 Every candidate report contains:
 
-1. commit, command, environment, dependency, license, A1 fixture receipts, and the accepted A2 calibration receipt, including a per-run binding among the calibration-receipt SHA-256, derived fixture-configuration version/SHA-256, and actual fixture-receipt SHA-256;
+1. commit, command, environment, dependency, license, and exact A1 fixture receipts; a B1 report explicitly records A2 as unavailable or not yet accepted, while C/D and any calibrated B1 confirmation additionally bind the accepted A2 calibration-receipt SHA-256, derived fixture-configuration version/SHA-256, and actual fixture-receipt SHA-256 in the same run record;
 2. raw run table plus median/p95 summary;
 3. all pass criteria with `pass`, `fail`, or `insufficient_evidence` and linked evidence;
 4. cancellation, restart, cleanup, malformed-input, and privacy observations;
-5. selected batch sizes, restore-staging multiplier and reserve, Blob threshold, store declarations, and package versions, or the exact blocking failure;
+5. for B1, selected batch sizes, provisional restore-staging baseline, and the receipt-contract version or exact blocking failure; for C/D, the selected store declarations, final restore parameters, Blob threshold, and package versions or exact blocking failure;
 6. limitations that automated engineering checks cannot establish, including subjective usefulness and real-user adoption.
 
 No report may contain user notes, local source text, account identifiers, Cookie/profile/login-state data, key material, file paths, or raw runtime errors in screenshots intended for public review.
