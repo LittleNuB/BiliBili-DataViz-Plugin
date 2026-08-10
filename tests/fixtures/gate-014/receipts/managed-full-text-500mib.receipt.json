@@ -1,6 +1,6 @@
 {
-  "receiptContract": "gate-014-fixture-receipt-v4",
-  "generatorVersion": "gate-014-fixture-generator-v4",
+  "receiptContract": "gate-014-fixture-receipt-v5",
+  "generatorVersion": "gate-014-fixture-generator-v5",
   "seed": "gate-014-public-safe-seed-v1",
   "fixture": {
     "id": "managed-full-text-500mib",
@@ -23,11 +23,11 @@
   },
   "canonical": {
     "totalBytes": 524288000,
-    "fixtureSha256": "762da8e6663c1acc63d4f241c5ee3b40ec008ddb8ea803759f77b90c5369d925",
-    "bodyManifestSha256": "854cd170ca015523024f138952241e76b4af81a355e691d216b8fa5985a959a1",
+    "fixtureSha256": "0bfad1762617af97ab58cd4df072a94e77d9b6b94e7d296b8c285e77edba743a",
+    "bodyManifestSha256": "a02b10c30c3004a67240c8270f94e8bd163831041d3f33312959c62dc47cb2aa",
     "timelineManifestSha256": "a35ab00a020953e962881676726b559adf1374102768aaa70f22de61fb085230",
-    "versionManifestSha256": "632237c82009951a7afa0cc8b38dc39bc0d843edaf4667bbdc232f5f83327c90",
-    "querySuiteSha256": "6ca7776cb17f45b9fdc7c85694cd33ac929ad920e74c1376316feee7c0ad8a4b",
+    "versionManifestSha256": "0f75a295a064621aa9ccd4442ee87ffe04fdabc85ce1acd5033c1caca8dab1b2",
+    "querySuiteSha256": "8819d38eaf65b55b9ba5403d355f007d5bb529538d96553ca873b5a4cf71442a",
     "versionCount": 667,
     "segmentCount": 381415,
     "recordCount": 382082,
@@ -42,9 +42,9 @@
         "versionState": "current",
         "duplicateScopeOfVersionOrdinal": null,
         "sourceType": "bilibili_subtitle",
-        "bodyHash": "52cfb1635d73642f0c44c6376f214157a5fa5b7c53dd36f1946f4e1ee208dba3",
+        "bodyHash": "fe5a3ec90c4f0662fbb97126cce65f8ce0bc2a7799f9f8c69cd3255d9b712306",
         "timelineHash": "e615fa251c5c0e23d3965fc709c1929f3e90899af455d92a310a044b3f1fc3e7",
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834"
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff"
       },
       {
         "versionOrdinal": 1,
@@ -200,25 +200,25 @@
       }
     },
     "characterMix": {
-      "totalCodePoints": 270819262,
+      "totalCodePoints": 270819008,
       "cjk": {
-        "count": 90821624,
+        "count": 90821693,
         "proportion": 0.335359
       },
       "latin": {
-        "count": 120951788,
+        "count": 120951511,
         "proportion": 0.446614
       },
       "number": {
-        "count": 18983437,
+        "count": 18983381,
         "proportion": 0.070096
       },
       "punctuation": {
-        "count": 16461253,
+        "count": 16461313,
         "proportion": 0.060783
       },
       "space": {
-        "count": 23601160,
+        "count": 23601110,
         "proportion": 0.087147
       },
       "other": {
@@ -345,7 +345,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 0,
         "startSeconds": 6,
         "endSeconds": 8
@@ -366,7 +366,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 1,
         "startSeconds": 9,
         "endSeconds": 16
@@ -387,7 +387,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 2,
         "startSeconds": 18,
         "endSeconds": 29
@@ -408,7 +408,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 3,
         "startSeconds": 30,
         "endSeconds": 33
@@ -429,7 +429,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 4,
         "startSeconds": 35,
         "endSeconds": 40
@@ -450,7 +450,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 5,
         "startSeconds": 42,
         "endSeconds": 50
@@ -471,7 +471,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 6,
         "startSeconds": 50,
         "endSeconds": 58
@@ -492,7 +492,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 7,
         "startSeconds": 58,
         "endSeconds": 62
@@ -513,7 +513,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 8,
         "startSeconds": 64,
         "endSeconds": 68
@@ -534,7 +534,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 9,
         "startSeconds": 70,
         "endSeconds": 79
@@ -555,7 +555,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 10,
         "startSeconds": 79,
         "endSeconds": 85
@@ -576,7 +576,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 11,
         "startSeconds": 87,
         "endSeconds": 92
@@ -597,7 +597,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 12,
         "startSeconds": 93,
         "endSeconds": 105
@@ -618,7 +618,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 13,
         "startSeconds": 107,
         "endSeconds": 110
@@ -639,7 +639,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 14,
         "startSeconds": 110,
         "endSeconds": 121
@@ -660,7 +660,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 15,
         "startSeconds": 119,
         "endSeconds": 121
@@ -681,7 +681,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 16,
         "startSeconds": 122,
         "endSeconds": 125
@@ -702,7 +702,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 17,
         "startSeconds": 125,
         "endSeconds": 137
@@ -723,7 +723,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 18,
         "startSeconds": 137,
         "endSeconds": 142
@@ -744,7 +744,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 19,
         "startSeconds": 142,
         "endSeconds": 146
@@ -765,7 +765,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 20,
         "startSeconds": 147,
         "endSeconds": 156
@@ -786,7 +786,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 21,
         "startSeconds": 157,
         "endSeconds": 163
@@ -807,7 +807,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 22,
         "startSeconds": 163,
         "endSeconds": 165
@@ -828,7 +828,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 23,
         "startSeconds": 166,
         "endSeconds": 178
@@ -849,7 +849,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 24,
         "startSeconds": 178,
         "endSeconds": 183
@@ -870,7 +870,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 25,
         "startSeconds": 185,
         "endSeconds": 191
@@ -891,7 +891,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 26,
         "startSeconds": 192,
         "endSeconds": 197
@@ -912,7 +912,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 27,
         "startSeconds": 197,
         "endSeconds": 205
@@ -933,7 +933,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 28,
         "startSeconds": 205,
         "endSeconds": 216
@@ -954,7 +954,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 29,
         "startSeconds": 215,
         "endSeconds": 219
@@ -975,7 +975,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 30,
         "startSeconds": 219,
         "endSeconds": 229
@@ -996,7 +996,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 31,
         "startSeconds": 230,
         "endSeconds": 235
@@ -1017,7 +1017,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 32,
         "startSeconds": 237,
         "endSeconds": 242
@@ -1038,7 +1038,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 33,
         "startSeconds": 244,
         "endSeconds": 248
@@ -1059,7 +1059,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 34,
         "startSeconds": 250,
         "endSeconds": 261
@@ -1080,7 +1080,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 35,
         "startSeconds": 261,
         "endSeconds": 265
@@ -1101,7 +1101,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 36,
         "startSeconds": 267,
         "endSeconds": 276
@@ -1122,7 +1122,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 37,
         "startSeconds": 278,
         "endSeconds": 283
@@ -1143,7 +1143,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 38,
         "startSeconds": 284,
         "endSeconds": 292
@@ -1164,7 +1164,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 39,
         "startSeconds": 294,
         "endSeconds": 303
@@ -1185,7 +1185,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 40,
         "startSeconds": 303,
         "endSeconds": 309
@@ -1206,7 +1206,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 41,
         "startSeconds": 307,
         "endSeconds": 311
@@ -1227,7 +1227,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 42,
         "startSeconds": 310,
         "endSeconds": 319
@@ -1248,7 +1248,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 43,
         "startSeconds": 320,
         "endSeconds": 332
@@ -1269,7 +1269,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 44,
         "startSeconds": 334,
         "endSeconds": 336
@@ -1290,7 +1290,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 45,
         "startSeconds": 334,
         "endSeconds": 342
@@ -1311,7 +1311,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 46,
         "startSeconds": 342,
         "endSeconds": 353
@@ -1332,7 +1332,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 47,
         "startSeconds": 353,
         "endSeconds": 362
@@ -1353,7 +1353,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 48,
         "startSeconds": 364,
         "endSeconds": 374
@@ -1374,7 +1374,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 49,
         "startSeconds": 376,
         "endSeconds": 378
@@ -1395,7 +1395,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 50,
         "startSeconds": 378,
         "endSeconds": 388
@@ -1416,7 +1416,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 51,
         "startSeconds": 390,
         "endSeconds": 401
@@ -1437,7 +1437,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 52,
         "startSeconds": 401,
         "endSeconds": 403
@@ -1458,7 +1458,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 53,
         "startSeconds": 405,
         "endSeconds": 416
@@ -1479,7 +1479,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 54,
         "startSeconds": 416,
         "endSeconds": 428
@@ -1500,7 +1500,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 55,
         "startSeconds": 427,
         "endSeconds": 432
@@ -1521,7 +1521,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 56,
         "startSeconds": 434,
         "endSeconds": 439
@@ -1542,7 +1542,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 57,
         "startSeconds": 439,
         "endSeconds": 447
@@ -1563,7 +1563,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 58,
         "startSeconds": 447,
         "endSeconds": 459
@@ -1584,7 +1584,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 59,
         "startSeconds": 460,
         "endSeconds": 470
@@ -1605,7 +1605,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 60,
         "startSeconds": 470,
         "endSeconds": 481
@@ -1626,7 +1626,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 61,
         "startSeconds": 481,
         "endSeconds": 485
@@ -1647,7 +1647,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 62,
         "startSeconds": 485,
         "endSeconds": 487
@@ -1668,7 +1668,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 63,
         "startSeconds": 485,
         "endSeconds": 491
@@ -1689,7 +1689,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 64,
         "startSeconds": 492,
         "endSeconds": 496
@@ -1710,7 +1710,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 65,
         "startSeconds": 496,
         "endSeconds": 505
@@ -1731,7 +1731,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 66,
         "startSeconds": 505,
         "endSeconds": 510
@@ -1752,7 +1752,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 67,
         "startSeconds": 512,
         "endSeconds": 516
@@ -1773,7 +1773,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 68,
         "startSeconds": 517,
         "endSeconds": 522
@@ -1794,7 +1794,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 69,
         "startSeconds": 523,
         "endSeconds": 525
@@ -1815,7 +1815,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 70,
         "startSeconds": 527,
         "endSeconds": 533
@@ -1836,7 +1836,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 71,
         "startSeconds": 534,
         "endSeconds": 537
@@ -1857,7 +1857,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 72,
         "startSeconds": 538,
         "endSeconds": 548
@@ -1878,7 +1878,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 73,
         "startSeconds": 550,
         "endSeconds": 560
@@ -1899,7 +1899,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 74,
         "startSeconds": 559,
         "endSeconds": 571
@@ -1920,7 +1920,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 75,
         "startSeconds": 571,
         "endSeconds": 581
@@ -1941,7 +1941,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 76,
         "startSeconds": 583,
         "endSeconds": 587
@@ -1962,7 +1962,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 77,
         "startSeconds": 588,
         "endSeconds": 591
@@ -1983,7 +1983,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 78,
         "startSeconds": 592,
         "endSeconds": 595
@@ -2004,7 +2004,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 79,
         "startSeconds": 597,
         "endSeconds": 599
@@ -2025,7 +2025,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 80,
         "startSeconds": 598,
         "endSeconds": 607
@@ -2046,7 +2046,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 81,
         "startSeconds": 608,
         "endSeconds": 614
@@ -2067,7 +2067,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 82,
         "startSeconds": 615,
         "endSeconds": 627
@@ -2088,7 +2088,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 83,
         "startSeconds": 627,
         "endSeconds": 638
@@ -2109,7 +2109,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 84,
         "startSeconds": 639,
         "endSeconds": 644
@@ -2130,7 +2130,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 85,
         "startSeconds": 645,
         "endSeconds": 657
@@ -2151,7 +2151,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 86,
         "startSeconds": 658,
         "endSeconds": 666
@@ -2172,7 +2172,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 87,
         "startSeconds": 666,
         "endSeconds": 673
@@ -2193,7 +2193,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 88,
         "startSeconds": 673,
         "endSeconds": 684
@@ -2214,7 +2214,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 89,
         "startSeconds": 685,
         "endSeconds": 697
@@ -2235,7 +2235,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 90,
         "startSeconds": 698,
         "endSeconds": 705
@@ -2256,7 +2256,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 91,
         "startSeconds": 705,
         "endSeconds": 707
@@ -2277,7 +2277,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 92,
         "startSeconds": 708,
         "endSeconds": 719
@@ -2298,7 +2298,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 93,
         "startSeconds": 719,
         "endSeconds": 729
@@ -2319,7 +2319,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 94,
         "startSeconds": 731,
         "endSeconds": 739
@@ -2340,7 +2340,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 95,
         "startSeconds": 739,
         "endSeconds": 746
@@ -2361,7 +2361,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 96,
         "startSeconds": 748,
         "endSeconds": 751
@@ -2382,7 +2382,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 97,
         "startSeconds": 752,
         "endSeconds": 761
@@ -2403,7 +2403,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 98,
         "startSeconds": 762,
         "endSeconds": 766
@@ -2424,7 +2424,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 99,
         "startSeconds": 768,
         "endSeconds": 772
@@ -2445,7 +2445,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 100,
         "startSeconds": 774,
         "endSeconds": 778
@@ -2466,7 +2466,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 101,
         "startSeconds": 779,
         "endSeconds": 788
@@ -2487,7 +2487,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 102,
         "startSeconds": 788,
         "endSeconds": 794
@@ -2508,7 +2508,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 103,
         "startSeconds": 794,
         "endSeconds": 803
@@ -2529,7 +2529,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 104,
         "startSeconds": 804,
         "endSeconds": 814
@@ -2550,7 +2550,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 105,
         "startSeconds": 813,
         "endSeconds": 815
@@ -2571,7 +2571,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 106,
         "startSeconds": 817,
         "endSeconds": 825
@@ -2592,7 +2592,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 107,
         "startSeconds": 826,
         "endSeconds": 830
@@ -2613,7 +2613,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 108,
         "startSeconds": 832,
         "endSeconds": 842
@@ -2634,7 +2634,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 109,
         "startSeconds": 842,
         "endSeconds": 849
@@ -2655,7 +2655,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 110,
         "startSeconds": 850,
         "endSeconds": 859
@@ -2676,7 +2676,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 111,
         "startSeconds": 861,
         "endSeconds": 863
@@ -2697,7 +2697,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 112,
         "startSeconds": 863,
         "endSeconds": 872
@@ -2718,7 +2718,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 113,
         "startSeconds": 872,
         "endSeconds": 883
@@ -2739,7 +2739,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 114,
         "startSeconds": 883,
         "endSeconds": 889
@@ -2749,8 +2749,8 @@
       "targetId": "pn-1",
       "queryId": "pn-1",
       "kind": "punctuation_number",
-      "query": "GATE-014-A 01 500MiB",
-      "targetText": "GATE-014-A#01/500MiB",
+      "query": "GATE-014-A1 01 500MiB",
+      "targetText": "GATE-014-A1#01/500MiB",
       "planted": true,
       "expectedResultContract": "unique_exact_target_rank_1",
       "expectedResult": {
@@ -2760,7 +2760,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 115,
         "startSeconds": 890,
         "endSeconds": 898
@@ -2770,8 +2770,8 @@
       "targetId": "pn-2",
       "queryId": "pn-2",
       "kind": "punctuation_number",
-      "query": "GATE-014-A 02 500MiB",
-      "targetText": "GATE-014-A#02/500MiB",
+      "query": "GATE-014-A1 02 500MiB",
+      "targetText": "GATE-014-A1#02/500MiB",
       "planted": true,
       "expectedResultContract": "unique_exact_target_rank_1",
       "expectedResult": {
@@ -2781,7 +2781,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 116,
         "startSeconds": 896,
         "endSeconds": 898
@@ -2791,8 +2791,8 @@
       "targetId": "pn-3",
       "queryId": "pn-3",
       "kind": "punctuation_number",
-      "query": "GATE-014-A 03 500MiB",
-      "targetText": "GATE-014-A#03/500MiB",
+      "query": "GATE-014-A1 03 500MiB",
+      "targetText": "GATE-014-A1#03/500MiB",
       "planted": true,
       "expectedResultContract": "unique_exact_target_rank_1",
       "expectedResult": {
@@ -2802,7 +2802,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 117,
         "startSeconds": 900,
         "endSeconds": 902
@@ -2812,8 +2812,8 @@
       "targetId": "pn-4",
       "queryId": "pn-4",
       "kind": "punctuation_number",
-      "query": "GATE-014-A 04 500MiB",
-      "targetText": "GATE-014-A#04/500MiB",
+      "query": "GATE-014-A1 04 500MiB",
+      "targetText": "GATE-014-A1#04/500MiB",
       "planted": true,
       "expectedResultContract": "unique_exact_target_rank_1",
       "expectedResult": {
@@ -2823,7 +2823,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 118,
         "startSeconds": 903,
         "endSeconds": 908
@@ -2833,8 +2833,8 @@
       "targetId": "pn-5",
       "queryId": "pn-5",
       "kind": "punctuation_number",
-      "query": "GATE-014-A 05 500MiB",
-      "targetText": "GATE-014-A#05/500MiB",
+      "query": "GATE-014-A1 05 500MiB",
+      "targetText": "GATE-014-A1#05/500MiB",
       "planted": true,
       "expectedResultContract": "unique_exact_target_rank_1",
       "expectedResult": {
@@ -2844,7 +2844,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 119,
         "startSeconds": 910,
         "endSeconds": 912
@@ -2854,8 +2854,8 @@
       "targetId": "pn-6",
       "queryId": "pn-6",
       "kind": "punctuation_number",
-      "query": "GATE-014-A 06 500MiB",
-      "targetText": "GATE-014-A#06/500MiB",
+      "query": "GATE-014-A1 06 500MiB",
+      "targetText": "GATE-014-A1#06/500MiB",
       "planted": true,
       "expectedResultContract": "unique_exact_target_rank_1",
       "expectedResult": {
@@ -2865,7 +2865,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 120,
         "startSeconds": 914,
         "endSeconds": 925
@@ -2875,8 +2875,8 @@
       "targetId": "pn-7",
       "queryId": "pn-7",
       "kind": "punctuation_number",
-      "query": "GATE-014-A 07 500MiB",
-      "targetText": "GATE-014-A#07/500MiB",
+      "query": "GATE-014-A1 07 500MiB",
+      "targetText": "GATE-014-A1#07/500MiB",
       "planted": true,
       "expectedResultContract": "unique_exact_target_rank_1",
       "expectedResult": {
@@ -2886,7 +2886,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 121,
         "startSeconds": 927,
         "endSeconds": 935
@@ -2896,8 +2896,8 @@
       "targetId": "pn-8",
       "queryId": "pn-8",
       "kind": "punctuation_number",
-      "query": "GATE-014-A 08 500MiB",
-      "targetText": "GATE-014-A#08/500MiB",
+      "query": "GATE-014-A1 08 500MiB",
+      "targetText": "GATE-014-A1#08/500MiB",
       "planted": true,
       "expectedResultContract": "unique_exact_target_rank_1",
       "expectedResult": {
@@ -2907,7 +2907,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 122,
         "startSeconds": 936,
         "endSeconds": 943
@@ -2917,8 +2917,8 @@
       "targetId": "pn-9",
       "queryId": "pn-9",
       "kind": "punctuation_number",
-      "query": "GATE-014-A 09 500MiB",
-      "targetText": "GATE-014-A#09/500MiB",
+      "query": "GATE-014-A1 09 500MiB",
+      "targetText": "GATE-014-A1#09/500MiB",
       "planted": true,
       "expectedResultContract": "unique_exact_target_rank_1",
       "expectedResult": {
@@ -2928,7 +2928,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 123,
         "startSeconds": 943,
         "endSeconds": 955
@@ -2938,8 +2938,8 @@
       "targetId": "pn-10",
       "queryId": "pn-10",
       "kind": "punctuation_number",
-      "query": "GATE-014-A 10 500MiB",
-      "targetText": "GATE-014-A#10/500MiB",
+      "query": "GATE-014-A1 10 500MiB",
+      "targetText": "GATE-014-A1#10/500MiB",
       "planted": true,
       "expectedResultContract": "unique_exact_target_rank_1",
       "expectedResult": {
@@ -2949,7 +2949,7 @@
         "versionOrdinal": 0,
         "bvid": "BV014GATEA0000000",
         "cid": 1400000,
-        "sourceVersionFingerprint": "9665d24ef7cdebd7472dbc0bfa152760a453294c0f85623392f708a9d4054834",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
         "segmentOrdinal": 124,
         "startSeconds": 955,
         "endSeconds": 964
@@ -3080,7 +3080,7 @@
   ],
   "reusableReceiptHelpers": [
     {
-      "contract": "gate-014-receipt-helper-v4",
+      "contract": "gate-014-receipt-helper-v5",
       "helper": "createTimingReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3095,7 +3095,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v4",
+      "contract": "gate-014-receipt-helper-v5",
       "helper": "createMemoryReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3113,7 +3113,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v4",
+      "contract": "gate-014-receipt-helper-v5",
       "helper": "createIndexedDbUsageReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3131,7 +3131,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v4",
+      "contract": "gate-014-receipt-helper-v5",
       "helper": "createPersistedIndexSizeReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3148,7 +3148,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v4",
+      "contract": "gate-014-receipt-helper-v5",
       "helper": "createRestartReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3169,7 +3169,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v4",
+      "contract": "gate-014-receipt-helper-v5",
       "helper": "createFailureInjectionReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3187,7 +3187,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v4",
+      "contract": "gate-014-receipt-helper-v5",
       "helper": "createCleanupReadbackReceipt",
       "requiredFields": [
         "fixtureId",

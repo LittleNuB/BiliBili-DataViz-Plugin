@@ -1,8 +1,11 @@
-# GATE-014-A fixture receipts
+# GATE-014-A1 fixture receipts
 
 This directory commits only small public-safe receipts for deterministic 0.14 gate fixtures.
 
+This is the synthetic fixture and receipt foundation only. GATE-014-A2 remains responsible for measured public-safe Bilibili-subtitle calibration, and these receipts do not unblock GATE-014-B by themselves.
+
 - `receipts/*.receipt.json` freezes generator version, seed, canonical byte totals, SHA-256 values, counts, distribution profile, planted retrieval targets, and reusable receipt-helper contracts.
+- Receipt files use canonical two-space JSON with a trailing LF. `.gitattributes` fixes their checkout EOL to LF, and read-only verification rejects whitespace, field-order, or EOL drift before returning the receipt SHA-256.
 - `generated/` is intentionally ignored. It is the opt-in destination for large JSONL fixture artifacts and must not be committed.
 - Artifact and golden-receipt publication use same-directory unique temp files, readback/hash verification, and atomic rename. Failed writes remove their temp files and preserve any prior valid target.
 

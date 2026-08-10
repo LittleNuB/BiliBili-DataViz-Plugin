@@ -52,55 +52,55 @@ const RAW_RUNTIME_DETAIL_PATTERN = new RegExp([
 const EXPECTED_GOLDEN_REGRESSION = {
   "managed-full-text-100mib": {
     totalBytes: 104857600,
-    fixtureSha256: "d9bc59f5c682479c0bf29dcbd5316904b181a4b9cd7fbfc11bdb50cdab56dbb5",
-    bodyManifestSha256: "add2e5b271cb474d930e94dfb83ada2a3919f69b73e87d9d43f5804baa25414c",
+    fixtureSha256: "563d407a09a5203e5e8fed4606f2a189da52e641e874daf84c3016d0424a08da",
+    bodyManifestSha256: "d74c8197c1a08d34066065bfb1a17b5dd93f59c0af3bff0d077e228880d8e882",
     timelineManifestSha256: "97e051f402c97d4dc6fac7f70049ac9dd5cb783dcc97d0bdd4c73c83a922f2ed",
-    versionManifestSha256: "cf149c7a6bcc79eabc53369f6c0ee857b37c34e49367a69ff9f42465e79f7189",
-    querySuiteSha256: "2c34206866b5d9091f884c529e0ca9a5876ddf79d1c8b720daea1cf82a431438",
+    versionManifestSha256: "cfee18fcbc8173683e6d393631bd5cca365d881f01699a35d53cc8c70bc1d70c",
+    querySuiteSha256: "d780fe6c48a5ff29c40d9ceeefd5e46d6a0b82777561b6cead632f2145b83ab3",
     versionCount: 132,
     segmentCount: 76352,
     recordCount: 76484,
   },
   "managed-full-text-400mib": {
     totalBytes: 419430400,
-    fixtureSha256: "add631ff4206ceb1a1ed74e2de0d72cfede76c9df0a6e6764181aab65ae2ed6b",
-    bodyManifestSha256: "928e0c8c0610d6d6f6ee3fdc10686af6d9d7e28c182f46ab65f56d590eddcfc7",
+    fixtureSha256: "4483a915d032375d655897b52d3dbf3b696e4218ae040f4da46601c5c7709ed4",
+    bodyManifestSha256: "c347063e777cb287786e9035f8d1277d9801b189edd4643879748410911bea45",
     timelineManifestSha256: "26068839e1fd47177bdf2f01679e86160a9361daaf0b9dd91665f100e939f923",
-    versionManifestSha256: "02f60f4884a7dc5bb84cd9f134491912dba015f7e96de09a5a77862d0c782037",
-    querySuiteSha256: "b2aa1a9900f7240ba66cf544eaa8f2f75c8a0e4d2848169817deeb5e2a0c65c6",
+    versionManifestSha256: "bedb694a14286c254101420d042010275fa3cbc162941efe8552860695fe52da",
+    querySuiteSha256: "6b16a0d046fceb6ed847ca37ed2847e3387f655e5aa07b94f749d2c8a867401a",
     versionCount: 534,
     segmentCount: 305402,
     recordCount: 305936,
   },
   "managed-full-text-500mib": {
     totalBytes: 524288000,
-    fixtureSha256: "762da8e6663c1acc63d4f241c5ee3b40ec008ddb8ea803759f77b90c5369d925",
-    bodyManifestSha256: "854cd170ca015523024f138952241e76b4af81a355e691d216b8fa5985a959a1",
+    fixtureSha256: "0bfad1762617af97ab58cd4df072a94e77d9b6b94e7d296b8c285e77edba743a",
+    bodyManifestSha256: "a02b10c30c3004a67240c8270f94e8bd163831041d3f33312959c62dc47cb2aa",
     timelineManifestSha256: "a35ab00a020953e962881676726b559adf1374102768aaa70f22de61fb085230",
-    versionManifestSha256: "632237c82009951a7afa0cc8b38dc39bc0d843edaf4667bbdc232f5f83327c90",
-    querySuiteSha256: "6ca7776cb17f45b9fdc7c85694cd33ac929ad920e74c1376316feee7c0ad8a4b",
+    versionManifestSha256: "0f75a295a064621aa9ccd4442ee87ffe04fdabc85ce1acd5033c1caca8dab1b2",
+    querySuiteSha256: "8819d38eaf65b55b9ba5403d355f007d5bb529538d96553ca873b5a4cf71442a",
     versionCount: 667,
     segmentCount: 381415,
     recordCount: 382082,
   },
   "single-version-64mib": {
     totalBytes: 67108864,
-    fixtureSha256: "2b87fd168c9adf1a13b8a2aec8849e1745a040f9f62d36dc01144052e91f018e",
-    bodyManifestSha256: "7e526e1740a51f6bebc143f531f02fc41375948c0d41cc508908e561d0c91e5f",
+    fixtureSha256: "158cdad82896df70e66fc7e7d94fd318fe8b7d6f9139a88eaea03b0e6e54b249",
+    bodyManifestSha256: "6375d934a2e08074abe0c92f511ee6c13e92070a853e084e32a0b980a9114663",
     timelineManifestSha256: "91284680a7ae6fc98ed4dc75513cc266b591e278b1a1077c3e92adc23c109617",
-    versionManifestSha256: "7fc7fc529ee8f442e9ae3d32fc3bbe72d98a0da61e7c5bb5d3efa206ea940bea",
-    querySuiteSha256: "8750db5f5d403952a1ccc69dcacb7c7bd8da0e2162efc6ed37212dd58507d607",
+    versionManifestSha256: "6127c065639dcb4fd94e70413a1d6d8219744d09236a15f692a8d0ff1a79533c",
+    querySuiteSha256: "acbedb94a49ebd3ebcf48ece589a6da2c2ed3d3a7e6e890dc27e5108ae5b878c",
     versionCount: 1,
     segmentCount: 38746,
     recordCount: 38747,
   },
   "high-fragmentation-pathological": {
     totalBytes: 16777216,
-    fixtureSha256: "1984f0f1c26ec056b5445bb65e753501d79ba736a3dfcb1e2d27eda3f8914391",
-    bodyManifestSha256: "90a4358dd0a9d9208bb3036c70d5d44049969922c5ecf07fc2cec6cab3bdfa82",
+    fixtureSha256: "ededecbc4ef07e405830b63107806469d5812e4cb8605e853c7e0304d8376c47",
+    bodyManifestSha256: "14d4931450a9d7d6e25d1fba747d89bb7f6d3863b3f6e9f1dd483d397675e03c",
     timelineManifestSha256: "810a8666598aeeec14ccf835f3505c9d63a64a76f84fd0eb9bb5a9398615313b",
-    versionManifestSha256: "46482a2eda356c7fc87389b5a47b4472633c366337a30b0c2a770422b80cfecc",
-    querySuiteSha256: "d96d2e473984a087415a2c1a479c8948e4d28ca24c39c667cfa045a2047d97bd",
+    versionManifestSha256: "0a1fa67818cc5b33a9d8eca2ff35689bd54be961bbaca5934a4c43a170c42462",
+    querySuiteSha256: "44c8148bfc9a1e0b4fba400b748e54f73ef2c095009e2fdc7bb31a463bcfeae7",
     versionCount: 63,
     segmentCount: 90840,
     recordCount: 90903,
@@ -117,7 +117,7 @@ async function createFakeRepositoryRoot(prefix) {
   return repositoryRoot;
 }
 
-test("GATE-014-A generator produces exact deterministic canonical bytes for a bounded sample", async () => {
+test("GATE-014-A1 generator produces exact deterministic canonical bytes for a bounded sample", async () => {
   const definition = createCustomFixtureDefinition({
     id: "unit-managed-full-text-384kib",
     targetCanonicalBytes: 384 * 1024,
@@ -129,9 +129,9 @@ test("GATE-014-A generator produces exact deterministic canonical bytes for a bo
   const second = await createFixtureReceipt(definition, { seed: "unit-seed" });
 
   assert.equal(first.generatorVersion, GENERATOR_VERSION);
-  assert.equal(GENERATOR_VERSION, "gate-014-fixture-generator-v4");
-  assert.equal(RECEIPT_CONTRACT, "gate-014-fixture-receipt-v4");
-  assert.equal(GATE_014_RECEIPT_HELPER_CONTRACT, "gate-014-receipt-helper-v4");
+  assert.equal(GENERATOR_VERSION, "gate-014-fixture-generator-v5");
+  assert.equal(RECEIPT_CONTRACT, "gate-014-fixture-receipt-v5");
+  assert.equal(GATE_014_RECEIPT_HELPER_CONTRACT, "gate-014-receipt-helper-v5");
   assert.deepEqual(INDEXED_DB_EXPECTED_DIRECTIONS, ["increase", "decrease"]);
   assert.equal(Object.isFrozen(INDEXED_DB_EXPECTED_DIRECTIONS), true);
   assert.equal(first.seed, "unit-seed");
@@ -155,7 +155,7 @@ test("GATE-014-A generator produces exact deterministic canonical bytes for a bo
   );
 });
 
-test("GATE-014-A artifact writer emits bytes matching the receipt without using repo-local large output", async () => {
+test("GATE-014-A1 artifact writer emits bytes matching the receipt without using repo-local large output", async () => {
   const definition = createCustomFixtureDefinition({
     id: "unit-managed-full-text-artifact",
     targetCanonicalBytes: 192 * 1024,
@@ -184,7 +184,7 @@ test("GATE-014-A artifact writer emits bytes matching the receipt without using 
   }
 });
 
-test("committed GATE-014-A golden receipts cover every required large fixture without committing data", async () => {
+test("committed GATE-014-A1 golden receipts cover every required large fixture without committing data", async () => {
   const expectedTargets = new Map([
     ["managed-full-text-100mib", 100 * MIB],
     ["managed-full-text-400mib", 400 * MIB],
@@ -334,7 +334,7 @@ test("committed GATE-014-A golden receipts cover every required large fixture wi
   }
 });
 
-test("GATE-014-A generator can be imported when process.argv[1] is undefined", () => {
+test("GATE-014-A1 generator can be imported when process.argv[1] is undefined", () => {
   const moduleUrl = new URL("../scripts/gate-014-fixture-generator.mjs", import.meta.url).href;
   const child = spawnSync(process.execPath, [
     "--input-type=module",
@@ -347,7 +347,7 @@ test("GATE-014-A generator can be imported when process.argv[1] is undefined", (
   assert.equal(child.stderr, "");
 });
 
-test("GATE-014-A golden receipt verification recomputes deeply without writing", async () => {
+test("GATE-014-A1 golden receipt verification recomputes deeply without writing", async () => {
   const definition = createCustomFixtureDefinition({
     id: "unit-read-only-verify",
     targetCanonicalBytes: 384 * 1024,
@@ -398,12 +398,33 @@ test("GATE-014-A golden receipt verification recomputes deeply without writing",
 
       await writeFile(written.receiptPath, originalBytes);
     }
+
+    const serializationMismatches = [
+      JSON.stringify(originalReceipt),
+      `${JSON.stringify(originalReceipt, null, 4)}\n`,
+      `${JSON.stringify(originalReceipt, null, 2)}\n`.replaceAll("\n", "\r\n"),
+      `${JSON.stringify(Object.fromEntries(Object.entries(originalReceipt).reverse()), null, 2)}\n`,
+    ];
+    for (const mismatchedSerialization of serializationMismatches) {
+      const mismatchedBytes = Buffer.from(mismatchedSerialization);
+      await writeFile(written.receiptPath, mismatchedBytes);
+
+      await assert.rejects(
+        () => verifyGoldenFixtureReceipt(definition, { repositoryRoot, seed }),
+        /Golden receipt serialization mismatch/,
+      );
+      assert.deepEqual(await readFile(written.receiptPath), mismatchedBytes);
+      assert.deepEqual(await readdir(receiptDirectory), originalEntries);
+      await assert.rejects(() => stat(generatedDirectory), { code: "ENOENT" });
+
+      await writeFile(written.receiptPath, originalBytes);
+    }
   } finally {
     await rm(repositoryRoot, { recursive: true, force: true });
   }
 });
 
-test("GATE-014-A golden receipt verification does not create a missing receipt directory", async () => {
+test("GATE-014-A1 golden receipt verification does not create a missing receipt directory", async () => {
   const definition = createCustomFixtureDefinition({
     id: "unit-read-only-missing-receipt",
     targetCanonicalBytes: 384 * 1024,
@@ -437,7 +458,7 @@ test("large generated fixture outputs are ignored and outside release packaging 
   assert.doesNotMatch(packager, /tests[\\/]fixtures[\\/]gate-014[\\/]generated/);
 });
 
-test("GATE-014-A custom definitions use closed inputs and controlled descriptions", async () => {
+test("GATE-014-A1 custom definitions use closed inputs and controlled descriptions", async () => {
   const definition = createCustomFixtureDefinition({
     id: "unit-public-definition",
     targetCanonicalBytes: 384 * 1024,
@@ -485,7 +506,7 @@ test("GATE-014-A custom definitions use closed inputs and controlled description
   }), /seed must be a public-safe id/);
 });
 
-test("GATE-014-A malformed candidates are executable rejects before canonical serialization", () => {
+test("GATE-014-A1 malformed candidates are executable rejects before canonical serialization", () => {
   const actualReasons = new Map();
   for (const testCase of MALFORMED_CANDIDATE_SUITE) {
     const result = validateManagedFullTextCandidate(testCase.candidate);
@@ -534,7 +555,7 @@ test("GATE-014-A malformed candidates are executable rejects before canonical se
   }), /unsupported candidate field: note/);
 });
 
-test("GATE-014-A timing receipts fail closed when the metric is unavailable", () => {
+test("GATE-014-A1 timing receipts fail closed when the metric is unavailable", () => {
   const available = createTimingReceipt({
     fixtureId: "managed-full-text-100mib",
     operation: "dry-run-generation",
@@ -623,7 +644,7 @@ test("GATE-014-A timing receipts fail closed when the metric is unavailable", ()
   }), /unsupported field: notes/);
 });
 
-test("GATE-014-A reusable receipt helpers fail closed when browser metrics are unavailable", () => {
+test("GATE-014-A1 reusable receipt helpers fail closed when browser metrics are unavailable", () => {
   const timing = createTimingReceipt({
     fixtureId: "managed-full-text-100mib",
     operation: "dry-run-generation",
@@ -671,7 +692,7 @@ test("GATE-014-A reusable receipt helpers fail closed when browser metrics are u
   }
 });
 
-test("GATE-014-A reusable receipt helpers reject false-pass values and arbitrary text", () => {
+test("GATE-014-A1 reusable receipt helpers reject false-pass values and arbitrary text", () => {
   assert.throws(() => createMemoryReceipt({
     fixtureId: "managed-full-text-100mib",
     phase: "admission",
@@ -720,6 +741,133 @@ test("GATE-014-A reusable receipt helpers reject false-pass values and arbitrary
     metricAvailable: true,
     managedSourceBytes: 100,
   }), /persistedIndexBytes/);
+
+  const contradictoryUnavailableReceipts = [
+    {
+      create: () => createMemoryReceipt({
+        fixtureId: "managed-full-text-100mib",
+        phase: "admission",
+        metricAvailable: false,
+        reasonCode: "browser_metric_unavailable",
+        heapUsedBytes: 1,
+      }),
+      error: /unavailable memory receipt must not include memory measurements/,
+    },
+    {
+      create: () => createIndexedDbUsageReceipt({
+        fixtureId: "managed-full-text-100mib",
+        phase: "admission",
+        metricAvailable: false,
+        reasonCode: "browser_metric_unavailable",
+        storageEstimateUsageBeforeBytes: 1,
+      }),
+      error: /unavailable IndexedDB receipt must not include storage measurements/,
+    },
+    {
+      create: () => createPersistedIndexSizeReceipt({
+        fixtureId: "managed-full-text-100mib",
+        phase: "indexing_sources",
+        metricAvailable: false,
+        reasonCode: "browser_metric_unavailable",
+        managedSourceBytes: 1,
+      }),
+      error: /unavailable persisted-index receipt must not include index measurements/,
+    },
+    {
+      create: () => createRestartReceipt({
+        fixtureId: "managed-full-text-100mib",
+        scenario: "mv3-worker-restart",
+        attempted: false,
+        reasonCode: "browser_gate_not_run",
+        completed: false,
+      }),
+      error: /unattempted restart receipt must not include restart results/,
+    },
+    {
+      create: () => createFailureInjectionReceipt({
+        fixtureId: "managed-full-text-100mib",
+        scenario: "transaction-abort",
+        injectionPoint: "after-metadata-before-segments",
+        attempted: false,
+        reasonCode: "storage_candidate_not_selected",
+        completed: false,
+      }),
+      error: /unattempted failure-injection receipt must not include failure results/,
+    },
+  ];
+  for (const { create, error } of contradictoryUnavailableReceipts) {
+    assert.throws(create, error);
+  }
+
+  const checkpoint = {
+    checkpointId: "batch-1",
+    phase: "indexing_sources",
+    batchOrdinal: 1,
+    recordCount: 10,
+    canonicalBytes: 100,
+    operationOpen: true,
+  };
+  const contradictoryAvailableReceipts = [
+    () => createMemoryReceipt({
+      fixtureId: "managed-full-text-100mib",
+      phase: "admission",
+      metricAvailable: true,
+      heapUsedBytes: 10,
+      heapTotalBytes: 20,
+      rssBytes: 30,
+      peakHeapGrowthBytes: 5,
+      reasonCode: "browser_metric_unavailable",
+    }),
+    () => createIndexedDbUsageReceipt({
+      fixtureId: "managed-full-text-100mib",
+      phase: "admission",
+      metricAvailable: true,
+      storageEstimateUsageBeforeBytes: 0,
+      storageEstimateUsageAfterBytes: 1,
+      storageEstimateQuotaBytes: 10,
+      indexedDbDeltaBytes: 1,
+      expectedDirection: "increase",
+      readbackVerified: true,
+      reasonCode: "browser_metric_unavailable",
+    }),
+    () => createPersistedIndexSizeReceipt({
+      fixtureId: "managed-full-text-100mib",
+      phase: "indexing_sources",
+      metricAvailable: true,
+      managedSourceBytes: 100,
+      persistedIndexBytes: 50,
+      reasonCode: "browser_metric_unavailable",
+    }),
+    () => createRestartReceipt({
+      fixtureId: "managed-full-text-100mib",
+      scenario: "mv3-worker-restart",
+      attempted: true,
+      completed: true,
+      preRestartCheckpoint: checkpoint,
+      postRestartCheckpoint: checkpoint,
+      replayedBatchCount: 0,
+      readbackVerified: true,
+      mixedGenerationVisible: false,
+      duplicatePostingsDetected: false,
+      fullRebuildStarted: false,
+      reasonCode: "browser_gate_not_run",
+    }),
+    () => createFailureInjectionReceipt({
+      fixtureId: "managed-full-text-100mib",
+      scenario: "transaction-abort",
+      injectionPoint: "after-metadata-before-segments",
+      attempted: true,
+      completed: true,
+      visibleRowsAfterFailure: 0,
+      cleanupRequired: false,
+      cleanupCompleted: false,
+      readbackVerified: true,
+      reasonCode: "storage_candidate_not_selected",
+    }),
+  ];
+  for (const create of contradictoryAvailableReceipts) {
+    assert.throws(create, /must not include reasonCode/);
+  }
 
   assert.throws(() => createRestartReceipt({
     fixtureId: "managed-full-text-100mib",
@@ -791,7 +939,7 @@ test("GATE-014-A reusable receipt helpers reject false-pass values and arbitrary
   }), /reasonCode must use a closed reason code/);
 });
 
-test("GATE-014-A helper receipts pass only with concrete required measurements", () => {
+test("GATE-014-A1 helper receipts pass only with concrete required measurements", () => {
   const memory = createMemoryReceipt({
     fixtureId: "managed-full-text-100mib",
     phase: "admission",
@@ -931,7 +1079,7 @@ test("GATE-014-A helper receipts pass only with concrete required measurements",
   }, TypeError);
 });
 
-test("GATE-014-A receipt outcomes fail for contradictory or gate-negative evidence", () => {
+test("GATE-014-A1 receipt outcomes fail for contradictory or gate-negative evidence", () => {
   const memoryZero = createMemoryReceipt({
     fixtureId: "managed-full-text-100mib",
     phase: "admission",
@@ -1207,7 +1355,7 @@ test("GATE-014-A receipt outcomes fail for contradictory or gate-negative eviden
   }).status, "fail");
 });
 
-test("GATE-014-A artifact writer is failure-atomic and leaves no temp artifact", async () => {
+test("GATE-014-A1 artifact writer is failure-atomic and leaves no temp artifact", async () => {
   const definition = createCustomFixtureDefinition({
     id: "unit-managed-full-text-atomic",
     targetCanonicalBytes: 192 * 1024,
@@ -1237,7 +1385,7 @@ test("GATE-014-A artifact writer is failure-atomic and leaves no temp artifact",
   }
 });
 
-test("GATE-014-A artifact writer atomically replaces an existing artifact", async () => {
+test("GATE-014-A1 artifact writer atomically replaces an existing artifact", async () => {
   const definition = createCustomFixtureDefinition({
     id: "unit-managed-full-text-replacement",
     targetCanonicalBytes: 192 * 1024,
@@ -1266,7 +1414,7 @@ test("GATE-014-A artifact writer atomically replaces an existing artifact", asyn
   }
 });
 
-test("GATE-014-A golden receipt writer is failure-atomic", async () => {
+test("GATE-014-A1 golden receipt writer is failure-atomic", async () => {
   const definition = createCustomFixtureDefinition({
     id: "unit-golden-receipt-atomic",
     targetCanonicalBytes: 384 * 1024,
@@ -1298,7 +1446,7 @@ test("GATE-014-A golden receipt writer is failure-atomic", async () => {
   }
 });
 
-test("GATE-014-A generated artifact cleanup removes only known final and temp names", async () => {
+test("GATE-014-A1 generated artifact cleanup removes only known final and temp names", async () => {
   const repositoryRoot = await createFakeRepositoryRoot("gate-014-cleanup-repo-");
   const generatedDirectory = path.join(repositoryRoot, GENERATED_FIXTURE_RELATIVE_DIR);
 
@@ -1334,13 +1482,13 @@ test("GATE-014-A generated artifact cleanup removes only known final and temp na
   }
 });
 
-test("GATE-014-A cleanup rejects unsafe targets", async () => {
+test("GATE-014-A1 cleanup rejects unsafe targets", async () => {
   await assert.rejects(() => cleanupGeneratedFixtureArtifacts({
     repositoryRoot: path.parse(process.cwd()).root,
   }), /Refusing to clean unsafe GATE-014 fixture directory/);
 });
 
-test("GATE-014-A cleanup rejects an unmarked arbitrary repository root", async () => {
+test("GATE-014-A1 cleanup rejects an unmarked arbitrary repository root", async () => {
   const arbitraryRoot = await mkdtemp(path.join(os.tmpdir(), "gate-014-unmarked-root-"));
   try {
     await assert.rejects(
@@ -1352,7 +1500,7 @@ test("GATE-014-A cleanup rejects an unmarked arbitrary repository root", async (
   }
 });
 
-test("GATE-014-A cleanup rejects removed arbitrary-directory bypass options", async () => {
+test("GATE-014-A1 cleanup rejects removed arbitrary-directory bypass options", async () => {
   const arbitraryDirectory = await mkdtemp(path.join(os.tmpdir(), "gate-014-cleanup-bypass-"));
   try {
     await assert.rejects(() => cleanupGeneratedFixtureArtifacts({
@@ -1369,7 +1517,7 @@ test("GATE-014-A cleanup rejects removed arbitrary-directory bypass options", as
   }
 });
 
-test("GATE-014-A cleanup rejects a redirected generated-directory ancestor", async t => {
+test("GATE-014-A1 cleanup rejects a redirected generated-directory ancestor", async t => {
   const repositoryRoot = await createFakeRepositoryRoot("gate-014-cleanup-link-repo-");
   const redirectTarget = await mkdtemp(path.join(os.tmpdir(), "gate-014-cleanup-link-target-"));
   const testsLink = path.join(repositoryRoot, "tests");

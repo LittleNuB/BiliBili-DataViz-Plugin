@@ -14,8 +14,8 @@ import {
 
 export const MIB = 1024 * 1024;
 export const DEFAULT_SEED = 'gate-014-public-safe-seed-v1';
-export const GENERATOR_VERSION = 'gate-014-fixture-generator-v4';
-export const RECEIPT_CONTRACT = 'gate-014-fixture-receipt-v4';
+export const GENERATOR_VERSION = 'gate-014-fixture-generator-v5';
+export const RECEIPT_CONTRACT = 'gate-014-fixture-receipt-v5';
 export const MANAGED_FULL_TEXT_CONTRACT = 'managed-full-text-v1';
 export const GENERATED_FIXTURE_RELATIVE_DIR = 'tests/fixtures/gate-014/generated';
 export const GOLDEN_RECEIPT_RELATIVE_DIR = 'tests/fixtures/gate-014/receipts';
@@ -333,12 +333,16 @@ export async function verifyGoldenFixtureReceipt(definition, options = {}) {
   if (!isDeepStrictEqual(committedReceipt, computedReceipt)) {
     throw new Error(`Golden receipt verification mismatch for fixture ${definition.id}`);
   }
+  const computedSerialized = `${JSON.stringify(computedReceipt, null, 2)}\n`;
+  if (serialized !== computedSerialized) {
+    throw new Error(`Golden receipt serialization mismatch for fixture ${definition.id}`);
+  }
 
   return deepFreeze({
     status: 'pass',
     fixtureId: definition.id,
     receiptRelativePath: `${GOLDEN_RECEIPT_RELATIVE_DIR}/${definition.id}.receipt.json`,
-    receiptSha256: sha256Hex(serialized),
+    receiptSha256: sha256Hex(computedSerialized),
     canonicalBytes: computedReceipt.canonical.totalBytes,
     fixtureSha256: computedReceipt.canonical.fixtureSha256,
   });
@@ -1423,8 +1427,8 @@ function createQuerySuite() {
     queries.push(plantedQuery(
       `pn-${index}`,
       'punctuation_number',
-      `GATE-014-A ${label} 500MiB`,
-      `GATE-014-A#${label}/500MiB`,
+      `GATE-014-A1 ${label} 500MiB`,
+      `GATE-014-A1#${label}/500MiB`,
     ));
   }
   for (let index = 1; index <= 20; index += 1) {

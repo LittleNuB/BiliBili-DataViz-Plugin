@@ -1,4 +1,4 @@
-export const GATE_014_RECEIPT_HELPER_CONTRACT = 'gate-014-receipt-helper-v4';
+export const GATE_014_RECEIPT_HELPER_CONTRACT = 'gate-014-receipt-helper-v5';
 export const INSUFFICIENT_EVIDENCE = 'insufficient_evidence';
 export const PUBLIC_SAFE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,95}$/;
 export const MAX_PEAK_HEAP_GROWTH_BYTES = 256 * 1024 * 1024;
@@ -179,8 +179,15 @@ export function createMemoryReceipt(input) {
   };
 
   if (!base.metricAvailable) {
+    assertFieldsAbsent(input, [
+      'heapUsedBytes',
+      'heapTotalBytes',
+      'rssBytes',
+      'peakHeapGrowthBytes',
+    ], 'unavailable memory receipt must not include memory measurements');
     return insufficientReceipt(base, input.reasonCode);
   }
+  assertFieldsAbsent(input, ['reasonCode'], 'available memory receipt must not include reasonCode');
 
   const heapUsedBytes = assertNonNegativeSafeInteger(input.heapUsedBytes, 'heapUsedBytes');
   const heapTotalBytes = assertNonNegativeSafeInteger(input.heapTotalBytes, 'heapTotalBytes');
@@ -234,8 +241,17 @@ export function createIndexedDbUsageReceipt(input) {
   };
 
   if (!base.metricAvailable) {
+    assertFieldsAbsent(input, [
+      'storageEstimateUsageBeforeBytes',
+      'storageEstimateUsageAfterBytes',
+      'storageEstimateQuotaBytes',
+      'indexedDbDeltaBytes',
+      'expectedDirection',
+      'readbackVerified',
+    ], 'unavailable IndexedDB receipt must not include storage measurements');
     return insufficientReceipt(base, input.reasonCode);
   }
+  assertFieldsAbsent(input, ['reasonCode'], 'available IndexedDB receipt must not include reasonCode');
 
   const storageEstimateUsageBeforeBytes = assertNonNegativeSafeInteger(
     input.storageEstimateUsageBeforeBytes,
@@ -300,8 +316,13 @@ export function createPersistedIndexSizeReceipt(input) {
   };
 
   if (!base.metricAvailable) {
+    assertFieldsAbsent(input, [
+      'managedSourceBytes',
+      'persistedIndexBytes',
+    ], 'unavailable persisted-index receipt must not include index measurements');
     return insufficientReceipt(base, input.reasonCode);
   }
+  assertFieldsAbsent(input, ['reasonCode'], 'available persisted-index receipt must not include reasonCode');
 
   const managedSourceBytes = assertPositiveSafeInteger(input.managedSourceBytes, 'managedSourceBytes');
   const persistedIndexBytes = assertNonNegativeSafeInteger(input.persistedIndexBytes, 'persistedIndexBytes');
@@ -349,8 +370,19 @@ export function createRestartReceipt(input) {
   };
 
   if (!base.attempted) {
+    assertFieldsAbsent(input, [
+      'completed',
+      'preRestartCheckpoint',
+      'postRestartCheckpoint',
+      'replayedBatchCount',
+      'readbackVerified',
+      'mixedGenerationVisible',
+      'duplicatePostingsDetected',
+      'fullRebuildStarted',
+    ], 'unattempted restart receipt must not include restart results');
     return insufficientReceipt(base, input.reasonCode);
   }
+  assertFieldsAbsent(input, ['reasonCode'], 'attempted restart receipt must not include reasonCode');
 
   const completed = assertBoolean(input.completed, 'completed');
   const preRestartCheckpoint = assertCheckpoint(input.preRestartCheckpoint, 'preRestartCheckpoint');
@@ -428,8 +460,16 @@ export function createFailureInjectionReceipt(input) {
   };
 
   if (!base.attempted) {
+    assertFieldsAbsent(input, [
+      'completed',
+      'visibleRowsAfterFailure',
+      'cleanupRequired',
+      'cleanupCompleted',
+      'readbackVerified',
+    ], 'unattempted failure-injection receipt must not include failure results');
     return insufficientReceipt(base, input.reasonCode);
   }
+  assertFieldsAbsent(input, ['reasonCode'], 'attempted failure-injection receipt must not include reasonCode');
 
   const completed = assertBoolean(input.completed, 'completed');
   const visibleRowsAfterFailure = assertNonNegativeSafeInteger(
@@ -561,6 +601,12 @@ function assertAllowedFields(input, allowedFields, helper) {
     if (!allowed.has(key)) {
       throw new Error(`${helper} received unsupported field: ${key}`);
     }
+  }
+}
+
+function assertFieldsAbsent(input, fields, message) {
+  if (fields.some(field => Object.hasOwn(input, field))) {
+    throw new Error(message);
   }
 }
 
