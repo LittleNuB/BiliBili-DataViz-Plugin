@@ -5,6 +5,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   statfs,
@@ -1247,38 +1248,31 @@ async function buildProductionDist() {
 }
 
 export async function resolveNpmBuildInvocation() {
-  const nodeExecutable = path.resolve(
-    process.env.npm_node_execpath ?? process.execPath,
+  const nodeExecutable = await realpath(process.execPath);
+  const npmCliCandidate = path.join(
+    path.dirname(nodeExecutable),
+    "node_modules",
+    "npm",
+    "bin",
+    "npm-cli.js",
   );
-  const npmCliCandidates = [
-    process.env.npm_execpath,
-    path.join(
-      path.dirname(nodeExecutable),
-      "node_modules",
-      "npm",
-      "bin",
-      "npm-cli.js",
-    ),
-  ];
-  for (const candidate of npmCliCandidates) {
-    if (
-      typeof candidate !== "string" ||
-      !path.isAbsolute(candidate) ||
-      path.basename(candidate).toLowerCase() !== "npm-cli.js"
-    ) {
-      continue;
-    }
-    try {
-      await access(candidate);
-      return Object.freeze({
-        executable: nodeExecutable,
-        arguments: Object.freeze([path.resolve(candidate), "run", "build"]),
-      });
-    } catch {
-      // Try the npm CLI installed beside the active Node executable.
-    }
+  let npmCliPath;
+  try {
+    npmCliPath = await realpath(npmCliCandidate);
+  } catch {
+    throw new Error("npm_cli_not_found");
   }
-  throw new Error("npm_cli_not_found");
+  if (
+    path.normalize(npmCliPath).toLowerCase() !==
+      path.normalize(npmCliCandidate).toLowerCase() ||
+    path.basename(npmCliPath).toLowerCase() !== "npm-cli.js"
+  ) {
+    throw new Error("npm_cli_not_found");
+  }
+  return Object.freeze({
+    executable: nodeExecutable,
+    arguments: Object.freeze([npmCliPath, "run", "build"]),
+  });
 }
 
 async function hashDirectory(directory) {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -16,18 +17,50 @@ const FIXTURE_SHA = "a".repeat(64);
 const ENVIRONMENT_SHA = "b".repeat(64);
 
 test("GATE-014-B1 launches npm build through Node instead of a Windows command shim", async () => {
-  const invocation = await resolveNpmBuildInvocation();
-  assert.equal(
-    path.resolve(invocation.executable),
-    path.resolve(process.env.npm_node_execpath ?? process.execPath),
+  const originalNpmExecPath = process.env.npm_execpath;
+  const originalNpmNodeExecPath = process.env.npm_node_execpath;
+  const expectedNodeExecutable = await realpath(process.execPath);
+  const expectedNpmCli = await realpath(
+    path.join(
+      path.dirname(expectedNodeExecutable),
+      "node_modules",
+      "npm",
+      "bin",
+      "npm-cli.js",
+    ),
   );
-  assert.equal(
-    path.basename(invocation.arguments[0]).toLowerCase(),
-    "npm-cli.js",
-  );
-  assert.deepEqual(invocation.arguments.slice(1), ["run", "build"]);
-  assert.equal(Object.isFrozen(invocation), true);
-  assert.equal(Object.isFrozen(invocation.arguments), true);
+  try {
+    delete process.env.npm_execpath;
+    delete process.env.npm_node_execpath;
+    const withoutEnvironmentHints = await resolveNpmBuildInvocation();
+    assert.equal(withoutEnvironmentHints.executable, expectedNodeExecutable);
+    assert.deepEqual(withoutEnvironmentHints.arguments, [
+      expectedNpmCli,
+      "run",
+      "build",
+    ]);
+
+    process.env.npm_execpath = path.resolve("unrelated", "npm-cli.js");
+    process.env.npm_node_execpath = path.resolve("unrelated", "node.exe");
+    const withUnrelatedEnvironmentHints = await resolveNpmBuildInvocation();
+    assert.deepEqual(withUnrelatedEnvironmentHints, withoutEnvironmentHints);
+    assert.equal(Object.isFrozen(withUnrelatedEnvironmentHints), true);
+    assert.equal(
+      Object.isFrozen(withUnrelatedEnvironmentHints.arguments),
+      true,
+    );
+  } finally {
+    if (originalNpmExecPath === undefined) {
+      delete process.env.npm_execpath;
+    } else {
+      process.env.npm_execpath = originalNpmExecPath;
+    }
+    if (originalNpmNodeExecPath === undefined) {
+      delete process.env.npm_node_execpath;
+    } else {
+      process.env.npm_node_execpath = originalNpmNodeExecPath;
+    }
+  }
 });
 
 function lifecycleResult() {
