@@ -115,6 +115,12 @@ test("GATE-014-B1 Chrome arguments isolate a fresh profile and block external na
     true,
   );
   assert.equal(argumentsList.includes("--disable-background-networking"), true);
+  assert.equal(
+    argumentsList.includes(
+      "--disable-features=MediaRouter,OptimizationGuideModelExecution,OptimizationGuideOnDeviceModel,OptimizationHints,Translate",
+    ),
+    true,
+  );
   assert.equal(argumentsList.includes("--no-proxy-server"), true);
   assert.equal(
     argumentsList.includes(

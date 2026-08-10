@@ -109,7 +109,7 @@ export function buildChromeArguments({
     "--no-first-run",
     "--no-default-browser-check",
     "--enable-precise-memory-info",
-    "--disable-features=MediaRouter,OptimizationHints,Translate",
+    "--disable-features=MediaRouter,OptimizationGuideModelExecution,OptimizationGuideOnDeviceModel,OptimizationHints,Translate",
     "--host-resolver-rules=MAP * ~NOTFOUND,EXCLUDE 127.0.0.1",
     "about:blank",
   ];
