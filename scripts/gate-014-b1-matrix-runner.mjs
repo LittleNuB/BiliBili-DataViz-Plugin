@@ -100,6 +100,25 @@ const BENCHMARK_SOURCE_FILES = Object.freeze([
   "tests/fixtures/gate-014/receipts/single-version-64mib.receipt.json",
   "tests/fixtures/gate-014/receipts/high-fragmentation-pathological.receipt.json",
 ]);
+const PRODUCTION_SOURCE_DIRECTORIES = Object.freeze([
+  "src",
+  "public",
+  "dashboard",
+  "popup",
+  "third_party",
+]);
+const PRODUCTION_SOURCE_FILES = Object.freeze([
+  "vite.config.ts",
+  "vite.sidebar-card.config.ts",
+  "vite.player-monitor.config.ts",
+  "tsconfig.json",
+  "scripts/copy-release-licenses.mjs",
+  "scripts/verify-release-dist.mjs",
+  "LICENSE",
+  "THIRD_PARTY_NOTICES.txt",
+  "package.json",
+]);
+const PRODUCTION_BUILD_TIMEOUT_MS = 30 * 60 * 1_000;
 
 export function mapB1LifecycleToRawOperations(lifecycle, metadata) {
   assertPlainObject(lifecycle, "lifecycle");
@@ -157,9 +176,7 @@ export function mapB1LifecycleToRawOperations(lifecycle, metadata) {
       operation: operation.operation,
       totalDurationMs: operation.totalDurationMs,
       committedBatchCount: operation.committedBatchCount,
-      committedBatchDurationsMs: [
-        ...operation.committedBatchDurationsMs,
-      ],
+      committedBatchDurationsMs: [...operation.committedBatchDurationsMs],
       batchDurationsMs: [...operation.batchDurationsMs],
       progressEventOffsetsMs: [...operation.progressEventOffsetsMs],
       restart: { ...operation.restart },
@@ -188,16 +205,22 @@ export async function runB1Matrix(options = {}) {
     throw new Error("GATE_014_B1_CHROME_PATH is required");
   }
   await access(chromePath);
-  const expectedStableVersion =
-    options.expectedStableVersion ??
-    process.env.GATE_014_B1_CFT_STABLE_VERSION;
+  const cftMetadataPath = path.resolve(
+    options.cftMetadataPath ?? process.env.GATE_014_B1_CFT_METADATA_PATH ?? "",
+  );
+  if (!options.cftMetadataPath && !process.env.GATE_014_B1_CFT_METADATA_PATH) {
+    throw new Error("GATE_014_B1_CFT_METADATA_PATH is required");
+  }
+  await access(cftMetadataPath);
+  await assertTrackedWorktreeClean();
+  await buildProductionDist();
   const maxNewRuns =
     options.maxNewRuns === undefined
       ? Number.POSITIVE_INFINITY
       : assertPositiveSafeInteger(options.maxNewRuns, "maxNewRuns");
   const environmentCore = await collectEnvironmentCore(
     chromePath,
-    expectedStableVersion,
+    cftMetadataPath,
   );
   const environmentFingerprintSha256 = sha256Text(
     stableStringify(environmentCore),
@@ -229,7 +252,7 @@ export async function runB1Matrix(options = {}) {
   const recordRun = async (preparedFixture, profile, spec) => {
     const lifecycle = await runBrowserFixtureLifecycleWithPreparedFixture({
       chromePath,
-      expectedStableVersion,
+      cftMetadataPath,
       fixtureId: spec.fixtureId,
       recordCap: spec.candidate.recordCap,
       byteCapBytes: spec.candidate.byteCapBytes,
@@ -428,7 +451,7 @@ export async function runB1Matrix(options = {}) {
     preliminaryReport.provisionalRestoreHeadroom.allMeasuredRunsAllowed === true
       ? await runDerivedRestorePreflightValidation({
           chromePath,
-          expectedStableVersion,
+          cftMetadataPath,
           environmentReceiptSha256: preliminaryEnvironmentReceiptSha256,
           fixtureReceiptDetails,
           fixtureReceipts,
@@ -520,7 +543,7 @@ async function runDerivedRestorePreflightValidation(options) {
   try {
     const lifecycle = await runBrowserFixtureLifecycleWithPreparedFixture({
       chromePath: options.chromePath,
-      expectedStableVersion: options.expectedStableVersion,
+      cftMetadataPath: options.cftMetadataPath,
       fixtureId,
       recordCap: options.candidate.recordCap,
       byteCapBytes: options.candidate.byteCapBytes,
@@ -627,14 +650,14 @@ function createExpectedRunSpecs() {
 
 class MatrixPause extends Error {}
 
-async function collectEnvironmentCore(chromePath, expectedStableVersion) {
+async function collectEnvironmentCore(chromePath, cftMetadataPath) {
   await access(path.join(REPOSITORY_ROOT, "dist", "manifest.json"));
   const [{ stdout: commitStdout }, browser] = await Promise.all([
     execFile("git", ["rev-parse", "HEAD"], {
       cwd: REPOSITORY_ROOT,
       windowsHide: true,
     }),
-    readChromeForTestingMetadata(chromePath, expectedStableVersion),
+    readChromeForTestingMetadata(chromePath, cftMetadataPath),
   ]);
   const repositoryCommitSha = commitStdout.trim();
   if (!/^[a-f0-9]{40}$/.test(repositoryCommitSha)) {
@@ -647,6 +670,7 @@ async function collectEnvironmentCore(chromePath, expectedStableVersion) {
   return {
     repositoryCommitSha,
     benchmarkSourceSha256: await hashKnownFiles(BENCHMARK_SOURCE_FILES),
+    productionSourceSha256: await hashProductionSourceInputs(),
     packageLockSha256: await hashFile(
       path.join(REPOSITORY_ROOT, "package-lock.json"),
     ),
@@ -668,6 +692,7 @@ async function collectEnvironmentCore(chromePath, expectedStableVersion) {
     browser,
     execution: {
       commandId: "gate014_b1_full_matrix",
+      productionBuildCommand: "npm_run_build",
       productionExtensionMode: "unpacked",
       networkPolicy: "loopback_only_external_dns_blocked",
       coldProfilePolicy: "fresh_temporary_profile_per_run",
@@ -675,7 +700,7 @@ async function collectEnvironmentCore(chromePath, expectedStableVersion) {
         "opened_complete_seed_generation_with_group_profile_reuse",
       coldRunsPerCandidateFixture: B1_RUN_COUNTS.cold,
       warmRunsPerCandidateFixture: B1_RUN_COUNTS.warm,
-      externalNetworkUsed: false,
+      externalNetworkDependencyUsed: false,
       realUserProfileRead: false,
       bilibiliLoginUsed: false,
     },
@@ -690,6 +715,7 @@ function buildEnvironmentInput(environmentCore, run) {
     completedAtEpochMs: run.completedAtEpochMs,
     repositoryCommitSha: environmentCore.repositoryCommitSha,
     benchmarkSourceSha256: environmentCore.benchmarkSourceSha256,
+    productionSourceSha256: environmentCore.productionSourceSha256,
     packageLockSha256: environmentCore.packageLockSha256,
     productionDistSha256: environmentCore.productionDistSha256,
     fixtureGeneratorVersion: environmentCore.fixtureGeneratorVersion,
@@ -946,6 +972,7 @@ function createSummaryMarkdown(report) {
     `- 门禁状态：\`${report.status}\`\n` +
     `- 证据范围：仅确定性、公开安全的合成夹具\n` +
     `- 覆盖：${report.coverage.measuredOperationCount}/${report.coverage.expectedOperationCount} 项操作收据\n` +
+    `- 重复运行汇总：${report.coverage.runSummaryCount} 组（候选 / 夹具 / 操作 / 冷暖）\n` +
     `- 选中候选：${selected}\n` +
     `- 暂定恢复空间倍率：${headroom.provisionalMultiplier ?? "不可用"}\n` +
     `- 固定恢复预留：${headroom.fixedReserveBytes ?? "不可用"} 字节\n` +
@@ -1026,14 +1053,22 @@ export async function verifyB1ReportArtifacts() {
 }
 
 async function verifyCurrentArtifactBindings(environment) {
-  const [benchmarkSourceSha256, packageLockSha256, productionDistSha256] =
-    await Promise.all([
-      hashKnownFiles(BENCHMARK_SOURCE_FILES),
-      hashFile(path.join(REPOSITORY_ROOT, "package-lock.json")),
-      hashDirectory(path.join(REPOSITORY_ROOT, "dist")),
-    ]);
+  const [
+    benchmarkSourceSha256,
+    productionSourceSha256,
+    packageLockSha256,
+    productionDistSha256,
+  ] = await Promise.all([
+    hashKnownFiles(BENCHMARK_SOURCE_FILES),
+    hashProductionSourceInputs(),
+    hashFile(path.join(REPOSITORY_ROOT, "package-lock.json")),
+    hashDirectory(path.join(REPOSITORY_ROOT, "dist")),
+  ]);
   if (benchmarkSourceSha256 !== environment.benchmarkSourceSha256) {
     throw new Error("B1 benchmark source binding mismatch");
+  }
+  if (productionSourceSha256 !== environment.productionSourceSha256) {
+    throw new Error("B1 production source binding mismatch");
   }
   if (packageLockSha256 !== environment.packageLockSha256) {
     throw new Error("B1 package-lock binding mismatch");
@@ -1173,6 +1208,39 @@ async function hashKnownFiles(relativePaths) {
     hash.update("\0", "utf8");
   }
   return hash.digest("hex");
+}
+
+async function hashProductionSourceInputs() {
+  const relativePaths = [...PRODUCTION_SOURCE_FILES];
+  for (const directory of PRODUCTION_SOURCE_DIRECTORIES) {
+    const absoluteDirectory = path.join(REPOSITORY_ROOT, directory);
+    for (const filePath of await listFiles(absoluteDirectory)) {
+      relativePaths.push(
+        path.relative(REPOSITORY_ROOT, filePath).replaceAll("\\", "/"),
+      );
+    }
+  }
+  return hashKnownFiles([...new Set(relativePaths)]);
+}
+
+async function assertTrackedWorktreeClean() {
+  const { stdout } = await execFile(
+    "git",
+    ["status", "--porcelain", "--untracked-files=no"],
+    { cwd: REPOSITORY_ROOT, windowsHide: true },
+  );
+  if (stdout.trim() !== "") {
+    throw new Error("B1 matrix requires a clean tracked worktree");
+  }
+}
+
+async function buildProductionDist() {
+  await execFile("npm.cmd", ["run", "build"], {
+    cwd: REPOSITORY_ROOT,
+    windowsHide: true,
+    timeout: PRODUCTION_BUILD_TIMEOUT_MS,
+    maxBuffer: 16 * 1024 * 1024,
+  });
 }
 
 async function hashDirectory(directory) {
@@ -1318,8 +1386,7 @@ async function main() {
   } else if (args.run) {
     result = await runB1Matrix({
       chromePath: process.env.GATE_014_B1_CHROME_PATH,
-      expectedStableVersion:
-        process.env.GATE_014_B1_CFT_STABLE_VERSION,
+      cftMetadataPath: process.env.GATE_014_B1_CFT_METADATA_PATH,
       maxNewRuns: args.maxNewRuns,
     });
   } else {

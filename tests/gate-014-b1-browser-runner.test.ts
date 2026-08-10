@@ -11,6 +11,7 @@ import {
   removeB1TemporaryProfile,
   validateBrowserExecutionObservation,
   validateChromeForTestingMetadata,
+  validateOfficialCftStableMetadata,
   validateSmokeResult,
 } from "../scripts/gate-014-b1-browser-runner.mjs";
 import {
@@ -78,12 +79,33 @@ test("GATE-014-B1 Chrome arguments isolate a fresh profile and block external na
 });
 
 test("GATE-014-B1 requires the executable version to match the declared official CFT stable", () => {
+  const officialStable = validateOfficialCftStableMetadata(
+    {
+      timestamp: "2026-08-10T10:33:09.663Z",
+      channels: {
+        Stable: {
+          channel: "Stable",
+          version: "151.0.7922.77",
+          revision: "1654411",
+          downloads: {
+            chrome: [
+              {
+                platform: "win64",
+                url: "https://storage.googleapis.com/chrome-for-testing-public/151.0.7922.77/win64/chrome-win64.zip",
+              },
+            ],
+          },
+        },
+      },
+    },
+    "e".repeat(64),
+  );
   const metadata = validateChromeForTestingMetadata(
     {
       productName: "Google Chrome for Testing",
       productVersion: "151.0.7922.77",
     },
-    "151.0.7922.77",
+    officialStable,
   );
   assert.equal(metadata.version, metadata.officialStableVersion);
   assert.equal(
@@ -97,7 +119,7 @@ test("GATE-014-B1 requires the executable version to match the declared official
           productName: "Google Chrome for Testing",
           productVersion: "151.0.7922.76",
         },
-        "151.0.7922.77",
+        officialStable,
       ),
     /stable_version_mismatch/,
   );
@@ -105,9 +127,34 @@ test("GATE-014-B1 requires the executable version to match the declared official
     () =>
       validateChromeForTestingMetadata(
         { productName: "Google Chrome", productVersion: "151.0.7922.77" },
-        "151.0.7922.77",
+        officialStable,
       ),
     /official_chrome_for_testing_required/,
+  );
+  assert.throws(
+    () =>
+      validateOfficialCftStableMetadata(
+        {
+          timestamp: "2026-08-10T10:33:09.663Z",
+          channels: {
+            Stable: {
+              channel: "Stable",
+              version: "151.0.7922.77",
+              revision: "1654411",
+              downloads: {
+                chrome: [
+                  {
+                    platform: "win64",
+                    url: "https://example.invalid/chrome-win64.zip",
+                  },
+                ],
+              },
+            },
+          },
+        },
+        "e".repeat(64),
+      ),
+    /official_cft_stable_metadata_invalid/,
   );
 });
 
@@ -115,15 +162,22 @@ test("GATE-014-B1 browser observation fails closed on external requests or conso
   const passing = {
     contract: "gate-014-b1-browser-observation-v1",
     browserLaunchCount: 1,
+    observationScope: "all_loaded_extension_targets_after_devtools_attach",
+    preAttachEventsObserved: false,
+    observedTargetCount: 2,
     networkMetricAvailable: true,
-    networkRequestCount: 2,
+    networkRequestCount: 3,
     loopbackRequestCount: 1,
     extensionRequestCount: 1,
-    externalRequestCount: 0,
+    externalRequestAttemptCount: 1,
+    externalResponseCount: 0,
     consoleMetricAvailable: true,
     consoleErrorCount: 0,
   };
-  assert.equal(validateBrowserExecutionObservation(passing).browserLaunchCount, 1);
+  assert.equal(
+    validateBrowserExecutionObservation(passing).browserLaunchCount,
+    1,
+  );
   assert.equal(
     combineBrowserExecutionObservations(passing, passing).browserLaunchCount,
     2,
@@ -132,7 +186,7 @@ test("GATE-014-B1 browser observation fails closed on external requests or conso
     () =>
       validateBrowserExecutionObservation({
         ...passing,
-        externalRequestCount: 1,
+        externalResponseCount: 1,
       }),
     /observation_failed/,
   );
@@ -141,6 +195,14 @@ test("GATE-014-B1 browser observation fails closed on external requests or conso
       validateBrowserExecutionObservation({
         ...passing,
         consoleErrorCount: 1,
+      }),
+    /observation_failed/,
+  );
+  assert.throws(
+    () =>
+      validateBrowserExecutionObservation({
+        ...passing,
+        unexpected: true,
       }),
     /observation_failed/,
   );

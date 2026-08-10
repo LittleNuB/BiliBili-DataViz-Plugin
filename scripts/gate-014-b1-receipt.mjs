@@ -74,6 +74,7 @@ export function createB1EnvironmentReceipt(input) {
     "completedAtEpochMs",
     "repositoryCommitSha",
     "benchmarkSourceSha256",
+    "productionSourceSha256",
     "packageLockSha256",
     "productionDistSha256",
     "fixtureGeneratorVersion",
@@ -167,6 +168,9 @@ export function createB1EnvironmentReceipt(input) {
     "version",
     "channel",
     "officialStableVersion",
+    "officialStableRevision",
+    "officialMetadataTimestamp",
+    "officialMetadataSha256",
     "stableVersionSource",
     "headlessMode",
     "sandboxEnabled",
@@ -188,6 +192,20 @@ export function createB1EnvironmentReceipt(input) {
       /^\d+\.\d+\.\d+\.\d+$/,
       "browser.officialStableVersion",
     ),
+    officialStableRevision: assertPattern(
+      input.browser.officialStableRevision,
+      /^\d+$/,
+      "browser.officialStableRevision",
+    ),
+    officialMetadataTimestamp: assertPattern(
+      input.browser.officialMetadataTimestamp,
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/,
+      "browser.officialMetadataTimestamp",
+    ),
+    officialMetadataSha256: assertSha256(
+      input.browser.officialMetadataSha256,
+      "browser.officialMetadataSha256",
+    ),
     stableVersionSource: assertEnum(
       input.browser.stableVersionSource,
       ["official_last_known_good_versions_with_downloads_json"],
@@ -207,17 +225,21 @@ export function createB1EnvironmentReceipt(input) {
   if (browser.version !== browser.officialStableVersion) {
     throw new Error("browser version must match official stable version");
   }
+  if (!Number.isFinite(Date.parse(browser.officialMetadataTimestamp))) {
+    throw new Error("browser official metadata timestamp is invalid");
+  }
 
   assertPlainObject(input.execution, "execution");
   assertAllowedFields(input.execution, [
     "commandId",
+    "productionBuildCommand",
     "productionExtensionMode",
     "networkPolicy",
     "coldProfilePolicy",
     "warmProfilePolicy",
     "coldRunsPerCandidateFixture",
     "warmRunsPerCandidateFixture",
-    "externalNetworkUsed",
+    "externalNetworkDependencyUsed",
     "realUserProfileRead",
     "bilibiliLoginUsed",
     "browserObservation",
@@ -227,6 +249,11 @@ export function createB1EnvironmentReceipt(input) {
       input.execution.commandId,
       ["gate014_b1_full_matrix"],
       "execution.commandId",
+    ),
+    productionBuildCommand: assertEnum(
+      input.execution.productionBuildCommand,
+      ["npm_run_build"],
+      "execution.productionBuildCommand",
     ),
     productionExtensionMode: assertEnum(
       input.execution.productionExtensionMode,
@@ -258,10 +285,10 @@ export function createB1EnvironmentReceipt(input) {
       B1_RUN_COUNTS.warm,
       "execution.warmRunsPerCandidateFixture",
     ),
-    externalNetworkUsed: assertExactBoolean(
-      input.execution.externalNetworkUsed,
+    externalNetworkDependencyUsed: assertExactBoolean(
+      input.execution.externalNetworkDependencyUsed,
       false,
-      "execution.externalNetworkUsed",
+      "execution.externalNetworkDependencyUsed",
     ),
     realUserProfileRead: assertExactBoolean(
       input.execution.realUserProfileRead,
@@ -289,6 +316,10 @@ export function createB1EnvironmentReceipt(input) {
     benchmarkSourceSha256: assertSha256(
       input.benchmarkSourceSha256,
       "benchmarkSourceSha256",
+    ),
+    productionSourceSha256: assertSha256(
+      input.productionSourceSha256,
+      "productionSourceSha256",
     ),
     packageLockSha256: assertSha256(
       input.packageLockSha256,
@@ -561,11 +592,6 @@ export function createB1OperationReceipt(input) {
       minimumLength: 1,
     },
   );
-  assertNumberMultisetSubset(
-    committedBatchDurationsMs,
-    batchDurationsMs,
-    "committedBatchDurationsMs",
-  );
   const progressEventOffsetsMs = validateNumberArray(
     input.progressEventOffsetsMs,
     "progressEventOffsetsMs",
@@ -593,8 +619,7 @@ export function createB1OperationReceipt(input) {
     sortedCommittedBatchDurations.length === 0
       ? null
       : percentile(sortedCommittedBatchDurations, 0.95);
-  const batchDurationMaximumMs =
-    sortedCommittedBatchDurations.at(-1) ?? null;
+  const batchDurationMaximumMs = sortedCommittedBatchDurations.at(-1) ?? null;
   const instrumentedBatchDurationMedianMs = percentile(
     sortedInstrumentedBatchDurations,
     0.5,
@@ -616,10 +641,7 @@ export function createB1OperationReceipt(input) {
   if (totalDurationLimitMs !== null && totalDurationMs > totalDurationLimitMs) {
     failures.push("total_duration_exceeded");
   }
-  if (
-    batchDurationP95Ms !== null &&
-    batchDurationP95Ms > MAX_BATCH_P95_MS
-  ) {
+  if (batchDurationP95Ms !== null && batchDurationP95Ms > MAX_BATCH_P95_MS) {
     failures.push("batch_p95_exceeded");
   }
   if (
@@ -879,6 +901,7 @@ export function evaluateB1Report(input) {
       ? "insufficient_evidence"
       : baseStatus;
   const selectedCandidate = status === "pass" ? performanceCandidate : null;
+  const runSummaries = createB1RunSummaries(input.rawOperations);
   const report = {
     contract: "gate-014-b1-report-v1",
     status,
@@ -899,6 +922,7 @@ export function evaluateB1Report(input) {
       measuredOperationCount: operations.length,
       missingOperationCount: missingOperationIdentities.length,
       missingOperationIdentities: deepFreeze(missingOperationIdentities),
+      runSummaryCount: runSummaries.length,
     }),
     provisionalRestoreHeadroom,
     restorePreflightValidation:
@@ -909,10 +933,72 @@ export function evaluateB1Report(input) {
       }),
     selectedCandidate,
     candidates: deepFreeze(candidates),
+    runSummaries,
     operations: deepFreeze(operations),
   };
   assertPublicSafeValue(report);
   return deepFreeze(report);
+}
+
+function createB1RunSummaries(operations) {
+  const summaries = [];
+  for (const recordCap of B1_RECORD_CAPS) {
+    for (const byteCapBytes of B1_BYTE_CAPS) {
+      for (const fixtureId of B1_REQUIRED_FIXTURE_IDS) {
+        for (const operation of B1_OPERATION_KINDS) {
+          for (const [runMode, expectedRunCount] of Object.entries(
+            B1_RUN_COUNTS,
+          )) {
+            const matching = operations.filter(
+              (receipt) =>
+                receipt.candidate.recordCap === recordCap &&
+                receipt.candidate.byteCapBytes === byteCapBytes &&
+                receipt.fixtureId === fixtureId &&
+                receipt.operation === operation &&
+                receipt.runMode === runMode,
+            );
+            const totalDurationsMs = matching
+              .map((receipt) => receipt.totalDurationMs)
+              .sort((left, right) => left - right);
+            const committedBatchDurationsMs = matching
+              .flatMap((receipt) => receipt.committedBatchDurationsMs)
+              .sort((left, right) => left - right);
+            summaries.push(
+              deepFreeze({
+                candidate: deepFreeze({ recordCap, byteCapBytes }),
+                fixtureId,
+                operation,
+                runMode,
+                expectedRunCount,
+                measuredRunCount: matching.length,
+                totalDurationMedianMs:
+                  totalDurationsMs.length === 0
+                    ? null
+                    : percentile(totalDurationsMs, 0.5),
+                totalDurationP95Ms:
+                  totalDurationsMs.length === 0
+                    ? null
+                    : percentile(totalDurationsMs, 0.95),
+                committedBatchMeasurementCount:
+                  committedBatchDurationsMs.length,
+                committedBatchDurationMedianMs:
+                  committedBatchDurationsMs.length === 0
+                    ? null
+                    : percentile(committedBatchDurationsMs, 0.5),
+                committedBatchDurationP95Ms:
+                  committedBatchDurationsMs.length === 0
+                    ? null
+                    : percentile(committedBatchDurationsMs, 0.95),
+                committedBatchDurationMaximumMs:
+                  committedBatchDurationsMs.at(-1) ?? null,
+              }),
+            );
+          }
+        }
+      }
+    }
+  }
+  return deepFreeze(summaries);
 }
 
 export function serializeB1Report(report) {
@@ -1500,11 +1586,15 @@ function validateBrowserObservation(value) {
   assertAllowedFields(value, [
     "contract",
     "browserLaunchCount",
+    "observationScope",
+    "preAttachEventsObserved",
+    "observedTargetCount",
     "networkMetricAvailable",
     "networkRequestCount",
     "loopbackRequestCount",
     "extensionRequestCount",
-    "externalRequestCount",
+    "externalRequestAttemptCount",
+    "externalResponseCount",
     "consoleMetricAvailable",
     "consoleErrorCount",
   ]);
@@ -1517,6 +1607,20 @@ function validateBrowserObservation(value) {
     browserLaunchCount: assertPositiveSafeInteger(
       value.browserLaunchCount,
       "execution.browserObservation.browserLaunchCount",
+    ),
+    observationScope: assertEnum(
+      value.observationScope,
+      ["all_loaded_extension_targets_after_devtools_attach"],
+      "execution.browserObservation.observationScope",
+    ),
+    preAttachEventsObserved: assertExactBoolean(
+      value.preAttachEventsObserved,
+      false,
+      "execution.browserObservation.preAttachEventsObserved",
+    ),
+    observedTargetCount: assertPositiveSafeInteger(
+      value.observedTargetCount,
+      "execution.browserObservation.observedTargetCount",
     ),
     networkMetricAvailable: assertExactBoolean(
       value.networkMetricAvailable,
@@ -1535,10 +1639,14 @@ function validateBrowserObservation(value) {
       value.extensionRequestCount,
       "execution.browserObservation.extensionRequestCount",
     ),
-    externalRequestCount: assertExactInteger(
-      value.externalRequestCount,
+    externalRequestAttemptCount: assertNonNegativeSafeInteger(
+      value.externalRequestAttemptCount,
+      "execution.browserObservation.externalRequestAttemptCount",
+    ),
+    externalResponseCount: assertExactInteger(
+      value.externalResponseCount,
       0,
-      "execution.browserObservation.externalRequestCount",
+      "execution.browserObservation.externalResponseCount",
     ),
     consoleMetricAvailable: assertExactBoolean(
       value.consoleMetricAvailable,
@@ -1552,7 +1660,9 @@ function validateBrowserObservation(value) {
     ),
   };
   if (
-    observation.loopbackRequestCount + observation.extensionRequestCount >
+    observation.loopbackRequestCount +
+      observation.extensionRequestCount +
+      observation.externalRequestAttemptCount >
     observation.networkRequestCount
   ) {
     throw new Error(
@@ -1560,20 +1670,6 @@ function validateBrowserObservation(value) {
     );
   }
   return observation;
-}
-
-function assertNumberMultisetSubset(subset, superset, label) {
-  const available = new Map();
-  for (const value of superset) {
-    available.set(value, (available.get(value) ?? 0) + 1);
-  }
-  for (const value of subset) {
-    const remaining = available.get(value) ?? 0;
-    if (remaining < 1) {
-      throw new Error(`${label} must be a subset of batchDurationsMs`);
-    }
-    available.set(value, remaining - 1);
-  }
 }
 
 function assertPublicSafeId(value, label) {

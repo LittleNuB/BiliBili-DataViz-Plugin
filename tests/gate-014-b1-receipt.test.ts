@@ -22,6 +22,7 @@ const ENVIRONMENT_INPUT = {
   completedAtEpochMs: 2_000,
   repositoryCommitSha: "a".repeat(40),
   benchmarkSourceSha256: "b".repeat(64),
+  productionSourceSha256: "e".repeat(64),
   packageLockSha256: "c".repeat(64),
   productionDistSha256: "d".repeat(64),
   fixtureGeneratorVersion: "gate-014-fixture-generator-v5",
@@ -43,6 +44,9 @@ const ENVIRONMENT_INPUT = {
     version: "151.0.7922.77",
     channel: "stable",
     officialStableVersion: "151.0.7922.77",
+    officialStableRevision: "1654411",
+    officialMetadataTimestamp: "2026-08-10T10:33:09.663Z",
+    officialMetadataSha256: "f".repeat(64),
     stableVersionSource:
       "official_last_known_good_versions_with_downloads_json",
     headlessMode: "new",
@@ -50,6 +54,7 @@ const ENVIRONMENT_INPUT = {
   },
   execution: {
     commandId: "gate014_b1_full_matrix",
+    productionBuildCommand: "npm_run_build",
     productionExtensionMode: "unpacked",
     networkPolicy: "loopback_only_external_dns_blocked",
     coldProfilePolicy: "fresh_temporary_profile_per_run",
@@ -57,17 +62,21 @@ const ENVIRONMENT_INPUT = {
       "opened_complete_seed_generation_with_group_profile_reuse",
     coldRunsPerCandidateFixture: 3,
     warmRunsPerCandidateFixture: 5,
-    externalNetworkUsed: false,
+    externalNetworkDependencyUsed: false,
     realUserProfileRead: false,
     bilibiliLoginUsed: false,
     browserObservation: {
       contract: "gate-014-b1-browser-observation-v1",
       browserLaunchCount: 722,
+      observationScope: "all_loaded_extension_targets_after_devtools_attach",
+      preAttachEventsObserved: false,
+      observedTargetCount: 1_444,
       networkMetricAvailable: true,
-      networkRequestCount: 1_000,
+      networkRequestCount: 1_004,
       loopbackRequestCount: 600,
       extensionRequestCount: 400,
-      externalRequestCount: 0,
+      externalRequestAttemptCount: 4,
+      externalResponseCount: 0,
       consoleMetricAvailable: true,
       consoleErrorCount: 0,
     },
@@ -103,11 +112,11 @@ test("GATE-014-B1 environment receipt is deterministic and rejects local paths",
           ...ENVIRONMENT_INPUT.execution,
           browserObservation: {
             ...ENVIRONMENT_INPUT.execution.browserObservation,
-            externalRequestCount: 1,
+            externalResponseCount: 1,
           },
         },
       }),
-    /externalRequestCount/,
+    /externalResponseCount/,
   );
   assert.equal(serializeB1EnvironmentReceipt(receipt).endsWith("\n"), true);
   assert.throws(
@@ -348,16 +357,15 @@ test("GATE-014-B1 records committed writes separately from instrumented batch ti
       ),
     /must match/,
   );
-  assert.throws(
-    () =>
-      createB1OperationReceipt(
-        passingOperation({
-          committedBatchCount: 1,
-          committedBatchDurationsMs: [9_999],
-        }),
-      ),
-    /subset/,
+  const separateWriteTiming = createB1OperationReceipt(
+    passingOperation({
+      committedBatchCount: 1,
+      committedBatchDurationsMs: [1_500],
+      batchDurationsMs: [800, 900],
+    }),
   );
+  assert.equal(separateWriteTiming.batchDurationMaximumMs, 1_500);
+  assert.equal(separateWriteTiming.instrumentedBatchDurationMaximumMs, 900);
   assert.equal(
     createB1OperationReceipt(
       passingOperation({
@@ -541,6 +549,38 @@ test("GATE-014-B1 report requires complete raw coverage and selects the largest 
     input.rawOperations.length,
   );
   assert.equal(report.coverage.missingOperationCount, 0);
+  assert.equal(report.coverage.runSummaryCount, 1_170);
+  const coldAdmissionSummary = report.runSummaries.find(
+    (summary) =>
+      summary.candidate.recordCap === 1024 &&
+      summary.candidate.byteCapBytes === 4 * 1024 * 1024 &&
+      summary.fixtureId === "managed-full-text-500mib" &&
+      summary.operation === "admission" &&
+      summary.runMode === "cold",
+  );
+  assert.deepEqual(
+    {
+      expectedRunCount: coldAdmissionSummary.expectedRunCount,
+      measuredRunCount: coldAdmissionSummary.measuredRunCount,
+      totalDurationMedianMs: coldAdmissionSummary.totalDurationMedianMs,
+      totalDurationP95Ms: coldAdmissionSummary.totalDurationP95Ms,
+      committedBatchMeasurementCount:
+        coldAdmissionSummary.committedBatchMeasurementCount,
+      committedBatchDurationMedianMs:
+        coldAdmissionSummary.committedBatchDurationMedianMs,
+      committedBatchDurationP95Ms:
+        coldAdmissionSummary.committedBatchDurationP95Ms,
+    },
+    {
+      expectedRunCount: 3,
+      measuredRunCount: 3,
+      totalDurationMedianMs: 1_000,
+      totalDurationP95Ms: 1_000,
+      committedBatchMeasurementCount: 3,
+      committedBatchDurationMedianMs: 100,
+      committedBatchDurationP95Ms: 100,
+    },
+  );
   assert.equal(
     report.realBilibiliSubtitleRepresentativeness,
     "insufficient_evidence",

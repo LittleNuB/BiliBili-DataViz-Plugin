@@ -1,5 +1,5 @@
 import { execFile as execFileCallback, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import http from "node:http";
@@ -126,27 +126,81 @@ export async function resolveChromeExecutable(explicitPath) {
   throw new Error("stable_chrome_not_found");
 }
 
-export function validateChromeForTestingMetadata(
-  metadata,
-  expectedStableVersion,
-) {
-  if (!/^\d+\.\d+\.\d+\.\d+$/.test(expectedStableVersion ?? "")) {
-    throw new Error("official_cft_stable_version_required");
+export function validateOfficialCftStableMetadata(metadata, metadataSha256) {
+  const stable = metadata?.channels?.Stable;
+  const version = stable?.version;
+  const revision = stable?.revision;
+  const metadataTimestamp = metadata?.timestamp;
+  const expectedWin64Url = `https://storage.googleapis.com/chrome-for-testing-public/${version}/win64/chrome-win64.zip`;
+  const win64Download = stable?.downloads?.chrome?.find(
+    (download) => download?.platform === "win64",
+  );
+  if (
+    stable?.channel !== "Stable" ||
+    !/^\d+\.\d+\.\d+\.\d+$/.test(version ?? "") ||
+    !/^\d+$/.test(revision ?? "") ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(
+      metadataTimestamp ?? "",
+    ) ||
+    !Number.isFinite(Date.parse(metadataTimestamp)) ||
+    win64Download?.url !== expectedWin64Url ||
+    !/^[a-f0-9]{64}$/.test(metadataSha256 ?? "")
+  ) {
+    throw new Error("official_cft_stable_metadata_invalid");
   }
-  const version = metadata?.productVersion
-    ?.match(/\d+\.\d+\.\d+\.\d+/)?.[0];
+  return Object.freeze({
+    version,
+    revision,
+    metadataTimestamp,
+    metadataSha256,
+    source: CFT_STABLE_VERSION_SOURCE,
+  });
+}
+
+export async function readOfficialCftStableMetadata(metadataPath) {
+  if (!metadataPath) {
+    throw new Error("official_cft_stable_metadata_path_required");
+  }
+  const raw = await readFile(path.resolve(metadataPath), "utf8");
+  const metadataSha256 = createHash("sha256").update(raw, "utf8").digest("hex");
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("official_cft_stable_metadata_invalid");
+  }
+  return validateOfficialCftStableMetadata(parsed, metadataSha256);
+}
+
+export function validateChromeForTestingMetadata(metadata, officialStable) {
+  if (
+    officialStable?.source !== CFT_STABLE_VERSION_SOURCE ||
+    !/^\d+\.\d+\.\d+\.\d+$/.test(officialStable?.version ?? "") ||
+    !/^\d+$/.test(officialStable?.revision ?? "") ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(
+      officialStable?.metadataTimestamp ?? "",
+    ) ||
+    !Number.isFinite(Date.parse(officialStable?.metadataTimestamp)) ||
+    !/^[a-f0-9]{64}$/.test(officialStable?.metadataSha256 ?? "")
+  ) {
+    throw new Error("official_cft_stable_metadata_required");
+  }
+  const version = metadata?.productVersion?.match(/\d+\.\d+\.\d+\.\d+/)?.[0];
   if (!/Chrome for Testing/i.test(metadata?.productName ?? "") || !version) {
     throw new Error("official_chrome_for_testing_required");
   }
-  if (version !== expectedStableVersion) {
+  if (version !== officialStable.version) {
     throw new Error("chrome_for_testing_stable_version_mismatch");
   }
   return Object.freeze({
     flavor: "chrome_for_testing_stable",
     version,
     channel: "stable",
-    officialStableVersion: expectedStableVersion,
-    stableVersionSource: CFT_STABLE_VERSION_SOURCE,
+    officialStableVersion: officialStable.version,
+    officialStableRevision: officialStable.revision,
+    officialMetadataTimestamp: officialStable.metadataTimestamp,
+    officialMetadataSha256: officialStable.metadataSha256,
+    stableVersionSource: officialStable.source,
     headlessMode: "new",
     sandboxEnabled: true,
   });
@@ -154,8 +208,9 @@ export function validateChromeForTestingMetadata(
 
 export async function readChromeForTestingMetadata(
   chromePath,
-  expectedStableVersion = process.env.GATE_014_B1_CFT_STABLE_VERSION,
+  metadataPath = process.env.GATE_014_B1_CFT_METADATA_PATH,
 ) {
+  const officialStable = await readOfficialCftStableMetadata(metadataPath);
   const script = [
     "$item = Get-Item -LiteralPath $env:GATE_014_B1_BROWSER_EXECUTABLE",
     "$info = $item.VersionInfo",
@@ -173,21 +228,45 @@ export async function readChromeForTestingMetadata(
   const [productName, productVersion] = stdout.trim().split("|");
   return validateChromeForTestingMetadata(
     { productName, productVersion },
-    expectedStableVersion,
+    officialStable,
   );
 }
 
 export function validateBrowserExecutionObservation(observation) {
-  const integerFields = [
+  assertPlainObject(observation, "browser_execution_observation_failed");
+  const expectedFields = [
+    "contract",
     "browserLaunchCount",
+    "observationScope",
+    "preAttachEventsObserved",
+    "observedTargetCount",
+    "networkMetricAvailable",
     "networkRequestCount",
     "loopbackRequestCount",
     "extensionRequestCount",
-    "externalRequestCount",
+    "externalRequestAttemptCount",
+    "externalResponseCount",
+    "consoleMetricAvailable",
+    "consoleErrorCount",
+  ].sort();
+  if (Object.keys(observation).sort().join("|") !== expectedFields.join("|")) {
+    throw new Error("browser_execution_observation_failed");
+  }
+  const integerFields = [
+    "browserLaunchCount",
+    "observedTargetCount",
+    "networkRequestCount",
+    "loopbackRequestCount",
+    "extensionRequestCount",
+    "externalRequestAttemptCount",
+    "externalResponseCount",
     "consoleErrorCount",
   ];
   if (
     observation?.contract !== "gate-014-b1-browser-observation-v1" ||
+    observation.observationScope !==
+      "all_loaded_extension_targets_after_devtools_attach" ||
+    observation.preAttachEventsObserved !== false ||
     observation.networkMetricAvailable !== true ||
     observation.consoleMetricAvailable !== true ||
     integerFields.some(
@@ -195,7 +274,12 @@ export function validateBrowserExecutionObservation(observation) {
         !Number.isSafeInteger(observation[field]) || observation[field] < 0,
     ) ||
     observation.browserLaunchCount < 1 ||
-    observation.externalRequestCount !== 0 ||
+    observation.observedTargetCount < 1 ||
+    observation.loopbackRequestCount +
+      observation.extensionRequestCount +
+      observation.externalRequestAttemptCount >
+      observation.networkRequestCount ||
+    observation.externalResponseCount !== 0 ||
     observation.consoleErrorCount !== 0
   ) {
     throw new Error("browser_execution_observation_failed");
@@ -207,11 +291,15 @@ export function combineBrowserExecutionObservations(...observations) {
   const combined = {
     contract: "gate-014-b1-browser-observation-v1",
     browserLaunchCount: 0,
+    observationScope: "all_loaded_extension_targets_after_devtools_attach",
+    preAttachEventsObserved: false,
+    observedTargetCount: 0,
     networkMetricAvailable: true,
     networkRequestCount: 0,
     loopbackRequestCount: 0,
     extensionRequestCount: 0,
-    externalRequestCount: 0,
+    externalRequestAttemptCount: 0,
+    externalResponseCount: 0,
     consoleMetricAvailable: true,
     consoleErrorCount: 0,
   };
@@ -219,10 +307,12 @@ export function combineBrowserExecutionObservations(...observations) {
     const validated = validateBrowserExecutionObservation(observation);
     for (const field of [
       "browserLaunchCount",
+      "observedTargetCount",
       "networkRequestCount",
       "loopbackRequestCount",
       "extensionRequestCount",
-      "externalRequestCount",
+      "externalRequestAttemptCount",
+      "externalResponseCount",
       "consoleErrorCount",
     ]) {
       combined[field] += validated[field];
@@ -647,10 +737,7 @@ async function evaluateInHarnessProfile(
   evaluationErrorCode,
 ) {
   const chromeExecutable = await resolveChromeExecutable(options.chromePath);
-  await readChromeForTestingMetadata(
-    chromeExecutable,
-    options.expectedStableVersion,
-  );
+  await readChromeForTestingMetadata(chromeExecutable, options.cftMetadataPath);
   const productionExtension = path.resolve(
     options.productionExtension ?? path.join(REPOSITORY_ROOT, "dist"),
   );
@@ -697,6 +784,9 @@ async function evaluateInHarnessProfile(
       `ws://127.0.0.1:${port}${browserPath}`,
     );
     try {
+      const observation = createCdpExecutionObservation(client);
+      const targetObserver = createExtensionTargetObserver(client, observation);
+      await targetObserver.start();
       const { targetId } = await client.send(
         "Target.createTarget",
         {
@@ -705,31 +795,10 @@ async function evaluateInHarnessProfile(
         undefined,
         B1_CDP_SETUP_TIMEOUT_MS,
       );
-      const { sessionId } = await client.send(
-        "Target.attachToTarget",
-        { targetId, flatten: true },
-        undefined,
-        B1_CDP_SETUP_TIMEOUT_MS,
-      );
-      const observation = createCdpExecutionObservation(client, sessionId);
-      await client.send(
-        "Runtime.enable",
-        {},
-        sessionId,
-        B1_CDP_SETUP_TIMEOUT_MS,
-      );
-      await client.send(
-        "Network.enable",
-        {},
-        sessionId,
-        B1_CDP_SETUP_TIMEOUT_MS,
-      );
-      await client.send(
-        "Log.enable",
-        {},
-        sessionId,
-        B1_CDP_SETUP_TIMEOUT_MS,
-      );
+      const sessionId = await targetObserver.ensureTargetId(targetId);
+      if (!sessionId) {
+        throw new Error("browser_runner_target_not_observed");
+      }
       await waitForHarnessReady(client, sessionId);
       const resolvedExpression =
         typeof expression === "function"
@@ -757,7 +826,14 @@ async function evaluateInHarnessProfile(
         }
         throw new Error(evaluationErrorCode);
       }
+      await targetObserver.settle();
+      await targetObserver.stop();
       const observationReceipt = observation.finish();
+      if (process.env.GATE_014_B1_DEBUG === "1") {
+        process.stderr.write(
+          `Browser observation counts: ${JSON.stringify(observationReceipt)}\n`,
+        );
+      }
       return {
         value: evaluation.result?.value,
         observation: validateBrowserExecutionObservation(observationReceipt),
@@ -778,37 +854,38 @@ async function evaluateInHarnessProfile(
   }
 }
 
-function createCdpExecutionObservation(client, sessionId) {
+function createCdpExecutionObservation(client) {
+  const observedSessionIds = new Set();
   const counts = {
     networkRequestCount: 0,
     loopbackRequestCount: 0,
     extensionRequestCount: 0,
-    externalRequestCount: 0,
+    externalRequestAttemptCount: 0,
+    externalResponseCount: 0,
     consoleErrorCount: 0,
   };
   const unsubscribe = client.onEvent((message) => {
-    if (message.sessionId !== sessionId) {
+    if (!observedSessionIds.has(message.sessionId)) {
       return;
     }
     if (message.method === "Network.requestWillBeSent") {
       counts.networkRequestCount += 1;
-      const url = message.params?.request?.url;
-      try {
-        const parsed = new URL(url);
-        if (
-          parsed.protocol === "http:" ||
-          parsed.protocol === "https:"
-        ) {
-          if (["127.0.0.1", "localhost", "::1"].includes(parsed.hostname)) {
-            counts.loopbackRequestCount += 1;
-          } else {
-            counts.externalRequestCount += 1;
-          }
-        } else if (parsed.protocol === "chrome-extension:") {
-          counts.extensionRequestCount += 1;
-        }
-      } catch {
-        counts.externalRequestCount += 1;
+      const classification = classifyNetworkUrl(message.params?.request?.url);
+      if (classification.kind === "loopback") {
+        counts.loopbackRequestCount += 1;
+      } else if (classification.kind === "extension") {
+        counts.extensionRequestCount += 1;
+      } else if (classification.kind === "external") {
+        counts.externalRequestAttemptCount += 1;
+        debugExternalNetworkClass("request", classification);
+      }
+      return;
+    }
+    if (message.method === "Network.responseReceived") {
+      const classification = classifyNetworkUrl(message.params?.response?.url);
+      if (classification.kind === "external") {
+        counts.externalResponseCount += 1;
+        debugExternalNetworkClass("response", classification);
       }
       return;
     }
@@ -823,17 +900,180 @@ function createCdpExecutionObservation(client, sessionId) {
     }
   });
   return {
+    observeSession(sessionId) {
+      if (typeof sessionId !== "string" || sessionId.length === 0) {
+        throw new Error("browser_observation_session_invalid");
+      }
+      observedSessionIds.add(sessionId);
+    },
     finish() {
       unsubscribe();
       return {
         contract: "gate-014-b1-browser-observation-v1",
         browserLaunchCount: 1,
+        observationScope: "all_loaded_extension_targets_after_devtools_attach",
+        preAttachEventsObserved: false,
+        observedTargetCount: observedSessionIds.size,
         networkMetricAvailable: true,
         ...counts,
         consoleMetricAvailable: true,
       };
     },
   };
+}
+
+function classifyNetworkUrl(value) {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol === "chrome-extension:") {
+      return { kind: "extension", protocol: parsed.protocol, hostname: "" };
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { kind: "other", protocol: parsed.protocol, hostname: "" };
+    }
+    if (["127.0.0.1", "localhost", "::1"].includes(parsed.hostname)) {
+      return {
+        kind: "loopback",
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+      };
+    }
+    return {
+      kind: "external",
+      protocol: parsed.protocol,
+      hostname: parsed.hostname,
+    };
+  } catch {
+    return { kind: "external", protocol: "invalid:", hostname: "" };
+  }
+}
+
+function debugExternalNetworkClass(eventKind, classification) {
+  if (process.env.GATE_014_B1_DEBUG !== "1") {
+    return;
+  }
+  process.stderr.write(
+    `External ${eventKind} class: ${classification.protocol}//${classification.hostname}\n`,
+  );
+}
+
+function createExtensionTargetObserver(client, observation) {
+  const observedTargetTypes = new Set([
+    "page",
+    "background_page",
+    "service_worker",
+    "shared_worker",
+  ]);
+  const attachedTargets = new Map();
+  let attachmentFailure = null;
+  let unsubscribe = null;
+
+  const shouldObserve = (targetInfo) =>
+    observedTargetTypes.has(targetInfo?.type) &&
+    typeof targetInfo?.url === "string" &&
+    targetInfo.url.startsWith("chrome-extension://");
+
+  const ensureTarget = (targetInfo) => {
+    if (!shouldObserve(targetInfo)) {
+      return Promise.resolve(null);
+    }
+    if (attachedTargets.has(targetInfo.targetId)) {
+      return attachedTargets.get(targetInfo.targetId);
+    }
+    const attachment = attachObservedTarget(
+      client,
+      observation,
+      targetInfo.targetId,
+    ).catch((error) => {
+      attachmentFailure = error;
+      throw error;
+    });
+    attachedTargets.set(targetInfo.targetId, attachment);
+    return attachment;
+  };
+
+  const settleAttachments = async () => {
+    while (true) {
+      const attachmentCount = attachedTargets.size;
+      await Promise.all([...attachedTargets.values()]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (attachmentFailure) {
+        throw attachmentFailure;
+      }
+      if (attachedTargets.size === attachmentCount) {
+        return;
+      }
+    }
+  };
+
+  return {
+    async start() {
+      unsubscribe = client.onEvent((message) => {
+        if (
+          message.sessionId === undefined &&
+          ["Target.targetCreated", "Target.targetInfoChanged"].includes(
+            message.method,
+          )
+        ) {
+          void ensureTarget(message.params?.targetInfo).catch(() => {});
+        }
+      });
+      await client.send(
+        "Target.setDiscoverTargets",
+        { discover: true },
+        undefined,
+        B1_CDP_SETUP_TIMEOUT_MS,
+      );
+      const { targetInfos = [] } = await client.send(
+        "Target.getTargets",
+        {},
+        undefined,
+        B1_CDP_SETUP_TIMEOUT_MS,
+      );
+      await Promise.all(
+        targetInfos.map((targetInfo) => ensureTarget(targetInfo)),
+      );
+    },
+    async ensureTargetId(targetId) {
+      const { targetInfo } = await client.send(
+        "Target.getTargetInfo",
+        { targetId },
+        undefined,
+        B1_CDP_SETUP_TIMEOUT_MS,
+      );
+      return ensureTarget(targetInfo);
+    },
+    async settle() {
+      await settleAttachments();
+    },
+    async stop() {
+      await client.send(
+        "Target.setDiscoverTargets",
+        { discover: false },
+        undefined,
+        B1_CDP_SETUP_TIMEOUT_MS,
+      );
+      await settleAttachments();
+      unsubscribe?.();
+      unsubscribe = null;
+    },
+  };
+}
+
+async function attachObservedTarget(client, observation, targetId) {
+  const { sessionId } = await client.send(
+    "Target.attachToTarget",
+    { targetId, flatten: true },
+    undefined,
+    B1_CDP_SETUP_TIMEOUT_MS,
+  );
+  observation.observeSession(sessionId);
+  await Promise.all(
+    ["Runtime.enable", "Network.enable", "Log.enable"].map((method) =>
+      client.send(method, {}, sessionId, B1_CDP_SETUP_TIMEOUT_MS),
+    ),
+  );
+  return sessionId;
 }
 
 async function serveFixture(artifactPath, fixtureId) {
@@ -1080,7 +1320,7 @@ function delay(milliseconds) {
 async function main() {
   const result = await runBrowserSmoke({
     chromePath: process.env.GATE_014_B1_CHROME_PATH,
-    expectedStableVersion: process.env.GATE_014_B1_CFT_STABLE_VERSION,
+    cftMetadataPath: process.env.GATE_014_B1_CFT_METADATA_PATH,
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
