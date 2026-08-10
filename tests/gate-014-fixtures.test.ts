@@ -129,9 +129,9 @@ test("GATE-014-A generator produces exact deterministic canonical bytes for a bo
   const second = await createFixtureReceipt(definition, { seed: "unit-seed" });
 
   assert.equal(first.generatorVersion, GENERATOR_VERSION);
-  assert.equal(GENERATOR_VERSION, "gate-014-fixture-generator-v3");
-  assert.equal(RECEIPT_CONTRACT, "gate-014-fixture-receipt-v3");
-  assert.equal(GATE_014_RECEIPT_HELPER_CONTRACT, "gate-014-receipt-helper-v3");
+  assert.equal(GENERATOR_VERSION, "gate-014-fixture-generator-v4");
+  assert.equal(RECEIPT_CONTRACT, "gate-014-fixture-receipt-v4");
+  assert.equal(GATE_014_RECEIPT_HELPER_CONTRACT, "gate-014-receipt-helper-v4");
   assert.deepEqual(INDEXED_DB_EXPECTED_DIRECTIONS, ["increase", "decrease"]);
   assert.equal(Object.isFrozen(INDEXED_DB_EXPECTED_DIRECTIONS), true);
   assert.equal(first.seed, "unit-seed");
@@ -311,6 +311,20 @@ test("committed GATE-014-A golden receipts cover every required large fixture wi
         "createRestartReceipt",
         "createFailureInjectionReceipt",
         "createCleanupReadbackReceipt",
+      ],
+    );
+    assert.deepEqual(
+      receipt.reusableReceiptHelpers.find(
+        (helper: { helper: string }) => helper.helper === "createTimingReceipt",
+      ).requiredFields,
+      [
+        "fixtureId",
+        "operation",
+        "metricAvailable",
+        "startedAtEpochMs",
+        "endedAtEpochMs",
+        "durationMs",
+        "sampleCount",
       ],
     );
     assert.doesNotMatch(
@@ -520,13 +534,101 @@ test("GATE-014-A malformed candidates are executable rejects before canonical se
   }), /unsupported candidate field: note/);
 });
 
+test("GATE-014-A timing receipts fail closed when the metric is unavailable", () => {
+  const available = createTimingReceipt({
+    fixtureId: "managed-full-text-100mib",
+    operation: "dry-run-generation",
+    metricAvailable: true,
+    startedAtEpochMs: 1000,
+    endedAtEpochMs: 1240,
+    sampleCount: 1,
+  });
+  const unavailable = createTimingReceipt({
+    fixtureId: "managed-full-text-100mib",
+    operation: "dry-run-generation",
+    metricAvailable: false,
+    reasonCode: "browser_metric_unavailable",
+  });
+
+  assert.equal(available.status, "pass");
+  assert.equal(available.metricAvailable, true);
+  assert.equal(available.durationMs, 240);
+  assert.equal(unavailable.status, INSUFFICIENT_EVIDENCE);
+  assert.equal(unavailable.metricAvailable, false);
+  assert.equal(unavailable.reasonCode, "browser_metric_unavailable");
+  assert.equal("startedAtEpochMs" in unavailable, false);
+  assert.equal("endedAtEpochMs" in unavailable, false);
+  assert.equal("sampleCount" in unavailable, false);
+  for (const receipt of [available, unavailable]) {
+    assert.equal(receipt.storesSensitiveText, false);
+    assert.doesNotMatch(JSON.stringify(receipt), RAW_RUNTIME_DETAIL_PATTERN);
+    assert.doesNotMatch(JSON.stringify(receipt), SENSITIVE_RECEIPT_TOKEN_PATTERN);
+  }
+
+  assert.throws(() => createTimingReceipt({
+    fixtureId: "managed-full-text-100mib",
+    operation: "dry-run-generation",
+    metricAvailable: false,
+  }), /reasonCode/);
+  assert.throws(() => createTimingReceipt({
+    fixtureId: "managed-full-text-100mib",
+    operation: "dry-run-generation",
+    metricAvailable: false,
+    reasonCode: "raw-error-detail",
+  }), /reasonCode/);
+  assert.throws(() => createTimingReceipt({
+    fixtureId: "managed-full-text-100mib",
+    operation: "dry-run-generation",
+    metricAvailable: false,
+    reasonCode: "arbitrary_reason",
+  }), /reasonCode/);
+  assert.throws(() => createTimingReceipt({
+    fixtureId: "managed-full-text-100mib",
+    operation: "dry-run-generation",
+    metricAvailable: false,
+    reasonCode: "browser_metric_unavailable",
+    startedAtEpochMs: 1000,
+  }), /must not include timing measurements/);
+  assert.throws(() => createTimingReceipt({
+    fixtureId: "managed-full-text-100mib",
+    operation: "dry-run-generation",
+    metricAvailable: true,
+    endedAtEpochMs: 1240,
+  }), /startedAtEpochMs/);
+  assert.throws(() => createTimingReceipt({
+    fixtureId: "managed-full-text-100mib",
+    operation: "dry-run-generation",
+    metricAvailable: true,
+    startedAtEpochMs: 1000,
+  }), /endedAtEpochMs/);
+  assert.throws(() => createTimingReceipt({
+    fixtureId: "managed-full-text-100mib",
+    operation: "dry-run-generation",
+    metricAvailable: true,
+    startedAtEpochMs: 1000,
+    endedAtEpochMs: 1240,
+    reasonCode: "browser_metric_unavailable",
+  }), /available timing receipt must not include reasonCode/);
+  assert.throws(() => createTimingReceipt({
+    fixtureId: "managed-full-text-100mib",
+    operation: "dry-run-generation",
+    metricAvailable: "true",
+  }), /metricAvailable must be a boolean/);
+  assert.throws(() => createTimingReceipt({
+    fixtureId: "managed-full-text-100mib",
+    operation: "dry-run-generation",
+    metricAvailable: false,
+    reasonCode: "browser_metric_unavailable",
+    notes: "arbitrary text",
+  }), /unsupported field: notes/);
+});
+
 test("GATE-014-A reusable receipt helpers fail closed when browser metrics are unavailable", () => {
   const timing = createTimingReceipt({
     fixtureId: "managed-full-text-100mib",
     operation: "dry-run-generation",
-    startedAtEpochMs: 1000,
-    endedAtEpochMs: 1240,
-    sampleCount: 1,
+    metricAvailable: false,
+    reasonCode: "browser_metric_unavailable",
   });
   const memory = createMemoryReceipt({
     fixtureId: "managed-full-text-100mib",
@@ -560,9 +662,7 @@ test("GATE-014-A reusable receipt helpers fail closed when browser metrics are u
     reasonCode: "storage_candidate_not_selected",
   });
 
-  assert.equal(timing.status, "pass");
-  assert.equal(timing.durationMs, 240);
-  for (const receipt of [memory, indexedDb, persistedIndex, restart, failure]) {
+  for (const receipt of [timing, memory, indexedDb, persistedIndex, restart, failure]) {
     assert.equal(receipt.status, INSUFFICIENT_EVIDENCE);
     assert.equal(receipt.storesSensitiveText, false);
     assert.ok(typeof receipt.reasonCode === "string");

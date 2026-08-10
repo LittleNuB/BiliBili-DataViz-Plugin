@@ -14,8 +14,8 @@ import {
 
 export const MIB = 1024 * 1024;
 export const DEFAULT_SEED = 'gate-014-public-safe-seed-v1';
-export const GENERATOR_VERSION = 'gate-014-fixture-generator-v3';
-export const RECEIPT_CONTRACT = 'gate-014-fixture-receipt-v3';
+export const GENERATOR_VERSION = 'gate-014-fixture-generator-v4';
+export const RECEIPT_CONTRACT = 'gate-014-fixture-receipt-v4';
 export const MANAGED_FULL_TEXT_CONTRACT = 'managed-full-text-v1';
 export const GENERATED_FIXTURE_RELATIVE_DIR = 'tests/fixtures/gate-014/generated';
 export const GOLDEN_RECEIPT_RELATIVE_DIR = 'tests/fixtures/gate-014/receipts';

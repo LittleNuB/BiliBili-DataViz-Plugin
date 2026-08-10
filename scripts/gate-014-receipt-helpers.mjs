@@ -1,4 +1,4 @@
-export const GATE_014_RECEIPT_HELPER_CONTRACT = 'gate-014-receipt-helper-v3';
+export const GATE_014_RECEIPT_HELPER_CONTRACT = 'gate-014-receipt-helper-v4';
 export const INSUFFICIENT_EVIDENCE = 'insufficient_evidence';
 export const PUBLIC_SAFE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,95}$/;
 export const MAX_PEAK_HEAP_GROWTH_BYTES = 256 * 1024 * 1024;
@@ -25,6 +25,7 @@ export const REUSABLE_RECEIPT_HELPER_DESCRIPTORS = deepFreeze([
   helperDescriptor('createTimingReceipt', [
     'fixtureId',
     'operation',
+    'metricAvailable',
     'startedAtEpochMs',
     'endedAtEpochMs',
     'durationMs',
@@ -109,10 +110,30 @@ export function createTimingReceipt(input) {
   assertAllowedFields(input, [
     'fixtureId',
     'operation',
+    'metricAvailable',
     'startedAtEpochMs',
     'endedAtEpochMs',
     'sampleCount',
+    'reasonCode',
   ], 'createTimingReceipt');
+
+  const base = {
+    contract: GATE_014_RECEIPT_HELPER_CONTRACT,
+    helper: 'createTimingReceipt',
+    fixtureId: assertPublicSafeId(input.fixtureId, 'fixtureId'),
+    operation: assertPublicSafeId(input.operation, 'operation'),
+    metricAvailable: assertBoolean(input.metricAvailable, 'metricAvailable'),
+    storesSensitiveText: false,
+  };
+  if (!base.metricAvailable) {
+    if (['startedAtEpochMs', 'endedAtEpochMs', 'sampleCount'].some(field => Object.hasOwn(input, field))) {
+      throw new Error('unavailable timing receipt must not include timing measurements');
+    }
+    return insufficientReceipt(base, input.reasonCode);
+  }
+  if (Object.hasOwn(input, 'reasonCode')) {
+    throw new Error('available timing receipt must not include reasonCode');
+  }
 
   const startedAtEpochMs = assertNonNegativeSafeInteger(input.startedAtEpochMs, 'startedAtEpochMs');
   const endedAtEpochMs = assertNonNegativeSafeInteger(input.endedAtEpochMs, 'endedAtEpochMs');
@@ -127,16 +148,12 @@ export function createTimingReceipt(input) {
   }
 
   return freezeReceipt({
-    contract: GATE_014_RECEIPT_HELPER_CONTRACT,
-    helper: 'createTimingReceipt',
-    fixtureId: assertPublicSafeId(input.fixtureId, 'fixtureId'),
-    operation: assertPublicSafeId(input.operation, 'operation'),
+    ...base,
     status: 'pass',
     startedAtEpochMs,
     endedAtEpochMs,
     durationMs: endedAtEpochMs - startedAtEpochMs,
     sampleCount,
-    storesSensitiveText: false,
   });
 }
 

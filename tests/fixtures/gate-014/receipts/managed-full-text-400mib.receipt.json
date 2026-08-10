@@ -1,6 +1,6 @@
 {
-  "receiptContract": "gate-014-fixture-receipt-v3",
-  "generatorVersion": "gate-014-fixture-generator-v3",
+  "receiptContract": "gate-014-fixture-receipt-v4",
+  "generatorVersion": "gate-014-fixture-generator-v4",
   "seed": "gate-014-public-safe-seed-v1",
   "fixture": {
     "id": "managed-full-text-400mib",
@@ -3080,11 +3080,12 @@
   ],
   "reusableReceiptHelpers": [
     {
-      "contract": "gate-014-receipt-helper-v3",
+      "contract": "gate-014-receipt-helper-v4",
       "helper": "createTimingReceipt",
       "requiredFields": [
         "fixtureId",
         "operation",
+        "metricAvailable",
         "startedAtEpochMs",
         "endedAtEpochMs",
         "durationMs",
@@ -3094,7 +3095,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v3",
+      "contract": "gate-014-receipt-helper-v4",
       "helper": "createMemoryReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3112,7 +3113,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v3",
+      "contract": "gate-014-receipt-helper-v4",
       "helper": "createIndexedDbUsageReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3130,7 +3131,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v3",
+      "contract": "gate-014-receipt-helper-v4",
       "helper": "createPersistedIndexSizeReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3147,7 +3148,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v3",
+      "contract": "gate-014-receipt-helper-v4",
       "helper": "createRestartReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3168,7 +3169,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v3",
+      "contract": "gate-014-receipt-helper-v4",
       "helper": "createFailureInjectionReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3186,7 +3187,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v3",
+      "contract": "gate-014-receipt-helper-v4",
       "helper": "createCleanupReadbackReceipt",
       "requiredFields": [
         "fixtureId",
