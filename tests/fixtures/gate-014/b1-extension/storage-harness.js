@@ -321,6 +321,9 @@ async function runRestartRecovery(config, operationId) {
     );
     const ledgerConsistency = await readLedgerConsistency(database);
     const stateReadDurationMs = performance.now() - stateReadStartedAt;
+    if (stateReadDurationMs <= 0) {
+      throw new Error("fixture_read_timing_unavailable");
+    }
     const stateVisibleMs = Math.max(
       0,
       Date.now() - config.restartStartedEpochMs,
@@ -362,6 +365,12 @@ async function runRestartRecovery(config, operationId) {
         committedBatchCount: 0,
         committedBatchDurationsMs: [],
         readBatchDurationsMs: [stateReadDurationMs],
+        readTimingEvidence: {
+          finalLedgerAndVisibleReadbackMs: stateReadDurationMs,
+          preCommitVisibleGraphMs: null,
+          preCommitLedgerAndVisibleReadbackMs: null,
+          postCommitVisibleGraphMs: null,
+        },
         batchDurationsMs: [
           stateReadDurationMs,
           normalizationOperation.batchDurationsMs[0],
@@ -497,10 +506,13 @@ async function runAdmission(database, config, operationKind) {
       invisibleRead = await readVisibleGraph(database, () => {
         progressEventOffsetsMs.push(performance.now() - context.startedAt);
       });
-      readBatchDurationsMs.push(performance.now() - readStartedAt);
+      const preCommitVisibleGraphMs = performance.now() - readStartedAt;
+      readBatchDurationsMs.push(preCommitVisibleGraphMs);
       readStartedAt = performance.now();
       const invisibleLedgerConsistency = await readLedgerConsistency(database);
-      readBatchDurationsMs.push(performance.now() - readStartedAt);
+      const preCommitLedgerAndVisibleReadbackMs =
+        performance.now() - readStartedAt;
+      readBatchDurationsMs.push(preCommitLedgerAndVisibleReadbackMs);
       progressEventOffsetsMs.push(performance.now() - context.startedAt);
       commitMeasurement = await measureOperation(
         database,
@@ -532,7 +544,8 @@ async function runAdmission(database, config, operationKind) {
       visibleRead = await readVisibleGraph(database, () => {
         progressEventOffsetsMs.push(performance.now() - context.startedAt);
       });
-      readBatchDurationsMs.push(performance.now() - readStartedAt);
+      const postCommitVisibleGraphMs = performance.now() - readStartedAt;
+      readBatchDurationsMs.push(postCommitVisibleGraphMs);
       progressEventOffsetsMs.push(performance.now() - context.startedAt);
       return {
         committedBatchCount: writeResult.batchDurationsMs.length + 1,
@@ -541,6 +554,11 @@ async function runAdmission(database, config, operationKind) {
           ...writeResult.batchDurationsMs,
         ],
         readBatchDurationsMs,
+        readTimingEvidence: {
+          preCommitVisibleGraphMs,
+          preCommitLedgerAndVisibleReadbackMs,
+          postCommitVisibleGraphMs,
+        },
         batchDurationsMs: [
           operationCreateDurationMs,
           ...writeResult.batchDurationsMs,
@@ -1905,6 +1923,15 @@ async function measureOperation(database, operation, expectedDirection, task) {
   const committedBatchCount = result.committedBatchCount;
   const committedBatchDurationsMs = result.committedBatchDurationsMs;
   const taskReadBatchDurationsMs = result.readBatchDurationsMs ?? [];
+  const requiresVisibilityTiming = ["admission", "restore_staging"].includes(
+    operation,
+  );
+  const taskReadTimingEvidence = result.readTimingEvidence ?? null;
+  const visibilityTimingFields = [
+    "preCommitVisibleGraphMs",
+    "preCommitLedgerAndVisibleReadbackMs",
+    "postCommitVisibleGraphMs",
+  ];
   if (
     !Number.isSafeInteger(committedBatchCount) ||
     committedBatchCount < 0 ||
@@ -1912,8 +1939,18 @@ async function measureOperation(database, operation, expectedDirection, task) {
     committedBatchDurationsMs.length !== committedBatchCount ||
     !Array.isArray(taskReadBatchDurationsMs) ||
     taskReadBatchDurationsMs.some(
-      (duration) => !Number.isFinite(duration) || duration < 0,
-    )
+      (duration) => !Number.isFinite(duration) || duration <= 0,
+    ) ||
+    (requiresVisibilityTiming &&
+      (taskReadTimingEvidence === null ||
+        Object.keys(taskReadTimingEvidence).sort().join("|") !==
+          [...visibilityTimingFields].sort().join("|") ||
+        visibilityTimingFields.some(
+          (field) =>
+            !Number.isFinite(taskReadTimingEvidence[field]) ||
+            taskReadTimingEvidence[field] <= 0,
+        ))) ||
+    (!requiresVisibilityTiming && taskReadTimingEvidence !== null)
   ) {
     throw new Error("fixture_committed_batch_evidence_mismatch");
   }
@@ -1923,16 +1960,32 @@ async function measureOperation(database, operation, expectedDirection, task) {
     progressEventOffsetsMs.push(performance.now() - startedAt);
   });
   const ledgerReadDurationMs = performance.now() - ledgerReadStartedAt;
+  if (ledgerReadDurationMs <= 0) {
+    throw new Error("fixture_read_timing_unavailable");
+  }
   const readBatchDurationsMs = [
     ...taskReadBatchDurationsMs,
     ledgerReadDurationMs,
   ];
   const batchDurationsMs = [...result.batchDurationsMs, ledgerReadDurationMs];
+  const readTimingEvidence = {
+    finalLedgerAndVisibleReadbackMs: ledgerReadDurationMs,
+    preCommitVisibleGraphMs:
+      taskReadTimingEvidence?.preCommitVisibleGraphMs ?? null,
+    preCommitLedgerAndVisibleReadbackMs:
+      taskReadTimingEvidence?.preCommitLedgerAndVisibleReadbackMs ?? null,
+    postCommitVisibleGraphMs:
+      taskReadTimingEvidence?.postCommitVisibleGraphMs ?? null,
+  };
   if (
     !isDurationMultisetIncluded(
       batchDurationsMs,
       committedBatchDurationsMs,
       readBatchDurationsMs,
+    ) ||
+    !isDurationMultisetIncluded(
+      readBatchDurationsMs,
+      Object.values(readTimingEvidence).filter((duration) => duration !== null),
     )
   ) {
     throw new Error("fixture_classified_batch_evidence_mismatch");
@@ -1950,6 +2003,7 @@ async function measureOperation(database, operation, expectedDirection, task) {
     committedBatchCount,
     committedBatchDurationsMs: [...committedBatchDurationsMs],
     readBatchDurationsMs: [...readBatchDurationsMs],
+    readTimingEvidence,
     batchDurationsMs,
     progressEventOffsetsMs: normalizeProgressEvents(
       progressEventOffsetsMs,

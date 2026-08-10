@@ -178,6 +178,7 @@ export function mapB1LifecycleToRawOperations(lifecycle, metadata) {
       committedBatchCount: operation.committedBatchCount,
       committedBatchDurationsMs: [...operation.committedBatchDurationsMs],
       readBatchDurationsMs: [...operation.readBatchDurationsMs],
+      readTimingEvidence: { ...operation.readTimingEvidence },
       batchDurationsMs: [...operation.batchDurationsMs],
       progressEventOffsetsMs: [...operation.progressEventOffsetsMs],
       restart: { ...operation.restart },

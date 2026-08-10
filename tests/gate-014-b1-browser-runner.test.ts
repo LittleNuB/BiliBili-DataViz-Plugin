@@ -9,7 +9,9 @@ import {
   buildChromeArguments,
   combineBrowserExecutionObservations,
   createB1TemporaryProfile,
+  findProductionServiceWorkerSession,
   removeB1TemporaryProfile,
+  selectProductionServiceWorkerTarget,
   validateBrowserExecutionObservation,
   validateChromeForTestingMetadata,
   validateLoadedExtensionInventory,
@@ -65,9 +67,10 @@ test("GATE-014-B1 Chrome arguments isolate a fresh profile and block external na
     true,
   );
   assert.equal(argumentsList.includes("--disable-background-networking"), true);
+  assert.equal(argumentsList.includes("--no-proxy-server"), true);
   assert.equal(
     argumentsList.includes(
-      "--host-resolver-rules=MAP * 0.0.0.0,EXCLUDE 127.0.0.1",
+      "--host-resolver-rules=MAP * ~NOTFOUND,EXCLUDE 127.0.0.1",
     ),
     true,
   );
@@ -319,6 +322,60 @@ test("GATE-014-B1 proves the expected production and harness extensions are load
       /required_extensions_not_loaded/,
     );
   }
+});
+
+test("GATE-014-B1 binds production runtime proof only to its service worker and polls", async () => {
+  const productionExtensionId = "b".repeat(32);
+  const pageTarget = {
+    targetId: "product-page",
+    type: "page",
+    url: `chrome-extension://${productionExtensionId}/dashboard/index.html`,
+  };
+  const workerTarget = {
+    targetId: "production-worker",
+    type: "service_worker",
+    url: `chrome-extension://${productionExtensionId}/background.js`,
+  };
+  assert.equal(
+    selectProductionServiceWorkerTarget([pageTarget], productionExtensionId),
+    null,
+  );
+  assert.deepEqual(
+    selectProductionServiceWorkerTarget(
+      [pageTarget, workerTarget],
+      productionExtensionId,
+    ),
+    workerTarget,
+  );
+
+  let discoveryCount = 0;
+  const client = {
+    async send(method) {
+      assert.equal(method, "Target.getTargets");
+      discoveryCount += 1;
+      return {
+        targetInfos:
+          discoveryCount === 1 ? [pageTarget] : [pageTarget, workerTarget],
+      };
+    },
+  };
+  const targetObserver = {
+    async ensureServiceWorkerTargetId(targetId, extensionId) {
+      assert.equal(targetId, workerTarget.targetId);
+      assert.equal(extensionId, productionExtensionId);
+      return "production-worker-session";
+    },
+  };
+  assert.equal(
+    await findProductionServiceWorkerSession(
+      client,
+      targetObserver,
+      productionExtensionId,
+      { timeoutMs: 100, pollIntervalMs: 0 },
+    ),
+    "production-worker-session",
+  );
+  assert.equal(discoveryCount, 2);
 });
 
 test("GATE-014-B1 browser smoke accepts only the fixed public-safe harness identity", () => {

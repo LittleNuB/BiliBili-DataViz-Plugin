@@ -66,6 +66,16 @@ const OPERATIONS_REQUIRING_COMMITTED_WRITE_TIMING = new Set([
   "restore_staging",
 ]);
 const OPERATIONS_REQUIRING_READ_BATCH_TIMING = new Set(B1_OPERATION_KINDS);
+const OPERATIONS_REQUIRING_VISIBILITY_READ_TIMING = new Set([
+  "admission",
+  "restore_staging",
+]);
+const READ_TIMING_EVIDENCE_FIELDS = Object.freeze([
+  "finalLedgerAndVisibleReadbackMs",
+  "preCommitVisibleGraphMs",
+  "preCommitLedgerAndVisibleReadbackMs",
+  "postCommitVisibleGraphMs",
+]);
 
 const ASSERTION_FIELDS = Object.freeze([
   "atomicVersionCommitOrRollback",
@@ -553,6 +563,7 @@ export function createB1OperationReceipt(input) {
     "committedBatchCount",
     "committedBatchDurationsMs",
     "readBatchDurationsMs",
+    "readTimingEvidence",
     "batchDurationsMs",
     "progressEventOffsetsMs",
     "restart",
@@ -602,6 +613,10 @@ export function createB1OperationReceipt(input) {
     input.readBatchDurationsMs,
     "readBatchDurationsMs",
     { minimumLength: 0 },
+  );
+  const readTimingEvidence = validateReadTimingEvidence(
+    input.readTimingEvidence,
+    operation,
   );
   const batchDurationsMs = validateNumberArray(
     input.batchDurationsMs,
@@ -678,6 +693,43 @@ export function createB1OperationReceipt(input) {
     readBatchDurationsMs.length === 0
   ) {
     insufficientEvidence.push("read_batch_timing_unavailable");
+  }
+  if (readBatchDurationsMs.some((duration) => duration <= 0)) {
+    insufficientEvidence.push("read_batch_timing_not_positive");
+  }
+  if (readTimingEvidence.finalLedgerAndVisibleReadbackMs === null) {
+    insufficientEvidence.push(
+      "final_ledger_visible_readback_timing_unavailable",
+    );
+  }
+  if (OPERATIONS_REQUIRING_VISIBILITY_READ_TIMING.has(operation)) {
+    for (const [field, reasonCode] of [
+      [
+        "preCommitVisibleGraphMs",
+        "pre_commit_visible_graph_timing_unavailable",
+      ],
+      [
+        "preCommitLedgerAndVisibleReadbackMs",
+        "pre_commit_ledger_visible_readback_timing_unavailable",
+      ],
+      [
+        "postCommitVisibleGraphMs",
+        "post_commit_visible_graph_timing_unavailable",
+      ],
+    ]) {
+      if (readTimingEvidence[field] === null) {
+        insufficientEvidence.push(reasonCode);
+      }
+    }
+  }
+  const namedReadDurationsMs = READ_TIMING_EVIDENCE_FIELDS.map(
+    (field) => readTimingEvidence[field],
+  ).filter((duration) => duration !== null);
+  if (namedReadDurationsMs.some((duration) => duration <= 0)) {
+    insufficientEvidence.push("named_read_timing_not_positive");
+  }
+  if (!isDurationMultisetIncluded(readBatchDurationsMs, namedReadDurationsMs)) {
+    failures.push("named_read_timing_missing_from_read_batch");
   }
   if (
     committedBatchDurationsMs.length + readBatchDurationsMs.length >
@@ -793,6 +845,7 @@ export function createB1OperationReceipt(input) {
     readBatchDurationMedianMs,
     readBatchDurationP95Ms,
     readBatchDurationMaximumMs,
+    readTimingEvidence,
     firstProgressEventLatencyMs: progress.firstLatencyMs,
     maximumProgressEventGapMs: progress.maximumGapMs,
     restart,
@@ -1653,6 +1706,35 @@ function validateNumberArray(value, label, { minimumLength }) {
   return value.map((item, index) =>
     assertNonNegativeFiniteNumber(item, `${label}[${index}]`),
   );
+}
+
+function validateReadTimingEvidence(value, operation) {
+  assertPlainObject(value, "readTimingEvidence");
+  assertAllowedFields(value, READ_TIMING_EVIDENCE_FIELDS);
+  const evidence = Object.fromEntries(
+    READ_TIMING_EVIDENCE_FIELDS.map((field) => [
+      field,
+      value[field] === null
+        ? null
+        : assertNonNegativeFiniteNumber(
+            value[field],
+            `readTimingEvidence.${field}`,
+          ),
+    ]),
+  );
+  if (
+    !OPERATIONS_REQUIRING_VISIBILITY_READ_TIMING.has(operation) &&
+    [
+      evidence.preCommitVisibleGraphMs,
+      evidence.preCommitLedgerAndVisibleReadbackMs,
+      evidence.postCommitVisibleGraphMs,
+    ].some((duration) => duration !== null)
+  ) {
+    throw new Error(
+      "visibility read timing evidence is valid only for admission or restore_staging",
+    );
+  }
+  return deepFreeze(evidence);
 }
 
 function isDurationMultisetIncluded(

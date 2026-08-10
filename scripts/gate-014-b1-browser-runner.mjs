@@ -105,11 +105,12 @@ export function buildChromeArguments({
     "--disable-default-apps",
     "--disable-sync",
     "--metrics-recording-only",
+    "--no-proxy-server",
     "--no-first-run",
     "--no-default-browser-check",
     "--enable-precise-memory-info",
     "--disable-features=MediaRouter,OptimizationHints,Translate",
-    "--host-resolver-rules=MAP * 0.0.0.0,EXCLUDE 127.0.0.1",
+    "--host-resolver-rules=MAP * ~NOTFOUND,EXCLUDE 127.0.0.1",
     "about:blank",
   ];
 }
@@ -910,7 +911,7 @@ async function evaluateInHarnessProfile(
         productionExtensionId,
         harnessExtensionId: B1_HARNESS_EXTENSION_ID,
       });
-      const productionSessionId = await findExtensionTargetSession(
+      const productionSessionId = await findProductionServiceWorkerSession(
         client,
         targetObserver,
         productionExtensionId,
@@ -1192,6 +1193,21 @@ function createExtensionTargetObserver(client, observation) {
       );
       return ensureTarget(targetInfo);
     },
+    async ensureServiceWorkerTargetId(targetId, extensionId) {
+      const { targetInfo } = await client.send(
+        "Target.getTargetInfo",
+        { targetId },
+        undefined,
+        B1_CDP_SETUP_TIMEOUT_MS,
+      );
+      if (
+        targetInfo?.type !== "service_worker" ||
+        getExtensionIdFromTargetUrl(targetInfo?.url) !== extensionId
+      ) {
+        throw new Error("browser_production_service_worker_target_invalid");
+      }
+      return ensureTarget(targetInfo);
+    },
     async settle() {
       await settleAttachments();
     },
@@ -1292,25 +1308,73 @@ async function waitForProductionExtensionReady(
   throw new Error("browser_production_extension_runtime_identity_failed");
 }
 
-async function findExtensionTargetSession(client, targetObserver, extensionId) {
-  const { targetInfos = [] } = await client.send(
-    "Target.getTargets",
-    {},
-    undefined,
-    B1_CDP_SETUP_TIMEOUT_MS,
+export function selectProductionServiceWorkerTarget(targetInfos, extensionId) {
+  if (!Array.isArray(targetInfos) || !EXTENSION_ID_PATTERN.test(extensionId)) {
+    throw new Error("browser_production_service_worker_target_invalid");
+  }
+  const matches = targetInfos.filter(
+    (candidate) =>
+      candidate?.type === "service_worker" &&
+      getExtensionIdFromTargetUrl(candidate?.url) === extensionId,
   );
-  const target = targetInfos.find((candidate) => {
-    try {
-      return (
-        ["page", "background_page", "service_worker", "shared_worker"].includes(
-          candidate?.type,
-        ) && new URL(candidate.url).hostname === extensionId
-      );
-    } catch {
-      return false;
+  if (matches.length > 1) {
+    throw new Error("browser_production_service_worker_target_ambiguous");
+  }
+  return matches[0] ?? null;
+}
+
+export async function findProductionServiceWorkerSession(
+  client,
+  targetObserver,
+  extensionId,
+  options = {},
+) {
+  const timeoutMs = options.timeoutMs ?? B1_CDP_SETUP_TIMEOUT_MS;
+  const pollIntervalMs = options.pollIntervalMs ?? 50;
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    !Number.isSafeInteger(pollIntervalMs) ||
+    pollIntervalMs < 0
+  ) {
+    throw new Error("browser_production_service_worker_poll_invalid");
+  }
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const { targetInfos = [] } = await client.send(
+      "Target.getTargets",
+      {},
+      undefined,
+      B1_CDP_SETUP_TIMEOUT_MS,
+    );
+    const target = selectProductionServiceWorkerTarget(
+      targetInfos,
+      extensionId,
+    );
+    if (target) {
+      try {
+        return await targetObserver.ensureServiceWorkerTargetId(
+          target.targetId,
+          extensionId,
+        );
+      } catch {
+        // A Manifest V3 worker can stop between discovery and attachment.
+      }
     }
-  });
-  return target ? targetObserver.ensureTargetId(target.targetId) : null;
+    if (Date.now() < deadline) {
+      await delay(pollIntervalMs);
+    }
+  } while (Date.now() < deadline);
+  return null;
+}
+
+function getExtensionIdFromTargetUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "chrome-extension:" ? parsed.hostname : null;
+  } catch {
+    return null;
+  }
 }
 
 async function serveFixture(artifactPath, fixtureId) {

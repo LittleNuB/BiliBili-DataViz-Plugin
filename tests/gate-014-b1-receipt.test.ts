@@ -135,6 +135,7 @@ test("GATE-014-B1 environment receipt is deterministic and rejects local paths",
 });
 
 function passingOperation(overrides = {}) {
+  const readBatchDurationsMs = [1_000, 1_001, 1_002, 1_003];
   return {
     fixtureId: "managed-full-text-500mib",
     fixtureReceiptSha256: SHA_256,
@@ -152,11 +153,17 @@ function passingOperation(overrides = {}) {
       ...Array.from({ length: 19 }, () => 2_000),
       5_000,
     ],
-    readBatchDurationsMs: [1_000],
+    readBatchDurationsMs,
+    readTimingEvidence: {
+      finalLedgerAndVisibleReadbackMs: 1_003,
+      preCommitVisibleGraphMs: 1_000,
+      preCommitLedgerAndVisibleReadbackMs: 1_001,
+      postCommitVisibleGraphMs: 1_002,
+    },
     batchDurationsMs: [
       ...Array.from({ length: 19 }, () => 2_000),
       5_000,
-      1_000,
+      ...readBatchDurationsMs,
     ],
     progressEventOffsetsMs: Array.from(
       { length: 450 },
@@ -341,6 +348,12 @@ test("GATE-014-B1 records committed writes separately from instrumented batch ti
       committedBatchCount: 0,
       committedBatchDurationsMs: [],
       readBatchDurationsMs: [10, 20, 30],
+      readTimingEvidence: {
+        finalLedgerAndVisibleReadbackMs: 30,
+        preCommitVisibleGraphMs: null,
+        preCommitLedgerAndVisibleReadbackMs: null,
+        postCommitVisibleGraphMs: null,
+      },
       batchDurationsMs: [10, 20, 30],
       progressEventOffsetsMs: [],
     }),
@@ -355,9 +368,16 @@ test("GATE-014-B1 records committed writes separately from instrumented batch ti
   assert.equal(receipt.readBatchDurationMaximumMs, 30);
   const missingWriteTiming = createB1OperationReceipt(
     passingOperation({
+      operation: "commit_visibility",
       committedBatchCount: 0,
       committedBatchDurationsMs: [],
       readBatchDurationsMs: [10],
+      readTimingEvidence: {
+        finalLedgerAndVisibleReadbackMs: 10,
+        preCommitVisibleGraphMs: null,
+        preCommitLedgerAndVisibleReadbackMs: null,
+        postCommitVisibleGraphMs: null,
+      },
       batchDurationsMs: [10],
     }),
   );
@@ -372,6 +392,12 @@ test("GATE-014-B1 records committed writes separately from instrumented batch ti
       committedBatchCount: 0,
       committedBatchDurationsMs: [],
       readBatchDurationsMs: [],
+      readTimingEvidence: {
+        finalLedgerAndVisibleReadbackMs: null,
+        preCommitVisibleGraphMs: null,
+        preCommitLedgerAndVisibleReadbackMs: null,
+        postCommitVisibleGraphMs: null,
+      },
       batchDurationsMs: [10],
       progressEventOffsetsMs: [],
     }),
@@ -379,6 +405,7 @@ test("GATE-014-B1 records committed writes separately from instrumented batch ti
   assert.equal(missingReadTiming.status, "insufficient_evidence");
   assert.deepEqual(missingReadTiming.insufficientEvidence, [
     "read_batch_timing_unavailable",
+    "final_ledger_visible_readback_timing_unavailable",
   ]);
   assert.throws(
     () =>
@@ -399,9 +426,16 @@ test("GATE-014-B1 records committed writes separately from instrumented batch ti
   );
   const separateWriteTiming = createB1OperationReceipt(
     passingOperation({
+      operation: "commit_visibility",
       committedBatchCount: 1,
       committedBatchDurationsMs: [1_500],
       readBatchDurationsMs: [800],
+      readTimingEvidence: {
+        finalLedgerAndVisibleReadbackMs: 800,
+        preCommitVisibleGraphMs: null,
+        preCommitLedgerAndVisibleReadbackMs: null,
+        postCommitVisibleGraphMs: null,
+      },
       batchDurationsMs: [800, 900, 1_500],
     }),
   );
@@ -410,9 +444,16 @@ test("GATE-014-B1 records committed writes separately from instrumented batch ti
   assert.equal(separateWriteTiming.instrumentedBatchDurationMaximumMs, 1_500);
   const mismatchedClassifiedTiming = createB1OperationReceipt(
     passingOperation({
+      operation: "commit_visibility",
       committedBatchCount: 1,
       committedBatchDurationsMs: [1_500],
       readBatchDurationsMs: [800],
+      readTimingEvidence: {
+        finalLedgerAndVisibleReadbackMs: 800,
+        preCommitVisibleGraphMs: null,
+        preCommitLedgerAndVisibleReadbackMs: null,
+        postCommitVisibleGraphMs: null,
+      },
       batchDurationsMs: [800, 900],
     }),
   );
@@ -427,6 +468,12 @@ test("GATE-014-B1 records committed writes separately from instrumented batch ti
         committedBatchCount: 0,
         committedBatchDurationsMs: [],
         readBatchDurationsMs: [6_000],
+        readTimingEvidence: {
+          finalLedgerAndVisibleReadbackMs: 6_000,
+          preCommitVisibleGraphMs: null,
+          preCommitLedgerAndVisibleReadbackMs: null,
+          postCommitVisibleGraphMs: null,
+        },
         batchDurationsMs: [6_000],
       }),
     ).status,
@@ -451,7 +498,18 @@ function reportOperation({
   ].includes(operation)
     ? 0
     : 1;
-  const readBatchDurationsMs = [80];
+  const requiresVisibilityTiming = ["admission", "restore_staging"].includes(
+    operation,
+  );
+  const readBatchDurationsMs = requiresVisibilityTiming
+    ? [81, 82, 83, 80]
+    : [80];
+  const readTimingEvidence = {
+    finalLedgerAndVisibleReadbackMs: 80,
+    preCommitVisibleGraphMs: requiresVisibilityTiming ? 81 : null,
+    preCommitLedgerAndVisibleReadbackMs: requiresVisibilityTiming ? 82 : null,
+    postCommitVisibleGraphMs: requiresVisibilityTiming ? 83 : null,
+  };
   const committedBatchDurationsMs = committedBatchCount === 0 ? [] : [100];
   return passingOperation({
     fixtureId,
@@ -464,6 +522,7 @@ function reportOperation({
     committedBatchCount,
     committedBatchDurationsMs,
     readBatchDurationsMs,
+    readTimingEvidence,
     batchDurationsMs:
       committedBatchDurationsMs.length + readBatchDurationsMs.length === 0
         ? [100]
@@ -511,6 +570,60 @@ function reportOperation({
     },
   });
 }
+
+test("GATE-014-B1 requires positive named readback timing for all operations", () => {
+  for (const operation of B1_OPERATION_KINDS) {
+    const input = reportOperation({
+      fixtureId: "managed-full-text-500mib",
+      fixtureReceiptSha256: SHA_256,
+      recordCap: 1024,
+      byteCapBytes: 4 * 1024 * 1024,
+      runMode: "cold",
+      runOrdinal: 1,
+      operation,
+    });
+    input.readBatchDurationsMs = input.readBatchDurationsMs.map((duration) =>
+      duration === 80 ? 0 : duration,
+    );
+    input.batchDurationsMs = input.batchDurationsMs.map((duration) =>
+      duration === 80 ? 0 : duration,
+    );
+    input.readTimingEvidence.finalLedgerAndVisibleReadbackMs = 0;
+    const receipt = createB1OperationReceipt(input);
+    assert.equal(receipt.status, "insufficient_evidence", operation);
+    assert.equal(
+      receipt.insufficientEvidence.includes("read_batch_timing_not_positive"),
+      true,
+      operation,
+    );
+    assert.equal(
+      receipt.insufficientEvidence.includes("named_read_timing_not_positive"),
+      true,
+      operation,
+    );
+  }
+});
+
+test("GATE-014-B1 admission visibility evidence requires distinct measured samples", () => {
+  const input = passingOperation({
+    committedBatchCount: 1,
+    committedBatchDurationsMs: [100],
+    readBatchDurationsMs: [80],
+    readTimingEvidence: {
+      finalLedgerAndVisibleReadbackMs: 80,
+      preCommitVisibleGraphMs: 80,
+      preCommitLedgerAndVisibleReadbackMs: 80,
+      postCommitVisibleGraphMs: 80,
+    },
+    batchDurationsMs: [100, 80],
+  });
+  const receipt = createB1OperationReceipt(input);
+  assert.equal(receipt.status, "fail");
+  assert.equal(
+    receipt.failures.includes("named_read_timing_missing_from_read_batch"),
+    true,
+  );
+});
 
 function completeReportInput() {
   const fixtureReceipts = Object.fromEntries(
