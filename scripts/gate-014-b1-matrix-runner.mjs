@@ -215,7 +215,8 @@ export async function runB1Matrix(options = {}) {
     throw new Error("GATE_014_B1_CFT_METADATA_PATH is required");
   }
   await access(cftMetadataPath);
-  await assertTrackedWorktreeClean();
+  await assertWorktreeClean();
+  await assertProductionSourceInputsTracked();
   await buildProductionDist();
   const maxNewRuns =
     options.maxNewRuns === undefined
@@ -330,8 +331,21 @@ export async function runB1Matrix(options = {}) {
       }
       try {
         for (const candidate of createCandidateOrder()) {
-          for (const runOrdinal of [1, 2]) {
-            const spec = { fixtureId, candidate, runMode: "cold", runOrdinal };
+          const candidateSpecs = [
+            ...Array.from({ length: B1_RUN_COUNTS.cold }, (_, index) => ({
+              fixtureId,
+              candidate,
+              runMode: "cold",
+              runOrdinal: index + 1,
+            })),
+            ...Array.from({ length: B1_RUN_COUNTS.warm }, (_, index) => ({
+              fixtureId,
+              candidate,
+              runMode: "warm",
+              runOrdinal: index + 1,
+            })),
+          ];
+          for (const spec of candidateSpecs) {
             if (checkpoints.has(runIdentity(spec))) {
               continue;
             }
@@ -341,38 +355,6 @@ export async function runB1Matrix(options = {}) {
             } finally {
               await removeB1TemporaryProfile(profile);
             }
-          }
-
-          const coldThree = {
-            fixtureId,
-            candidate,
-            runMode: "cold",
-            runOrdinal: 3,
-          };
-          const pendingWarm = Array.from(
-            { length: B1_RUN_COUNTS.warm },
-            (_, index) => ({
-              fixtureId,
-              candidate,
-              runMode: "warm",
-              runOrdinal: index + 1,
-            }),
-          ).filter((spec) => !checkpoints.has(runIdentity(spec)));
-          const coldThreePending = !checkpoints.has(runIdentity(coldThree));
-          if (!coldThreePending && pendingWarm.length === 0) {
-            continue;
-          }
-
-          const bridgeProfile = await createB1TemporaryProfile();
-          try {
-            if (coldThreePending) {
-              await recordRun(preparedFixture, bridgeProfile, coldThree);
-            }
-            for (const spec of pendingWarm) {
-              await recordRun(preparedFixture, bridgeProfile, spec);
-            }
-          } finally {
-            await removeB1TemporaryProfile(bridgeProfile);
           }
         }
       } finally {
@@ -700,7 +682,7 @@ async function collectEnvironmentCore(chromePath, cftMetadataPath) {
       networkPolicy: "loopback_only_external_dns_blocked",
       coldProfilePolicy: "fresh_temporary_profile_per_run",
       warmProfilePolicy:
-        "opened_complete_seed_generation_with_group_profile_reuse",
+        "opened_complete_seed_generation_with_fresh_profile_per_run",
       coldRunsPerCandidateFixture: B1_RUN_COUNTS.cold,
       warmRunsPerCandidateFixture: B1_RUN_COUNTS.warm,
       externalNetworkDependencyUsed: false,
@@ -1214,6 +1196,12 @@ async function hashKnownFiles(relativePaths) {
 }
 
 async function hashProductionSourceInputs() {
+  const relativePaths = await listProductionSourceInputs();
+  await assertProductionSourceInputsTracked(relativePaths);
+  return hashKnownFiles(relativePaths);
+}
+
+async function listProductionSourceInputs() {
   const relativePaths = [...PRODUCTION_SOURCE_FILES];
   for (const directory of PRODUCTION_SOURCE_DIRECTORIES) {
     const absoluteDirectory = path.join(REPOSITORY_ROOT, directory);
@@ -1223,18 +1211,71 @@ async function hashProductionSourceInputs() {
       );
     }
   }
-  return hashKnownFiles([...new Set(relativePaths)]);
+  return [...new Set(relativePaths)];
 }
 
-async function assertTrackedWorktreeClean() {
+async function assertProductionSourceInputsTracked(
+  productionSourceInputs = undefined,
+) {
+  const relativePaths =
+    productionSourceInputs ?? (await listProductionSourceInputs());
   const { stdout } = await execFile(
     "git",
-    ["status", "--porcelain", "--untracked-files=no"],
+    [
+      "ls-files",
+      "--cached",
+      "--",
+      ...PRODUCTION_SOURCE_DIRECTORIES,
+      ...PRODUCTION_SOURCE_FILES,
+    ],
     { cwd: REPOSITORY_ROOT, windowsHide: true },
   );
-  if (stdout.trim() !== "") {
-    throw new Error("B1 matrix requires a clean tracked worktree");
+  validateProductionSourceInputsTracked(
+    relativePaths,
+    stdout.split(/\r?\n/u).filter(Boolean),
+  );
+}
+
+export function validateProductionSourceInputsTracked(
+  productionSourceInputs,
+  trackedPaths,
+) {
+  if (!Array.isArray(productionSourceInputs) || !Array.isArray(trackedPaths)) {
+    throw new Error("B1 production source tracking evidence invalid");
   }
+  const normalize = (value) => {
+    if (
+      typeof value !== "string" ||
+      value === "" ||
+      value.includes("\0") ||
+      path.isAbsolute(value)
+    ) {
+      throw new Error("B1 production source tracking evidence invalid");
+    }
+    return value.replaceAll("\\", "/");
+  };
+  const tracked = new Set(trackedPaths.map(normalize));
+  const untrackedInputs = productionSourceInputs
+    .map(normalize)
+    .filter((relativePath) => !tracked.has(relativePath));
+  if (untrackedInputs.length > 0) {
+    throw new Error("B1 production source inputs must be Git tracked");
+  }
+}
+
+export function validateB1WorktreeStatus(status) {
+  if (typeof status !== "string" || status.trim() !== "") {
+    throw new Error("B1 matrix requires a clean worktree");
+  }
+}
+
+async function assertWorktreeClean() {
+  const { stdout } = await execFile(
+    "git",
+    ["status", "--porcelain=v1", "--untracked-files=all"],
+    { cwd: REPOSITORY_ROOT, windowsHide: true },
+  );
+  validateB1WorktreeStatus(stdout);
 }
 
 async function buildProductionDist() {

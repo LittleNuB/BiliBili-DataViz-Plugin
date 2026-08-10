@@ -59,25 +59,28 @@ const ENVIRONMENT_INPUT = {
     networkPolicy: "loopback_only_external_dns_blocked",
     coldProfilePolicy: "fresh_temporary_profile_per_run",
     warmProfilePolicy:
-      "opened_complete_seed_generation_with_group_profile_reuse",
+      "opened_complete_seed_generation_with_fresh_profile_per_run",
     coldRunsPerCandidateFixture: 3,
     warmRunsPerCandidateFixture: 5,
     externalNetworkDependencyUsed: false,
     realUserProfileRead: false,
     bilibiliLoginUsed: false,
     browserObservation: {
-      contract: "gate-014-b1-browser-observation-v2",
+      contract: "gate-014-b1-browser-observation-v4",
       browserLaunchCount: 722,
-      observationScope: "all_loaded_extension_targets_after_devtools_attach",
+      observationScope:
+        "extension_targets_after_devtools_attach_with_production_worker_barrier",
       preAttachEventsObserved: false,
+      productionServiceWorkerStartupBarrierEnabled: true,
       observedTargetCount: 1_444,
       productionExtensionTargetCount: 722,
       harnessExtensionTargetCount: 722,
       networkMetricAvailable: true,
-      networkRequestCount: 1_004,
+      networkRequestCount: 2_000,
       loopbackRequestCount: 600,
       extensionRequestCount: 400,
-      externalRequestAttemptCount: 4,
+      externalRequestAttemptCount: 722,
+      syntheticUnauthenticatedResponseCount: 722,
       externalResponseCount: 0,
       consoleMetricAvailable: true,
       consoleErrorCount: 0,
@@ -120,6 +123,36 @@ test("GATE-014-B1 environment receipt is deterministic and rejects local paths",
         },
       }),
     /externalResponseCount/,
+  );
+  assert.throws(
+    () =>
+      createB1EnvironmentReceipt({
+        ...ENVIRONMENT_INPUT,
+        execution: {
+          ...ENVIRONMENT_INPUT.execution,
+          browserObservation: {
+            ...ENVIRONMENT_INPUT.execution.browserObservation,
+            browserLaunchCount: 1,
+            externalRequestAttemptCount: 1,
+            syntheticUnauthenticatedResponseCount: 2,
+          },
+        },
+      }),
+    /classified requests exceed total/,
+  );
+  assert.throws(
+    () =>
+      createB1EnvironmentReceipt({
+        ...ENVIRONMENT_INPUT,
+        execution: {
+          ...ENVIRONMENT_INPUT.execution,
+          browserObservation: {
+            ...ENVIRONMENT_INPUT.execution.browserObservation,
+            syntheticUnauthenticatedResponseCount: 721,
+          },
+        },
+      }),
+    /classified requests exceed total/,
   );
   assert.equal(serializeB1EnvironmentReceipt(receipt).endsWith("\n"), true);
   assert.throws(

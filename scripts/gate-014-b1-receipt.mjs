@@ -294,7 +294,7 @@ export function createB1EnvironmentReceipt(input) {
     ),
     warmProfilePolicy: assertEnum(
       input.execution.warmProfilePolicy,
-      ["opened_complete_seed_generation_with_group_profile_reuse"],
+      ["opened_complete_seed_generation_with_fresh_profile_per_run"],
       "execution.warmProfilePolicy",
     ),
     coldRunsPerCandidateFixture: assertExactInteger(
@@ -1762,6 +1762,7 @@ function validateBrowserObservation(value) {
     "browserLaunchCount",
     "observationScope",
     "preAttachEventsObserved",
+    "productionServiceWorkerStartupBarrierEnabled",
     "observedTargetCount",
     "productionExtensionTargetCount",
     "harnessExtensionTargetCount",
@@ -1770,6 +1771,7 @@ function validateBrowserObservation(value) {
     "loopbackRequestCount",
     "extensionRequestCount",
     "externalRequestAttemptCount",
+    "syntheticUnauthenticatedResponseCount",
     "externalResponseCount",
     "consoleMetricAvailable",
     "consoleErrorCount",
@@ -1778,7 +1780,7 @@ function validateBrowserObservation(value) {
   const observation = {
     contract: assertEnum(
       value.contract,
-      ["gate-014-b1-browser-observation-v2"],
+      ["gate-014-b1-browser-observation-v4"],
       "execution.browserObservation.contract",
     ),
     browserLaunchCount: assertPositiveSafeInteger(
@@ -1787,13 +1789,20 @@ function validateBrowserObservation(value) {
     ),
     observationScope: assertEnum(
       value.observationScope,
-      ["all_loaded_extension_targets_after_devtools_attach"],
+      [
+        "extension_targets_after_devtools_attach_with_production_worker_barrier",
+      ],
       "execution.browserObservation.observationScope",
     ),
     preAttachEventsObserved: assertExactBoolean(
       value.preAttachEventsObserved,
       false,
       "execution.browserObservation.preAttachEventsObserved",
+    ),
+    productionServiceWorkerStartupBarrierEnabled: assertExactBoolean(
+      value.productionServiceWorkerStartupBarrierEnabled,
+      true,
+      "execution.browserObservation.productionServiceWorkerStartupBarrierEnabled",
     ),
     observedTargetCount: assertPositiveSafeInteger(
       value.observedTargetCount,
@@ -1828,6 +1837,10 @@ function validateBrowserObservation(value) {
       value.externalRequestAttemptCount,
       "execution.browserObservation.externalRequestAttemptCount",
     ),
+    syntheticUnauthenticatedResponseCount: assertNonNegativeSafeInteger(
+      value.syntheticUnauthenticatedResponseCount,
+      "execution.browserObservation.syntheticUnauthenticatedResponseCount",
+    ),
     externalResponseCount: assertExactInteger(
       value.externalResponseCount,
       0,
@@ -1858,7 +1871,11 @@ function validateBrowserObservation(value) {
     observation.loopbackRequestCount +
       observation.extensionRequestCount +
       observation.externalRequestAttemptCount >
-      observation.networkRequestCount
+      observation.networkRequestCount ||
+    observation.syntheticUnauthenticatedResponseCount >
+      observation.externalRequestAttemptCount ||
+    observation.syntheticUnauthenticatedResponseCount <
+      observation.browserLaunchCount
   ) {
     throw new Error(
       "execution.browserObservation classified requests exceed total",

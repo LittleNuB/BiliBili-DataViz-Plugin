@@ -8,6 +8,8 @@ import {
   createB1RestorePreflightValidationFromLifecycle,
   mapB1LifecycleToRawOperations,
   resolveNpmBuildInvocation,
+  validateB1WorktreeStatus,
+  validateProductionSourceInputsTracked,
 } from "../scripts/gate-014-b1-matrix-runner.mjs";
 import {
   B1_OPERATION_KINDS,
@@ -16,6 +18,39 @@ import {
 
 const FIXTURE_SHA = "a".repeat(64);
 const ENVIRONMENT_SHA = "b".repeat(64);
+
+test("GATE-014-B1 rejects tracked and untracked worktree inputs", () => {
+  assert.doesNotThrow(() => validateB1WorktreeStatus(""));
+  assert.throws(
+    () => validateB1WorktreeStatus(" M src/background/index.ts\n"),
+    /clean worktree/,
+  );
+  assert.throws(
+    () => validateB1WorktreeStatus("?? public/untracked-runtime-input.js\n"),
+    /clean worktree/,
+  );
+});
+
+test("GATE-014-B1 rejects ignored files under production inputs", () => {
+  assert.doesNotThrow(() =>
+    validateProductionSourceInputsTracked(
+      ["src/background/index.ts", "public/manifest.json"],
+      ["src/background/index.ts", "public/manifest.json"],
+    ),
+  );
+  assert.throws(
+    () =>
+      validateProductionSourceInputsTracked(
+        [
+          "src/background/index.ts",
+          "public/manifest.json",
+          "public/runtime.local",
+        ],
+        ["src/background/index.ts", "public/manifest.json"],
+      ),
+    /must be Git tracked/,
+  );
+});
 
 test("GATE-014-B1 launches npm build through Node instead of a Windows command shim", async () => {
   const originalNpmExecPath = process.env.npm_execpath;

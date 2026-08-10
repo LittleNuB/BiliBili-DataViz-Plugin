@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import {
@@ -9,16 +12,24 @@ import {
   buildChromeArguments,
   classifyObservedErrorEvent,
   combineBrowserExecutionObservations,
+  createB1ProductionExtensionStage,
   createB1TemporaryProfile,
+  createCdpExecutionObservation,
   createExtensionTargetObserver,
+  createPipeCdpClient,
+  findSurvivingWindowsProcessTree,
   findProductionServiceWorkerSession,
+  loadUnpackedExtension,
+  removeB1ProductionExtensionStage,
   removeB1TemporaryProfile,
   selectProductionServiceWorkerTarget,
+  uninstallUnpackedExtension,
   validateBrowserExecutionObservation,
   validateChromeForTestingMetadata,
   validateLoadedExtensionInventory,
   validateOfficialCftStableMetadata,
   validateSmokeResult,
+  validateWindowsChromeTerminationEvidence,
   waitForProductionExtensionReady,
   waitForProcessExit,
 } from "../scripts/gate-014-b1-browser-runner.mjs";
@@ -106,8 +117,6 @@ test("GATE-014-B1 reads the final restart ledger only after normalization and pr
 test("GATE-014-B1 Chrome arguments isolate a fresh profile and block external name resolution", () => {
   const argumentsList = buildChromeArguments({
     profileDirectory: path.resolve("temporary-profile"),
-    productionExtension: path.resolve("dist"),
-    harnessExtension: path.resolve("tests/fixtures/gate-014/b1-extension"),
   });
 
   assert.equal(argumentsList.includes("--headless=new"), true);
@@ -116,6 +125,22 @@ test("GATE-014-B1 Chrome arguments isolate a fresh profile and block external na
     true,
   );
   assert.equal(argumentsList.includes("--disable-background-networking"), true);
+  assert.equal(argumentsList.includes("--disable-extensions"), false);
+  assert.equal(argumentsList.includes("--remote-debugging-pipe"), true);
+  assert.equal(
+    argumentsList.includes("--enable-unsafe-extension-debugging"),
+    true,
+  );
+  assert.equal(
+    argumentsList.some((argument) => argument.startsWith("--load-extension")),
+    false,
+  );
+  assert.equal(
+    argumentsList.some((argument) =>
+      argument.startsWith("--disable-extensions-except"),
+    ),
+    false,
+  );
   assert.equal(
     argumentsList.includes(
       "--disable-features=MediaRouter,OptimizationGuideModelExecution,OptimizationGuideOnDeviceModel,OptimizationHints,Translate",
@@ -136,6 +161,331 @@ test("GATE-014-B1 Chrome arguments isolate a fresh profile and block external na
   assert.equal(
     argumentsList.some((argument) => argument.includes("User Data")),
     false,
+  );
+});
+
+test("GATE-014-B1 stages a byte-identical production extension and proves cleanup", async () => {
+  const source = await mkdtemp(path.join(tmpdir(), "b1-production-source-"));
+  let stage = null;
+  try {
+    await writeFile(
+      path.join(source, "manifest.json"),
+      '{"manifest_version":3,"name":"Synthetic","version":"1.0.0"}\n',
+      "utf8",
+    );
+    await writeFile(path.join(source, "background.js"), "export {};\n", "utf8");
+    stage = await createB1ProductionExtensionStage(source);
+    assert.notEqual(stage.directory, source);
+    assert.equal(stage.sourceSha256.length, 64);
+    assert.equal(
+      await readFile(path.join(stage.directory, "background.js"), "utf8"),
+      "export {};\n",
+    );
+    const removedRoot = stage.root;
+    await removeB1ProductionExtensionStage(stage);
+    stage = null;
+    await assert.rejects(() => access(removedRoot), { code: "ENOENT" });
+  } finally {
+    if (stage) {
+      await removeB1ProductionExtensionStage(stage);
+    }
+    await rm(source, { recursive: true, force: true });
+  }
+});
+
+test("GATE-014-B1 CDP pipe frames commands and parses fragmented responses", async () => {
+  const commandPipe = new PassThrough();
+  const eventPipe = new PassThrough();
+  const commandChunks: Buffer[] = [];
+  commandPipe.on("data", (chunk) => commandChunks.push(Buffer.from(chunk)));
+  const client = createPipeCdpClient(commandPipe, eventPipe);
+  const observedEvents: Array<Record<string, unknown>> = [];
+  client.onEvent((message: Record<string, unknown>) => {
+    observedEvents.push(message);
+  });
+
+  const responsePromise = client.send(
+    "Runtime.evaluate",
+    { expression: "1" },
+    "extension-session",
+    1_000,
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  const commandText = Buffer.concat(commandChunks).toString("utf8");
+  assert.equal(commandText.endsWith("\0"), true);
+  const command = JSON.parse(commandText.slice(0, -1));
+  assert.equal(command.method, "Runtime.evaluate");
+  assert.equal(command.sessionId, "extension-session");
+
+  eventPipe.write(
+    '{"method":"Runtime.executionContextCreated","sessionId":"extension-session","params":{}}\0{"id":',
+  );
+  eventPipe.write(
+    `${command.id},"result":{"result":{"value":1}}}\0`,
+  );
+  const response = await responsePromise;
+  assert.equal(response.result.value, 1);
+  assert.equal(observedEvents.length, 1);
+  assert.equal(observedEvents[0].method, "Runtime.executionContextCreated");
+  client.close();
+});
+
+test("GATE-014-B1 dynamically loads only absolute unpacked extension paths", async () => {
+  const extensionPath = path.resolve("dist");
+  const calls: Array<Record<string, unknown>> = [];
+  const extensionId = "b".repeat(32);
+  const client = {
+    async send(method: string, params: Record<string, unknown>) {
+      calls.push({ method, params });
+      if (method === "Extensions.getExtensions") {
+        return { extensions: [] };
+      }
+      return { id: extensionId };
+    },
+  };
+  assert.equal(
+    await loadUnpackedExtension(client, extensionPath, { timeoutMs: 1_000 }),
+    extensionId,
+  );
+  assert.deepEqual(calls, [
+    {
+      method: "Extensions.loadUnpacked",
+      params: { path: extensionPath },
+    },
+  ]);
+  await assert.rejects(
+    () => loadUnpackedExtension(client, "dist", { timeoutMs: 1_000 }),
+    /browser_extension_path_invalid/,
+  );
+  await assert.rejects(
+    () =>
+      loadUnpackedExtension(
+        { async send() { return { id: "invalid" }; } },
+        extensionPath,
+        { timeoutMs: 1_000 },
+      ),
+    /browser_extension_dynamic_load_failed/,
+  );
+  await uninstallUnpackedExtension(client, extensionId, { timeoutMs: 1_000 });
+  assert.deepEqual(calls.slice(-2), [
+    {
+      method: "Extensions.uninstall",
+      params: { id: extensionId },
+    },
+    {
+      method: "Extensions.getExtensions",
+      params: {},
+    },
+  ]);
+  await assert.rejects(
+    () => uninstallUnpackedExtension(client, "invalid", { timeoutMs: 1_000 }),
+    /browser_extension_identity_invalid/,
+  );
+  await assert.rejects(
+    () =>
+      uninstallUnpackedExtension(
+        {
+          async send(method: string) {
+            return method === "Extensions.getExtensions"
+              ? { extensions: [{ id: extensionId }] }
+              : {};
+          },
+        },
+        extensionId,
+        { timeoutMs: 1_000 },
+      ),
+    /browser_extension_uninstall_failed/,
+  );
+});
+
+test("GATE-014-B1 configures a paused production worker before resuming it", async () => {
+  const productionExtensionId = "b".repeat(32);
+  const workerTarget = {
+    targetId: "production-worker",
+    type: "service_worker",
+    url: `chrome-extension://${productionExtensionId}/background.js`,
+  };
+  let eventListener: ((message: Record<string, unknown>) => void) | null = null;
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const observedSessions: Array<{ sessionId: string; extensionId: string }> = [];
+  const client = {
+    onEvent(listener: (message: Record<string, unknown>) => void) {
+      eventListener = listener;
+      return () => {
+        eventListener = null;
+      };
+    },
+    async send(method: string, params: Record<string, unknown>) {
+      calls.push({ method, params });
+      if (method === "Target.getTargets") {
+        return { targetInfos: [] };
+      }
+      return {};
+    },
+  };
+  const observer = createExtensionTargetObserver(client, {
+    observeSession(sessionId: string, extensionId: string) {
+      observedSessions.push({ sessionId, extensionId });
+    },
+  });
+  await observer.start({ timeoutMs: 1_000 });
+  eventListener?.({
+    method: "Target.attachedToTarget",
+    params: {
+      sessionId: "production-session",
+      targetInfo: workerTarget,
+      waitingForDebugger: true,
+    },
+  });
+  eventListener?.({
+    method: "Target.attachedToTarget",
+    params: {
+      sessionId: "manual-page-session",
+      targetInfo: {
+        targetId: "manual-page",
+        type: "page",
+        url: `chrome-extension://${B1_HARNESS_EXTENSION_ID}/runner.html`,
+      },
+      waitingForDebugger: false,
+    },
+  });
+  eventListener?.({
+    method: "Target.attachedToTarget",
+    params: {
+      sessionId: "persisted-harness-worker-session",
+      targetInfo: {
+        targetId: "persisted-harness-worker",
+        type: "service_worker",
+        url: `chrome-extension://${B1_HARNESS_EXTENSION_ID}/service-worker.js`,
+      },
+      waitingForDebugger: false,
+    },
+  });
+  await observer.settle();
+
+  assert.deepEqual(calls[0], {
+    method: "Target.setAutoAttach",
+    params: {
+      autoAttach: true,
+      waitForDebuggerOnStart: true,
+      flatten: true,
+      filter: [
+        { type: "service_worker", exclude: false },
+        { exclude: true },
+      ],
+    },
+  });
+  const resumeIndex = calls.findIndex(
+    ({ method }) => method === "Runtime.runIfWaitingForDebugger",
+  );
+  for (const requiredMethod of [
+    "Runtime.enable",
+    "Network.enable",
+    "Log.enable",
+    "Fetch.enable",
+  ]) {
+    const enableIndex = calls.findIndex(({ method }) => method === requiredMethod);
+    assert.equal(enableIndex >= 0, true);
+    assert.equal(enableIndex < resumeIndex, true);
+  }
+  assert.equal(
+    calls.some(({ method }) => method === "Target.attachToTarget"),
+    false,
+  );
+  assert.deepEqual(observedSessions, [
+    {
+      sessionId: "production-session",
+      extensionId: productionExtensionId,
+    },
+    {
+      sessionId: "persisted-harness-worker-session",
+      extensionId: B1_HARNESS_EXTENSION_ID,
+    },
+  ]);
+  assert.equal(
+    calls.filter(({ method }) => method === "Runtime.runIfWaitingForDebugger")
+      .length,
+    1,
+  );
+  observer.completeSetup();
+  await observer.stop();
+});
+
+test("GATE-014-B1 waits for a newly created runner target to reach its extension URL", async () => {
+  let targetInfoReadCount = 0;
+  const client = {
+    onEvent() {
+      return () => {};
+    },
+    async send(method: string, params: Record<string, unknown>) {
+      if (method === "Target.getTargets") {
+        return { targetInfos: [] };
+      }
+      if (method === "Target.getTargetInfo") {
+        targetInfoReadCount += 1;
+        return {
+          targetInfo: {
+            targetId: params.targetId,
+            type: "page",
+            url:
+              targetInfoReadCount === 1
+                ? "about:blank"
+                : `chrome-extension://${B1_HARNESS_EXTENSION_ID}/runner.html`,
+          },
+        };
+      }
+      if (method === "Target.attachToTarget") {
+        return { sessionId: "runner-session" };
+      }
+      return {};
+    },
+  };
+  const observer = createExtensionTargetObserver(client, {
+    observeSession() {},
+  });
+  await observer.start({ timeoutMs: 1_000 });
+  assert.equal(await observer.ensureTargetId("runner-target", 1_000), "runner-session");
+  assert.equal(targetInfoReadCount, 2);
+  observer.completeSetup();
+  await observer.stop();
+});
+
+test("GATE-014-B1 never accepts an already-running production worker", async () => {
+  const productionExtensionId = "b".repeat(32);
+  let eventListener: ((message: Record<string, unknown>) => void) | null = null;
+  const client = {
+    onEvent(listener: (message: Record<string, unknown>) => void) {
+      eventListener = listener;
+      return () => {
+        eventListener = null;
+      };
+    },
+    async send(method: string) {
+      if (method === "Target.getTargets") {
+        return { targetInfos: [] };
+      }
+      return {};
+    },
+  };
+  const observer = createExtensionTargetObserver(client, {
+    observeSession() {},
+  });
+  await observer.start({ timeoutMs: 1_000 });
+  eventListener?.({
+    method: "Target.attachedToTarget",
+    params: {
+      sessionId: "already-running-production-session",
+      targetInfo: {
+        targetId: "already-running-production-worker",
+        type: "service_worker",
+        url: `chrome-extension://${productionExtensionId}/background.js`,
+      },
+      waitingForDebugger: false,
+    },
+  });
+  await assert.rejects(
+    () => observer.settle(),
+    /browser_extension_startup_barrier_missing/,
   );
 });
 
@@ -262,6 +612,86 @@ test("GATE-014-B1 process exit observation fails closed on timeout", async () =>
   assert.equal(await exitPromise, true);
 });
 
+test("GATE-014-B1 process-tree verification catches surviving descendants after the root exits", () => {
+  const initial = [
+    { processId: 100, parentProcessId: 10 },
+    { processId: 101, parentProcessId: 100 },
+    { processId: 102, parentProcessId: 101 },
+    { processId: 900, parentProcessId: 10 },
+  ];
+  assert.deepEqual(
+    findSurvivingWindowsProcessTree(
+      initial,
+      [
+        { processId: 101, parentProcessId: 100 },
+        { processId: 102, parentProcessId: 101 },
+        { processId: 103, parentProcessId: 102 },
+        { processId: 900, parentProcessId: 10 },
+      ],
+      100,
+    ),
+    [101, 102, 103],
+  );
+  assert.deepEqual(
+    findSurvivingWindowsProcessTree(
+      initial,
+      [{ processId: 103, parentProcessId: 102 }],
+      100,
+    ),
+    [103],
+  );
+  assert.deepEqual(findSurvivingWindowsProcessTree(initial, [], 100), []);
+  assert.throws(
+    () =>
+      findSurvivingWindowsProcessTree(
+        initial,
+        [
+          { processId: 101, parentProcessId: 100 },
+          { processId: 101, parentProcessId: 100 },
+        ],
+        100,
+      ),
+    /current_process_table_invalid/,
+  );
+});
+
+test("GATE-014-B1 requires successful native tree termination with no surviving lineage", () => {
+  assert.doesNotThrow(() =>
+    validateWindowsChromeTerminationEvidence({
+      terminationCommandSucceeded: true,
+      parentExited: true,
+      survivingProcessIds: [],
+    }),
+  );
+  assert.throws(
+    () =>
+      validateWindowsChromeTerminationEvidence({
+        terminationCommandSucceeded: false,
+        parentExited: true,
+        survivingProcessIds: [],
+      }),
+    /chrome_process_tree_termination_failed/,
+  );
+  assert.throws(
+    () =>
+      validateWindowsChromeTerminationEvidence({
+        terminationCommandSucceeded: true,
+        parentExited: false,
+        survivingProcessIds: [],
+      }),
+    /chrome_process_exit_timeout/,
+  );
+  assert.throws(
+    () =>
+      validateWindowsChromeTerminationEvidence({
+        terminationCommandSucceeded: true,
+        parentExited: true,
+        survivingProcessIds: [101],
+      }),
+    /chrome_process_tree_termination_failed/,
+  );
+});
+
 test("GATE-014-B1 attributes extension errors without treating Chrome internal logs as extension failures", () => {
   assert.equal(
     classifyObservedErrorEvent({ method: "Runtime.exceptionThrown" }),
@@ -297,18 +727,490 @@ test("GATE-014-B1 attributes extension errors without treating Chrome internal l
   assert.equal(
     classifyObservedErrorEvent({
       method: "Log.entryAdded",
+      params: {
+        entry: {
+          level: "error",
+          source: "other",
+          url: `chrome-extension://${B1_HARNESS_EXTENSION_ID}/runner.js`,
+        },
+      },
+    }),
+    "unattributed_log_error",
+  );
+  assert.equal(
+    classifyObservedErrorEvent({
+      method: "Log.entryAdded",
+      params: { entry: { level: "error", source: "javascript" } },
+    }),
+    "extension_error",
+  );
+  assert.equal(
+    classifyObservedErrorEvent({
+      method: "Log.entryAdded",
       params: { entry: { level: "warning", source: "other" } },
     }),
     null,
   );
 });
 
+test("GATE-014-B1 fulfills production startup API requests with a synthetic unauthenticated response", async () => {
+  const productionExtensionId = "b".repeat(32);
+  const listeners = new Set<(message: Record<string, unknown>) => void>();
+  const sent: Array<{
+    method: string;
+    params: Record<string, unknown>;
+    sessionId?: string;
+  }> = [];
+  const client = {
+    onEvent(listener: (message: Record<string, unknown>) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    async send(
+      method: string,
+      params: Record<string, unknown>,
+      sessionId?: string,
+    ) {
+      sent.push({ method, params, sessionId });
+      return {};
+    },
+  };
+  const emit = (message: Record<string, unknown>) => {
+    for (const listener of listeners) listener(message);
+  };
+  const observation = createCdpExecutionObservation(client);
+  observation.observeSession("production-session", productionExtensionId);
+  observation.observeSession("harness-session", B1_HARNESS_EXTENSION_ID);
+
+  emit({
+    sessionId: "production-session",
+    method: "Network.requestWillBeSent",
+    params: {
+      requestId: "network-request-1",
+      request: {
+        method: "GET",
+        url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=30",
+      },
+    },
+  });
+  emit({
+    sessionId: "production-session",
+    method: "Fetch.requestPaused",
+    params: {
+      requestId: "fetch-request-1",
+      networkId: "network-request-1",
+      request: {
+        method: "GET",
+        url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=30",
+      },
+    },
+  });
+  observation.setRequiredExtensionIds({
+    productionExtensionId,
+    harnessExtensionId: B1_HARNESS_EXTENSION_ID,
+  });
+  emit({
+    sessionId: "production-session",
+    method: "Network.responseReceived",
+    params: {
+      requestId: "network-request-1",
+      response: {
+        url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=30",
+      },
+    },
+  });
+  await observation.waitForSyntheticUnauthenticatedResponse();
+
+  const receipt = observation.finish();
+  assert.equal(receipt.contract, "gate-014-b1-browser-observation-v4");
+  assert.equal(receipt.externalRequestAttemptCount, 1);
+  assert.equal(receipt.syntheticUnauthenticatedResponseCount, 1);
+  assert.equal(receipt.externalResponseCount, 0);
+  assert.equal(receipt.consoleErrorCount, 0);
+  const fulfillment = sent.find(
+    ({ method }) => method === "Fetch.fulfillRequest",
+  );
+  assert.equal(fulfillment?.sessionId, "production-session");
+  const body = JSON.parse(
+    Buffer.from(String(fulfillment?.params.body), "base64").toString("utf8"),
+  );
+  assert.equal(body.code, -101);
+});
+
+test("GATE-014-B1 requires the production startup response before workload execution", async () => {
+  const productionExtensionId = "b".repeat(32);
+  const observation = createCdpExecutionObservation({
+    onEvent() {
+      return () => {};
+    },
+    async send() {
+      return {};
+    },
+  });
+  observation.observeSession("production-session", productionExtensionId);
+  observation.setRequiredExtensionIds({
+    productionExtensionId,
+    harnessExtensionId: B1_HARNESS_EXTENSION_ID,
+  });
+  await assert.rejects(
+    () => observation.waitForSyntheticUnauthenticatedResponse({ timeoutMs: 5 }),
+    /browser_synthetic_response_observation_incomplete|cdp_command_timeout/,
+  );
+});
+
+test("GATE-014-B1 bounds a pending startup fulfillment by the shared deadline", async () => {
+  const productionExtensionId = "b".repeat(32);
+  let listener: ((message: Record<string, unknown>) => void) | null = null;
+  const observation = createCdpExecutionObservation({
+    onEvent(nextListener: (message: Record<string, unknown>) => void) {
+      listener = nextListener;
+      return () => {
+        listener = null;
+      };
+    },
+    async send(method: string) {
+      if (method === "Fetch.fulfillRequest") {
+        return new Promise(() => {});
+      }
+      return {};
+    },
+  });
+  observation.observeSession("production-session", productionExtensionId);
+  observation.setRequiredExtensionIds({
+    productionExtensionId,
+    harnessExtensionId: B1_HARNESS_EXTENSION_ID,
+  });
+  listener?.({
+    sessionId: "production-session",
+    method: "Fetch.requestPaused",
+    params: {
+      requestId: "pending-fetch-request",
+      networkId: "pending-network-request",
+      request: {
+        method: "GET",
+        url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=30",
+      },
+    },
+  });
+  const deadlineEpochMs = Date.now() + 20;
+  await assert.rejects(
+    () =>
+      observation.waitForSyntheticUnauthenticatedResponse({
+        deadlineEpochMs,
+      }),
+    /cdp_command_timeout/,
+  );
+  const deadlineOverrunMs = Date.now() - deadlineEpochMs;
+  assert.equal(deadlineOverrunMs >= 0 && deadlineOverrunMs < 200, true);
+});
+
+test("GATE-014-B1 accepts exactly eight pre-identity startup requests", async () => {
+  const productionExtensionId = "b".repeat(32);
+  const listeners = new Set<(message: Record<string, unknown>) => void>();
+  const observation = createCdpExecutionObservation({
+    onEvent(listener: (message: Record<string, unknown>) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    async send() {
+      return {};
+    },
+  });
+  const emit = (message: Record<string, unknown>) => {
+    for (const listener of listeners) listener(message);
+  };
+  observation.observeSession("production-session", productionExtensionId);
+  observation.observeSession("harness-session", B1_HARNESS_EXTENSION_ID);
+  for (let index = 0; index < 8; index += 1) {
+    const networkId = `network-request-${index}`;
+    const request = {
+      method: "GET",
+      url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=30",
+    };
+    emit({
+      sessionId: "production-session",
+      method: "Network.requestWillBeSent",
+      params: { requestId: networkId, request },
+    });
+    emit({
+      sessionId: "production-session",
+      method: "Fetch.requestPaused",
+      params: {
+        requestId: `fetch-request-${index}`,
+        networkId,
+        request,
+      },
+    });
+  }
+  observation.setRequiredExtensionIds({
+    productionExtensionId,
+    harnessExtensionId: B1_HARNESS_EXTENSION_ID,
+  });
+  for (let index = 0; index < 8; index += 1) {
+    emit({
+      sessionId: "production-session",
+      method: "Network.responseReceived",
+      params: {
+        requestId: `network-request-${index}`,
+        response: {
+          url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=30",
+        },
+      },
+    });
+  }
+  await observation.settle();
+  assert.equal(observation.finish().syntheticUnauthenticatedResponseCount, 8);
+});
+
+test("GATE-014-B1 fails closed on a ninth pre-identity startup request", async () => {
+  const productionExtensionId = "b".repeat(32);
+  let listener: ((message: Record<string, unknown>) => void) | null = null;
+  const sentMethods: string[] = [];
+  const observation = createCdpExecutionObservation({
+    onEvent(nextListener: (message: Record<string, unknown>) => void) {
+      listener = nextListener;
+      return () => {
+        listener = null;
+      };
+    },
+    async send(method: string) {
+      sentMethods.push(method);
+      return {};
+    },
+  });
+  observation.observeSession("production-session", productionExtensionId);
+  const request = {
+    method: "GET",
+    url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=30",
+  };
+  for (let index = 0; index < 9; index += 1) {
+    listener?.({
+      sessionId: "production-session",
+      method: "Fetch.requestPaused",
+      params: {
+        requestId: `fetch-request-${index}`,
+        networkId: `network-request-${index}`,
+        request,
+      },
+    });
+  }
+  await assert.rejects(
+    () => observation.settle(),
+    /browser_synthetic_unauthenticated_response_failed/,
+  );
+  assert.equal(sentMethods.includes("Fetch.failRequest"), true);
+});
+
+test("GATE-014-B1 rejects a queued pre-identity request from another extension", async () => {
+  const productionExtensionId = "b".repeat(32);
+  const otherExtensionId = "c".repeat(32);
+  let listener: ((message: Record<string, unknown>) => void) | null = null;
+  const sentMethods: string[] = [];
+  const observation = createCdpExecutionObservation({
+    onEvent(nextListener: (message: Record<string, unknown>) => void) {
+      listener = nextListener;
+      return () => {
+        listener = null;
+      };
+    },
+    async send(method: string) {
+      sentMethods.push(method);
+      return {};
+    },
+  });
+  observation.observeSession("other-session", otherExtensionId);
+  observation.observeSession("production-session", productionExtensionId);
+  observation.observeSession("harness-session", B1_HARNESS_EXTENSION_ID);
+  listener?.({
+    sessionId: "other-session",
+    method: "Fetch.requestPaused",
+    params: {
+      requestId: "fetch-request-1",
+      networkId: "network-request-1",
+      request: {
+        method: "GET",
+        url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=30",
+      },
+    },
+  });
+  observation.setRequiredExtensionIds({
+    productionExtensionId,
+    harnessExtensionId: B1_HARNESS_EXTENSION_ID,
+  });
+  await assert.rejects(
+    () => observation.settle(),
+    /browser_synthetic_unauthenticated_response_failed/,
+  );
+  assert.deepEqual(sentMethods, ["Fetch.failRequest"]);
+});
+
+test("GATE-014-B1 fails closed when the synthetic unauthenticated response cannot be delivered", async () => {
+  const productionExtensionId = "b".repeat(32);
+  let listener: ((message: Record<string, unknown>) => void) | null = null;
+  const observation = createCdpExecutionObservation({
+    onEvent(nextListener: (message: Record<string, unknown>) => void) {
+      listener = nextListener;
+      return () => {
+        listener = null;
+      };
+    },
+    async send(method: string) {
+      if (method === "Fetch.fulfillRequest") {
+        throw new Error("synthetic transport unavailable");
+      }
+      return {};
+    },
+  });
+  observation.observeSession("production-session", productionExtensionId);
+  observation.observeSession("harness-session", B1_HARNESS_EXTENSION_ID);
+  observation.setRequiredExtensionIds({
+    productionExtensionId,
+    harnessExtensionId: B1_HARNESS_EXTENSION_ID,
+  });
+  listener?.({
+    sessionId: "production-session",
+    method: "Fetch.requestPaused",
+    params: {
+      requestId: "fetch-request-1",
+      networkId: "network-request-1",
+      request: {
+        method: "GET",
+        url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=30",
+      },
+    },
+  });
+  await assert.rejects(
+    () => observation.settle(),
+    /browser_synthetic_unauthenticated_response_failed/,
+  );
+});
+
+test("GATE-014-B1 rejects synthetic responses outside the verified production startup request", async () => {
+  const productionExtensionId = "b".repeat(32);
+  const otherExtensionId = "c".repeat(32);
+
+  for (const testCase of [
+    {
+      sessionId: "other-session",
+      observedExtensionId: otherExtensionId,
+      url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=30",
+    },
+    {
+      sessionId: "production-session",
+      observedExtensionId: productionExtensionId,
+      url: "https://api.bilibili.com/x/web-interface/nav",
+    },
+    {
+      sessionId: "production-session",
+      observedExtensionId: productionExtensionId,
+      url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=20",
+    },
+    {
+      sessionId: "production-session",
+      observedExtensionId: productionExtensionId,
+      url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=30&",
+    },
+    {
+      sessionId: "production-session",
+      observedExtensionId: productionExtensionId,
+      url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=%33%30",
+    },
+    {
+      sessionId: "production-session",
+      observedExtensionId: productionExtensionId,
+      url: "https://api.bilibili.com/x/unused/../web-interface/history/cursor?ps=30",
+    },
+  ]) {
+    let listener: ((message: Record<string, unknown>) => void) | null = null;
+    const sentMethods: string[] = [];
+    const observation = createCdpExecutionObservation({
+      onEvent(nextListener: (message: Record<string, unknown>) => void) {
+        listener = nextListener;
+        return () => {
+          listener = null;
+        };
+      },
+      async send(method: string) {
+        sentMethods.push(method);
+        return {};
+      },
+    });
+    observation.observeSession(testCase.sessionId, testCase.observedExtensionId);
+    observation.observeSession("harness-session", B1_HARNESS_EXTENSION_ID);
+    if (testCase.observedExtensionId !== productionExtensionId) {
+      observation.observeSession("production-session", productionExtensionId);
+    }
+    observation.setRequiredExtensionIds({
+      productionExtensionId,
+      harnessExtensionId: B1_HARNESS_EXTENSION_ID,
+    });
+    listener?.({
+      sessionId: testCase.sessionId,
+      method: "Fetch.requestPaused",
+      params: {
+        requestId: "fetch-request-1",
+        networkId: "network-request-1",
+        request: { method: "GET", url: testCase.url },
+      },
+    });
+    await assert.rejects(
+      () => observation.settle(),
+      /browser_synthetic_unauthenticated_response_failed/,
+    );
+    assert.deepEqual(sentMethods, ["Fetch.failRequest"]);
+  }
+});
+
+test("GATE-014-B1 rejects an unclosed synthetic request and response correlation", async () => {
+  const productionExtensionId = "b".repeat(32);
+  let listener: ((message: Record<string, unknown>) => void) | null = null;
+  const observation = createCdpExecutionObservation({
+    onEvent(nextListener: (message: Record<string, unknown>) => void) {
+      listener = nextListener;
+      return () => {
+        listener = null;
+      };
+    },
+    async send() {
+      return {};
+    },
+  });
+  observation.observeSession("production-session", productionExtensionId);
+  observation.observeSession("harness-session", B1_HARNESS_EXTENSION_ID);
+  observation.setRequiredExtensionIds({
+    productionExtensionId,
+    harnessExtensionId: B1_HARNESS_EXTENSION_ID,
+  });
+  listener?.({
+    sessionId: "production-session",
+    method: "Fetch.requestPaused",
+    params: {
+      requestId: "fetch-request-1",
+      networkId: "network-request-1",
+      request: {
+        method: "GET",
+        url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=30",
+      },
+    },
+  });
+  await assert.rejects(
+    () => observation.settle(5),
+    /browser_synthetic_response_observation_incomplete/,
+  );
+  assert.throws(
+    () => observation.finish(),
+    /browser_synthetic_unauthenticated_response_failed/,
+  );
+});
+
 test("GATE-014-B1 browser observation fails closed on external requests or console errors", () => {
   const passing = {
-    contract: "gate-014-b1-browser-observation-v2",
+    contract: "gate-014-b1-browser-observation-v4",
     browserLaunchCount: 1,
-    observationScope: "all_loaded_extension_targets_after_devtools_attach",
+    observationScope:
+      "extension_targets_after_devtools_attach_with_production_worker_barrier",
     preAttachEventsObserved: false,
+    productionServiceWorkerStartupBarrierEnabled: true,
     observedTargetCount: 2,
     productionExtensionTargetCount: 1,
     harnessExtensionTargetCount: 1,
@@ -317,6 +1219,7 @@ test("GATE-014-B1 browser observation fails closed on external requests or conso
     loopbackRequestCount: 1,
     extensionRequestCount: 1,
     externalRequestAttemptCount: 1,
+    syntheticUnauthenticatedResponseCount: 1,
     externalResponseCount: 0,
     consoleMetricAvailable: true,
     consoleErrorCount: 0,
@@ -356,6 +1259,30 @@ test("GATE-014-B1 browser observation fails closed on external requests or conso
       validateBrowserExecutionObservation({
         ...passing,
         consoleErrorCount: 1,
+      }),
+    /observation_failed/,
+  );
+  assert.throws(
+    () =>
+      validateBrowserExecutionObservation({
+        ...passing,
+        externalRequestAttemptCount: 0,
+      }),
+    /observation_failed/,
+  );
+  assert.throws(
+    () =>
+      validateBrowserExecutionObservation({
+        ...passing,
+        syntheticUnauthenticatedResponseCount: 0,
+      }),
+    /observation_failed/,
+  );
+  assert.throws(
+    () =>
+      validateBrowserExecutionObservation({
+        ...passing,
+        contract: "gate-014-b1-browser-observation-v2",
       }),
     /observation_failed/,
   );
@@ -536,28 +1463,44 @@ test("GATE-014-B1 keeps a cached production attachment inside the shared setup d
     version: "0.13.0",
     versionName: "0.13.0-alpha",
   };
-  let attachCount = 0;
+  let eventListener: ((message: Record<string, unknown>) => void) | null = null;
+  let discoveryCount = 0;
+  let resumeCount = 0;
   let runtimeIdentityCount = 0;
   const client = {
-    onEvent() {
-      return () => {};
+    onEvent(listener: (message: Record<string, unknown>) => void) {
+      eventListener = listener;
+      return () => {
+        eventListener = null;
+      };
     },
-    async send(method) {
+    async send(method, params) {
+      if (method === "Target.setAutoAttach") {
+        return {};
+      }
       if (method === "Target.setDiscoverTargets") {
         return {};
       }
       if (method === "Target.getTargets") {
-        return { targetInfos: [workerTarget] };
+        discoveryCount += 1;
+        return { targetInfos: discoveryCount === 1 ? [] : [workerTarget] };
       }
       if (method === "Target.getTargetInfo") {
         return { targetInfo: workerTarget };
       }
       if (method === "Target.attachToTarget") {
-        attachCount += 1;
-        await new Promise((resolve) => setTimeout(resolve, 60));
-        return { sessionId: "cached-production-session" };
+        throw new Error("service_worker_must_use_auto_attach");
       }
-      if (["Runtime.enable", "Network.enable", "Log.enable"].includes(method)) {
+      if (
+        ["Runtime.enable", "Network.enable", "Log.enable", "Fetch.enable"].includes(
+          method,
+        )
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        return {};
+      }
+      if (method === "Runtime.runIfWaitingForDebugger") {
+        resumeCount += 1;
         return {};
       }
       if (method === "Runtime.evaluate") {
@@ -577,6 +1520,14 @@ test("GATE-014-B1 keeps a cached production attachment inside the shared setup d
   });
   const sharedDeadlineEpochMs = Date.now() + 200;
   await observer.start({ deadlineEpochMs: sharedDeadlineEpochMs });
+  eventListener?.({
+    method: "Target.attachedToTarget",
+    params: {
+      sessionId: "cached-production-session",
+      targetInfo: workerTarget,
+      waitingForDebugger: true,
+    },
+  });
   const sessionId = await findProductionServiceWorkerSession(
     client,
     observer,
@@ -584,7 +1535,7 @@ test("GATE-014-B1 keeps a cached production attachment inside the shared setup d
     { deadlineEpochMs: sharedDeadlineEpochMs, pollIntervalMs: 0 },
   );
   assert.equal(sessionId, "cached-production-session");
-  assert.equal(attachCount, 1);
+  assert.equal(resumeCount, 1);
   await assert.rejects(
     () =>
       waitForProductionExtensionReady(
@@ -601,7 +1552,7 @@ test("GATE-014-B1 keeps a cached production attachment inside the shared setup d
   await observer.stop();
 });
 
-test("GATE-014-B1 rejects an initial target attachment that outlives the setup deadline", async () => {
+test("GATE-014-B1 rejects a worker not configured before the setup deadline", async () => {
   const extensionId = "b".repeat(32);
   const workerTarget = {
     targetId: "slow-production-worker",
@@ -609,23 +1560,51 @@ test("GATE-014-B1 rejects an initial target attachment that outlives the setup d
     url: `chrome-extension://${extensionId}/background.js`,
   };
   let attachmentCompleted = false;
+  let eventListener: ((message: Record<string, unknown>) => void) | null = null;
   const client = {
-    onEvent() {
-      return () => {};
+    onEvent(listener: (message: Record<string, unknown>) => void) {
+      eventListener = listener;
+      return () => {
+        eventListener = null;
+      };
     },
-    async send(method) {
+    async send(method, params) {
+      if (method === "Target.setAutoAttach") {
+        return {};
+      }
       if (method === "Target.setDiscoverTargets") {
+        if (params.discover === true) {
+          setImmediate(() => {
+            eventListener?.({
+              method: "Target.attachedToTarget",
+              params: {
+                sessionId: "late-initial-session",
+                targetInfo: workerTarget,
+                waitingForDebugger: true,
+              },
+            });
+          });
+        }
         return {};
       }
       if (method === "Target.getTargets") {
         return { targetInfos: [workerTarget] };
       }
       if (method === "Target.attachToTarget") {
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        attachmentCompleted = true;
-        return { sessionId: "late-initial-session" };
+        throw new Error("service_worker_must_use_auto_attach");
       }
-      if (["Runtime.enable", "Network.enable", "Log.enable"].includes(method)) {
+      if (
+        ["Runtime.enable", "Network.enable", "Log.enable", "Fetch.enable"].includes(
+          method,
+        )
+      ) {
+        if (method === "Runtime.enable") {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          attachmentCompleted = true;
+        }
+        return {};
+      }
+      if (method === "Runtime.runIfWaitingForDebugger") {
         return {};
       }
       throw new Error(`unexpected_method:${method}`);
@@ -636,12 +1615,16 @@ test("GATE-014-B1 rejects an initial target attachment that outlives the setup d
   });
   await assert.rejects(
     () => observer.start({ deadlineEpochMs: Date.now() + 5 }),
-    /cdp_command_timeout/,
+    /cdp_command_timeout|browser_extension_startup_barrier_missing/,
   );
   assert.equal(attachmentCompleted, false);
   await new Promise((resolve) => setTimeout(resolve, 35));
+  assert.equal(attachmentCompleted, true);
   observer.completeSetup();
-  await observer.stop();
+  await assert.rejects(
+    () => observer.stop(),
+    /browser_extension_startup_barrier_missing/,
+  );
 });
 
 test("GATE-014-B1 browser smoke accepts only the fixed public-safe harness identity", () => {

@@ -1,7 +1,7 @@
 import { execFile as execFileCallback, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, cp, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -22,11 +22,26 @@ const B1_CDP_SETUP_TIMEOUT_MS = 30_000;
 const B1_HARNESS_EXTENSION_NAME = "Bili-Bill GATE-014-B1 Harness";
 const B1_HARNESS_EXTENSION_VERSION = "1.0.0";
 const EXTENSION_ID_PATTERN = /^[a-p]{32}$/;
+const BILIBILI_API_HOSTNAME = "api.bilibili.com";
+const BILIBILI_HISTORY_CURSOR_PATH = "/x/web-interface/history/cursor";
+const BILIBILI_HISTORY_CURSOR_URL = `https://${BILIBILI_API_HOSTNAME}${BILIBILI_HISTORY_CURSOR_PATH}?ps=30`;
+const B1_SYNTHETIC_RESPONSE_SETTLE_TIMEOUT_MS = 5_000;
+const B1_MAX_QUEUED_SYNTHETIC_REQUESTS = 8;
+const B1_MAX_CDP_PIPE_MESSAGE_BYTES = 8 * 1024 * 1024;
+const SYNTHETIC_UNAUTHENTICATED_RESPONSE_BODY = Buffer.from(
+  JSON.stringify({
+    code: -101,
+    message: "synthetic unauthenticated benchmark response",
+    ttl: 1,
+  }),
+  "utf8",
+).toString("base64");
 const execFile = promisify(execFileCallback);
 const CFT_STABLE_VERSION_SOURCE =
   "official_last_known_good_versions_with_downloads_json";
 
 const MANAGED_PROFILE_DIRECTORIES = new Set();
+const MANAGED_PRODUCTION_EXTENSION_STAGE_ROOTS = new Set();
 
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = path.resolve(SCRIPT_DIRECTORY, "..");
@@ -79,27 +94,67 @@ export async function removeB1TemporaryProfile(profile) {
   }
 }
 
-export function buildChromeArguments({
-  profileDirectory,
-  productionExtension,
-  harnessExtension,
-}) {
-  for (const [label, value] of Object.entries({
-    profileDirectory,
-    productionExtension,
-    harnessExtension,
-  })) {
-    if (!path.isAbsolute(value)) {
-      throw new Error(`${label} must be an absolute path`);
+export async function createB1ProductionExtensionStage(sourceDirectory) {
+  const source = path.resolve(sourceDirectory ?? "");
+  await access(path.join(source, "manifest.json"));
+  const root = await mkdtemp(
+    path.join(os.tmpdir(), "bili-bill-gate-014-b1-production-"),
+  );
+  const directory = path.join(root, "extension");
+  try {
+    const sourceSha256 = await hashB1ExtensionDirectory(source);
+    await cp(source, directory, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+    });
+    if ((await hashB1ExtensionDirectory(directory)) !== sourceSha256) {
+      throw new Error("browser_production_extension_stage_hash_mismatch");
     }
+    MANAGED_PRODUCTION_EXTENSION_STAGE_ROOTS.add(root);
+    return Object.freeze({
+      contract: "gate-014-b1-production-extension-stage-v1",
+      root,
+      directory,
+      sourceSha256,
+    });
+  } catch (error) {
+    await rm(root, { recursive: true, force: true });
+    throw error;
   }
-  const extensions = `${productionExtension},${harnessExtension}`;
+}
+
+export async function removeB1ProductionExtensionStage(stage) {
+  const root = requireManagedProductionExtensionStage(stage);
+  try {
+    await rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 5,
+      retryDelay: 250,
+    });
+    try {
+      await access(root);
+      throw new Error("browser_production_extension_stage_cleanup_failed");
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  } finally {
+    MANAGED_PRODUCTION_EXTENSION_STAGE_ROOTS.delete(root);
+  }
+}
+
+export function buildChromeArguments({ profileDirectory }) {
+  if (!path.isAbsolute(profileDirectory)) {
+    throw new Error("profileDirectory must be an absolute path");
+  }
   return [
     "--headless=new",
     `--user-data-dir=${profileDirectory}`,
-    "--remote-debugging-port=0",
-    `--disable-extensions-except=${extensions}`,
-    `--load-extension=${extensions}`,
+    "--remote-debugging-pipe",
+    "--enable-unsafe-extension-debugging",
     "--disable-background-networking",
     "--disable-component-update",
     "--disable-default-apps",
@@ -248,6 +303,7 @@ export function validateBrowserExecutionObservation(observation) {
     "browserLaunchCount",
     "observationScope",
     "preAttachEventsObserved",
+    "productionServiceWorkerStartupBarrierEnabled",
     "observedTargetCount",
     "productionExtensionTargetCount",
     "harnessExtensionTargetCount",
@@ -256,6 +312,7 @@ export function validateBrowserExecutionObservation(observation) {
     "loopbackRequestCount",
     "extensionRequestCount",
     "externalRequestAttemptCount",
+    "syntheticUnauthenticatedResponseCount",
     "externalResponseCount",
     "consoleMetricAvailable",
     "consoleErrorCount",
@@ -273,15 +330,17 @@ export function validateBrowserExecutionObservation(observation) {
     "loopbackRequestCount",
     "extensionRequestCount",
     "externalRequestAttemptCount",
+    "syntheticUnauthenticatedResponseCount",
     "externalResponseCount",
     "consoleErrorCount",
     "unattributedLogErrorCount",
   ];
   if (
-    observation?.contract !== "gate-014-b1-browser-observation-v2" ||
+    observation?.contract !== "gate-014-b1-browser-observation-v4" ||
     observation.observationScope !==
-      "all_loaded_extension_targets_after_devtools_attach" ||
+      "extension_targets_after_devtools_attach_with_production_worker_barrier" ||
     observation.preAttachEventsObserved !== false ||
+    observation.productionServiceWorkerStartupBarrierEnabled !== true ||
     observation.networkMetricAvailable !== true ||
     observation.consoleMetricAvailable !== true ||
     integerFields.some(
@@ -300,6 +359,10 @@ export function validateBrowserExecutionObservation(observation) {
       observation.extensionRequestCount +
       observation.externalRequestAttemptCount >
       observation.networkRequestCount ||
+    observation.syntheticUnauthenticatedResponseCount >
+      observation.externalRequestAttemptCount ||
+    observation.syntheticUnauthenticatedResponseCount <
+      observation.browserLaunchCount ||
     observation.externalResponseCount !== 0 ||
     observation.consoleErrorCount !== 0
   ) {
@@ -310,10 +373,12 @@ export function validateBrowserExecutionObservation(observation) {
 
 export function combineBrowserExecutionObservations(...observations) {
   const combined = {
-    contract: "gate-014-b1-browser-observation-v2",
+    contract: "gate-014-b1-browser-observation-v4",
     browserLaunchCount: 0,
-    observationScope: "all_loaded_extension_targets_after_devtools_attach",
+    observationScope:
+      "extension_targets_after_devtools_attach_with_production_worker_barrier",
     preAttachEventsObserved: false,
+    productionServiceWorkerStartupBarrierEnabled: true,
     observedTargetCount: 0,
     productionExtensionTargetCount: 0,
     harnessExtensionTargetCount: 0,
@@ -322,6 +387,7 @@ export function combineBrowserExecutionObservations(...observations) {
     loopbackRequestCount: 0,
     extensionRequestCount: 0,
     externalRequestAttemptCount: 0,
+    syntheticUnauthenticatedResponseCount: 0,
     externalResponseCount: 0,
     consoleMetricAvailable: true,
     consoleErrorCount: 0,
@@ -338,6 +404,7 @@ export function combineBrowserExecutionObservations(...observations) {
       "loopbackRequestCount",
       "extensionRequestCount",
       "externalRequestAttemptCount",
+      "syntheticUnauthenticatedResponseCount",
       "externalResponseCount",
       "consoleErrorCount",
       "unattributedLogErrorCount",
@@ -783,6 +850,51 @@ function requireManagedProfile(profile) {
   return profile.directory;
 }
 
+function requireManagedProductionExtensionStage(stage) {
+  if (
+    !stage ||
+    stage.contract !== "gate-014-b1-production-extension-stage-v1" ||
+    typeof stage.root !== "string" ||
+    typeof stage.directory !== "string" ||
+    !/^[a-f0-9]{64}$/.test(stage.sourceSha256 ?? "") ||
+    path.resolve(stage.directory) !== path.join(stage.root, "extension") ||
+    !MANAGED_PRODUCTION_EXTENSION_STAGE_ROOTS.has(stage.root)
+  ) {
+    throw new Error("browser_production_extension_stage_not_managed");
+  }
+  return stage.root;
+}
+
+async function hashB1ExtensionDirectory(directory) {
+  const files = [];
+  const visit = async (currentDirectory) => {
+    for (const entry of await readdir(currentDirectory, {
+      withFileTypes: true,
+    })) {
+      const entryPath = path.join(currentDirectory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(entryPath);
+      } else if (entry.isFile()) {
+        files.push(entryPath);
+      } else {
+        throw new Error("browser_production_extension_stage_entry_invalid");
+      }
+    }
+  };
+  await visit(directory);
+  const hash = createHash("sha256");
+  files.sort((left, right) => left.localeCompare(right));
+  for (const filePath of files) {
+    const relativePath = path
+      .relative(directory, filePath)
+      .replaceAll("\\", "/");
+    hash.update(`${relativePath}\0`, "utf8");
+    hash.update(await readFile(filePath));
+    hash.update("\0", "utf8");
+  }
+  return hash.digest("hex");
+}
+
 export function validateFixtureSmokeResult(result, config) {
   if (result === null || typeof result !== "object" || Array.isArray(result)) {
     throw new Error("browser_fixture_smoke_result_invalid");
@@ -840,11 +952,33 @@ async function evaluateInHarnessProfile(
   expression,
   evaluationErrorCode,
 ) {
-  const chromeExecutable = await resolveChromeExecutable(options.chromePath);
-  await readChromeForTestingMetadata(chromeExecutable, options.cftMetadataPath);
-  const productionExtension = path.resolve(
+  const productionExtensionSource = path.resolve(
     options.productionExtension ?? path.join(REPOSITORY_ROOT, "dist"),
   );
+  const productionExtensionStage =
+    await createB1ProductionExtensionStage(productionExtensionSource);
+  try {
+    return await evaluateInStagedHarnessProfile(
+      options,
+      profileDirectory,
+      expression,
+      evaluationErrorCode,
+      productionExtensionStage.directory,
+    );
+  } finally {
+    await removeB1ProductionExtensionStage(productionExtensionStage);
+  }
+}
+
+async function evaluateInStagedHarnessProfile(
+  options,
+  profileDirectory,
+  expression,
+  evaluationErrorCode,
+  productionExtension,
+) {
+  const chromeExecutable = await resolveChromeExecutable(options.chromePath);
+  await readChromeForTestingMetadata(chromeExecutable, options.cftMetadataPath);
   const harnessExtension = path.resolve(
     options.harnessExtension ??
       path.join(
@@ -861,14 +995,9 @@ async function evaluateInHarnessProfile(
   ]);
   const productionIdentity =
     await readProductionExtensionIdentity(productionExtension);
-  await rm(path.join(profileDirectory, "DevToolsActivePort"), { force: true });
-  const chromeArguments = buildChromeArguments({
-    profileDirectory,
-    productionExtension,
-    harnessExtension,
-  });
+  const chromeArguments = buildChromeArguments({ profileDirectory });
   const chrome = spawn(chromeExecutable, chromeArguments, {
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
     windowsHide: true,
   });
   let stderr = "";
@@ -877,142 +1006,207 @@ async function evaluateInHarnessProfile(
     stderr = `${stderr}${chunk}`.slice(-8_192);
   });
 
+  let client = null;
   try {
-    const { port, browserPath } = await waitForDevToolsPort(
-      profileDirectory,
-      chrome,
+    const commandPipe = chrome.stdio[3];
+    const eventPipe = chrome.stdio[4];
+    if (!commandPipe || !eventPipe) {
+      throw new Error("cdp_pipe_unavailable");
+    }
+    client = createPipeCdpClient(commandPipe, eventPipe);
+    const observation = createCdpExecutionObservation(client);
+    const targetObserver = createExtensionTargetObserver(client, observation);
+    const productionProofDeadlineEpochMs = Date.now() + B1_CDP_SETUP_TIMEOUT_MS;
+    await targetObserver.start({
+      deadlineEpochMs: productionProofDeadlineEpochMs,
+    });
+    const loadedHarnessExtensionId = await loadUnpackedExtension(
+      client,
+      harnessExtension,
+      { deadlineEpochMs: productionProofDeadlineEpochMs },
     );
-    const discoveredExtensionId = await discoverHarnessExtensionId(port);
-    if (discoveredExtensionId !== B1_HARNESS_EXTENSION_ID) {
+    if (loadedHarnessExtensionId !== B1_HARNESS_EXTENSION_ID) {
       throw new Error("browser_smoke_extension_identity_mismatch");
     }
-    const client = await CdpClient.connect(
-      `ws://127.0.0.1:${port}${browserPath}`,
+    const productionExtensionId = await loadUnpackedExtension(
+      client,
+      productionExtension,
+      { deadlineEpochMs: productionProofDeadlineEpochMs },
     );
-    try {
-      const observation = createCdpExecutionObservation(client);
-      const targetObserver = createExtensionTargetObserver(client, observation);
-      const productionProofDeadlineEpochMs =
-        Date.now() + B1_CDP_SETUP_TIMEOUT_MS;
-      await targetObserver.start({
-        deadlineEpochMs: productionProofDeadlineEpochMs,
-      });
-      const { targetId } = await sendCdpWithinDeadline(
-        client,
-        "Target.createTarget",
-        {
-          url: `chrome-extension://${B1_HARNESS_EXTENSION_ID}/runner.html`,
-        },
-        undefined,
-        productionProofDeadlineEpochMs,
-      );
-      const runnerAttachmentRemainingMs = remainingSetupMs(
-        productionProofDeadlineEpochMs,
-      );
-      const sessionId = await settleWithin(
-        targetObserver.ensureTargetId(targetId, runnerAttachmentRemainingMs),
-        runnerAttachmentRemainingMs,
-      );
-      if (!sessionId) {
-        throw new Error("browser_runner_target_not_observed");
-      }
-      await waitForHarnessReady(client, sessionId, {
-        deadlineEpochMs: productionProofDeadlineEpochMs,
-      });
-      const inventory = await readLoadedExtensionInventory(client, sessionId, {
-        deadlineEpochMs: productionProofDeadlineEpochMs,
-      });
-      const { productionExtensionId } = validateLoadedExtensionInventory(
-        inventory,
-        productionIdentity,
-      );
-      observation.setRequiredExtensionIds({
-        productionExtensionId,
-        harnessExtensionId: B1_HARNESS_EXTENSION_ID,
-      });
-      const productionSessionId = await findProductionServiceWorkerSession(
-        client,
-        targetObserver,
-        productionExtensionId,
-        { deadlineEpochMs: productionProofDeadlineEpochMs },
-      );
-      if (!productionSessionId) {
-        throw new Error("browser_production_extension_target_not_observed");
-      }
-      await waitForProductionExtensionReady(
-        client,
-        productionSessionId,
-        productionExtensionId,
-        productionIdentity,
-        { deadlineEpochMs: productionProofDeadlineEpochMs },
-      );
-      targetObserver.completeSetup();
-      const resolvedExpression =
-        typeof expression === "function"
-          ? expression({ harnessReadyEpochMs: Date.now() })
-          : expression;
-      const evaluation = await client.send(
-        "Runtime.evaluate",
-        {
-          expression: resolvedExpression,
-          awaitPromise: true,
-          returnByValue: true,
-        },
-        sessionId,
-        B1_LIFECYCLE_EVALUATION_TIMEOUT_MS,
-      );
-      if (evaluation.exceptionDetails) {
-        if (process.env.GATE_014_B1_DEBUG === "1") {
-          const description =
-            evaluation.exceptionDetails.exception?.description ??
-            "unknown_exception";
-          const safeCode =
-            description.match(/Error: ([a-z0-9_:-]+)/i)?.[1] ??
-            "unknown_exception";
-          process.stderr.write(`Harness exception code: ${safeCode}\n`);
-        }
-        throw new Error(evaluationErrorCode);
-      }
-      await targetObserver.settle();
-      await targetObserver.stop();
-      const observationReceipt = observation.finish();
-      if (process.env.GATE_014_B1_DEBUG === "1") {
-        process.stderr.write(
-          `Browser observation counts: ${JSON.stringify(observationReceipt)}\n`,
-        );
-      }
-      return {
-        value: evaluation.result?.value,
-        observation: validateBrowserExecutionObservation(observationReceipt),
-      };
-    } finally {
-      client.close();
+    if (productionExtensionId === B1_HARNESS_EXTENSION_ID) {
+      throw new Error("browser_production_extension_identity_invalid");
     }
+    observation.setRequiredExtensionIds({
+      productionExtensionId,
+      harnessExtensionId: B1_HARNESS_EXTENSION_ID,
+    });
+    const { targetId } = await sendCdpWithinDeadline(
+      client,
+      "Target.createTarget",
+      {
+        url: `chrome-extension://${B1_HARNESS_EXTENSION_ID}/runner.html`,
+      },
+      undefined,
+      productionProofDeadlineEpochMs,
+    );
+    const runnerAttachmentRemainingMs = remainingSetupMs(
+      productionProofDeadlineEpochMs,
+    );
+    const sessionId = await settleWithin(
+      targetObserver.ensureTargetId(targetId, runnerAttachmentRemainingMs),
+      runnerAttachmentRemainingMs,
+    );
+    if (!sessionId) {
+      throw new Error("browser_runner_target_not_observed");
+    }
+    await waitForHarnessReady(client, sessionId, {
+      deadlineEpochMs: productionProofDeadlineEpochMs,
+    });
+    const inventory = await readLoadedExtensionInventory(client, sessionId, {
+      deadlineEpochMs: productionProofDeadlineEpochMs,
+    });
+    const inventoryIdentity = validateLoadedExtensionInventory(
+      inventory,
+      productionIdentity,
+    );
+    if (inventoryIdentity.productionExtensionId !== productionExtensionId) {
+      throw new Error("browser_production_extension_identity_invalid");
+    }
+    const productionSessionId = await findProductionServiceWorkerSession(
+      client,
+      targetObserver,
+      productionExtensionId,
+      { deadlineEpochMs: productionProofDeadlineEpochMs },
+    );
+    if (!productionSessionId) {
+      throw new Error("browser_production_extension_target_not_observed");
+    }
+    await waitForProductionExtensionReady(
+      client,
+      productionSessionId,
+      productionExtensionId,
+      productionIdentity,
+      { deadlineEpochMs: productionProofDeadlineEpochMs },
+    );
+    await observation.waitForSyntheticUnauthenticatedResponse({
+      deadlineEpochMs: productionProofDeadlineEpochMs,
+    });
+    await uninstallUnpackedExtension(client, productionExtensionId, {
+      deadlineEpochMs: productionProofDeadlineEpochMs,
+    });
+    targetObserver.completeSetup();
+    const resolvedExpression =
+      typeof expression === "function"
+        ? expression({ harnessReadyEpochMs: Date.now() })
+        : expression;
+    const evaluation = await client.send(
+      "Runtime.evaluate",
+      {
+        expression: resolvedExpression,
+        awaitPromise: true,
+        returnByValue: true,
+      },
+      sessionId,
+      B1_LIFECYCLE_EVALUATION_TIMEOUT_MS,
+    );
+    if (evaluation.exceptionDetails) {
+      if (process.env.GATE_014_B1_DEBUG === "1") {
+        const description =
+          evaluation.exceptionDetails.exception?.description ??
+          "unknown_exception";
+        const safeCode =
+          description.match(/Error: ([a-z0-9_:-]+)/i)?.[1] ??
+          "unknown_exception";
+        process.stderr.write(`Harness exception code: ${safeCode}\n`);
+      }
+      throw new Error(evaluationErrorCode);
+    }
+    await targetObserver.settle();
+    await observation.settle();
+    await targetObserver.stop();
+    await observation.settle();
+    const observationReceipt = observation.finish();
+    if (process.env.GATE_014_B1_DEBUG === "1") {
+      process.stderr.write(
+        `Browser observation counts: ${JSON.stringify(observationReceipt)}\n`,
+      );
+    }
+    return {
+      value: evaluation.result?.value,
+      observation: validateBrowserExecutionObservation(observationReceipt),
+    };
   } catch (error) {
     if (stderr && process.env.GATE_014_B1_DEBUG === "1") {
       process.stderr.write(stderr);
     }
     throw error;
   } finally {
-    await terminateChromeProcessTree(chrome);
+    try {
+      await terminateChromeProcessTree(chrome);
+    } finally {
+      client?.close();
+    }
   }
 }
 
-function createCdpExecutionObservation(client) {
+export function createCdpExecutionObservation(client) {
   const observedSessionIds = new Set();
   const observedExtensionIds = new Map();
+  const syntheticResponseNetworkIds = new Map();
+  const pendingSyntheticResponses = new Set();
+  const queuedSyntheticRequests = [];
   let requiredExtensionIds = null;
+  let syntheticResponseFailure = null;
   const counts = {
     networkRequestCount: 0,
     loopbackRequestCount: 0,
     extensionRequestCount: 0,
     externalRequestAttemptCount: 0,
+    syntheticUnauthenticatedResponseCount: 0,
     externalResponseCount: 0,
     consoleErrorCount: 0,
     unattributedLogErrorCount: 0,
   };
   const unsubscribe = client.onEvent((message) => {
     if (!observedSessionIds.has(message.sessionId)) {
+      return;
+    }
+    const observedExtensionId = observedExtensionIds.get(message.sessionId);
+    if (message.method === "Fetch.requestPaused") {
+      if (!requiredExtensionIds) {
+        if (
+          queuedSyntheticRequests.length >=
+          B1_MAX_QUEUED_SYNTHETIC_REQUESTS
+        ) {
+          trackSyntheticUnauthenticatedResponse(
+            client,
+            message,
+            observedExtensionId,
+            null,
+            syntheticResponseNetworkIds,
+            pendingSyntheticResponses,
+            counts,
+            (error) => {
+              syntheticResponseFailure ??= error;
+            },
+          );
+          return;
+        }
+        queuedSyntheticRequests.push({ message, observedExtensionId });
+        return;
+      }
+      trackSyntheticUnauthenticatedResponse(
+        client,
+        message,
+        observedExtensionId,
+        requiredExtensionIds.productionExtensionId,
+        syntheticResponseNetworkIds,
+        pendingSyntheticResponses,
+        counts,
+        (error) => {
+          syntheticResponseFailure ??= error;
+        },
+      );
       return;
     }
     if (message.method === "Network.requestWillBeSent") {
@@ -1029,6 +1223,15 @@ function createCdpExecutionObservation(client) {
       return;
     }
     if (message.method === "Network.responseReceived") {
+      if (
+        consumeSyntheticNetworkResponse(
+          syntheticResponseNetworkIds,
+          message.sessionId,
+          message.params?.requestId,
+        )
+      ) {
+        return;
+      }
       const classification = classifyNetworkUrl(message.params?.response?.url);
       if (classification.kind === "external") {
         counts.externalResponseCount += 1;
@@ -1063,18 +1266,95 @@ function createCdpExecutionObservation(client) {
         throw new Error("browser_observation_required_identity_invalid");
       }
       requiredExtensionIds = { productionExtensionId, harnessExtensionId };
+      for (const queued of queuedSyntheticRequests.splice(0)) {
+        trackSyntheticUnauthenticatedResponse(
+          client,
+          queued.message,
+          queued.observedExtensionId,
+          productionExtensionId,
+          syntheticResponseNetworkIds,
+          pendingSyntheticResponses,
+          counts,
+          (error) => {
+            syntheticResponseFailure ??= error;
+          },
+        );
+      }
+    },
+    async settle(timeoutMs = B1_SYNTHETIC_RESPONSE_SETTLE_TIMEOUT_MS) {
+      if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+        throw new Error("browser_synthetic_response_settle_timeout_invalid");
+      }
+      const deadlineEpochMs = Date.now() + timeoutMs;
+      while (true) {
+        await Promise.all([...pendingSyntheticResponses]);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (syntheticResponseFailure) {
+          throw syntheticResponseFailure;
+        }
+        if (
+          pendingSyntheticResponses.size === 0 &&
+          syntheticResponseNetworkIds.size === 0
+        ) {
+          return;
+        }
+        if (Date.now() >= deadlineEpochMs) {
+          throw new Error("browser_synthetic_response_observation_incomplete");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    },
+    async waitForSyntheticUnauthenticatedResponse(
+      options = {},
+    ) {
+      const deadlineEpochMs = resolveSetupDeadline({
+        ...options,
+        timeoutMs:
+          options.timeoutMs ?? B1_SYNTHETIC_RESPONSE_SETTLE_TIMEOUT_MS,
+      });
+      while (Date.now() < deadlineEpochMs) {
+        await settleWithin(
+          Promise.all([...pendingSyntheticResponses]),
+          remainingSetupMs(deadlineEpochMs),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (syntheticResponseFailure) {
+          throw syntheticResponseFailure;
+        }
+        if (
+          counts.syntheticUnauthenticatedResponseCount >= 1 &&
+          pendingSyntheticResponses.size === 0 &&
+          syntheticResponseNetworkIds.size === 0
+        ) {
+          return;
+        }
+        await delay(
+          Math.min(10, Math.max(1, remainingSetupMs(deadlineEpochMs))),
+        );
+      }
+      throw new Error("browser_synthetic_response_observation_incomplete");
     },
     finish() {
       if (!requiredExtensionIds) {
         throw new Error("browser_observation_required_identity_missing");
       }
+      if (
+        syntheticResponseFailure ||
+        pendingSyntheticResponses.size > 0 ||
+        syntheticResponseNetworkIds.size > 0 ||
+        queuedSyntheticRequests.length > 0
+      ) {
+        throw new Error("browser_synthetic_unauthenticated_response_failed");
+      }
       unsubscribe();
       const extensionIds = [...observedExtensionIds.values()];
       return {
-        contract: "gate-014-b1-browser-observation-v2",
+        contract: "gate-014-b1-browser-observation-v4",
         browserLaunchCount: 1,
-        observationScope: "all_loaded_extension_targets_after_devtools_attach",
+        observationScope:
+          "extension_targets_after_devtools_attach_with_production_worker_barrier",
         preAttachEventsObserved: false,
+        productionServiceWorkerStartupBarrierEnabled: true,
         observedTargetCount: observedSessionIds.size,
         productionExtensionTargetCount: extensionIds.filter(
           (extensionId) =>
@@ -1106,10 +1386,122 @@ export function classifyObservedErrorEvent(message) {
   ) {
     return null;
   }
+  if (message.params.entry.source === "javascript") {
+    return "extension_error";
+  }
+  if (message.params.entry.source === "other") {
+    return "unattributed_log_error";
+  }
   const extensionId = getExtensionIdFromTargetUrl(message.params.entry.url);
   return EXTENSION_ID_PATTERN.test(extensionId ?? "")
     ? "extension_error"
     : "unattributed_log_error";
+}
+
+function trackSyntheticUnauthenticatedResponse(
+  client,
+  message,
+  observedExtensionId,
+  productionExtensionId,
+  syntheticResponseNetworkIds,
+  pendingSyntheticResponses,
+  counts,
+  recordFailure,
+) {
+  const response = fulfillSyntheticUnauthenticatedResponse(
+    client,
+    message,
+    observedExtensionId,
+    productionExtensionId,
+    syntheticResponseNetworkIds,
+  )
+    .then(() => {
+      counts.syntheticUnauthenticatedResponseCount += 1;
+    })
+    .catch(() => {
+      recordFailure(
+        new Error("browser_synthetic_unauthenticated_response_failed"),
+      );
+    })
+    .finally(() => {
+      pendingSyntheticResponses.delete(response);
+    });
+  pendingSyntheticResponses.add(response);
+}
+
+async function fulfillSyntheticUnauthenticatedResponse(
+  client,
+  message,
+  observedExtensionId,
+  productionExtensionId,
+  syntheticResponseNetworkIds,
+) {
+  const requestId = message.params?.requestId;
+  const networkId = message.params?.networkId;
+  const request = message.params?.request;
+  if (
+    !EXTENSION_ID_PATTERN.test(productionExtensionId ?? "") ||
+    observedExtensionId !== productionExtensionId ||
+    typeof requestId !== "string" ||
+    requestId.length === 0 ||
+    typeof networkId !== "string" ||
+    networkId.length === 0 ||
+    !isSyntheticUnauthenticatedRequest(request)
+  ) {
+    if (typeof requestId === "string" && requestId.length > 0) {
+      await client.send(
+        "Fetch.failRequest",
+        { requestId, errorReason: "BlockedByClient" },
+        message.sessionId,
+        B1_CDP_SETUP_TIMEOUT_MS,
+      );
+    }
+    throw new Error("browser_synthetic_unauthenticated_request_invalid");
+  }
+  rememberSyntheticNetworkResponse(
+    syntheticResponseNetworkIds,
+    message.sessionId,
+    networkId,
+  );
+  await client.send(
+    "Fetch.fulfillRequest",
+    {
+      requestId,
+      responseCode: 200,
+      responsePhrase: "OK",
+      responseHeaders: [
+        { name: "Content-Type", value: "application/json; charset=utf-8" },
+        { name: "Cache-Control", value: "no-store" },
+      ],
+      body: SYNTHETIC_UNAUTHENTICATED_RESPONSE_BODY,
+    },
+    message.sessionId,
+    B1_CDP_SETUP_TIMEOUT_MS,
+  );
+}
+
+function isSyntheticUnauthenticatedRequest(request) {
+  return (
+    request?.method === "GET" && request.url === BILIBILI_HISTORY_CURSOR_URL
+  );
+}
+
+function rememberSyntheticNetworkResponse(store, sessionId, networkId) {
+  if (!store.has(sessionId)) {
+    store.set(sessionId, new Set());
+  }
+  store.get(sessionId).add(networkId);
+}
+
+function consumeSyntheticNetworkResponse(store, sessionId, networkId) {
+  const sessionNetworkIds = store.get(sessionId);
+  if (!sessionNetworkIds?.delete(networkId)) {
+    return false;
+  }
+  if (sessionNetworkIds.size === 0) {
+    store.delete(sessionId);
+  }
+  return true;
 }
 
 function classifyNetworkUrl(value) {
@@ -1147,6 +1539,55 @@ function debugExternalNetworkClass(eventKind, classification) {
   );
 }
 
+export async function loadUnpackedExtension(client, extensionPath, options = {}) {
+  if (!path.isAbsolute(extensionPath)) {
+    throw new Error("browser_extension_path_invalid");
+  }
+  const deadlineEpochMs = resolveSetupDeadline(options);
+  const { id } = await sendCdpWithinDeadline(
+    client,
+    "Extensions.loadUnpacked",
+    { path: extensionPath },
+    undefined,
+    deadlineEpochMs,
+  );
+  if (!EXTENSION_ID_PATTERN.test(id ?? "")) {
+    throw new Error("browser_extension_dynamic_load_failed");
+  }
+  return id;
+}
+
+export async function uninstallUnpackedExtension(
+  client,
+  extensionId,
+  options = {},
+) {
+  if (!EXTENSION_ID_PATTERN.test(extensionId ?? "")) {
+    throw new Error("browser_extension_identity_invalid");
+  }
+  const deadlineEpochMs = resolveSetupDeadline(options);
+  await sendCdpWithinDeadline(
+    client,
+    "Extensions.uninstall",
+    { id: extensionId },
+    undefined,
+    deadlineEpochMs,
+  );
+  const { extensions } = await sendCdpWithinDeadline(
+    client,
+    "Extensions.getExtensions",
+    {},
+    undefined,
+    deadlineEpochMs,
+  );
+  if (
+    !Array.isArray(extensions) ||
+    extensions.some((extension) => extension?.id === extensionId)
+  ) {
+    throw new Error("browser_extension_uninstall_failed");
+  }
+}
+
 export function createExtensionTargetObserver(client, observation) {
   const observedTargetTypes = new Set([
     "page",
@@ -1155,6 +1596,7 @@ export function createExtensionTargetObserver(client, observation) {
     "shared_worker",
   ]);
   const attachedTargets = new Map();
+  const attachmentPromises = new Set();
   let attachmentFailure = null;
   let unsubscribe = null;
   let setupDeadlineEpochMs = null;
@@ -1164,35 +1606,159 @@ export function createExtensionTargetObserver(client, observation) {
     typeof targetInfo?.url === "string" &&
     targetInfo.url.startsWith("chrome-extension://");
 
+  const trackAttachment = (targetId, attachment) => {
+    const tracked = attachment.catch((error) => {
+      attachmentFailure ??= error;
+      throw error;
+    });
+    if (targetId) {
+      attachedTargets.set(targetId, tracked);
+    }
+    attachmentPromises.add(tracked);
+    return tracked;
+  };
+
+  const waitForAutoAttachedTarget = async (targetId, timeoutMs) => {
+    const deadlineEpochMs = Date.now() + timeoutMs;
+    while (Date.now() < deadlineEpochMs) {
+      if (attachmentFailure) {
+        throw attachmentFailure;
+      }
+      const attachment = attachedTargets.get(targetId);
+      if (attachment) {
+        return attachment;
+      }
+      await delay(Math.min(10, Math.max(0, deadlineEpochMs - Date.now())));
+    }
+    throw new Error("browser_extension_startup_barrier_missing");
+  };
+
   const ensureTarget = (targetInfo, timeoutMs = B1_CDP_SETUP_TIMEOUT_MS) => {
     if (!shouldObserve(targetInfo)) {
       return Promise.resolve(null);
     }
+    if (targetInfo.type === "service_worker") {
+      return waitForAutoAttachedTarget(targetInfo.targetId, timeoutMs).catch(
+        (error) => {
+          attachmentFailure ??= error;
+          throw error;
+        },
+      );
+    }
     if (attachedTargets.has(targetInfo.targetId)) {
       return attachedTargets.get(targetInfo.targetId);
     }
-    const attachment = attachObservedTarget(
-      client,
-      observation,
-      targetInfo,
-      timeoutMs,
-    ).catch((error) => {
-      attachmentFailure = error;
-      throw error;
-    });
-    attachedTargets.set(targetInfo.targetId, attachment);
-    return attachment;
+    return trackAttachment(
+      targetInfo.targetId,
+      attachObservedTarget(client, observation, targetInfo, timeoutMs),
+    );
+  };
+
+  const waitForObservedTargetId = async (targetId, timeoutMs) => {
+    const deadlineEpochMs = Date.now() + timeoutMs;
+    while (Date.now() < deadlineEpochMs) {
+      if (attachmentFailure) {
+        throw attachmentFailure;
+      }
+      const existingAttachment = attachedTargets.get(targetId);
+      if (existingAttachment) {
+        return existingAttachment;
+      }
+      const remainingMs = Math.max(1, deadlineEpochMs - Date.now());
+      const { targetInfo } = await client.send(
+        "Target.getTargetInfo",
+        { targetId },
+        undefined,
+        remainingMs,
+      );
+      const attachment = await ensureTarget(targetInfo, remainingMs);
+      if (attachment !== null) {
+        return attachment;
+      }
+      await delay(Math.min(10, Math.max(0, deadlineEpochMs - Date.now())));
+    }
+    return null;
+  };
+
+  const handleAutoAttachedTarget = (params, timeoutMs) => {
+    const sessionId = params?.sessionId;
+    const targetInfo = params?.targetInfo;
+    const waitingForDebugger = params?.waitingForDebugger;
+    if (typeof sessionId !== "string" || sessionId.length === 0) {
+      return trackAttachment(
+        null,
+        Promise.reject(new Error("browser_auto_attach_session_invalid")),
+      );
+    }
+    if (targetInfo?.type !== "service_worker") {
+      if (waitingForDebugger !== true) {
+        return Promise.resolve(null);
+      }
+      return trackAttachment(
+        null,
+        client.send(
+          "Runtime.runIfWaitingForDebugger",
+          {},
+          sessionId,
+          timeoutMs,
+        ),
+      );
+    }
+    if (!shouldObserve(targetInfo)) {
+      if (waitingForDebugger !== true) {
+        return Promise.resolve(null);
+      }
+      return trackAttachment(
+        null,
+        client.send(
+          "Runtime.runIfWaitingForDebugger",
+          {},
+          sessionId,
+          timeoutMs,
+        ),
+      );
+    }
+    if (waitingForDebugger !== true) {
+      if (getExtensionIdFromTargetUrl(targetInfo.url) === B1_HARNESS_EXTENSION_ID) {
+        return trackAttachment(
+          targetInfo.targetId,
+          configureObservedSession(
+            client,
+            observation,
+            targetInfo,
+            sessionId,
+            timeoutMs,
+            false,
+          ),
+        );
+      }
+      return trackAttachment(
+        targetInfo.targetId,
+        Promise.reject(new Error("browser_extension_startup_barrier_missing")),
+      );
+    }
+    return trackAttachment(
+      targetInfo.targetId,
+      configureObservedSession(
+        client,
+        observation,
+        targetInfo,
+        sessionId,
+        timeoutMs,
+        true,
+      ),
+    );
   };
 
   const settleAttachments = async () => {
     while (true) {
-      const attachmentCount = attachedTargets.size;
-      await Promise.all([...attachedTargets.values()]);
+      const attachmentCount = attachmentPromises.size;
+      await Promise.all([...attachmentPromises]);
       await new Promise((resolve) => setTimeout(resolve, 0));
       if (attachmentFailure) {
         throw attachmentFailure;
       }
-      if (attachedTargets.size === attachmentCount) {
+      if (attachmentPromises.size === attachmentCount) {
         return;
       }
     }
@@ -1207,24 +1773,48 @@ export function createExtensionTargetObserver(client, observation) {
     async start(options = {}) {
       setupDeadlineEpochMs = resolveSetupDeadline(options);
       unsubscribe = client.onEvent((message) => {
+        if (message.sessionId !== undefined) {
+          return;
+        }
+        let timeoutMs;
+        try {
+          timeoutMs = currentAttachmentTimeoutMs();
+        } catch {
+          return;
+        }
+        if (message.method === "Target.attachedToTarget") {
+          void settleWithin(
+            handleAutoAttachedTarget(message.params, timeoutMs),
+            timeoutMs,
+          ).catch(() => {});
+          return;
+        }
         if (
-          message.sessionId === undefined &&
           ["Target.targetCreated", "Target.targetInfoChanged"].includes(
             message.method,
           )
         ) {
-          let timeoutMs;
-          try {
-            timeoutMs = currentAttachmentTimeoutMs();
-          } catch {
-            return;
-          }
           void settleWithin(
             ensureTarget(message.params?.targetInfo, timeoutMs),
             timeoutMs,
           ).catch(() => {});
         }
       });
+      await sendCdpWithinDeadline(
+        client,
+        "Target.setAutoAttach",
+        {
+          autoAttach: true,
+          waitForDebuggerOnStart: true,
+          flatten: true,
+          filter: [
+            { type: "service_worker", exclude: false },
+            { exclude: true },
+          ],
+        },
+        undefined,
+        setupDeadlineEpochMs,
+      );
       await sendCdpWithinDeadline(
         client,
         "Target.setDiscoverTargets",
@@ -1250,13 +1840,7 @@ export function createExtensionTargetObserver(client, observation) {
       );
     },
     async ensureTargetId(targetId, timeoutMs = B1_CDP_SETUP_TIMEOUT_MS) {
-      const { targetInfo } = await client.send(
-        "Target.getTargetInfo",
-        { targetId },
-        undefined,
-        timeoutMs,
-      );
-      return ensureTarget(targetInfo, timeoutMs);
+      return waitForObservedTargetId(targetId, timeoutMs);
     },
     async ensureServiceWorkerTargetId(
       targetId,
@@ -1284,13 +1868,23 @@ export function createExtensionTargetObserver(client, observation) {
       setupDeadlineEpochMs = null;
     },
     async stop() {
+      await settleAttachments();
       await client.send(
         "Target.setDiscoverTargets",
         { discover: false },
         undefined,
         B1_CDP_SETUP_TIMEOUT_MS,
       );
-      await settleAttachments();
+      await client.send(
+        "Target.setAutoAttach",
+        {
+          autoAttach: false,
+          waitForDebuggerOnStart: false,
+          flatten: true,
+        },
+        undefined,
+        B1_CDP_SETUP_TIMEOUT_MS,
+      );
       unsubscribe?.();
       unsubscribe = null;
     },
@@ -1309,12 +1903,57 @@ async function attachObservedTarget(
     undefined,
     timeoutMs,
   );
-  observation.observeSession(sessionId, new URL(targetInfo.url).hostname);
-  await Promise.all(
-    ["Runtime.enable", "Network.enable", "Log.enable"].map((method) =>
-      client.send(method, {}, sessionId, timeoutMs),
-    ),
+  return configureObservedSession(
+    client,
+    observation,
+    targetInfo,
+    sessionId,
+    timeoutMs,
+    false,
   );
+}
+
+async function configureObservedSession(
+  client,
+  observation,
+  targetInfo,
+  sessionId,
+  timeoutMs,
+  resumeWhenReady,
+) {
+  const extensionId = new URL(targetInfo.url).hostname;
+  observation.observeSession(sessionId, extensionId);
+  const enableCommands = [
+    client.send("Runtime.enable", {}, sessionId, timeoutMs),
+    client.send("Network.enable", {}, sessionId, timeoutMs),
+    client.send("Log.enable", {}, sessionId, timeoutMs),
+  ];
+  if (extensionId !== B1_HARNESS_EXTENSION_ID) {
+    enableCommands.push(
+      client.send(
+        "Fetch.enable",
+        {
+          patterns: [
+            {
+              urlPattern: `https://${BILIBILI_API_HOSTNAME}/*`,
+              requestStage: "Request",
+            },
+          ],
+        },
+        sessionId,
+        timeoutMs,
+      ),
+    );
+  }
+  await Promise.all(enableCommands);
+  if (resumeWhenReady) {
+    await client.send(
+      "Runtime.runIfWaitingForDebugger",
+      {},
+      sessionId,
+      timeoutMs,
+    );
+  }
   return sessionId;
 }
 
@@ -1605,26 +2244,6 @@ async function serveFixture(artifactPath, fixtureId) {
   };
 }
 
-async function discoverHarnessExtensionId(port) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
-      signal: AbortSignal.timeout(B1_CDP_SETUP_TIMEOUT_MS),
-    });
-    const targets = await response.json();
-    const target = targets.find(
-      (candidate) =>
-        candidate.type === "service_worker" &&
-        candidate.url ===
-          `chrome-extension://${B1_HARNESS_EXTENSION_ID}/service-worker.js`,
-    );
-    if (target) {
-      return new URL(target.url).hostname;
-    }
-    await delay(50);
-  }
-  throw new Error("browser_smoke_harness_extension_not_loaded");
-}
-
 async function waitForHarnessReady(client, sessionId, options = {}) {
   const deadline = resolveSetupDeadline(options);
   let lastState = null;
@@ -1656,66 +2275,113 @@ async function waitForHarnessReady(client, sessionId, options = {}) {
   throw new Error("browser_smoke_harness_start_timeout");
 }
 
-class CdpClient {
-  static async connect(url) {
-    const socket = new WebSocket(url);
-    await new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        socket.close();
-        reject(new Error("cdp_connection_timeout"));
-      }, B1_CDP_SETUP_TIMEOUT_MS);
-      socket.addEventListener(
-        "open",
-        () => {
-          clearTimeout(timeoutId);
-          resolve();
-        },
-        { once: true },
-      );
-      socket.addEventListener(
-        "error",
-        () => {
-          clearTimeout(timeoutId);
-          reject(new Error("cdp_connection_failed"));
-        },
-        { once: true },
-      );
-    });
-    return new CdpClient(socket);
+export function createPipeCdpClient(commandPipe, eventPipe) {
+  if (
+    typeof commandPipe?.write !== "function" ||
+    typeof commandPipe?.end !== "function" ||
+    typeof eventPipe?.on !== "function"
+  ) {
+    throw new Error("cdp_pipe_invalid");
   }
+  const client = new CdpClient({
+    send(message) {
+      commandPipe.write(`${message}\0`, "utf8");
+    },
+    close() {
+      commandPipe.end();
+    },
+  });
+  let buffer = Buffer.alloc(0);
+  const fail = () => client.fail(new Error("cdp_connection_closed"));
+  const onData = (chunk) => {
+    const nextChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    buffer = Buffer.concat([buffer, nextChunk]);
+    while (true) {
+      const separatorIndex = buffer.indexOf(0);
+      if (separatorIndex < 0) {
+        break;
+      }
+      const messageBuffer = buffer.subarray(0, separatorIndex);
+      buffer = buffer.subarray(separatorIndex + 1);
+      if (messageBuffer.length === 0) {
+        continue;
+      }
+      if (messageBuffer.length > B1_MAX_CDP_PIPE_MESSAGE_BYTES) {
+        client.fail(new Error("cdp_pipe_message_too_large"));
+        return;
+      }
+      try {
+        client.receive(JSON.parse(messageBuffer.toString("utf8")));
+      } catch {
+        client.fail(new Error("cdp_pipe_message_invalid"));
+        return;
+      }
+    }
+    if (buffer.length > B1_MAX_CDP_PIPE_MESSAGE_BYTES) {
+      client.fail(new Error("cdp_pipe_message_too_large"));
+    }
+  };
+  eventPipe.on("data", onData);
+  eventPipe.once("end", fail);
+  eventPipe.once("close", fail);
+  eventPipe.once("error", fail);
+  commandPipe.once("error", fail);
+  client.setTransportCleanup(() => {
+    eventPipe.removeListener("data", onData);
+    eventPipe.removeListener("end", fail);
+    eventPipe.removeListener("close", fail);
+    eventPipe.removeListener("error", fail);
+    commandPipe.removeListener("error", fail);
+  });
+  return client;
+}
 
-  constructor(socket) {
-    this.socket = socket;
+class CdpClient {
+  constructor(transport) {
+    this.transport = transport;
     this.nextId = 1;
     this.pending = new Map();
     this.eventListeners = new Set();
-    socket.addEventListener("message", (event) => {
-      const message = JSON.parse(event.data);
-      if (!message.id) {
-        for (const listener of this.eventListeners) {
-          listener(message);
-        }
-        return;
+    this.transportCleanup = null;
+    this.connectionFailure = null;
+  }
+
+  setTransportCleanup(cleanup) {
+    this.transportCleanup = cleanup;
+  }
+
+  receive(message) {
+    if (!Number.isSafeInteger(message?.id)) {
+      for (const listener of this.eventListeners) {
+        listener(message);
       }
-      if (!this.pending.has(message.id)) {
-        return;
-      }
-      const { resolve, reject, timeoutId } = this.pending.get(message.id);
-      this.pending.delete(message.id);
+      return;
+    }
+    if (!this.pending.has(message.id)) {
+      return;
+    }
+    const { resolve, reject, timeoutId } = this.pending.get(message.id);
+    this.pending.delete(message.id);
+    clearTimeout(timeoutId);
+    if (message.error) {
+      reject(new Error(`cdp_command_failed:${message.error.code}`));
+    } else {
+      resolve(message.result ?? {});
+    }
+  }
+
+  fail(error) {
+    if (this.connectionFailure) {
+      return;
+    }
+    this.connectionFailure = error;
+    for (const { reject, timeoutId } of this.pending.values()) {
       clearTimeout(timeoutId);
-      if (message.error) {
-        reject(new Error(`cdp_command_failed:${message.error.code}`));
-      } else {
-        resolve(message.result ?? {});
-      }
-    });
-    socket.addEventListener("close", () => {
-      for (const { reject, timeoutId } of this.pending.values()) {
-        clearTimeout(timeoutId);
-        reject(new Error("cdp_connection_closed"));
-      }
-      this.pending.clear();
-    });
+      reject(error);
+    }
+    this.pending.clear();
+    this.transportCleanup?.();
+    this.transportCleanup = null;
   }
 
   onEvent(listener) {
@@ -1726,6 +2392,9 @@ class CdpClient {
   send(method, params = {}, sessionId, timeoutMs = B1_CDP_SETUP_TIMEOUT_MS) {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
       throw new Error("cdp_timeout_invalid");
+    }
+    if (this.connectionFailure) {
+      return Promise.reject(this.connectionFailure);
     }
     const id = this.nextId;
     this.nextId += 1;
@@ -1742,7 +2411,7 @@ class CdpClient {
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timeoutId });
       try {
-        this.socket.send(JSON.stringify(message));
+        this.transport.send(JSON.stringify(message));
       } catch (error) {
         clearTimeout(timeoutId);
         this.pending.delete(id);
@@ -1752,34 +2421,11 @@ class CdpClient {
   }
 
   close() {
-    this.socket.close();
+    this.transportCleanup?.();
+    this.transportCleanup = null;
+    this.transport.close();
+    this.fail(new Error("cdp_connection_closed"));
   }
-}
-
-async function waitForDevToolsPort(profileDirectory, chrome) {
-  const activePortPath = path.join(profileDirectory, "DevToolsActivePort");
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (chrome.exitCode !== null) {
-      throw new Error("chrome_exited_before_devtools_ready");
-    }
-    try {
-      const [portLine, browserPath] = (await readFile(activePortPath, "utf8"))
-        .trim()
-        .split(/\r?\n/);
-      const port = Number(portLine);
-      if (
-        Number.isInteger(port) &&
-        port > 0 &&
-        browserPath?.startsWith("/devtools/browser/")
-      ) {
-        return { port, browserPath };
-      }
-    } catch {
-      // Chrome writes DevToolsActivePort only after the temporary profile is ready.
-    }
-    await delay(50);
-  }
-  throw new Error("chrome_devtools_start_timeout");
 }
 
 export function waitForProcessExit(child, timeoutMs = 5_000) {
@@ -1800,25 +2446,160 @@ export function waitForProcessExit(child, timeoutMs = 5_000) {
   });
 }
 
-async function terminateChromeProcessTree(child) {
-  if (child.exitCode !== null) {
-    return;
+export function findSurvivingWindowsProcessTree(
+  initialProcesses,
+  currentProcesses,
+  rootProcessId,
+) {
+  if (!Number.isSafeInteger(rootProcessId) || rootProcessId < 1) {
+    throw new Error("chrome_process_identity_unavailable");
   }
+  const initial = validateWindowsProcessTable(
+    initialProcesses,
+    "initial_process_table",
+  );
+  const current = validateWindowsProcessTable(
+    currentProcesses,
+    "current_process_table",
+  );
+  const initialLineage = collectDescendantProcessIds(initial, [rootProcessId]);
+  const currentLineage = collectDescendantProcessIds(current, initialLineage);
+  const currentProcessIds = new Set(
+    current.map((process) => process.processId),
+  );
+  return Object.freeze(
+    [...currentLineage]
+      .filter((processId) => currentProcessIds.has(processId))
+      .sort((left, right) => left - right),
+  );
+}
+
+export function validateWindowsChromeTerminationEvidence({
+  terminationCommandSucceeded,
+  parentExited,
+  survivingProcessIds,
+}) {
+  if (terminationCommandSucceeded !== true) {
+    throw new Error("chrome_process_tree_termination_failed");
+  }
+  if (parentExited !== true) {
+    throw new Error("chrome_process_exit_timeout");
+  }
+  if (
+    !Array.isArray(survivingProcessIds) ||
+    survivingProcessIds.some(
+      (processId) => !Number.isSafeInteger(processId) || processId < 1,
+    ) ||
+    survivingProcessIds.length > 0
+  ) {
+    throw new Error("chrome_process_tree_termination_failed");
+  }
+}
+
+function validateWindowsProcessTable(processes, label) {
+  if (!Array.isArray(processes)) {
+    throw new Error(`${label}_invalid`);
+  }
+  const seenProcessIds = new Set();
+  return processes.map((process) => {
+    if (
+      process === null ||
+      typeof process !== "object" ||
+      Array.isArray(process) ||
+      !Number.isSafeInteger(process.processId) ||
+      process.processId < 0 ||
+      !Number.isSafeInteger(process.parentProcessId) ||
+      process.parentProcessId < 0 ||
+      seenProcessIds.has(process.processId)
+    ) {
+      throw new Error(`${label}_invalid`);
+    }
+    seenProcessIds.add(process.processId);
+    return {
+      processId: process.processId,
+      parentProcessId: process.parentProcessId,
+    };
+  });
+}
+
+function collectDescendantProcessIds(processes, seedProcessIds) {
+  const lineage = new Set(seedProcessIds);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const process of processes) {
+      if (
+        lineage.has(process.parentProcessId) &&
+        !lineage.has(process.processId)
+      ) {
+        lineage.add(process.processId);
+        changed = true;
+      }
+    }
+  }
+  return lineage;
+}
+
+async function readWindowsProcessTable() {
+  const script = [
+    "$rows = @(Get-CimInstance -ClassName Win32_Process | ForEach-Object { [pscustomobject]@{ processId = [int64]$_.ProcessId; parentProcessId = [int64]$_.ParentProcessId } })",
+    "ConvertTo-Json -Compress -InputObject $rows",
+  ].join("; ");
+  const { stdout } = await execFile(
+    "powershell.exe",
+    ["-NoProfile", "-Command", script],
+    {
+      windowsHide: true,
+      timeout: 10_000,
+      maxBuffer: 16 * 1024 * 1024,
+    },
+  );
+  let processes;
+  try {
+    processes = JSON.parse(stdout.trim());
+  } catch {
+    throw new Error("chrome_process_tree_observation_failed");
+  }
+  try {
+    return validateWindowsProcessTable(
+      processes,
+      "chrome_process_tree_observation",
+    );
+  } catch {
+    throw new Error("chrome_process_tree_observation_failed");
+  }
+}
+
+async function terminateChromeProcessTree(child) {
   if (!Number.isSafeInteger(child.pid) || child.pid < 1) {
     throw new Error("chrome_process_identity_unavailable");
   }
   if (process.platform === "win32") {
-    try {
-      await execFile("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
-        windowsHide: true,
-        timeout: 10_000,
-      });
-    } catch {
-      if (child.exitCode === null) {
-        throw new Error("chrome_process_tree_termination_failed");
-      }
+    const initialProcesses = await readWindowsProcessTable();
+    if (child.exitCode !== null) {
+      throw new Error("chrome_process_tree_termination_failed");
     }
-  } else if (!child.kill("SIGKILL")) {
+    await execFile("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+      windowsHide: true,
+      timeout: 10_000,
+    }).catch(() => {
+      throw new Error("chrome_process_tree_termination_failed");
+    });
+    const parentExited = await waitForProcessExit(child);
+    const currentProcesses = await readWindowsProcessTable();
+    const survivors = findSurvivingWindowsProcessTree(
+      initialProcesses,
+      currentProcesses,
+      child.pid,
+    );
+    validateWindowsChromeTerminationEvidence({
+      terminationCommandSucceeded: true,
+      parentExited,
+      survivingProcessIds: survivors,
+    });
+    return;
+  }
+  if (child.exitCode === null && !child.kill("SIGKILL")) {
     throw new Error("chrome_process_tree_termination_failed");
   }
   if (!(await waitForProcessExit(child))) {
