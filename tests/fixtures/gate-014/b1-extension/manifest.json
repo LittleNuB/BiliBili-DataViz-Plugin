@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Bili-Bill GATE-014-B1 Harness",
+  "version": "1.0.0",
+  "key": "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC46Ft68TCcftHs+LKpf/yvjVJIFYcbcnTkIGVZoTLStyejT//BtC7XkQVy0rum8CC0iFu2OV8QMu+8LHLfhkYGE0PtjW3T8BK+ZME3eb3vvl21kmeqeIjosXBsAxRmOygZ3K9Wd4hpixys7CzVqTl4EdleZbdoj+3A7voD9cP3ZwIDAQAB",
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "host_permissions": [
+    "http://127.0.0.1/*"
+  ],
+  "action": {
+    "default_title": "GATE-014-B1"
+  }
+}
