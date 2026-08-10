@@ -9,6 +9,7 @@ import {
   B1_MAX_HEAP_GROWTH_BYTES,
   createB1EnvironmentReceipt,
   createB1OperationReceipt,
+  createB1RestorePreflightValidationReceipt,
   evaluateB1Report,
   hashB1EnvironmentReceipt,
   serializeB1EnvironmentReceipt,
@@ -96,6 +97,7 @@ function passingOperation(overrides = {}) {
     runOrdinal: 1,
     operation: "admission",
     totalDurationMs: 900_000,
+    committedBatchCount: 20,
     batchDurationsMs: [...Array.from({ length: 19 }, () => 2_000), 5_000],
     progressEventOffsetsMs: Array.from(
       { length: 450 },
@@ -263,6 +265,26 @@ test("GATE-014-B1 receipt rejects unknown fields, unsafe identities, and non-pla
   );
 });
 
+test("GATE-014-B1 records committed writes separately from instrumented batch timings", () => {
+  const receipt = createB1OperationReceipt(
+    passingOperation({
+      committedBatchCount: 0,
+      batchDurationsMs: [10, 20, 30],
+    }),
+  );
+
+  assert.equal(receipt.status, "pass");
+  assert.equal(receipt.committedBatchCount, 0);
+  assert.equal(receipt.batchDurationMaximumMs, 30);
+  assert.throws(
+    () =>
+      createB1OperationReceipt(
+        passingOperation({ committedBatchCount: undefined }),
+      ),
+    /committedBatchCount/,
+  );
+});
+
 function reportOperation({
   fixtureId,
   fixtureReceiptSha256,
@@ -359,12 +381,55 @@ function completeReportInput() {
       }
     }
   }
-  return {
+  const input = {
     environment: structuredClone(ENVIRONMENT_INPUT),
     environmentReceiptSha256: ENVIRONMENT_SHA_256,
     fixtureReceipts,
     rawOperations,
   };
+  setPassingRestorePreflightValidation(input, {
+    recordCap: 1024,
+    byteCapBytes: 4 * 1024 * 1024,
+  });
+  return input;
+}
+
+function setPassingRestorePreflightValidation(
+  input,
+  candidate,
+  receiptOverrides = {},
+) {
+  const requiredFreeQuotaBytes = 64 * 1024 * 1024 + 1_250;
+  input.restorePreflightValidation = createB1RestorePreflightValidationReceipt({
+    fixtureId: "managed-full-text-500mib",
+    fixtureReceiptSha256: input.fixtureReceipts["managed-full-text-500mib"],
+    environmentReceiptSha256: ENVIRONMENT_SHA_256,
+    candidate,
+    startedAtEpochMs: 1_200,
+    completedAtEpochMs: 1_800,
+    requiredFreeQuotaBytes,
+    physicalQuota: {
+      metricAvailable: true,
+      availableFreeQuotaBytes: 100_000_000,
+    },
+    insufficientProbe: {
+      availableFreeQuotaBytes: requiredFreeQuotaBytes - 1,
+      requiredFreeQuotaBytes,
+      allowed: false,
+      artifactFetchAttempted: false,
+      writesObserved: 0,
+    },
+    exactProbe: {
+      availableFreeQuotaBytes: requiredFreeQuotaBytes,
+      requiredFreeQuotaBytes,
+      allowed: true,
+      artifactFetchAttempted: true,
+      writesObserved: 500,
+      writeReadbackVerified: true,
+    },
+    cleanupReadbackVerified: true,
+    ...receiptOverrides,
+  });
 }
 
 test("GATE-014-B1 report requires complete raw coverage and selects the largest passing candidate", () => {
@@ -398,6 +463,10 @@ test("GATE-014-B1 report requires complete raw coverage and selects the largest 
     false,
   );
   assert.equal(report.provisionalRestoreHeadroom.nearLimitProbe.allowed, true);
+  assert.equal(
+    report.provisionalRestoreHeadroom.browserValidationVerified,
+    true,
+  );
   assert.match(serializeB1Report(report), /"selectedCandidate"/);
   assert.equal(serializeB1Report(report).endsWith("\n"), true);
   assert.equal(Object.isFrozen(report), true);
@@ -411,6 +480,23 @@ test("GATE-014-B1 report stays insufficient when any required raw operation is a
   assert.equal(report.status, "insufficient_evidence");
   assert.equal(report.selectedCandidate, null);
   assert.equal(report.coverage.missingOperationCount, 1);
+});
+
+test("GATE-014-B1 report stays insufficient until the derived restore rule passes a browser write", () => {
+  const input = completeReportInput();
+  input.restorePreflightValidation = null;
+  const report = evaluateB1Report(input);
+
+  assert.equal(report.status, "insufficient_evidence");
+  assert.equal(report.selectedCandidate, null);
+  assert.equal(
+    report.provisionalRestoreHeadroom.browserValidationVerified,
+    false,
+  );
+  assert.equal(
+    report.restorePreflightValidation.reasonCode,
+    "browser_preflight_validation_missing",
+  );
 });
 
 test("GATE-014-B1 report stays insufficient when provisional restore headroom rejects a measured run", () => {
@@ -442,6 +528,10 @@ test("GATE-014-B1 candidate tie-break records rejected combinations instead of a
       operation.operation === "admission",
   );
   target.mainThread.maximumTaskMs = 201;
+  setPassingRestorePreflightValidation(input, {
+    recordCap: 1024,
+    byteCapBytes: 2 * 1024 * 1024,
+  });
   const report = evaluateB1Report(input);
 
   assert.equal(report.status, "pass");
@@ -480,4 +570,12 @@ test("GATE-014-B1 report rejects duplicate run identities and fixture hash drift
     () => evaluateB1Report(environmentDrift),
     /operation environment receipt SHA-256 mismatch/,
   );
+
+  const outsideRunWindow = completeReportInput();
+  setPassingRestorePreflightValidation(
+    outsideRunWindow,
+    { recordCap: 1024, byteCapBytes: 4 * 1024 * 1024 },
+    { startedAtEpochMs: 1_900, completedAtEpochMs: 2_100 },
+  );
+  assert.throws(() => evaluateB1Report(outsideRunWindow), /outside run window/);
 });

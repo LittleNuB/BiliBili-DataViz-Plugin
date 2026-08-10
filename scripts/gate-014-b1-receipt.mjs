@@ -319,6 +319,164 @@ export function hashB1EnvironmentReceipt(receipt) {
     .digest("hex");
 }
 
+export function createB1RestorePreflightValidationReceipt(input) {
+  assertPlainObject(input, "B1 restore preflight validation");
+  assertAllowedFields(input, [
+    "fixtureId",
+    "fixtureReceiptSha256",
+    "environmentReceiptSha256",
+    "candidate",
+    "startedAtEpochMs",
+    "completedAtEpochMs",
+    "requiredFreeQuotaBytes",
+    "physicalQuota",
+    "insufficientProbe",
+    "exactProbe",
+    "cleanupReadbackVerified",
+  ]);
+  const fixtureId = assertPublicSafeId(input.fixtureId, "fixtureId");
+  const fixtureReceiptSha256 = assertSha256(
+    input.fixtureReceiptSha256,
+    "fixtureReceiptSha256",
+  );
+  const environmentReceiptSha256 = assertSha256(
+    input.environmentReceiptSha256,
+    "environmentReceiptSha256",
+  );
+  const candidate = validateCandidate(input.candidate);
+  const startedAtEpochMs = assertPositiveSafeInteger(
+    input.startedAtEpochMs,
+    "startedAtEpochMs",
+  );
+  const completedAtEpochMs = assertPositiveSafeInteger(
+    input.completedAtEpochMs,
+    "completedAtEpochMs",
+  );
+  if (completedAtEpochMs < startedAtEpochMs) {
+    throw new Error("completedAtEpochMs must not precede startedAtEpochMs");
+  }
+  const requiredFreeQuotaBytes = assertPositiveSafeInteger(
+    input.requiredFreeQuotaBytes,
+    "requiredFreeQuotaBytes",
+  );
+  const physicalQuota = validateRestorePhysicalQuota(input.physicalQuota);
+  const insufficientProbe = validateRestoreBoundaryProbe(
+    input.insufficientProbe,
+    "insufficientProbe",
+  );
+  const exactProbe = validateRestoreBoundaryProbe(
+    input.exactProbe,
+    "exactProbe",
+    { requireWriteReadback: true },
+  );
+  const cleanupReadbackVerified = assertBoolean(
+    input.cleanupReadbackVerified,
+    "cleanupReadbackVerified",
+  );
+  const failures = [];
+  const insufficientEvidence = [];
+  if (!physicalQuota.metricAvailable) {
+    insufficientEvidence.push("physical_quota_metric_unavailable");
+  } else if (physicalQuota.availableFreeQuotaBytes < requiredFreeQuotaBytes) {
+    failures.push("physical_quota_below_required");
+  }
+  if (
+    insufficientProbe.availableFreeQuotaBytes !== requiredFreeQuotaBytes - 1 ||
+    insufficientProbe.requiredFreeQuotaBytes !== requiredFreeQuotaBytes ||
+    insufficientProbe.allowed !== false ||
+    insufficientProbe.artifactFetchAttempted !== false ||
+    insufficientProbe.writesObserved !== 0
+  ) {
+    failures.push("insufficient_boundary_probe_failed");
+  }
+  if (
+    exactProbe.availableFreeQuotaBytes !== requiredFreeQuotaBytes ||
+    exactProbe.requiredFreeQuotaBytes !== requiredFreeQuotaBytes ||
+    exactProbe.allowed !== true ||
+    exactProbe.artifactFetchAttempted !== true ||
+    exactProbe.writesObserved < 1 ||
+    exactProbe.writeReadbackVerified !== true
+  ) {
+    failures.push("exact_boundary_probe_failed");
+  }
+  if (!cleanupReadbackVerified) {
+    failures.push("restore_validation_cleanup_failed");
+  }
+  const status =
+    failures.length > 0
+      ? "fail"
+      : insufficientEvidence.length > 0
+        ? "insufficient_evidence"
+        : "pass";
+  const receipt = {
+    contract: "gate-014-b1-restore-preflight-validation-v1",
+    status,
+    storesSensitiveText: false,
+    fixtureId,
+    fixtureReceiptSha256,
+    environmentReceiptSha256,
+    candidate,
+    startedAtEpochMs,
+    completedAtEpochMs,
+    requiredFreeQuotaBytes,
+    physicalQuota,
+    insufficientProbe,
+    exactProbe,
+    cleanupReadbackVerified,
+    failures: deepFreeze([...new Set(failures)]),
+    insufficientEvidence: deepFreeze([...new Set(insufficientEvidence)]),
+  };
+  assertPublicSafeValue(receipt);
+  return deepFreeze(receipt);
+}
+
+export function validateB1RestorePreflightValidationReceipt(input) {
+  assertPlainObject(input, "B1 restore preflight validation receipt");
+  assertAllowedFields(input, [
+    "contract",
+    "status",
+    "storesSensitiveText",
+    "fixtureId",
+    "fixtureReceiptSha256",
+    "environmentReceiptSha256",
+    "candidate",
+    "startedAtEpochMs",
+    "completedAtEpochMs",
+    "requiredFreeQuotaBytes",
+    "physicalQuota",
+    "insufficientProbe",
+    "exactProbe",
+    "cleanupReadbackVerified",
+    "failures",
+    "insufficientEvidence",
+  ]);
+  const {
+    contract,
+    status,
+    storesSensitiveText,
+    failures,
+    insufficientEvidence,
+    ...source
+  } = input;
+  if (
+    contract !== "gate-014-b1-restore-preflight-validation-v1" ||
+    storesSensitiveText !== false ||
+    !["pass", "fail", "insufficient_evidence"].includes(status) ||
+    !Array.isArray(failures) ||
+    !Array.isArray(insufficientEvidence)
+  ) {
+    throw new Error("B1 restore preflight validation receipt is invalid");
+  }
+  const recomputed = createB1RestorePreflightValidationReceipt(source);
+  if (
+    JSON.stringify(sortObjectKeys(recomputed)) !==
+    JSON.stringify(sortObjectKeys(input))
+  ) {
+    throw new Error("B1 restore preflight validation receipt drift detected");
+  }
+  return recomputed;
+}
+
 export function createB1OperationReceipt(input) {
   assertPlainObject(input, "B1 operation receipt");
   assertAllowedFields(input, [
@@ -330,6 +488,7 @@ export function createB1OperationReceipt(input) {
     "runOrdinal",
     "operation",
     "totalDurationMs",
+    "committedBatchCount",
     "batchDurationsMs",
     "progressEventOffsetsMs",
     "restart",
@@ -360,6 +519,10 @@ export function createB1OperationReceipt(input) {
   const totalDurationMs = assertNonNegativeFiniteNumber(
     input.totalDurationMs,
     "totalDurationMs",
+  );
+  const committedBatchCount = assertNonNegativeSafeInteger(
+    input.committedBatchCount,
+    "committedBatchCount",
   );
   const batchDurationsMs = validateNumberArray(
     input.batchDurationsMs,
@@ -478,7 +641,7 @@ export function createB1OperationReceipt(input) {
     storesSensitiveText: false,
     totalDurationMs,
     totalDurationLimitMs,
-    committedBatchCount: batchDurationsMs.length,
+    committedBatchCount,
     batchDurationMedianMs,
     batchDurationP95Ms,
     batchDurationMaximumMs,
@@ -507,6 +670,7 @@ export function evaluateB1Report(input) {
     "environmentReceiptSha256",
     "fixtureReceipts",
     "rawOperations",
+    "restorePreflightValidation",
   ]);
   const environment = createB1EnvironmentReceipt(input.environment);
   const environmentReceiptSha256 = assertSha256(
@@ -517,6 +681,35 @@ export function evaluateB1Report(input) {
     throw new Error("environment receipt SHA-256 mismatch");
   }
   const fixtureReceipts = validateFixtureReceiptMap(input.fixtureReceipts);
+  const restorePreflightValidation =
+    input.restorePreflightValidation === null ||
+    input.restorePreflightValidation === undefined
+      ? null
+      : validateB1RestorePreflightValidationReceipt(
+          input.restorePreflightValidation,
+        );
+  if (restorePreflightValidation !== null) {
+    if (
+      restorePreflightValidation.environmentReceiptSha256 !==
+      environmentReceiptSha256
+    ) {
+      throw new Error("restore preflight environment receipt SHA-256 mismatch");
+    }
+    if (
+      fixtureReceipts[restorePreflightValidation.fixtureId] !==
+      restorePreflightValidation.fixtureReceiptSha256
+    ) {
+      throw new Error("restore preflight fixture receipt SHA-256 mismatch");
+    }
+    if (
+      restorePreflightValidation.startedAtEpochMs <
+        environment.startedAtEpochMs ||
+      restorePreflightValidation.completedAtEpochMs >
+        environment.completedAtEpochMs
+    ) {
+      throw new Error("restore preflight validation is outside run window");
+    }
+  }
   if (!Array.isArray(input.rawOperations)) {
     throw new Error("rawOperations must be an array");
   }
@@ -614,6 +807,7 @@ export function evaluateB1Report(input) {
   const provisionalRestoreHeadroom = deriveB1RestoreHeadroom(
     operations,
     performanceCandidate,
+    restorePreflightValidation,
   );
   const status =
     baseStatus === "pass" && provisionalRestoreHeadroom.status !== "pass"
@@ -642,6 +836,12 @@ export function evaluateB1Report(input) {
       missingOperationIdentities: deepFreeze(missingOperationIdentities),
     }),
     provisionalRestoreHeadroom,
+    restorePreflightValidation:
+      restorePreflightValidation ??
+      deepFreeze({
+        status: "insufficient_evidence",
+        reasonCode: "browser_preflight_validation_missing",
+      }),
     selectedCandidate,
     candidates: deepFreeze(candidates),
     operations: deepFreeze(operations),
@@ -658,7 +858,11 @@ export function serializeB1Report(report) {
   return `${JSON.stringify(sortObjectKeys(report), null, 2)}\n`;
 }
 
-export function deriveB1RestoreHeadroom(operations, selectedCandidate) {
+export function deriveB1RestoreHeadroom(
+  operations,
+  selectedCandidate,
+  restorePreflightValidation = null,
+) {
   if (!selectedCandidate) {
     return deepFreeze({
       status: "insufficient_evidence",
@@ -741,9 +945,26 @@ export function deriveB1RestoreHeadroom(operations, selectedCandidate) {
   const probesVerified =
     deliberatelyInsufficientProbe.allowed === false &&
     nearLimitProbe.allowed === true;
+  const browserValidationVerified =
+    restorePreflightValidation?.status === "pass" &&
+    restorePreflightValidation.fixtureId === "managed-full-text-500mib" &&
+    restorePreflightValidation.candidate.recordCap ===
+      selectedCandidate.recordCap &&
+    restorePreflightValidation.candidate.byteCapBytes ===
+      selectedCandidate.byteCapBytes &&
+    restorePreflightValidation.requiredFreeQuotaBytes ===
+      maximumRequiredFreeQuotaBytes &&
+    restorePreflightValidation.insufficientProbe.availableFreeQuotaBytes ===
+      deliberatelyInsufficientProbe.availableFreeQuotaBytes &&
+    restorePreflightValidation.insufficientProbe.requiredFreeQuotaBytes ===
+      deliberatelyInsufficientProbe.requiredFreeQuotaBytes &&
+    restorePreflightValidation.exactProbe.availableFreeQuotaBytes ===
+      nearLimitProbe.availableFreeQuotaBytes &&
+    restorePreflightValidation.exactProbe.requiredFreeQuotaBytes ===
+      nearLimitProbe.requiredFreeQuotaBytes;
   return deepFreeze({
     status:
-      allMeasuredRunsAllowed && probesVerified
+      allMeasuredRunsAllowed && probesVerified && browserValidationVerified
         ? "pass"
         : "insufficient_evidence",
     highestObservedAmplificationRatio,
@@ -761,6 +982,7 @@ export function deriveB1RestoreHeadroom(operations, selectedCandidate) {
       ...actualRuns.map((run) => run.marginBytes),
     ),
     allMeasuredRunsAllowed,
+    browserValidationVerified,
     deliberatelyInsufficientProbe,
     nearLimitProbe,
   });
@@ -849,6 +1071,74 @@ function validateCandidate(input) {
     throw new Error("candidate.byteCapBytes is not part of the B1 matrix");
   }
   return deepFreeze({ recordCap, byteCapBytes });
+}
+
+function validateRestorePhysicalQuota(input) {
+  assertPlainObject(input, "physicalQuota");
+  const metricAvailable = assertBoolean(
+    input.metricAvailable,
+    "physicalQuota.metricAvailable",
+  );
+  if (!metricAvailable) {
+    assertAllowedFields(input, ["metricAvailable", "reasonCode"]);
+    return deepFreeze({
+      metricAvailable: false,
+      reasonCode: assertEnum(
+        input.reasonCode,
+        ["browser_metric_unavailable"],
+        "physicalQuota.reasonCode",
+      ),
+    });
+  }
+  assertAllowedFields(input, ["metricAvailable", "availableFreeQuotaBytes"]);
+  return deepFreeze({
+    metricAvailable: true,
+    availableFreeQuotaBytes: assertNonNegativeSafeInteger(
+      input.availableFreeQuotaBytes,
+      "physicalQuota.availableFreeQuotaBytes",
+    ),
+  });
+}
+
+function validateRestoreBoundaryProbe(input, label, options = {}) {
+  assertPlainObject(input, label);
+  const fields = [
+    "availableFreeQuotaBytes",
+    "requiredFreeQuotaBytes",
+    "allowed",
+    "artifactFetchAttempted",
+    "writesObserved",
+  ];
+  if (options.requireWriteReadback) {
+    fields.push("writeReadbackVerified");
+  }
+  assertAllowedFields(input, fields);
+  const result = {
+    availableFreeQuotaBytes: assertNonNegativeSafeInteger(
+      input.availableFreeQuotaBytes,
+      `${label}.availableFreeQuotaBytes`,
+    ),
+    requiredFreeQuotaBytes: assertPositiveSafeInteger(
+      input.requiredFreeQuotaBytes,
+      `${label}.requiredFreeQuotaBytes`,
+    ),
+    allowed: assertBoolean(input.allowed, `${label}.allowed`),
+    artifactFetchAttempted: assertBoolean(
+      input.artifactFetchAttempted,
+      `${label}.artifactFetchAttempted`,
+    ),
+    writesObserved: assertNonNegativeSafeInteger(
+      input.writesObserved,
+      `${label}.writesObserved`,
+    ),
+  };
+  if (options.requireWriteReadback) {
+    result.writeReadbackVerified = assertBoolean(
+      input.writeReadbackVerified,
+      `${label}.writeReadbackVerified`,
+    );
+  }
+  return deepFreeze(result);
 }
 
 function validateRestart(input, operation) {

@@ -36,6 +36,7 @@ import {
   B1_RUN_COUNTS,
   createB1EnvironmentReceipt,
   createB1OperationReceipt,
+  createB1RestorePreflightValidationReceipt,
   evaluateB1Report,
   hashB1EnvironmentReceipt,
   serializeB1EnvironmentReceipt,
@@ -152,6 +153,7 @@ export function mapB1LifecycleToRawOperations(lifecycle, metadata) {
       runOrdinal,
       operation: operation.operation,
       totalDurationMs: operation.totalDurationMs,
+      committedBatchCount: operation.committedBatchCount,
       batchDurationsMs: [...operation.batchDurationsMs],
       progressEventOffsetsMs: [...operation.progressEventOffsetsMs],
       restart: { ...operation.restart },
@@ -358,30 +360,85 @@ export async function runB1Matrix(options = {}) {
     });
   }
 
-  const completedAtEpochMs = Date.now();
+  const preliminaryEnvironmentInput = buildEnvironmentInput(environmentCore, {
+    startedAtEpochMs: session.startedAtEpochMs,
+    completedAtEpochMs: Date.now(),
+    freeDiskBytesAtStart: session.freeDiskBytesAtStart,
+    freeDiskBytesAtEnd: await readFreeDiskBytes(),
+  });
+  const preliminaryEnvironment = createB1EnvironmentReceipt(
+    preliminaryEnvironmentInput,
+  );
+  const preliminaryEnvironmentReceiptSha256 = hashB1EnvironmentReceipt(
+    preliminaryEnvironment,
+  );
+  const preliminaryRawOperations = expectedSpecs.flatMap((spec) => {
+    const checkpoint = checkpoints.get(runIdentity(spec));
+    return checkpoint.rawOperations.map((operation) => ({
+      ...operation,
+      environmentReceiptSha256: preliminaryEnvironmentReceiptSha256,
+    }));
+  });
+  for (const operation of preliminaryRawOperations) {
+    createB1OperationReceipt(operation);
+  }
+  const preliminaryReportInput = {
+    environment: preliminaryEnvironmentInput,
+    environmentReceiptSha256: preliminaryEnvironmentReceiptSha256,
+    fixtureReceipts,
+    rawOperations: preliminaryRawOperations,
+  };
+  const preliminaryReport = evaluateB1Report({
+    ...preliminaryReportInput,
+    restorePreflightValidation: null,
+  });
+  const provisionalCandidate = preliminaryReport.candidates
+    .filter((candidate) => candidate.status === "pass")
+    .sort(
+      (left, right) =>
+        right.recordCap - left.recordCap ||
+        right.byteCapBytes - left.byteCapBytes,
+    )[0];
+  const requiredFreeQuotaBytes =
+    preliminaryReport.provisionalRestoreHeadroom.nearLimitProbe
+      ?.requiredFreeQuotaBytes;
+  const restorePreflightValidation =
+    provisionalCandidate &&
+    Number.isSafeInteger(requiredFreeQuotaBytes) &&
+    preliminaryReport.provisionalRestoreHeadroom.allMeasuredRunsAllowed === true
+      ? await runDerivedRestorePreflightValidation({
+          chromePath,
+          environmentReceiptSha256: preliminaryEnvironmentReceiptSha256,
+          fixtureReceiptDetails,
+          fixtureReceipts,
+          candidate: provisionalCandidate,
+          requiredFreeQuotaBytes,
+        })
+      : null;
   const environmentInput = buildEnvironmentInput(environmentCore, {
     startedAtEpochMs: session.startedAtEpochMs,
-    completedAtEpochMs,
+    completedAtEpochMs: Date.now(),
     freeDiskBytesAtStart: session.freeDiskBytesAtStart,
     freeDiskBytesAtEnd: await readFreeDiskBytes(),
   });
   const environment = createB1EnvironmentReceipt(environmentInput);
   const environmentReceiptSha256 = hashB1EnvironmentReceipt(environment);
-  const rawOperations = expectedSpecs.flatMap((spec) => {
-    const checkpoint = checkpoints.get(runIdentity(spec));
-    return checkpoint.rawOperations.map((operation) => ({
-      ...operation,
-      environmentReceiptSha256,
-    }));
-  });
-  for (const operation of rawOperations) {
-    createB1OperationReceipt(operation);
-  }
+  const rawOperations = preliminaryRawOperations.map((operation) => ({
+    ...operation,
+    environmentReceiptSha256,
+  }));
+  const finalRestorePreflightValidation = restorePreflightValidation
+    ? rebindRestorePreflightValidation(
+        restorePreflightValidation,
+        environmentReceiptSha256,
+      )
+    : null;
   const report = evaluateB1Report({
     environment: environmentInput,
     environmentReceiptSha256,
     fixtureReceipts,
     rawOperations,
+    restorePreflightValidation: finalRestorePreflightValidation,
   });
   await writeFinalArtifacts({ environment, rawOperations, report });
   return Object.freeze({
@@ -393,6 +450,122 @@ export async function runB1Matrix(options = {}) {
     reportPath: path
       .relative(REPOSITORY_ROOT, REPORT_PATH)
       .replaceAll("\\", "/"),
+  });
+}
+
+function rebindRestorePreflightValidation(receipt, environmentReceiptSha256) {
+  const {
+    contract,
+    status,
+    storesSensitiveText,
+    failures,
+    insufficientEvidence,
+    ...source
+  } = receipt;
+  return createB1RestorePreflightValidationReceipt({
+    ...source,
+    environmentReceiptSha256,
+  });
+}
+
+async function runDerivedRestorePreflightValidation(options) {
+  const fixtureId = "managed-full-text-500mib";
+  const definition = FIXTURE_DEFINITIONS.find(
+    (candidate) => candidate.id === fixtureId,
+  );
+  const golden = options.fixtureReceiptDetails.get(fixtureId);
+  if (!definition || !golden) {
+    throw new Error("restore preflight validation fixture unavailable");
+  }
+  await cleanupGeneratedFixtureArtifacts({ repositoryRoot: REPOSITORY_ROOT });
+  const preparedFixture = await writeFixtureArtifact(definition, {
+    repositoryRoot: REPOSITORY_ROOT,
+  });
+  if (
+    preparedFixture.artifactSha256 !== golden.fixtureSha256 ||
+    preparedFixture.receipt.canonical.totalBytes !== golden.canonicalBytes
+  ) {
+    throw new Error("restore preflight validation fixture drift detected");
+  }
+  const profile = await createB1TemporaryProfile();
+  const startedAtEpochMs = Date.now();
+  try {
+    const lifecycle = await runBrowserFixtureLifecycleWithPreparedFixture({
+      chromePath: options.chromePath,
+      fixtureId,
+      recordCap: options.candidate.recordCap,
+      byteCapBytes: options.candidate.byteCapBytes,
+      preparedFixture,
+      profile,
+      runMode: "cold",
+      restorePreflightRequiredFreeQuotaBytes: options.requiredFreeQuotaBytes,
+    });
+    return createB1RestorePreflightValidationFromLifecycle(lifecycle, {
+      fixtureId,
+      fixtureReceiptSha256: options.fixtureReceipts[fixtureId],
+      environmentReceiptSha256: options.environmentReceiptSha256,
+      candidate: options.candidate,
+      startedAtEpochMs,
+      completedAtEpochMs: Date.now(),
+      requiredFreeQuotaBytes: options.requiredFreeQuotaBytes,
+    });
+  } finally {
+    await removeB1TemporaryProfile(profile);
+    await cleanupGeneratedFixtureArtifacts({ repositoryRoot: REPOSITORY_ROOT });
+  }
+}
+
+export function createB1RestorePreflightValidationFromLifecycle(
+  lifecycle,
+  options,
+) {
+  if (lifecycle.status !== "pass" || lifecycle.readbackVerified !== true) {
+    throw new Error("restore preflight validation lifecycle failed");
+  }
+  const restore = lifecycle.operations.find(
+    (operation) => operation.operation === "restore_staging",
+  );
+  const quotaFailure = lifecycle.operations.find(
+    (operation) => operation.operation === "quota_failure",
+  );
+  const exactEvidence = restore?.detail?.restorePreflightEvidence;
+  const refusalEvidence = quotaFailure?.detail;
+  return createB1RestorePreflightValidationReceipt({
+    ...options,
+    physicalQuota: Number.isSafeInteger(
+      exactEvidence?.measuredAvailableFreeQuotaBytes,
+    )
+      ? {
+          metricAvailable: true,
+          availableFreeQuotaBytes:
+            exactEvidence.measuredAvailableFreeQuotaBytes,
+        }
+      : {
+          metricAvailable: false,
+          reasonCode: "browser_metric_unavailable",
+        },
+    insufficientProbe: {
+      availableFreeQuotaBytes: refusalEvidence?.availableBytes,
+      requiredFreeQuotaBytes: refusalEvidence?.requestedBytes,
+      allowed: refusalEvidence?.refusedBeforeWrite !== true,
+      artifactFetchAttempted: refusalEvidence?.artifactFetchAttempted ?? true,
+      writesObserved: refusalEvidence?.writesObserved,
+    },
+    exactProbe: {
+      availableFreeQuotaBytes:
+        exactEvidence?.exactBoundaryAvailableFreeQuotaBytes,
+      requiredFreeQuotaBytes: exactEvidence?.requiredFreeQuotaBytes,
+      allowed: exactEvidence?.exactBoundaryAllowed ?? false,
+      artifactFetchAttempted: exactEvidence?.artifactFetchAttempted ?? false,
+      writesObserved:
+        (restore?.detail?.receivedRecordCount ?? 0) +
+        (restore?.detail?.visibleRead?.versionCount ?? 0),
+      writeReadbackVerified:
+        restore?.readbackVerified === true &&
+        lifecycle.assertions?.committedRowsVisibleTogether === true,
+    },
+    cleanupReadbackVerified:
+      lifecycle.assertions?.cleanupReadbackVerified === true,
   });
 }
 
@@ -762,6 +935,7 @@ function createSummaryMarkdown(report) {
     `- 选中候选：${selected}\n` +
     `- 暂定恢复空间倍率：${headroom.provisionalMultiplier ?? "不可用"}\n` +
     `- 固定恢复预留：${headroom.fixedReserveBytes ?? "不可用"} 字节\n` +
+    `- 浏览器恢复边界实写：${headroom.browserValidationVerified === true ? "通过" : "证据不足"}\n` +
     `- Chrome for Testing：${report.environment.browser.version} stable，headless=new，沙箱开启\n` +
     `- A2 校准：\`insufficient_evidence\`\n` +
     `- 真实 B 站字幕代表性：\`insufficient_evidence\`\n` +
@@ -804,6 +978,7 @@ export async function verifyB1ReportArtifacts() {
     environmentReceiptSha256,
     fixtureReceipts: committedReport.fixtureReceipts,
     rawOperations,
+    restorePreflightValidation: committedReport.restorePreflightValidation,
   });
   if (serializeB1Report(evaluated) !== reportText) {
     throw new Error("B1 report artifact verification mismatch");

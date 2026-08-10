@@ -257,6 +257,12 @@ export async function runBrowserFixtureLifecycleWithPreparedFixture(
       expectedVersionCount: receipt.canonical.versionCount,
       expectedSegmentCount: receipt.canonical.segmentCount,
       runMode: options.runMode ?? "cold",
+      ...(options.restorePreflightRequiredFreeQuotaBytes === undefined
+        ? {}
+        : {
+            restorePreflightRequiredFreeQuotaBytes:
+              options.restorePreflightRequiredFreeQuotaBytes,
+          }),
       candidate: {
         recordCap: options.recordCap ?? 1024,
         byteCapBytes: options.byteCapBytes ?? 4 * 1024 * 1024,

@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mapB1LifecycleToRawOperations } from "../scripts/gate-014-b1-matrix-runner.mjs";
+import {
+  createB1RestorePreflightValidationFromLifecycle,
+  mapB1LifecycleToRawOperations,
+} from "../scripts/gate-014-b1-matrix-runner.mjs";
 import {
   B1_OPERATION_KINDS,
   createB1OperationReceipt,
@@ -21,6 +24,9 @@ function lifecycleResult() {
         ? "increase"
         : "stable",
       totalDurationMs: 1_000,
+      committedBatchCount: ["admission", "restore_staging"].includes(operation)
+        ? 1
+        : 0,
       batchDurationsMs: [10],
       progressEventOffsetsMs: [],
       restart:
@@ -79,6 +85,11 @@ test("GATE-014-B1 lifecycle mapping emits exactly one strict input per required 
   );
   assert.equal(Object.hasOwn(rawOperations[0], "detail"), false);
   assert.equal(rawOperations[0].indexedDb.sourceCanonicalBytes, 1_000);
+  assert.equal(
+    rawOperations.find((operation) => operation.operation === "ordered_read")
+      .committedBatchCount,
+    0,
+  );
   assert.equal(createB1OperationReceipt(rawOperations[0]).status, "pass");
 });
 
@@ -99,5 +110,75 @@ test("GATE-014-B1 lifecycle mapping fails closed when browser storage metrics ar
   assert.equal(
     createB1OperationReceipt(rawOperation).status,
     "insufficient_evidence",
+  );
+});
+
+test("GATE-014-B1 restore preflight validation is derived from a passing browser lifecycle", () => {
+  const requiredFreeQuotaBytes = 1_000;
+  const lifecycle = {
+    status: "pass",
+    readbackVerified: true,
+    assertions: {
+      committedRowsVisibleTogether: true,
+      cleanupReadbackVerified: true,
+    },
+    operations: [
+      {
+        operation: "restore_staging",
+        readbackVerified: true,
+        detail: {
+          receivedRecordCount: 100,
+          visibleRead: { versionCount: 1 },
+          restorePreflightEvidence: {
+            measuredAvailableFreeQuotaBytes: 10_000,
+            exactBoundaryAvailableFreeQuotaBytes: requiredFreeQuotaBytes,
+            requiredFreeQuotaBytes,
+            exactBoundaryAllowed: true,
+            artifactFetchAttempted: true,
+          },
+        },
+      },
+      {
+        operation: "quota_failure",
+        detail: {
+          availableBytes: requiredFreeQuotaBytes - 1,
+          requestedBytes: requiredFreeQuotaBytes,
+          refusedBeforeWrite: true,
+          artifactFetchAttempted: false,
+          writesObserved: 0,
+        },
+      },
+    ],
+  };
+  const options = {
+    fixtureId: "managed-full-text-500mib",
+    fixtureReceiptSha256: FIXTURE_SHA,
+    environmentReceiptSha256: ENVIRONMENT_SHA,
+    candidate: { recordCap: 1024, byteCapBytes: 4 * 1024 * 1024 },
+    startedAtEpochMs: 1,
+    completedAtEpochMs: 2,
+    requiredFreeQuotaBytes,
+  };
+
+  const receipt = createB1RestorePreflightValidationFromLifecycle(
+    lifecycle,
+    options,
+  );
+  assert.equal(receipt.status, "pass");
+  assert.equal(receipt.insufficientProbe.allowed, false);
+  assert.equal(receipt.exactProbe.writesObserved, 101);
+
+  assert.throws(
+    () =>
+      createB1RestorePreflightValidationFromLifecycle(
+        { ...lifecycle, status: "fail" },
+        options,
+      ),
+    /lifecycle failed/,
+  );
+  lifecycle.operations[1].detail.refusedBeforeWrite = false;
+  assert.equal(
+    createB1RestorePreflightValidationFromLifecycle(lifecycle, options).status,
+    "fail",
   );
 });

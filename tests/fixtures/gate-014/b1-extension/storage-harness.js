@@ -342,6 +342,7 @@ async function runRestartRecovery(config, operationId) {
         operation: "restart",
         expectedDirection: "stable",
         totalDurationMs: operationDurationMs,
+        committedBatchCount: 0,
         batchDurationsMs: [
           stateReadDurationMs,
           normalizationOperation.batchDurationsMs[0],
@@ -424,7 +425,9 @@ async function runAdmission(database, config, operationKind) {
           0,
           estimate.quotaBytes - estimate.usageBytes,
         );
-        const requiredFreeQuotaBytes = config.expectedCanonicalBytes;
+        const requiredFreeQuotaBytes =
+          config.restorePreflightRequiredFreeQuotaBytes ??
+          config.expectedCanonicalBytes;
         const measuredQuotaAllowed = restorePreflightAllows(
           availableFreeQuotaBytes,
           requiredFreeQuotaBytes,
@@ -486,6 +489,7 @@ async function runAdmission(database, config, operationKind) {
           );
           const duration = performance.now() - startedAt;
           return {
+            committedBatchCount: 1,
             batchDurationsMs: [duration],
             progressEventOffsetsMs: [
               performance.now() - commitContext.startedAt,
@@ -500,6 +504,7 @@ async function runAdmission(database, config, operationKind) {
       });
       progressEventOffsetsMs.push(performance.now() - context.startedAt);
       return {
+        committedBatchCount: writeResult.batchDurationsMs.length,
         batchDurationsMs: writeResult.batchDurationsMs,
         progressEventOffsetsMs,
         readbackVerified:
@@ -567,6 +572,7 @@ async function runOrderedRead(database, config) {
         },
       );
       return {
+        committedBatchCount: 0,
         batchDurationsMs: [
           ...versions.batchDurationsMs,
           ...segments.batchDurationsMs,
@@ -641,6 +647,10 @@ async function runMarkerNormalization(database, config, operationId) {
         );
       });
       return {
+        committedBatchCount:
+          versions.batchDurationsMs.length +
+          segments.batchDurationsMs.length +
+          1,
         batchDurationsMs: [
           ...versions.batchDurationsMs,
           ...segments.batchDurationsMs,
@@ -704,6 +714,7 @@ async function runLedgerRepair(database, config) {
           .get("managed-full-text-ledger"),
       );
       return {
+        committedBatchCount: 2,
         batchDurationsMs: [...batchDurationsMs, ...versions.batchDurationsMs],
         progressEventOffsetsMs: [
           ...versions.progressEventOffsetsMs,
@@ -771,6 +782,7 @@ async function runCapacityBoundary(database, config) {
           visible.versionCount === config.expectedVersionCount &&
           visible.segmentCount === config.expectedSegmentCount;
         return {
+          committedBatchCount: 0,
           batchDurationsMs: [batchDurationMs],
           progressEventOffsetsMs: [
             ...readbackProgressEventOffsetsMs,
@@ -843,6 +855,7 @@ async function runCapacityBoundary(database, config) {
           );
         });
         return {
+          committedBatchCount: 1,
           batchDurationsMs,
           progressEventOffsetsMs: [
             ...readbackProgressEventOffsetsMs,
@@ -874,6 +887,9 @@ async function runCapacityBoundary(database, config) {
 }
 
 async function runAtomicVersionRollback(database, config) {
+  if (config.fixtureId === "single-version-64mib") {
+    return runFullVersionAtomicRollback(database, config);
+  }
   return measureOperation(
     database,
     "atomic_version",
@@ -929,6 +945,7 @@ async function runAtomicVersionRollback(database, config) {
         );
       });
       return {
+        committedBatchCount: 0,
         batchDurationsMs: [duration],
         progressEventOffsetsMs: [
           ...readbackProgressEventOffsetsMs,
@@ -940,6 +957,178 @@ async function runAtomicVersionRollback(database, config) {
           segment === undefined &&
           visible.canonicalBytes === config.expectedCanonicalBytes,
         detail: { transactionAborted: aborted, visibleRowsAfterFailure: 0 },
+      };
+    },
+  );
+}
+
+async function runFullVersionAtomicRollback(database, config) {
+  return measureOperation(
+    database,
+    "atomic_version",
+    "stable",
+    async (context) => {
+      const sourceVersion = await firstVisibleVersion(database);
+      if (
+        config.expectedVersionCount !== 1 ||
+        sourceVersion?.canonicalBytes !== config.expectedCanonicalBytes ||
+        sourceVersion?.segmentCount !== config.expectedSegmentCount
+      ) {
+        throw new Error("fixture_atomic_stress_source_invalid");
+      }
+      const operationId = crypto.randomUUID();
+      const stagedVersionId = crypto.randomUUID();
+      const progressEventOffsetsMs = [performance.now() - context.startedAt];
+      const reportProgress = () => {
+        progressEventOffsetsMs.push(performance.now() - context.startedAt);
+      };
+      const operationCreateStartedAt = performance.now();
+      await createOperation(database, operationId, config);
+      const operationCreateDurationMs =
+        performance.now() - operationCreateStartedAt;
+      reportProgress();
+      let copiedSegmentCount = 0;
+      const copied = await scanIndexInBatches(
+        database,
+        "segments",
+        "versionId",
+        sourceVersion.versionId,
+        config.candidate,
+        {
+          startedAt: context.startedAt,
+          byteSelector: (value) => value.canonicalBytes,
+          visitBatch: async (batch) => {
+            await transactionPromise(
+              database,
+              ["versions", "segments"],
+              (transaction) => {
+                const versions = transaction.objectStore("versions");
+                const segments = transaction.objectStore("segments");
+                for (const value of batch.values) {
+                  segments.add({
+                    ...value,
+                    versionId: stagedVersionId,
+                    operationId,
+                  });
+                  copiedSegmentCount += 1;
+                }
+                versions.put({
+                  versionId: stagedVersionId,
+                  operationId,
+                  canonicalBytes: sourceVersion.canonicalBytes,
+                  segmentCount: copiedSegmentCount,
+                  visible: false,
+                });
+              },
+            );
+            context.metrics.sampleHeap();
+          },
+        },
+      );
+      progressEventOffsetsMs.push(...copied.progressEventOffsetsMs);
+      const stagedBeforeAbort = await Promise.all([
+        requestResult(
+          database
+            .transaction("versions", "readonly")
+            .objectStore("versions")
+            .get(stagedVersionId),
+        ),
+        countOperationSegments(database, operationId),
+        readVisibleGraph(database, reportProgress),
+        readLedgerConsistency(database, reportProgress),
+      ]);
+      reportProgress();
+      const abortStartedAt = performance.now();
+      const aborted = await commitOperationWithInjectedAbort(
+        database,
+        operationId,
+        sourceVersion.canonicalBytes,
+        1,
+      );
+      const abortDurationMs = performance.now() - abortStartedAt;
+      reportProgress();
+      const stagedAfterAbort = await Promise.all([
+        requestResult(
+          database
+            .transaction("operations", "readonly")
+            .objectStore("operations")
+            .get(operationId),
+        ),
+        requestResult(
+          database
+            .transaction("versions", "readonly")
+            .objectStore("versions")
+            .get(stagedVersionId),
+        ),
+        countOperationSegments(database, operationId),
+        readVisibleGraph(database, reportProgress),
+        readLedgerConsistency(database, reportProgress),
+      ]);
+      reportProgress();
+      const cleanup = await cleanupStagedOperation(
+        database,
+        operationId,
+        stagedVersionId,
+        config.candidate,
+        context.startedAt,
+      );
+      progressEventOffsetsMs.push(...cleanup.progressEventOffsetsMs);
+      const [versionAfterCleanup, segmentsAfterCleanup, visibleAfterCleanup] =
+        await Promise.all([
+          requestResult(
+            database
+              .transaction("versions", "readonly")
+              .objectStore("versions")
+              .get(stagedVersionId),
+          ),
+          countOperationSegments(database, operationId),
+          readVisibleGraph(database, reportProgress),
+        ]);
+      reportProgress();
+      const stagingCompleteBeforeAbort =
+        stagedBeforeAbort[0]?.segmentCount === config.expectedSegmentCount &&
+        stagedBeforeAbort[1] === config.expectedSegmentCount &&
+        stagedBeforeAbort[2].versionCount === config.expectedVersionCount &&
+        stagedBeforeAbort[2].segmentCount === config.expectedSegmentCount &&
+        stagedBeforeAbort[3].matches;
+      const rollbackVerified =
+        aborted &&
+        stagedAfterAbort[0]?.state === "staged" &&
+        stagedAfterAbort[1]?.segmentCount === config.expectedSegmentCount &&
+        stagedAfterAbort[2] === config.expectedSegmentCount &&
+        stagedAfterAbort[3].versionCount === config.expectedVersionCount &&
+        stagedAfterAbort[3].segmentCount === config.expectedSegmentCount &&
+        stagedAfterAbort[3].canonicalBytes === config.expectedCanonicalBytes &&
+        stagedAfterAbort[4].matches;
+      const cleanupVerified =
+        versionAfterCleanup === undefined &&
+        segmentsAfterCleanup === 0 &&
+        visibleAfterCleanup.versionCount === config.expectedVersionCount &&
+        visibleAfterCleanup.segmentCount === config.expectedSegmentCount &&
+        visibleAfterCleanup.canonicalBytes === config.expectedCanonicalBytes;
+      return {
+        committedBatchCount:
+          1 + copied.batchDurationsMs.length + cleanup.batchDurationsMs.length,
+        batchDurationsMs: [
+          operationCreateDurationMs,
+          ...copied.batchDurationsMs,
+          abortDurationMs,
+          ...cleanup.batchDurationsMs,
+        ],
+        progressEventOffsetsMs,
+        readbackVerified:
+          copied.totalCount === config.expectedSegmentCount &&
+          copiedSegmentCount === config.expectedSegmentCount &&
+          stagingCompleteBeforeAbort &&
+          rollbackVerified &&
+          cleanupVerified,
+        detail: {
+          fullStressVersion: true,
+          copiedSegmentCount,
+          stagingCompleteBeforeAbort,
+          rollbackVerified,
+          cleanupVerified,
+        },
       };
     },
   );
@@ -1027,6 +1216,7 @@ async function runCancellation(database, config) {
         progressEventOffsetsMs.push(performance.now() - context.startedAt);
       });
       return {
+        committedBatchCount: copyResult.batchCount,
         batchDurationsMs: [
           ...copyResult.batchDurationsMs,
           ...cleanup.batchDurationsMs,
@@ -1261,6 +1451,7 @@ async function runSelectedVersionRemoval(database, config) {
           .get("managed-full-text-ledger"),
       );
       return {
+        committedBatchCount: deletedSegments.batchDurationsMs.length + 1,
         batchDurationsMs: [
           ...batchDurationsMs,
           ...deletedSegments.batchDurationsMs,
@@ -1374,6 +1565,8 @@ async function runFullClear(database, config) {
         ),
       ]);
     return {
+      committedBatchCount:
+        segments.batchDurationsMs.length + versions.batchDurationsMs.length + 2,
       batchDurationsMs: [
         ...batchDurationsMs,
         ...segments.batchDurationsMs,
@@ -1410,12 +1603,20 @@ async function runQuotaFailure(database, config) {
         getStoreCount(database, "versions"),
         getStoreCount(database, "segments"),
       ]);
-      const availableBytes =
+      const configuredRequiredFreeQuotaBytes =
+        config.restorePreflightRequiredFreeQuotaBytes ?? null;
+      const measuredAvailableBytes =
         estimate === null
           ? null
           : Math.max(0, estimate.quotaBytes - estimate.usageBytes);
+      const availableBytes =
+        configuredRequiredFreeQuotaBytes === null
+          ? measuredAvailableBytes
+          : configuredRequiredFreeQuotaBytes - 1;
       const requestedBytes =
-        availableBytes === null ? null : availableBytes + 1;
+        availableBytes === null
+          ? null
+          : (configuredRequiredFreeQuotaBytes ?? availableBytes + 1);
       const refusalProbe =
         availableBytes === null
           ? {
@@ -1433,6 +1634,7 @@ async function runQuotaFailure(database, config) {
         getStoreCount(database, "segments"),
       ]);
       return {
+        committedBatchCount: 0,
         batchDurationsMs: [performance.now() - startedAt],
         progressEventOffsetsMs: [performance.now() - context.startedAt],
         readbackVerified:
@@ -1446,8 +1648,12 @@ async function runQuotaFailure(database, config) {
           metricAvailable: estimate !== null,
           availableBytes,
           requestedBytes,
+          measuredAvailableBytes,
           refusedBeforeWrite: refusalProbe.refusedBeforeWrite,
           artifactFetchAttempted: refusalProbe.artifactFetchAttempted,
+          writesObserved:
+            Math.abs(afterCounts[0] - beforeCounts[0]) +
+            Math.abs(afterCounts[1] - beforeCounts[1]),
         },
       };
     },
@@ -1514,6 +1720,7 @@ async function measureOperation(database, operation, expectedDirection, task) {
     operation,
     expectedDirection,
     totalDurationMs,
+    committedBatchCount: result.committedBatchCount ?? 0,
     batchDurationsMs: result.batchDurationsMs,
     progressEventOffsetsMs: normalizeProgressEvents(
       progressEventOffsetsMs,
@@ -1823,6 +2030,76 @@ function commitOperation(database, operationId, canonicalBytes, versionCount) {
     transaction.oncomplete = () => resolve();
     transaction.onabort = () => reject(new Error("fixture_commit_aborted"));
     transaction.onerror = () => reject(new Error("fixture_commit_failed"));
+  });
+}
+
+function commitOperationWithInjectedAbort(
+  database,
+  operationId,
+  canonicalBytes,
+  versionCount,
+) {
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(
+      ["operations", "state"],
+      "readwrite",
+    );
+    const operations = transaction.objectStore("operations");
+    const state = transaction.objectStore("state");
+    const operationRequest = operations.get(operationId);
+    const ledgerRequest = state.get("managed-full-text-ledger");
+    let operation;
+    let ledger;
+    let abortInjected = false;
+    const abortWhenReady = () => {
+      if (operation === undefined || ledger === undefined) {
+        return;
+      }
+      if (
+        !operation ||
+        !canCommitCanonicalBytes(ledger.canonicalBytes, canonicalBytes)
+      ) {
+        transaction.abort();
+        return;
+      }
+      operations.put({
+        ...operation,
+        state: "committed",
+        updatedAtEpochMs: Date.now(),
+      });
+      state.put({
+        id: "managed-full-text-ledger",
+        canonicalBytes: ledger.canonicalBytes + canonicalBytes,
+        versionCount: ledger.versionCount + versionCount,
+      });
+      abortInjected = true;
+      transaction.abort();
+    };
+    operationRequest.onsuccess = () => {
+      operation = operationRequest.result ?? null;
+      abortWhenReady();
+    };
+    ledgerRequest.onsuccess = () => {
+      ledger = ledgerRequest.result ?? {
+        id: "managed-full-text-ledger",
+        canonicalBytes: 0,
+        versionCount: 0,
+      };
+      abortWhenReady();
+    };
+    transaction.oncomplete = () => resolve(false);
+    transaction.onabort = () => {
+      if (abortInjected) {
+        resolve(true);
+        return;
+      }
+      reject(new Error("fixture_atomic_abort_failed"));
+    };
+    transaction.onerror = (event) => {
+      if (abortInjected) {
+        event.preventDefault();
+      }
+    };
   });
 }
 
@@ -2419,6 +2696,13 @@ function validateConfig(config, options = {}) {
     );
     if (!/^gate-014-b1-lifecycle-[a-f0-9-]{36}$/.test(config.databaseName)) {
       throw new Error("fixture_config_database_name_invalid");
+    }
+    if (
+      config.restorePreflightRequiredFreeQuotaBytes !== undefined &&
+      (!Number.isSafeInteger(config.restorePreflightRequiredFreeQuotaBytes) ||
+        config.restorePreflightRequiredFreeQuotaBytes < 1)
+    ) {
+      throw new Error("fixture_config_restore_preflight_bytes_invalid");
     }
   }
   if (
