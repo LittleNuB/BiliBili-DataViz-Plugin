@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { realpath } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
@@ -29,6 +30,13 @@ test("GATE-014-B1 launches npm build through Node instead of a Windows command s
       "npm-cli.js",
     ),
   );
+  const unrelatedDirectory = await mkdtemp(
+    path.join(tmpdir(), "gate-014-b1-unrelated-npm-"),
+  );
+  const unrelatedNpmExecPath = path.join(unrelatedDirectory, "npm-cli.js");
+  const unrelatedNodeExecPath = path.join(unrelatedDirectory, "node.exe");
+  await writeFile(unrelatedNpmExecPath, "// unrelated npm cli\n", "utf8");
+  await writeFile(unrelatedNodeExecPath, "unrelated node executable\n", "utf8");
   try {
     delete process.env.npm_execpath;
     delete process.env.npm_node_execpath;
@@ -40,8 +48,8 @@ test("GATE-014-B1 launches npm build through Node instead of a Windows command s
       "build",
     ]);
 
-    process.env.npm_execpath = path.resolve("unrelated", "npm-cli.js");
-    process.env.npm_node_execpath = path.resolve("unrelated", "node.exe");
+    process.env.npm_execpath = unrelatedNpmExecPath;
+    process.env.npm_node_execpath = unrelatedNodeExecPath;
     const withUnrelatedEnvironmentHints = await resolveNpmBuildInvocation();
     assert.deepEqual(withUnrelatedEnvironmentHints, withoutEnvironmentHints);
     assert.equal(Object.isFrozen(withUnrelatedEnvironmentHints), true);
@@ -60,6 +68,7 @@ test("GATE-014-B1 launches npm build through Node instead of a Windows command s
     } else {
       process.env.npm_node_execpath = originalNpmNodeExecPath;
     }
+    await rm(unrelatedDirectory, { recursive: true, force: true });
   }
 });
 
