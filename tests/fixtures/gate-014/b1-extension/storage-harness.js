@@ -335,17 +335,14 @@ async function runRestartRecovery(config, operationId) {
         config.expectedVersionCount &&
       initialLedgerConsistency.visibleCanonicalBytes ===
         config.expectedCanonicalBytes;
-    const normalizationOperation = await runMarkerNormalization(
-      database,
-      config,
-      operationId,
-    );
-    const finalReadStartedAt = performance.now();
-    const finalLedgerConsistency = await readLedgerConsistency(database);
-    const finalReadDurationMs = performance.now() - finalReadStartedAt;
-    if (finalReadDurationMs <= 0) {
-      throw new Error("fixture_read_timing_unavailable");
-    }
+    const {
+      normalizationOperation,
+      finalLedgerConsistency,
+      finalReadDurationMs,
+    } = await runNormalizationThenFinalLedgerRead({
+      normalize: () => runMarkerNormalization(database, config, operationId),
+      readFinalLedger: () => readLedgerConsistency(database),
+    });
     const firstNormalizationProgressMs =
       normalizationOperation.progressEventOffsetsMs[0];
     if (!Number.isFinite(firstNormalizationProgressMs)) {
@@ -372,6 +369,11 @@ async function runRestartRecovery(config, operationId) {
       [harnessReadyMs, stateVisibleMs, ...normalizationProgressOffsetsMs],
       operationDurationMs,
     );
+    const timingEvidence = createRestartTimingEvidence({
+      stateReadDurationMs,
+      normalizationBatchDurationMs: normalizationOperation.batchDurationsMs[0],
+      finalReadDurationMs,
+    });
     return {
       database,
       normalizationOperation,
@@ -381,18 +383,7 @@ async function runRestartRecovery(config, operationId) {
         totalDurationMs: operationDurationMs,
         committedBatchCount: 0,
         committedBatchDurationsMs: [],
-        readBatchDurationsMs: [stateReadDurationMs, finalReadDurationMs],
-        readTimingEvidence: {
-          finalLedgerAndVisibleReadbackMs: finalReadDurationMs,
-          preCommitVisibleGraphMs: null,
-          preCommitLedgerAndVisibleReadbackMs: null,
-          postCommitVisibleGraphMs: null,
-        },
-        batchDurationsMs: [
-          stateReadDurationMs,
-          normalizationOperation.batchDurationsMs[0],
-          finalReadDurationMs,
-        ],
+        ...timingEvidence,
         progressEventOffsetsMs,
         restart: {
           attempted: true,
@@ -444,6 +435,62 @@ async function runRestartRecovery(config, operationId) {
     database?.close();
     throw error;
   }
+}
+
+export async function runNormalizationThenFinalLedgerRead({
+  normalize,
+  readFinalLedger,
+  now = () => performance.now(),
+}) {
+  if (
+    typeof normalize !== "function" ||
+    typeof readFinalLedger !== "function" ||
+    typeof now !== "function"
+  ) {
+    throw new Error("fixture_restart_final_read_invalid");
+  }
+  const normalizationOperation = await normalize();
+  const finalReadStartedAt = now();
+  const finalLedgerConsistency = await readFinalLedger();
+  const finalReadDurationMs = now() - finalReadStartedAt;
+  if (!Number.isFinite(finalReadDurationMs) || finalReadDurationMs <= 0) {
+    throw new Error("fixture_read_timing_unavailable");
+  }
+  return {
+    normalizationOperation,
+    finalLedgerConsistency,
+    finalReadDurationMs,
+  };
+}
+
+export function createRestartTimingEvidence({
+  stateReadDurationMs,
+  normalizationBatchDurationMs,
+  finalReadDurationMs,
+}) {
+  if (
+    [
+      stateReadDurationMs,
+      normalizationBatchDurationMs,
+      finalReadDurationMs,
+    ].some((duration) => !Number.isFinite(duration) || duration <= 0)
+  ) {
+    throw new Error("fixture_read_timing_unavailable");
+  }
+  return {
+    readBatchDurationsMs: [stateReadDurationMs, finalReadDurationMs],
+    readTimingEvidence: {
+      finalLedgerAndVisibleReadbackMs: finalReadDurationMs,
+      preCommitVisibleGraphMs: null,
+      preCommitLedgerAndVisibleReadbackMs: null,
+      postCommitVisibleGraphMs: null,
+    },
+    batchDurationsMs: [
+      stateReadDurationMs,
+      normalizationBatchDurationMs,
+      finalReadDurationMs,
+    ],
+  };
 }
 
 async function runAdmission(database, config, operationKind) {

@@ -9,6 +9,7 @@ import {
   buildChromeArguments,
   combineBrowserExecutionObservations,
   createB1TemporaryProfile,
+  createExtensionTargetObserver,
   findProductionServiceWorkerSession,
   removeB1TemporaryProfile,
   selectProductionServiceWorkerTarget,
@@ -22,6 +23,8 @@ import {
 } from "../scripts/gate-014-b1-browser-runner.mjs";
 import {
   assertFixtureRecordFitsCandidate,
+  createRestartTimingEvidence,
+  runNormalizationThenFinalLedgerRead,
   shouldFlushFixtureBatch,
 } from "./fixtures/gate-014/b1-extension/storage-harness.js";
 import { restorePreflightAllows } from "./fixtures/gate-014/b1-extension/restore-preflight.js";
@@ -53,6 +56,42 @@ test("GATE-014-B1 uses one restore preflight boundary in browser and report code
   assert.equal(restorePreflightAllows(99, 100), false);
   assert.equal(restorePreflightAllows(100, 100), true);
   assert.equal(restorePreflightAllows(Number.NaN, 100), false);
+});
+
+test("GATE-014-B1 reads the final restart ledger only after normalization and preserves duplicate timings", async () => {
+  const phases = [];
+  let nowMs = 0;
+  const result = await runNormalizationThenFinalLedgerRead({
+    async normalize() {
+      phases.push("normalization_started");
+      nowMs = 7;
+      phases.push("normalization_completed");
+      return { operation: "marker_normalization", readbackVerified: true };
+    },
+    async readFinalLedger() {
+      phases.push("final_ledger_read");
+      nowMs = 10;
+      return { matches: true };
+    },
+    now: () => nowMs,
+  });
+  assert.deepEqual(phases, [
+    "normalization_started",
+    "normalization_completed",
+    "final_ledger_read",
+  ]);
+  assert.equal(result.normalizationOperation.readbackVerified, true);
+  assert.equal(result.finalLedgerConsistency.matches, true);
+  assert.equal(result.finalReadDurationMs, 3);
+
+  const timing = createRestartTimingEvidence({
+    stateReadDurationMs: 3,
+    normalizationBatchDurationMs: 5,
+    finalReadDurationMs: 3,
+  });
+  assert.deepEqual(timing.readBatchDurationsMs, [3, 3]);
+  assert.deepEqual(timing.batchDurationsMs, [3, 5, 3]);
+  assert.equal(timing.readTimingEvidence.finalLedgerAndVisibleReadbackMs, 3);
 });
 
 test("GATE-014-B1 Chrome arguments isolate a fresh profile and block external name resolution", () => {
@@ -426,6 +465,83 @@ test("GATE-014-B1 binds production runtime proof only to its service worker and 
       ),
     /runtime_identity_failed/,
   );
+});
+
+test("GATE-014-B1 keeps a cached production attachment inside the shared setup deadline", async () => {
+  const productionExtensionId = "b".repeat(32);
+  const workerTarget = {
+    targetId: "production-worker",
+    type: "service_worker",
+    url: `chrome-extension://${productionExtensionId}/background.js`,
+  };
+  const expectedProduction = {
+    name: "Bili-Bill",
+    version: "0.13.0",
+    versionName: "0.13.0-alpha",
+  };
+  let attachCount = 0;
+  let runtimeIdentityCount = 0;
+  const client = {
+    onEvent() {
+      return () => {};
+    },
+    async send(method) {
+      if (method === "Target.setDiscoverTargets") {
+        return {};
+      }
+      if (method === "Target.getTargets") {
+        return { targetInfos: [workerTarget] };
+      }
+      if (method === "Target.getTargetInfo") {
+        return { targetInfo: workerTarget };
+      }
+      if (method === "Target.attachToTarget") {
+        attachCount += 1;
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        return { sessionId: "cached-production-session" };
+      }
+      if (["Runtime.enable", "Network.enable", "Log.enable"].includes(method)) {
+        return {};
+      }
+      if (method === "Runtime.evaluate") {
+        runtimeIdentityCount += 1;
+        await new Promise((resolve) => setTimeout(resolve, 180));
+        return {
+          result: {
+            value: { id: productionExtensionId, ...expectedProduction },
+          },
+        };
+      }
+      throw new Error(`unexpected_method:${method}`);
+    },
+  };
+  const observer = createExtensionTargetObserver(client, {
+    observeSession() {},
+  });
+  const sharedDeadlineEpochMs = Date.now() + 200;
+  await observer.start({ deadlineEpochMs: sharedDeadlineEpochMs });
+  const sessionId = await findProductionServiceWorkerSession(
+    client,
+    observer,
+    productionExtensionId,
+    { deadlineEpochMs: sharedDeadlineEpochMs, pollIntervalMs: 0 },
+  );
+  assert.equal(sessionId, "cached-production-session");
+  assert.equal(attachCount, 1);
+  await assert.rejects(
+    () =>
+      waitForProductionExtensionReady(
+        client,
+        sessionId,
+        productionExtensionId,
+        expectedProduction,
+        { deadlineEpochMs: sharedDeadlineEpochMs, pollIntervalMs: 0 },
+      ),
+    /runtime_identity_failed/,
+  );
+  assert.equal(runtimeIdentityCount, 1);
+  observer.completeSetup();
+  await observer.stop();
 });
 
 test("GATE-014-B1 browser smoke accepts only the fixed public-safe harness identity", () => {

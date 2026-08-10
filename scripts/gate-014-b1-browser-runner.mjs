@@ -888,21 +888,36 @@ async function evaluateInHarnessProfile(
     try {
       const observation = createCdpExecutionObservation(client);
       const targetObserver = createExtensionTargetObserver(client, observation);
-      await targetObserver.start();
-      const { targetId } = await client.send(
+      const productionProofDeadlineEpochMs =
+        Date.now() + B1_CDP_SETUP_TIMEOUT_MS;
+      await targetObserver.start({
+        deadlineEpochMs: productionProofDeadlineEpochMs,
+      });
+      const { targetId } = await sendCdpWithinDeadline(
+        client,
         "Target.createTarget",
         {
           url: `chrome-extension://${B1_HARNESS_EXTENSION_ID}/runner.html`,
         },
         undefined,
-        B1_CDP_SETUP_TIMEOUT_MS,
+        productionProofDeadlineEpochMs,
       );
-      const sessionId = await targetObserver.ensureTargetId(targetId);
+      const runnerAttachmentRemainingMs = remainingSetupMs(
+        productionProofDeadlineEpochMs,
+      );
+      const sessionId = await settleWithin(
+        targetObserver.ensureTargetId(targetId, runnerAttachmentRemainingMs),
+        runnerAttachmentRemainingMs,
+      );
       if (!sessionId) {
         throw new Error("browser_runner_target_not_observed");
       }
-      await waitForHarnessReady(client, sessionId);
-      const inventory = await readLoadedExtensionInventory(client, sessionId);
+      await waitForHarnessReady(client, sessionId, {
+        deadlineEpochMs: productionProofDeadlineEpochMs,
+      });
+      const inventory = await readLoadedExtensionInventory(client, sessionId, {
+        deadlineEpochMs: productionProofDeadlineEpochMs,
+      });
       const { productionExtensionId } = validateLoadedExtensionInventory(
         inventory,
         productionIdentity,
@@ -911,8 +926,6 @@ async function evaluateInHarnessProfile(
         productionExtensionId,
         harnessExtensionId: B1_HARNESS_EXTENSION_ID,
       });
-      const productionProofDeadlineEpochMs =
-        Date.now() + B1_CDP_SETUP_TIMEOUT_MS;
       const productionSessionId = await findProductionServiceWorkerSession(
         client,
         targetObserver,
@@ -929,6 +942,7 @@ async function evaluateInHarnessProfile(
         productionIdentity,
         { deadlineEpochMs: productionProofDeadlineEpochMs },
       );
+      targetObserver.completeSetup();
       const resolvedExpression =
         typeof expression === "function"
           ? expression({ harnessReadyEpochMs: Date.now() })
@@ -1111,7 +1125,7 @@ function debugExternalNetworkClass(eventKind, classification) {
   );
 }
 
-function createExtensionTargetObserver(client, observation) {
+export function createExtensionTargetObserver(client, observation) {
   const observedTargetTypes = new Set([
     "page",
     "background_page",
@@ -1121,6 +1135,7 @@ function createExtensionTargetObserver(client, observation) {
   const attachedTargets = new Map();
   let attachmentFailure = null;
   let unsubscribe = null;
+  let setupDeadlineEpochMs = null;
 
   const shouldObserve = (targetInfo) =>
     observedTargetTypes.has(targetInfo?.type) &&
@@ -1161,8 +1176,14 @@ function createExtensionTargetObserver(client, observation) {
     }
   };
 
+  const currentAttachmentTimeoutMs = () =>
+    setupDeadlineEpochMs === null
+      ? B1_CDP_SETUP_TIMEOUT_MS
+      : remainingSetupMs(setupDeadlineEpochMs);
+
   return {
-    async start() {
+    async start(options = {}) {
+      setupDeadlineEpochMs = resolveSetupDeadline(options);
       unsubscribe = client.onEvent((message) => {
         if (
           message.sessionId === undefined &&
@@ -1170,33 +1191,50 @@ function createExtensionTargetObserver(client, observation) {
             message.method,
           )
         ) {
-          void ensureTarget(message.params?.targetInfo).catch(() => {});
+          let timeoutMs;
+          try {
+            timeoutMs = currentAttachmentTimeoutMs();
+          } catch {
+            return;
+          }
+          void settleWithin(
+            ensureTarget(message.params?.targetInfo, timeoutMs),
+            timeoutMs,
+          ).catch(() => {});
         }
       });
-      await client.send(
+      await sendCdpWithinDeadline(
+        client,
         "Target.setDiscoverTargets",
         { discover: true },
         undefined,
-        B1_CDP_SETUP_TIMEOUT_MS,
+        setupDeadlineEpochMs,
       );
-      const { targetInfos = [] } = await client.send(
+      const { targetInfos = [] } = await sendCdpWithinDeadline(
+        client,
         "Target.getTargets",
         {},
         undefined,
-        B1_CDP_SETUP_TIMEOUT_MS,
+        setupDeadlineEpochMs,
       );
-      await Promise.all(
-        targetInfos.map((targetInfo) => ensureTarget(targetInfo)),
+      const attachmentTimeoutMs = currentAttachmentTimeoutMs();
+      await settleWithin(
+        Promise.all(
+          targetInfos.map((targetInfo) =>
+            ensureTarget(targetInfo, attachmentTimeoutMs),
+          ),
+        ),
+        attachmentTimeoutMs,
       );
     },
-    async ensureTargetId(targetId) {
+    async ensureTargetId(targetId, timeoutMs = B1_CDP_SETUP_TIMEOUT_MS) {
       const { targetInfo } = await client.send(
         "Target.getTargetInfo",
         { targetId },
         undefined,
-        B1_CDP_SETUP_TIMEOUT_MS,
+        timeoutMs,
       );
-      return ensureTarget(targetInfo);
+      return ensureTarget(targetInfo, timeoutMs);
     },
     async ensureServiceWorkerTargetId(
       targetId,
@@ -1219,6 +1257,9 @@ function createExtensionTargetObserver(client, observation) {
     },
     async settle() {
       await settleAttachments();
+    },
+    completeSetup() {
+      setupDeadlineEpochMs = null;
     },
     async stop() {
       await client.send(
@@ -1272,8 +1313,10 @@ async function readProductionExtensionIdentity(productionExtension) {
   return validateExpectedProductionExtensionIdentity(identity);
 }
 
-async function readLoadedExtensionInventory(client, sessionId) {
-  const evaluation = await client.send(
+async function readLoadedExtensionInventory(client, sessionId, options = {}) {
+  const deadline = resolveSetupDeadline(options);
+  const evaluation = await sendCdpWithinDeadline(
+    client,
     "Runtime.evaluate",
     {
       expression: "globalThis.runGate014B1LoadedExtensionInventory()",
@@ -1281,7 +1324,7 @@ async function readLoadedExtensionInventory(client, sessionId) {
       returnByValue: true,
     },
     sessionId,
-    B1_CDP_SETUP_TIMEOUT_MS,
+    deadline,
   );
   if (evaluation.exceptionDetails || !Array.isArray(evaluation.result?.value)) {
     throw new Error("browser_loaded_extension_inventory_failed");
@@ -1378,7 +1421,7 @@ export async function findProductionServiceWorkerSession(
       await delay(Math.min(pollIntervalMs, deadline - Date.now()));
       continue;
     }
-    if (Date.now() > deadline) {
+    if (Date.now() >= deadline) {
       return null;
     }
     const target = selectProductionServiceWorkerTarget(
@@ -1431,6 +1474,32 @@ function validatePollInterval(value) {
     throw new Error("browser_production_service_worker_poll_invalid");
   }
   return pollIntervalMs;
+}
+
+function remainingSetupMs(deadlineEpochMs) {
+  const remainingMs = deadlineEpochMs - Date.now();
+  if (!Number.isSafeInteger(deadlineEpochMs) || remainingMs <= 0) {
+    throw new Error("cdp_command_timeout");
+  }
+  return remainingMs;
+}
+
+async function sendCdpWithinDeadline(
+  client,
+  method,
+  params,
+  sessionId,
+  deadlineEpochMs,
+) {
+  const timeoutMs = remainingSetupMs(deadlineEpochMs);
+  const result = await settleWithin(
+    client.send(method, params, sessionId, timeoutMs),
+    timeoutMs,
+  );
+  if (Date.now() >= deadlineEpochMs) {
+    throw new Error("cdp_command_timeout");
+  }
+  return result;
 }
 
 async function settleWithin(promise, timeoutMs) {
@@ -1534,10 +1603,12 @@ async function discoverHarnessExtensionId(port) {
   throw new Error("browser_smoke_harness_extension_not_loaded");
 }
 
-async function waitForHarnessReady(client, sessionId) {
+async function waitForHarnessReady(client, sessionId, options = {}) {
+  const deadline = resolveSetupDeadline(options);
   let lastState = null;
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const evaluation = await client.send(
+  while (Date.now() < deadline) {
+    const evaluation = await sendCdpWithinDeadline(
+      client,
       "Runtime.evaluate",
       {
         expression: `({
@@ -1549,13 +1620,13 @@ async function waitForHarnessReady(client, sessionId) {
         returnByValue: true,
       },
       sessionId,
-      B1_CDP_SETUP_TIMEOUT_MS,
+      deadline,
     );
     lastState = evaluation.result?.value ?? null;
     if (!evaluation.exceptionDetails && lastState?.ready === true) {
       return;
     }
-    await delay(50);
+    await delay(Math.min(50, Math.max(0, deadline - Date.now())));
   }
   if (process.env.GATE_014_B1_DEBUG === "1" && lastState) {
     process.stderr.write(`Harness state: ${JSON.stringify(lastState)}\n`);
