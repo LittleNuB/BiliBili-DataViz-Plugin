@@ -1,6 +1,6 @@
 {
-  "receiptContract": "gate-014-fixture-receipt-v2",
-  "generatorVersion": "gate-014-fixture-generator-v2",
+  "receiptContract": "gate-014-fixture-receipt-v3",
+  "generatorVersion": "gate-014-fixture-generator-v3",
   "seed": "gate-014-public-safe-seed-v1",
   "fixture": {
     "id": "single-version-64mib",
@@ -3018,7 +3018,7 @@
   ],
   "reusableReceiptHelpers": [
     {
-      "contract": "gate-014-receipt-helper-v2",
+      "contract": "gate-014-receipt-helper-v3",
       "helper": "createTimingReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3032,7 +3032,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v2",
+      "contract": "gate-014-receipt-helper-v3",
       "helper": "createMemoryReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3050,22 +3050,25 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v2",
+      "contract": "gate-014-receipt-helper-v3",
       "helper": "createIndexedDbUsageReceipt",
       "requiredFields": [
         "fixtureId",
         "phase",
         "metricAvailable",
-        "storageEstimateUsageBytes",
+        "storageEstimateUsageBeforeBytes",
+        "storageEstimateUsageAfterBytes",
         "storageEstimateQuotaBytes",
         "indexedDbDeltaBytes",
+        "expectedDirection",
+        "readbackVerified",
         "metricsConsistent"
       ],
       "unavailableMetricStatus": "insufficient_evidence",
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v2",
+      "contract": "gate-014-receipt-helper-v3",
       "helper": "createPersistedIndexSizeReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3082,7 +3085,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v2",
+      "contract": "gate-014-receipt-helper-v3",
       "helper": "createRestartReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3092,7 +3095,7 @@
         "preRestartCheckpoint",
         "postRestartCheckpoint",
         "replayedBatchCount",
-        "checkpointRegressionBatchCount",
+        "checkpointNonDecreasing",
         "checkpointProgressionValid",
         "readbackVerified",
         "mixedGenerationVisible",
@@ -3103,7 +3106,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v2",
+      "contract": "gate-014-receipt-helper-v3",
       "helper": "createFailureInjectionReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3121,7 +3124,7 @@
       "storesSensitiveText": false
     },
     {
-      "contract": "gate-014-receipt-helper-v2",
+      "contract": "gate-014-receipt-helper-v3",
       "helper": "createCleanupReadbackReceipt",
       "requiredFields": [
         "fixtureId",

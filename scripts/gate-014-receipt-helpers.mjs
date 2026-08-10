@@ -1,8 +1,9 @@
-export const GATE_014_RECEIPT_HELPER_CONTRACT = 'gate-014-receipt-helper-v2';
+export const GATE_014_RECEIPT_HELPER_CONTRACT = 'gate-014-receipt-helper-v3';
 export const INSUFFICIENT_EVIDENCE = 'insufficient_evidence';
 export const PUBLIC_SAFE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,95}$/;
 export const MAX_PEAK_HEAP_GROWTH_BYTES = 256 * 1024 * 1024;
 export const MAX_INDEX_TO_SOURCE_RATIO_PERMILLE = 1_500;
+export const INDEXED_DB_EXPECTED_DIRECTIONS = deepFreeze(['increase', 'decrease']);
 export const RECEIPT_REASON_CODES = deepFreeze([
   'browser_metric_unavailable',
   'browser_gate_not_run',
@@ -45,9 +46,12 @@ export const REUSABLE_RECEIPT_HELPER_DESCRIPTORS = deepFreeze([
     'fixtureId',
     'phase',
     'metricAvailable',
-    'storageEstimateUsageBytes',
+    'storageEstimateUsageBeforeBytes',
+    'storageEstimateUsageAfterBytes',
     'storageEstimateQuotaBytes',
     'indexedDbDeltaBytes',
+    'expectedDirection',
+    'readbackVerified',
     'metricsConsistent',
   ]),
   helperDescriptor('createPersistedIndexSizeReceipt', [
@@ -69,7 +73,7 @@ export const REUSABLE_RECEIPT_HELPER_DESCRIPTORS = deepFreeze([
     'preRestartCheckpoint',
     'postRestartCheckpoint',
     'replayedBatchCount',
-    'checkpointRegressionBatchCount',
+    'checkpointNonDecreasing',
     'checkpointProgressionValid',
     'readbackVerified',
     'mixedGenerationVisible',
@@ -194,9 +198,12 @@ export function createIndexedDbUsageReceipt(input) {
     'fixtureId',
     'phase',
     'metricAvailable',
-    'storageEstimateUsageBytes',
+    'storageEstimateUsageBeforeBytes',
+    'storageEstimateUsageAfterBytes',
     'storageEstimateQuotaBytes',
     'indexedDbDeltaBytes',
+    'expectedDirection',
+    'readbackVerified',
     'reasonCode',
   ], 'createIndexedDbUsageReceipt');
 
@@ -213,29 +220,45 @@ export function createIndexedDbUsageReceipt(input) {
     return insufficientReceipt(base, input.reasonCode);
   }
 
-  const storageEstimateUsageBytes = assertNonNegativeSafeInteger(
-    input.storageEstimateUsageBytes,
-    'storageEstimateUsageBytes',
+  const storageEstimateUsageBeforeBytes = assertNonNegativeSafeInteger(
+    input.storageEstimateUsageBeforeBytes,
+    'storageEstimateUsageBeforeBytes',
+  );
+  const storageEstimateUsageAfterBytes = assertNonNegativeSafeInteger(
+    input.storageEstimateUsageAfterBytes,
+    'storageEstimateUsageAfterBytes',
   );
   const storageEstimateQuotaBytes = assertNonNegativeSafeInteger(
     input.storageEstimateQuotaBytes,
     'storageEstimateQuotaBytes',
   );
-  const indexedDbDeltaBytes = assertNonNegativeSafeInteger(
+  const indexedDbDeltaBytes = assertSignedSafeInteger(
     input.indexedDbDeltaBytes,
     'indexedDbDeltaBytes',
   );
+  const expectedDirection = assertIndexedDbExpectedDirection(input.expectedDirection);
+  const readbackVerified = assertBoolean(input.readbackVerified, 'readbackVerified');
+  const measuredDeltaBytes = storageEstimateUsageAfterBytes - storageEstimateUsageBeforeBytes;
+  const directionMatches = expectedDirection === 'increase'
+    ? indexedDbDeltaBytes > 0
+    : indexedDbDeltaBytes < 0;
   const metricsConsistent = storageEstimateQuotaBytes > 0
-    && storageEstimateUsageBytes <= storageEstimateQuotaBytes
-    && indexedDbDeltaBytes > 0
-    && indexedDbDeltaBytes <= storageEstimateUsageBytes;
+    && storageEstimateUsageBeforeBytes <= storageEstimateQuotaBytes
+    && storageEstimateUsageAfterBytes <= storageEstimateQuotaBytes
+    && (storageEstimateUsageBeforeBytes > 0 || storageEstimateUsageAfterBytes > 0)
+    && indexedDbDeltaBytes === measuredDeltaBytes
+    && directionMatches
+    && readbackVerified;
 
   return freezeReceipt({
     ...base,
     status: metricsConsistent ? 'pass' : 'fail',
-    storageEstimateUsageBytes,
+    storageEstimateUsageBeforeBytes,
+    storageEstimateUsageAfterBytes,
     storageEstimateQuotaBytes,
     indexedDbDeltaBytes,
+    expectedDirection,
+    readbackVerified,
     metricsConsistent,
   });
 }
@@ -329,28 +352,18 @@ export function createRestartReceipt(input) {
     'duplicatePostingsDetected',
   );
   const fullRebuildStarted = assertBoolean(input.fullRebuildStarted, 'fullRebuildStarted');
-  const checkpointRegressionBatchCount = Math.max(
-    0,
-    preRestartCheckpoint.batchOrdinal - postRestartCheckpoint.batchOrdinal,
-  );
-  const postCheckpointDidNotRegress = postRestartCheckpoint.batchOrdinal >= preRestartCheckpoint.batchOrdinal
+  const checkpointNonDecreasing = postRestartCheckpoint.batchOrdinal >= preRestartCheckpoint.batchOrdinal
     && postRestartCheckpoint.recordCount >= preRestartCheckpoint.recordCount
-    && postRestartCheckpoint.canonicalBytes >= preRestartCheckpoint.canonicalBytes
-    && (
-      postRestartCheckpoint.batchOrdinal !== preRestartCheckpoint.batchOrdinal
-      || postRestartCheckpoint.checkpointId === preRestartCheckpoint.checkpointId
-    );
-  const postCheckpointReplayedOneBatch = checkpointRegressionBatchCount === 1
-    && replayedBatchCount === 1
-    && postRestartCheckpoint.recordCount <= preRestartCheckpoint.recordCount
-    && postRestartCheckpoint.canonicalBytes <= preRestartCheckpoint.canonicalBytes;
+    && postRestartCheckpoint.canonicalBytes >= preRestartCheckpoint.canonicalBytes;
+  const checkpointIdentityValid = postRestartCheckpoint.batchOrdinal !== preRestartCheckpoint.batchOrdinal
+    || postRestartCheckpoint.checkpointId === preRestartCheckpoint.checkpointId;
   const operationStateValid = preRestartCheckpoint.operationOpen
     || !postRestartCheckpoint.operationOpen;
-  const checkpointProgressionValid = checkpointRegressionBatchCount <= replayedBatchCount
+  const checkpointProgressionValid = checkpointNonDecreasing
+    && checkpointIdentityValid
     && operationStateValid
-    && (postCheckpointDidNotRegress || postCheckpointReplayedOneBatch);
+    && replayedBatchCount <= 1;
   const passed = completed
-    && replayedBatchCount <= 1
     && checkpointProgressionValid
     && readbackVerified
     && !mixedGenerationVisible
@@ -364,7 +377,7 @@ export function createRestartReceipt(input) {
     preRestartCheckpoint,
     postRestartCheckpoint,
     replayedBatchCount,
-    checkpointRegressionBatchCount,
+    checkpointNonDecreasing,
     checkpointProgressionValid,
     readbackVerified,
     mixedGenerationVisible,
@@ -558,6 +571,20 @@ function assertNonNegativeSafeInteger(value, fieldName) {
 function assertPositiveSafeInteger(value, fieldName) {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${fieldName} must be a positive safe integer`);
+  }
+  return value;
+}
+
+function assertSignedSafeInteger(value, fieldName) {
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`${fieldName} must be a signed safe integer`);
+  }
+  return value;
+}
+
+function assertIndexedDbExpectedDirection(value) {
+  if (typeof value !== 'string' || !INDEXED_DB_EXPECTED_DIRECTIONS.includes(value)) {
+    throw new Error('expectedDirection must use a closed IndexedDB direction');
   }
   return value;
 }

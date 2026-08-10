@@ -26,10 +26,13 @@ import {
   createCustomFixtureDefinition,
   createFixtureReceipt,
   validateManagedFullTextCandidate,
+  verifyGoldenFixtureReceipt,
   writeFixtureArtifact,
   writeGoldenFixtureReceipt,
 } from "../scripts/gate-014-fixture-generator.mjs";
 import {
+  GATE_014_RECEIPT_HELPER_CONTRACT,
+  INDEXED_DB_EXPECTED_DIRECTIONS,
   INSUFFICIENT_EVIDENCE,
   SENSITIVE_RECEIPT_TOKEN_PATTERN,
   createFailureInjectionReceipt,
@@ -126,8 +129,11 @@ test("GATE-014-A generator produces exact deterministic canonical bytes for a bo
   const second = await createFixtureReceipt(definition, { seed: "unit-seed" });
 
   assert.equal(first.generatorVersion, GENERATOR_VERSION);
-  assert.equal(GENERATOR_VERSION, "gate-014-fixture-generator-v2");
-  assert.equal(RECEIPT_CONTRACT, "gate-014-fixture-receipt-v2");
+  assert.equal(GENERATOR_VERSION, "gate-014-fixture-generator-v3");
+  assert.equal(RECEIPT_CONTRACT, "gate-014-fixture-receipt-v3");
+  assert.equal(GATE_014_RECEIPT_HELPER_CONTRACT, "gate-014-receipt-helper-v3");
+  assert.deepEqual(INDEXED_DB_EXPECTED_DIRECTIONS, ["increase", "decrease"]);
+  assert.equal(Object.isFrozen(INDEXED_DB_EXPECTED_DIRECTIONS), true);
   assert.equal(first.seed, "unit-seed");
   assert.equal(first.canonical.totalBytes, definition.targetCanonicalBytes);
   assert.equal(first.canonical.totalBytes, second.canonical.totalBytes);
@@ -327,6 +333,86 @@ test("GATE-014-A generator can be imported when process.argv[1] is undefined", (
   assert.equal(child.stderr, "");
 });
 
+test("GATE-014-A golden receipt verification recomputes deeply without writing", async () => {
+  const definition = createCustomFixtureDefinition({
+    id: "unit-read-only-verify",
+    targetCanonicalBytes: 384 * 1024,
+    profile: "baseline",
+    targetKind: "managed_full_text_total",
+  });
+  const repositoryRoot = await createFakeRepositoryRoot("gate-014-read-only-verify-");
+  const seed = "verify-seed";
+
+  try {
+    const written = await writeGoldenFixtureReceipt(definition, { repositoryRoot, seed });
+    const receiptDirectory = path.join(repositoryRoot, GOLDEN_RECEIPT_RELATIVE_DIR);
+    const generatedDirectory = path.join(repositoryRoot, GENERATED_FIXTURE_RELATIVE_DIR);
+    const originalBytes = await readFile(written.receiptPath);
+    const originalReceipt = JSON.parse(originalBytes.toString("utf8"));
+    const originalEntries = await readdir(receiptDirectory);
+
+    const verified = await verifyGoldenFixtureReceipt(definition, { repositoryRoot, seed });
+    assert.equal(verified.status, "pass");
+    assert.equal(verified.fixtureId, definition.id);
+    assert.equal(verified.canonicalBytes, definition.targetCanonicalBytes);
+    assert.deepEqual(await readFile(written.receiptPath), originalBytes);
+    assert.deepEqual(await readdir(receiptDirectory), originalEntries);
+    await assert.rejects(() => stat(generatedDirectory), { code: "ENOENT" });
+
+    const mismatches = [
+      (receipt: any) => { receipt.fixture.description = "controlled mismatch"; },
+      (receipt: any) => { receipt.fixture.targetKind = "single_version_full_text"; },
+      (receipt: any) => { receipt.canonical.totalBytes += 1; },
+      (receipt: any) => { receipt.canonical.fixtureSha256 = "0".repeat(64); },
+      (receipt: any) => { receipt.canonical.recordCount += 1; },
+      (receipt: any) => { receipt.plantedRetrievalTargets[0].queryId = "mutated-query"; },
+    ];
+
+    for (const mutate of mismatches) {
+      const mismatchedReceipt = structuredClone(originalReceipt);
+      mutate(mismatchedReceipt);
+      const mismatchedBytes = Buffer.from(`${JSON.stringify(mismatchedReceipt, null, 2)}\n`);
+      await writeFile(written.receiptPath, mismatchedBytes);
+
+      await assert.rejects(
+        () => verifyGoldenFixtureReceipt(definition, { repositoryRoot, seed }),
+        /Golden receipt verification mismatch/,
+      );
+      assert.deepEqual(await readFile(written.receiptPath), mismatchedBytes);
+      assert.deepEqual(await readdir(receiptDirectory), originalEntries);
+      await assert.rejects(() => stat(generatedDirectory), { code: "ENOENT" });
+
+      await writeFile(written.receiptPath, originalBytes);
+    }
+  } finally {
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
+test("GATE-014-A golden receipt verification does not create a missing receipt directory", async () => {
+  const definition = createCustomFixtureDefinition({
+    id: "unit-read-only-missing-receipt",
+    targetCanonicalBytes: 384 * 1024,
+    profile: "baseline",
+    targetKind: "managed_full_text_total",
+  });
+  const repositoryRoot = await createFakeRepositoryRoot("gate-014-read-only-missing-");
+  const receiptDirectory = path.join(repositoryRoot, GOLDEN_RECEIPT_RELATIVE_DIR);
+
+  try {
+    await assert.rejects(
+      () => verifyGoldenFixtureReceipt(definition, {
+        repositoryRoot,
+        seed: "verify-missing-seed",
+      }),
+      /Refusing to verify unsafe GATE-014 golden receipt directory/,
+    );
+    await assert.rejects(() => stat(receiptDirectory), { code: "ENOENT" });
+  } finally {
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
+});
+
 test("large generated fixture outputs are ignored and outside release packaging inputs", async () => {
   const gitignore = await readFile(new URL("../.gitignore", import.meta.url), "utf8");
   const packager = await readFile(new URL("../scripts/package-release.ps1", import.meta.url), "utf8");
@@ -509,9 +595,24 @@ test("GATE-014-A reusable receipt helpers reject false-pass values and arbitrary
     fixtureId: "managed-full-text-100mib",
     phase: "admission",
     metricAvailable: true,
-    storageEstimateUsageBytes: 1,
+    storageEstimateUsageBeforeBytes: 0,
+    storageEstimateUsageAfterBytes: 1,
     storageEstimateQuotaBytes: 1,
-  }), /indexedDbDeltaBytes/);
+    indexedDbDeltaBytes: 1,
+    expectedDirection: "increase",
+  }), /readbackVerified/);
+
+  assert.throws(() => createIndexedDbUsageReceipt({
+    fixtureId: "managed-full-text-100mib",
+    phase: "admission",
+    metricAvailable: true,
+    storageEstimateUsageBeforeBytes: 0,
+    storageEstimateUsageAfterBytes: 1,
+    storageEstimateQuotaBytes: 1,
+    indexedDbDeltaBytes: 1,
+    expectedDirection: "sideways",
+    readbackVerified: true,
+  }), /expectedDirection/);
 
   assert.throws(() => createPersistedIndexSizeReceipt({
     fixtureId: "managed-full-text-100mib",
@@ -604,9 +705,23 @@ test("GATE-014-A helper receipts pass only with concrete required measurements",
     fixtureId: "managed-full-text-100mib",
     phase: "admission",
     metricAvailable: true,
-    storageEstimateUsageBytes: 40,
+    storageEstimateUsageBeforeBytes: 10,
+    storageEstimateUsageAfterBytes: 40,
     storageEstimateQuotaBytes: 100,
     indexedDbDeltaBytes: 30,
+    expectedDirection: "increase",
+    readbackVerified: true,
+  });
+  const indexedDbCleanup = createIndexedDbUsageReceipt({
+    fixtureId: "managed-full-text-100mib",
+    phase: "cleanup",
+    metricAvailable: true,
+    storageEstimateUsageBeforeBytes: 40,
+    storageEstimateUsageAfterBytes: 10,
+    storageEstimateQuotaBytes: 100,
+    indexedDbDeltaBytes: -30,
+    expectedDirection: "decrease",
+    readbackVerified: true,
   });
   const persistedIndex = createPersistedIndexSizeReceipt({
     fixtureId: "managed-full-text-100mib",
@@ -642,6 +757,33 @@ test("GATE-014-A helper receipts pass only with concrete required measurements",
     duplicatePostingsDetected: false,
     fullRebuildStarted: false,
   });
+  const restartWithOneReplay = createRestartReceipt({
+    fixtureId: "managed-full-text-100mib",
+    scenario: "mv3-worker-restart",
+    attempted: true,
+    completed: true,
+    preRestartCheckpoint: {
+      checkpointId: "batch-10",
+      phase: "indexing_sources",
+      batchOrdinal: 10,
+      recordCount: 100,
+      canonicalBytes: 1000,
+      operationOpen: true,
+    },
+    postRestartCheckpoint: {
+      checkpointId: "batch-11",
+      phase: "verifying_generation",
+      batchOrdinal: 11,
+      recordCount: 110,
+      canonicalBytes: 1100,
+      operationOpen: true,
+    },
+    replayedBatchCount: 1,
+    readbackVerified: true,
+    mixedGenerationVisible: false,
+    duplicatePostingsDetected: false,
+    fullRebuildStarted: false,
+  });
   const failure = createFailureInjectionReceipt({
     fixtureId: "managed-full-text-100mib",
     scenario: "transaction-abort",
@@ -664,11 +806,23 @@ test("GATE-014-A helper receipts pass only with concrete required measurements",
     readbackVerified: true,
   });
 
-  for (const receipt of [memory, indexedDb, persistedIndex, restart, failure, cleanup]) {
+  for (const receipt of [
+    memory,
+    indexedDb,
+    indexedDbCleanup,
+    persistedIndex,
+    restart,
+    restartWithOneReplay,
+    failure,
+    cleanup,
+  ]) {
     assert.equal(receipt.status, "pass");
     assert.equal(receipt.storesSensitiveText, false);
     assert.doesNotMatch(JSON.stringify(receipt), SENSITIVE_RECEIPT_TOKEN_PATTERN);
   }
+  assert.equal(indexedDb.indexedDbDeltaBytes, 30);
+  assert.equal(indexedDbCleanup.indexedDbDeltaBytes, -30);
+  assert.equal(restartWithOneReplay.checkpointProgressionValid, true);
   assert.equal(persistedIndex.indexToSourceRatioPermille, 800);
   assert.equal(Object.isFrozen(restart), true);
   assert.equal(Object.isFrozen(restart.preRestartCheckpoint), true);
@@ -709,25 +863,56 @@ test("GATE-014-A receipt outcomes fail for contradictory or gate-negative eviden
     fixtureId: "managed-full-text-100mib",
     phase: "admission",
     metricAvailable: true,
-    storageEstimateUsageBytes: 0,
-    storageEstimateQuotaBytes: 0,
+    storageEstimateUsageBeforeBytes: 0,
+    storageEstimateUsageAfterBytes: 0,
+    storageEstimateQuotaBytes: 100,
     indexedDbDeltaBytes: 0,
+    expectedDirection: "increase",
+    readbackVerified: true,
   });
   const indexedDbInconsistent = createIndexedDbUsageReceipt({
     fixtureId: "managed-full-text-100mib",
     phase: "admission",
     metricAvailable: true,
-    storageEstimateUsageBytes: 101,
+    storageEstimateUsageBeforeBytes: 80,
+    storageEstimateUsageAfterBytes: 101,
     storageEstimateQuotaBytes: 100,
-    indexedDbDeltaBytes: 30,
+    indexedDbDeltaBytes: 21,
+    expectedDirection: "increase",
+    readbackVerified: true,
   });
   const indexedDbImpossibleDelta = createIndexedDbUsageReceipt({
     fixtureId: "managed-full-text-100mib",
     phase: "admission",
     metricAvailable: true,
-    storageEstimateUsageBytes: 40,
+    storageEstimateUsageBeforeBytes: 10,
+    storageEstimateUsageAfterBytes: 40,
     storageEstimateQuotaBytes: 100,
     indexedDbDeltaBytes: 41,
+    expectedDirection: "increase",
+    readbackVerified: true,
+  });
+  const indexedDbWrongDirection = createIndexedDbUsageReceipt({
+    fixtureId: "managed-full-text-100mib",
+    phase: "cleanup",
+    metricAvailable: true,
+    storageEstimateUsageBeforeBytes: 40,
+    storageEstimateUsageAfterBytes: 10,
+    storageEstimateQuotaBytes: 100,
+    indexedDbDeltaBytes: -30,
+    expectedDirection: "increase",
+    readbackVerified: true,
+  });
+  const indexedDbReadbackMissing = createIndexedDbUsageReceipt({
+    fixtureId: "managed-full-text-100mib",
+    phase: "cleanup",
+    metricAvailable: true,
+    storageEstimateUsageBeforeBytes: 40,
+    storageEstimateUsageAfterBytes: 10,
+    storageEstimateQuotaBytes: 100,
+    indexedDbDeltaBytes: -30,
+    expectedDirection: "decrease",
+    readbackVerified: false,
   });
   const zeroIndex = createPersistedIndexSizeReceipt({
     fixtureId: "managed-full-text-100mib",
@@ -758,6 +943,8 @@ test("GATE-014-A receipt outcomes fail for contradictory or gate-negative eviden
     indexedDbZero,
     indexedDbInconsistent,
     indexedDbImpossibleDelta,
+    indexedDbWrongDirection,
+    indexedDbReadbackMissing,
     zeroIndex,
     oversizedIndex,
     roundedDownOversizedIndex,
@@ -781,6 +968,14 @@ test("GATE-014-A receipt outcomes fail for contradictory or gate-negative eviden
     canonicalBytes: 0,
     operationOpen: true,
   };
+  const checkpoint9 = {
+    checkpointId: "batch-9",
+    phase: "indexing-sources",
+    batchOrdinal: 9,
+    recordCount: 90,
+    canonicalBytes: 900,
+    operationOpen: true,
+  };
   const restartBase = {
     fixtureId: "managed-full-text-100mib",
     scenario: "mv3-worker-restart",
@@ -796,6 +991,11 @@ test("GATE-014-A receipt outcomes fail for contradictory or gate-negative eviden
   };
 
   assert.equal(createRestartReceipt(restartBase).status, "fail");
+  assert.equal(createRestartReceipt({
+    ...restartBase,
+    postRestartCheckpoint: checkpoint9,
+    replayedBatchCount: 1,
+  }).status, "fail");
   assert.equal(createRestartReceipt({
     ...restartBase,
     postRestartCheckpoint: checkpoint10,

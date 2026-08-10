@@ -18,6 +18,7 @@
     "verify:release-dist": "node scripts/verify-release-dist.mjs",
     "package:release": "npm run build && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1",
     "gate014:fixtures:receipts": "node scripts/gate-014-fixture-generator.mjs --fixture all",
+    "gate014:fixtures:verify": "node scripts/gate-014-fixture-generator.mjs --verify-receipts",
     "gate014:fixtures:write": "node scripts/gate-014-fixture-generator.mjs --fixture all --write-artifacts",
     "gate014:fixtures:cleanup": "node scripts/gate-014-fixture-generator.mjs --cleanup-generated",
     "test:gate014": "node --test tests/gate-014-fixtures.test.ts",

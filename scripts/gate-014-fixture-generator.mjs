@@ -4,6 +4,7 @@ import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from
 import { once } from 'node:events';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import {
   INSUFFICIENT_EVIDENCE,
   REUSABLE_RECEIPT_HELPER_DESCRIPTORS,
@@ -13,8 +14,8 @@ import {
 
 export const MIB = 1024 * 1024;
 export const DEFAULT_SEED = 'gate-014-public-safe-seed-v1';
-export const GENERATOR_VERSION = 'gate-014-fixture-generator-v2';
-export const RECEIPT_CONTRACT = 'gate-014-fixture-receipt-v2';
+export const GENERATOR_VERSION = 'gate-014-fixture-generator-v3';
+export const RECEIPT_CONTRACT = 'gate-014-fixture-receipt-v3';
 export const MANAGED_FULL_TEXT_CONTRACT = 'managed-full-text-v1';
 export const GENERATED_FIXTURE_RELATIVE_DIR = 'tests/fixtures/gate-014/generated';
 export const GOLDEN_RECEIPT_RELATIVE_DIR = 'tests/fixtures/gate-014/receipts';
@@ -298,6 +299,72 @@ export async function writeGoldenFixtureReceipt(definition, options = {}) {
   const seed = assertPublicSafeId(options.seed ?? DEFAULT_SEED, 'seed');
   const receipt = await createFixtureReceipt(definition, { seed });
   return publishGoldenReceipt(definition, receipt, options);
+}
+
+export async function verifyGoldenFixtureReceipt(definition, options = {}) {
+  assertAllowedObjectFields(options, [
+    'seed',
+    'repositoryRoot',
+  ], 'verifyGoldenFixtureReceipt options');
+  definition = validateFixtureDefinition(definition);
+  const seed = assertPublicSafeId(options.seed ?? DEFAULT_SEED, 'seed');
+  const receiptDirectory = await resolveKnownRepositoryDirectory(
+    options.repositoryRoot,
+    GOLDEN_RECEIPT_RELATIVE_DIR,
+    'Refusing to verify unsafe GATE-014 golden receipt directory',
+    { createIfMissing: false },
+  );
+  const receiptPath = path.join(receiptDirectory, `${definition.id}.receipt.json`);
+
+  let serialized;
+  try {
+    serialized = await readFile(receiptPath, 'utf8');
+  } catch {
+    throw new Error(`Golden receipt unavailable for fixture ${definition.id}`);
+  }
+
+  let committedReceipt;
+  try {
+    committedReceipt = JSON.parse(serialized);
+  } catch {
+    throw new Error(`Golden receipt parse failed for fixture ${definition.id}`);
+  }
+  const computedReceipt = await createFixtureReceipt(definition, { seed });
+  if (!isDeepStrictEqual(committedReceipt, computedReceipt)) {
+    throw new Error(`Golden receipt verification mismatch for fixture ${definition.id}`);
+  }
+
+  return deepFreeze({
+    status: 'pass',
+    fixtureId: definition.id,
+    receiptRelativePath: `${GOLDEN_RECEIPT_RELATIVE_DIR}/${definition.id}.receipt.json`,
+    receiptSha256: sha256Hex(serialized),
+    canonicalBytes: computedReceipt.canonical.totalBytes,
+    fixtureSha256: computedReceipt.canonical.fixtureSha256,
+  });
+}
+
+export async function verifyGoldenFixtureReceipts(options = {}) {
+  assertAllowedObjectFields(options, [
+    'seed',
+    'repositoryRoot',
+  ], 'verifyGoldenFixtureReceipts options');
+  const seed = assertPublicSafeId(options.seed ?? DEFAULT_SEED, 'seed');
+  const receipts = [];
+  for (const definition of FIXTURE_DEFINITIONS) {
+    receipts.push(await verifyGoldenFixtureReceipt(definition, {
+      seed,
+      repositoryRoot: options.repositoryRoot,
+    }));
+  }
+  return deepFreeze({
+    status: 'pass',
+    generatorVersion: GENERATOR_VERSION,
+    receiptContract: RECEIPT_CONTRACT,
+    seed,
+    verifiedFixtureCount: receipts.length,
+    receipts,
+  });
 }
 
 async function publishGoldenReceipt(definition, receipt, options = {}) {
@@ -1782,7 +1849,17 @@ async function resolveCleanupDirectory(options) {
   );
 }
 
-async function resolveKnownRepositoryDirectory(repositoryRootOption, relativeDirectory, errorMessage) {
+async function resolveKnownRepositoryDirectory(
+  repositoryRootOption,
+  relativeDirectory,
+  errorMessage,
+  options = {},
+) {
+  assertAllowedObjectFields(options, ['createIfMissing'], 'repository directory options');
+  const createIfMissing = options.createIfMissing ?? true;
+  if (typeof createIfMissing !== 'boolean') {
+    throw new Error(errorMessage);
+  }
   const repositoryRoot = path.resolve(repositoryRootOption ?? REPOSITORY_ROOT);
   if (normalizePathForCompare(repositoryRoot) === normalizePathForCompare(path.parse(repositoryRoot).root)) {
     throw new Error(errorMessage);
@@ -1809,14 +1886,21 @@ async function resolveKnownRepositoryDirectory(repositoryRootOption, relativeDir
   for (const component of components) {
     currentPath = path.join(currentPath, component);
     expectedRealPath = path.join(expectedRealPath, component);
-    try {
-      await mkdir(currentPath);
-    } catch (error) {
-      if (!error || error.code !== 'EEXIST') {
-        throw new Error(errorMessage);
+    if (createIfMissing) {
+      try {
+        await mkdir(currentPath);
+      } catch (error) {
+        if (!error || error.code !== 'EEXIST') {
+          throw new Error(errorMessage);
+        }
       }
     }
-    const stats = await lstat(currentPath);
+    let stats;
+    try {
+      stats = await lstat(currentPath);
+    } catch {
+      throw new Error(errorMessage);
+    }
     if (!stats.isDirectory() || stats.isSymbolicLink()) {
       throw new Error(errorMessage);
     }
@@ -1969,6 +2053,12 @@ async function main(argv) {
     return;
   }
 
+  if (args.verifyReceipts) {
+    const verification = await verifyGoldenFixtureReceipts({ seed: args.seed });
+    console.log(JSON.stringify(verification, null, 2));
+    return;
+  }
+
   const definitions = args.fixture === 'all'
     ? FIXTURE_DEFINITIONS
     : FIXTURE_DEFINITIONS.filter(definition => definition.id === args.fixture);
@@ -2009,6 +2099,7 @@ function parseArgs(argv) {
     seed: DEFAULT_SEED,
     writeArtifacts: false,
     cleanupGenerated: false,
+    verifyReceipts: false,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -2023,9 +2114,22 @@ function parseArgs(argv) {
       result.writeArtifacts = true;
     } else if (arg === '--cleanup-generated') {
       result.cleanupGenerated = true;
+    } else if (arg === '--verify-receipts') {
+      result.verifyReceipts = true;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
+  }
+  const selectedModes = [
+    result.writeArtifacts,
+    result.cleanupGenerated,
+    result.verifyReceipts,
+  ].filter(Boolean).length;
+  if (selectedModes > 1) {
+    throw new Error('GATE-014 write, cleanup, and verify modes are mutually exclusive');
+  }
+  if (result.verifyReceipts && result.fixture !== 'all') {
+    throw new Error('GATE-014 receipt verification always covers all required fixtures');
   }
   return result;
 }
@@ -2038,6 +2142,7 @@ Options:
   --seed <seed>            Deterministic public-safe seed. Default: ${DEFAULT_SEED}
   --write-artifacts        Also write JSONL fixtures under ${GENERATED_FIXTURE_RELATIVE_DIR}. Opt-in only.
   --cleanup-generated      Remove only known generated GATE-014 JSONL/temp artifacts.
+  --verify-receipts        Recompute all required fixtures and deep-compare receipts without writing.
 `);
 }
 

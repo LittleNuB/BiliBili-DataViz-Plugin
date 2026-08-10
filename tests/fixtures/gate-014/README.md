@@ -10,10 +10,13 @@ Commands:
 
 ```sh
 npm run gate014:fixtures:receipts
+npm run gate014:fixtures:verify
 npm run gate014:fixtures:write
 npm run gate014:fixtures:cleanup
 npm run test:gate014
 ```
+
+`gate014:fixtures:verify` is the read-only full verification path. It recomputes all five required fixtures, deep-compares every committed receipt field, exits non-zero on drift, and writes neither receipts nor large artifacts. CI runs it separately from the fast `test:gate014` unit suite.
 
 `gate014:fixtures:cleanup` derives the fixed generated directory from the repository root, rejects redirected ancestors, and removes only known generated fixture JSONL and exact generator temp names.
 
