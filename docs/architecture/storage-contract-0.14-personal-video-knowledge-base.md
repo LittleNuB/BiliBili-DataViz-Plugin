@@ -272,7 +272,7 @@ Fields marked optional may be absent; no raw source-response body, network-error
 
 ## Blocking Global-Search Feasibility Gate
 
-- No runtime global-full-text search issue may begin before the gate passes on Chrome MV3 with realistic Chinese Bilibili-subtitle distributions and deterministic 100-, 400-, and 500-MiB fixtures. Synthetic future-compatible local-transcript rows may test schema and load only; they do not claim an ASR capability.
+- No runtime global-full-text search issue may begin before both the deterministic synthetic-fixture foundation and the separately reviewed public-safe Bilibili-subtitle distribution calibration pass, followed by the Chrome MV3 candidate gate at 100, 400, and 500 MiB. Synthetic fixture success alone does not establish representativeness. Synthetic future-compatible local-transcript rows may test schema and load only; they do not claim an ASR capability.
 - Compare at least an IndexedDB lexical-index design and one proven search library whose index can be built, persisted, loaded, and resumed in bounded chunks. A vector-only design is ineligible, and semantic indexing remains optional follow-up validation.
 - Record source bytes, indexed documents and fragments, build and resume duration, peak process or JS-heap growth where measurable, persisted index bytes, warm and cold Chinese/English query latency, result integrity, cancellation latency, checkpoint recovery, rebuild behavior, and MV3 worker-restart behavior.
 - The test must include add-one-version, remove-one-version, evidence-preserving full-text removal, index clear/rebuild, and crash/restart cases. The index must never be the sole copy of text or leave deleted personal text searchable after a completed rebuild.

@@ -32,10 +32,17 @@ The official zip.js repository documents incremental writing, Web Streams, large
 
 No dependency enters production `package.json` during the spike. The report records candidate version, integrity, transitive dependency tree, license, minified/gzipped contribution, worker/WASM assets, and the release verifier's 500,000-byte chunk result.
 
+## Gate Entry Split
+
+- **GATE-014-A1** builds deterministic public-safe synthetic fixtures and reusable receipt formats. Its pass establishes reproducibility, exact byte boundaries, cleanup, and fail-closed receipt behavior; it does not establish real Bilibili-subtitle representativeness.
+- **GATE-014-A2** separately records the measured public-safe aggregate profile, provenance, license or authorization, selection method, exclusions, and limitations. It retains no source wording, BVID/CID list, account identifier, local path, Cookie, profile, login state, history, or key material.
+- GATE-014-B and every candidate run remain blocked until both A1 and A2 pass. A1 success alone leaves real-distribution claims and the maximum measured segment-count tail at `insufficient_evidence`.
+
 ## Deterministic Fixtures
 
-- Build public-safe seeded fixtures at exactly 100 MiB, 400 MiB, and 500 MiB under `managed-full-text-v1`. They reproduce a separately recorded public-safe Bilibili-subtitle statistical profile without copying source wording or the user's local history, favorites, notes, profile, or login state.
-- The committed golden receipt fixes segment-length percentiles, segments-per-video percentiles, overlap rate and duration, CJK/Latin/number/punctuation proportions, video-duration buckets, and malformed-row exclusion counts. Add a high-fragmentation fixture with short segments and the maximum measured segment-count tail. A claim of “realistic distribution” without this receipt is `insufficient_evidence`.
+- A1 builds public-safe seeded synthetic fixtures at exactly 100 MiB, 400 MiB, and 500 MiB under `managed-full-text-v1`. Before A2 passes, they are deterministic load and edge-case fixtures only and cannot be described as reproducing real Bilibili subtitles.
+- A2 commits a separate aggregate calibration receipt for segment-length percentiles, segments-per-video percentiles, overlap rate and duration, CJK/Latin/number/punctuation proportions, video-duration buckets, and exclusions. The receipt records reproducible provenance and contains no source wording or user/account data.
+- After A2 passes, calibrate the A1 distribution receipt and bind the high-fragmentation fixture's short segments to the maximum measured segment-count tail. Each B/C/D candidate run record pins the A2 calibration-receipt SHA-256, the derived fixture-configuration version and SHA-256, and the actual fixture-receipt SHA-256; merely attaching separate receipts is not a binding. Until then, both representativeness and the maximum measured tail remain `insufficient_evidence`.
 - Include one 64-MiB single-version stress fixture because long videos cannot be excluded merely to make transactions easy. Failure returns the atomic-version contract to review; it does not introduce an undocumented video-duration cap.
 - Include current, historical, restored-pending, multi-part, multi-language, duplicate-source, changed-timeline, and Unicode edge cases. Future `local_transcript` rows are synthetic schema/load fixtures only and never claim an ASR capability.
 - Every fixture has a seed, generator version, canonical byte receipt, record counts, SHA-256 values, and planted retrieval targets. Generated fixtures are not committed when their size is impractical; the generator and small golden receipts are.
@@ -43,6 +50,7 @@ No dependency enters production `package.json` during the spike. The report reco
 
 ## Environment And Repetition
 
+- Begin B/C/D candidate runs only after the reviewed A1 fixture receipts and A2 calibration receipt are both available.
 - Run as an unpacked production build in current stable Chrome on Windows, using a fresh temporary test profile with no Bilibili login, Cookie import, browser-profile read, user database, API key, or network dependency.
 - Record OS build, CPU, logical cores, memory, free disk, Chrome version, extension commit, Node version, package lock hash, candidate versions, fixture hashes, storage estimate, run start/end time, and whether memory metrics were available.
 - Use at least three clean cold runs and five warm runs per candidate and fixture size. Cold means a fresh index generation and reopened extension; warm means an already opened complete generation with caches allowed by the candidate contract.
@@ -100,7 +108,7 @@ The verified threshold applies to estimated uncompressed entry bytes, not compre
 
 Every candidate report contains:
 
-1. commit, command, environment, dependency, license, and fixture receipts;
+1. commit, command, environment, dependency, license, A1 fixture receipts, and the accepted A2 calibration receipt, including a per-run binding among the calibration-receipt SHA-256, derived fixture-configuration version/SHA-256, and actual fixture-receipt SHA-256;
 2. raw run table plus median/p95 summary;
 3. all pass criteria with `pass`, `fail`, or `insufficient_evidence` and linked evidence;
 4. cancellation, restart, cleanup, malformed-input, and privacy observations;

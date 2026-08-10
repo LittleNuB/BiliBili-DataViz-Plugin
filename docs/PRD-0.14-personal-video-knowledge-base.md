@@ -421,7 +421,7 @@ The admission principle and its persistence triggers are accepted.
 
 ### Blocking validation before runtime implementation
 
-- Global full-text search must pass a separate Chrome MV3 feasibility gate before its runtime issue begins. The gate uses realistic Chinese Bilibili-subtitle distributions plus deterministic 100-, 400-, and 500-MiB fixtures and compares at least an IndexedDB lexical index with one proven chunk-persistable search library.
+- Global full-text search must first pass the deterministic synthetic-fixture foundation and the separately reviewed public-safe Bilibili-subtitle distribution calibration, then pass the Chrome MV3 feasibility gate before its runtime issue begins. Synthetic fixture success alone does not establish representativeness. The candidate gate uses the calibrated distribution plus deterministic 100-, 400-, and 500-MiB fixtures and compares at least an IndexedDB lexical index with one proven chunk-persistable search library.
 - It measures build and resume duration, peak memory, persisted index size, cold and warm Chinese/English query latency, cancellation, add/remove updates, rebuild, result integrity, and service-worker restart recovery. Vector or semantic indexing remains optional and cannot be required for a pass.
 - On the recorded release-QA machine and Chrome build, initial indexing must finish within 3 minutes at 100 MiB, 12 minutes at 400 MiB, and 15 minutes at 500 MiB; peak JavaScript-heap growth must remain within 256 MiB; and persisted index size must remain within 1.5 times source bytes.
 - At 500 MiB, warm-query p95 must be at most 500 ms and cold-query p95 at most 2 seconds. Every fixed deliberately planted target must be found, and a completed source removal must leave none of its text searchable.
