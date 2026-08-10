@@ -1,0 +1,15 @@
+---
+status: accepted
+---
+
+# Use versioned canonical JSONL for fingerprints and full-text bytes
+
+Managed-full-text capacity and content fingerprints use a pinned `managed-full-text-v1` canonical form rather than browser storage estimates or ZIP size. The serializer validates well-formed Unicode and finite normalized numbers, constructs objects in the field order below, applies standard ECMAScript `JSON.stringify`, encodes the result as UTF-8 without a BOM, and appends one LF byte to every record. A version's authoritative `serializedBytes` is the byte length of one metadata record followed by all segment records in ordinal order.
+
+The metadata projection contains, in order, `record`, `contract`, `versionId`, `scopeKey`, `bvid`, `cid`, `sourceType`, `language`, `languageLabel`, `sourceVariantKey`, `sourceVersionFingerprint`, `bodyHash`, `timelineHash`, `segmentCount`, `coverageStartSeconds`, `coverageEndSeconds`, `originKind`, `capturedAt`, `createdAt`, and `restoredFromBackupCreatedAt`; the two optional values serialize as JSON `null` when absent. Each segment projection contains `record`, `contract`, `ordinal`, `startSeconds`, `endSeconds`, and `text`. Mutable state, verification time, `serializedBytes` itself, restore-operation markers, and IndexedDB implementation overhead are excluded. Restore recalculates bytes after any UUID or origin rewrite.
+
+All hashes are lowercase SHA-256. `bodyHash` hashes canonical LF-terminated JSONL records containing `contract`, `ordinal`, and exact `text`; `timelineHash` hashes records containing `contract`, `ordinal`, `startSeconds`, and `endSeconds`; `scopeKey` hashes one canonical JSON object containing normalized `bvid`, exact positive `cid`, natural `sourceType`, normalized `language`, and exact `sourceVariantKey`; and `sourceVersionFingerprint` hashes one canonical object containing `contract`, `scopeKey`, `bodyHash`, and `timelineHash`. Text is not Unicode-normalized or whitespace-collapsed, so punctuation, spacing, line breaks, and timing changes remain detectable.
+
+The optional asset `saveFingerprint` uses a separate `knowledge-save-origin-v1` canonical JSON object containing saved-content kind, exact saved question or `null`, ordered immutable saved-content blocks, and ordered source-origin projections with exact video, part, time range, source-version fingerprint, captured evidence, and supported block ordinals. It excludes asset and evidence UUIDs, title, personal note, editable body, tags, lifecycle timestamps, provider/model/prompt fields, and operation markers. This makes concurrent repeated selection or whole-turn saves idempotent without equating later user edits with another source save.
+
+The warning threshold is `400 * 1024 * 1024` bytes and the hard boundary is `500 * 1024 * 1024` bytes. A resulting total at or above the warning threshold is warned; a result above the hard boundary is refused. Exactly 500 MiB may commit and then reports full. Corrupt, unsafe, or over-limit existing data is preserved for reading and export but blocks further full-text admission until repair or explicit management; no capacity path silently evicts retained text.
