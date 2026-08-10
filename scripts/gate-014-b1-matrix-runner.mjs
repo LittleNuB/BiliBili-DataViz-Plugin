@@ -1237,12 +1237,48 @@ async function assertTrackedWorktreeClean() {
 }
 
 async function buildProductionDist() {
-  await execFile("npm.cmd", ["run", "build"], {
+  const invocation = await resolveNpmBuildInvocation();
+  await execFile(invocation.executable, invocation.arguments, {
     cwd: REPOSITORY_ROOT,
     windowsHide: true,
     timeout: PRODUCTION_BUILD_TIMEOUT_MS,
     maxBuffer: 16 * 1024 * 1024,
   });
+}
+
+export async function resolveNpmBuildInvocation() {
+  const nodeExecutable = path.resolve(
+    process.env.npm_node_execpath ?? process.execPath,
+  );
+  const npmCliCandidates = [
+    process.env.npm_execpath,
+    path.join(
+      path.dirname(nodeExecutable),
+      "node_modules",
+      "npm",
+      "bin",
+      "npm-cli.js",
+    ),
+  ];
+  for (const candidate of npmCliCandidates) {
+    if (
+      typeof candidate !== "string" ||
+      !path.isAbsolute(candidate) ||
+      path.basename(candidate).toLowerCase() !== "npm-cli.js"
+    ) {
+      continue;
+    }
+    try {
+      await access(candidate);
+      return Object.freeze({
+        executable: nodeExecutable,
+        arguments: Object.freeze([path.resolve(candidate), "run", "build"]),
+      });
+    } catch {
+      // Try the npm CLI installed beside the active Node executable.
+    }
+  }
+  throw new Error("npm_cli_not_found");
 }
 
 async function hashDirectory(directory) {

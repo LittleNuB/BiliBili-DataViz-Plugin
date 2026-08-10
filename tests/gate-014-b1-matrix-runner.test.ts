@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 
 import {
   createB1RestorePreflightValidationFromLifecycle,
   mapB1LifecycleToRawOperations,
+  resolveNpmBuildInvocation,
 } from "../scripts/gate-014-b1-matrix-runner.mjs";
 import {
   B1_OPERATION_KINDS,
@@ -12,6 +14,21 @@ import {
 
 const FIXTURE_SHA = "a".repeat(64);
 const ENVIRONMENT_SHA = "b".repeat(64);
+
+test("GATE-014-B1 launches npm build through Node instead of a Windows command shim", async () => {
+  const invocation = await resolveNpmBuildInvocation();
+  assert.equal(
+    path.resolve(invocation.executable),
+    path.resolve(process.env.npm_node_execpath ?? process.execPath),
+  );
+  assert.equal(
+    path.basename(invocation.arguments[0]).toLowerCase(),
+    "npm-cli.js",
+  );
+  assert.deepEqual(invocation.arguments.slice(1), ["run", "build"]);
+  assert.equal(Object.isFrozen(invocation), true);
+  assert.equal(Object.isFrozen(invocation.arguments), true);
+});
 
 function lifecycleResult() {
   return {
