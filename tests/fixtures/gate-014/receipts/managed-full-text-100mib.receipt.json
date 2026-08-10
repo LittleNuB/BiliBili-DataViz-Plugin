@@ -23,15 +23,15 @@
   },
   "canonical": {
     "totalBytes": 104857600,
-    "fixtureSha256": "edb36613cd12de6d4e339fdb00f1c8637c5cce3d804f633acfe970cd25e69b79",
-    "bodyManifestSha256": "40918e50d09f9cab4ac03faffa45069b0ab801bbc8f5c7a0b2742952940b0c15",
+    "fixtureSha256": "d9bc59f5c682479c0bf29dcbd5316904b181a4b9cd7fbfc11bdb50cdab56dbb5",
+    "bodyManifestSha256": "add2e5b271cb474d930e94dfb83ada2a3919f69b73e87d9d43f5804baa25414c",
     "timelineManifestSha256": "97e051f402c97d4dc6fac7f70049ac9dd5cb783dcc97d0bdd4c73c83a922f2ed",
-    "versionManifestSha256": "d68873556fead6a83c375b2a57d984a5e62c34faa2e1c58deb637183f6a0a084",
+    "versionManifestSha256": "cf149c7a6bcc79eabc53369f6c0ee857b37c34e49367a69ff9f42465e79f7189",
     "querySuiteSha256": "2c34206866b5d9091f884c529e0ca9a5876ddf79d1c8b720daea1cf82a431438",
     "versionCount": 132,
     "segmentCount": 76352,
     "recordCount": 76484,
-    "bodyBytes": 100439914,
+    "bodyBytes": 100439917,
     "timelineBytes": 6668030,
     "versionSha256Samples": [
       {
@@ -41,6 +41,7 @@
         "segmentCount": 520,
         "versionState": "current",
         "duplicateScopeOfVersionOrdinal": null,
+        "sourceType": "bilibili_subtitle",
         "bodyHash": "93929f21476ba6ea4915319e999948f347fc76c465bebebf9a68b83c13cff25f",
         "timelineHash": "78bd4b9e01a1407c626096267d295af05d854b3089167a9c91d6e90deb1ce260",
         "sourceVersionFingerprint": "f92448abec2cc7e888097254680c531c28a7f4085c0e18a902a594610e747d47"
@@ -52,6 +53,7 @@
         "segmentCount": 535,
         "versionState": "current",
         "duplicateScopeOfVersionOrdinal": null,
+        "sourceType": "bilibili_subtitle",
         "bodyHash": "6ca7e1aad5586698771e993333a326e5f699917d3c4e435403550c0a7152130c",
         "timelineHash": "16d63945d4745117b5a36e5a8c58c4d4522ff8a3d384821920e7c3de1760fe2a",
         "sourceVersionFingerprint": "1cd508b3bfb369fa8bb6cfe4dc917d5dd94297ce6b5c2c33a0ab229f590418f6"
@@ -63,6 +65,7 @@
         "segmentCount": 633,
         "versionState": "current",
         "duplicateScopeOfVersionOrdinal": null,
+        "sourceType": "bilibili_subtitle",
         "bodyHash": "648818b2412864d7a21e2e8055d6f5ad031c25fa990910d4cfc3b11cc2e30e96",
         "timelineHash": "25353076e5e095167480bc91b590aaa46b3e301339496af156ba3cf89b5b80c6",
         "sourceVersionFingerprint": "37c0a951e1b0518a5be19bc911dacad73b1b598919d590172a3a5441eb0a7a85"
@@ -74,6 +77,7 @@
         "segmentCount": 502,
         "versionState": "current",
         "duplicateScopeOfVersionOrdinal": null,
+        "sourceType": "bilibili_subtitle",
         "bodyHash": "f0d9e4d689c9dd723d5435b941ac33d03a35802063cdb605f76dc1a6df779c53",
         "timelineHash": "3d37f9df9108591737cd4026bb4a6dc927a3ccecc9d02e13398d0df752b803f8",
         "sourceVersionFingerprint": "c522ff79d5179ad78355983ac235873a6ffc7961d996d6e2641c0f4929ece75f"
@@ -85,6 +89,7 @@
         "segmentCount": 553,
         "versionState": "current",
         "duplicateScopeOfVersionOrdinal": null,
+        "sourceType": "bilibili_subtitle",
         "bodyHash": "168439433ff41240ed38690bcd54afea1c23627ae73ca82b1df3dd12b10d9e54",
         "timelineHash": "a46cc2e210411efa522a2781e49f9ae4a548ca1fa8f34d7f60d77b32142f3fca",
         "sourceVersionFingerprint": "0f0329c7a7cb0df7ac7045b120561f1d375d7fa3032ac8eadd007ead3db93774"
@@ -96,6 +101,7 @@
         "segmentCount": 697,
         "versionState": "current",
         "duplicateScopeOfVersionOrdinal": null,
+        "sourceType": "bilibili_subtitle",
         "bodyHash": "3b293fbef4a420f2197b07f57b615ec9b744619521162ce3f2dd1823c9fdb9eb",
         "timelineHash": "18888f4cf81d0611f09be28adc42b3141ed54788fc5418d18fc9c6b9a025e6b3",
         "sourceVersionFingerprint": "a0b05581bfbddb0ad426b81f8f370f78af1b58b2f4bc49341463f1d158d20c2f"
@@ -110,7 +116,12 @@
       "reason": "Synthetic public-safe generation was used; no measured public-safe Bilibili subtitle sample is attached."
     },
     "segmentLengthBytes": {
+      "accumulator": "bounded_histogram_v1",
+      "bucketSize": 1,
       "count": 76352,
+      "min": 420,
+      "max": 1920,
+      "bucketCount": 1219,
       "percentiles": {
         "p0": 420,
         "p1": 763,
@@ -124,7 +135,12 @@
       }
     },
     "canonicalSegmentRecordBytes": {
+      "accumulator": "bounded_histogram_v1",
+      "bucketSize": 1,
       "count": 76352,
+      "min": 537,
+      "max": 2037,
+      "bucketCount": 1222,
       "percentiles": {
         "p0": 537,
         "p1": 879,
@@ -138,7 +154,12 @@
       }
     },
     "segmentsPerVersion": {
+      "accumulator": "bounded_histogram_v1",
+      "bucketSize": 1,
       "count": 132,
+      "min": 502,
+      "max": 697,
+      "bucketCount": 87,
       "percentiles": {
         "p0": 502,
         "p1": 502,
@@ -154,38 +175,46 @@
     "overlap": {
       "overlappingSegmentCount": 6783,
       "overlapRate": 0.088839,
-      "overlapSecondsPercentiles": {
-        "p0": 1,
-        "p1": 1,
-        "p5": 1,
-        "p25": 1,
-        "p50": 2,
-        "p75": 2,
-        "p95": 2,
-        "p99": 2,
-        "p100": 2
+      "overlapSeconds": {
+        "accumulator": "bounded_histogram_v1",
+        "bucketSize": 1,
+        "count": 6783,
+        "min": 1,
+        "max": 2,
+        "bucketCount": 2,
+        "percentiles": {
+          "p0": 1,
+          "p1": 1,
+          "p5": 1,
+          "p25": 1,
+          "p50": 2,
+          "p75": 2,
+          "p95": 2,
+          "p99": 2,
+          "p100": 2
+        }
       }
     },
     "characterMix": {
-      "totalCodePoints": 54155602,
+      "totalCodePoints": 54155467,
       "cjk": {
-        "count": 18163599,
-        "proportion": 0.335396
+        "count": 18163656,
+        "proportion": 0.335398
       },
       "latin": {
-        "count": 24187282,
-        "proportion": 0.446626
+        "count": 24187158,
+        "proportion": 0.446624
       },
       "number": {
-        "count": 3792739,
+        "count": 3792697,
         "proportion": 0.070034
       },
       "punctuation": {
-        "count": 3292946,
-        "proportion": 0.060805
+        "count": 3292954,
+        "proportion": 0.060806
       },
       "space": {
-        "count": 4719036,
+        "count": 4719002,
         "proportion": 0.087138
       },
       "other": {
@@ -194,6 +223,7 @@
       }
     },
     "durationBuckets": {
+      "accumulator": "bounded_duration_buckets_v1",
       "under_5m": 0,
       "from_5m_to_20m": 0,
       "from_20m_to_60m": 0,
@@ -210,6 +240,10 @@
     "originKinds": {
       "captured": 126,
       "restored": 6
+    },
+    "sourceTypes": {
+      "bilibili_subtitle": 129,
+      "local_transcript": 3
     },
     "languages": {
       "zh-cn": 115,
@@ -233,18 +267,36 @@
       "loneSurrogateExcluded": true
     },
     "futureLocalTranscriptRows": {
-      "status": "insufficient_evidence",
-      "reason": "This fixture foundation reserves schema testing only and does not claim a local ASR capability."
+      "status": "synthetic_schema_load_only",
+      "rowCount": 3,
+      "claimsAsrCapability": false
     }
   },
   "malformedRowExclusions": {
-    "total": 0,
-    "emptyText": 0,
-    "invalidTiming": 0,
-    "nonFiniteNumber": 0,
-    "negativeZero": 0,
-    "loneSurrogate": 0,
-    "invalidIdentity": 0
+    "suiteContract": "gate-014-malformed-candidate-suite-v1",
+    "total": 8,
+    "byReason": {
+      "empty_text": 1,
+      "invalid_timing": 2,
+      "non_finite_timing": 1,
+      "negative_zero": 1,
+      "lone_surrogate": 1,
+      "invalid_identity": 2
+    },
+    "candidateIds": [
+      "malformed-empty-text",
+      "malformed-reversed-timing",
+      "malformed-zero-duration",
+      "malformed-non-finite-start",
+      "malformed-negative-zero-start",
+      "malformed-lone-surrogate-text",
+      "malformed-invalid-bvid",
+      "malformed-invalid-cid"
+    ],
+    "emittedRecordCount": 0,
+    "emittedCanonicalBytes": 0,
+    "candidateSuiteSha256": "fcbd445962c70ac0bdc812a43fa817262d0a11fdde689a186473b2158421f060",
+    "exclusionStage": "pre_canonical_validation"
   },
   "querySuiteSummary": {
     "total": 145,
@@ -3062,6 +3114,20 @@
     },
     {
       "contract": "gate-014-receipt-helper-v1",
+      "helper": "createPersistedIndexSizeReceipt",
+      "requiredFields": [
+        "fixtureId",
+        "phase",
+        "metricAvailable",
+        "managedSourceBytes",
+        "persistedIndexBytes",
+        "indexToSourceRatioPermille"
+      ],
+      "unavailableMetricStatus": "insufficient_evidence",
+      "storesSensitiveText": false
+    },
+    {
+      "contract": "gate-014-receipt-helper-v1",
       "helper": "createRestartReceipt",
       "requiredFields": [
         "fixtureId",
@@ -3084,7 +3150,24 @@
         "attempted",
         "completed",
         "visibleRowsAfterFailure",
-        "cleanupRequired"
+        "cleanupRequired",
+        "readbackVerified"
+      ],
+      "unavailableMetricStatus": "insufficient_evidence",
+      "storesSensitiveText": false
+    },
+    {
+      "contract": "gate-014-receipt-helper-v1",
+      "helper": "createCleanupReadbackReceipt",
+      "requiredFields": [
+        "fixtureId",
+        "operation",
+        "beforeFileCount",
+        "removedFileCount",
+        "afterFileCount",
+        "tempFileCountAfterCleanup",
+        "finalFileCountAfterCleanup",
+        "readbackVerified"
       ],
       "unavailableMetricStatus": "insufficient_evidence",
       "storesSensitiveText": false

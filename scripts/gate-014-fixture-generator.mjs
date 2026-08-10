@@ -1,12 +1,14 @@
-import { createHash } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { lstat, mkdir, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
+import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   INSUFFICIENT_EVIDENCE,
   REUSABLE_RECEIPT_HELPER_DESCRIPTORS,
+  assertPublicSafeId,
+  createCleanupReadbackReceipt,
 } from './gate-014-receipt-helpers.mjs';
 
 export const MIB = 1024 * 1024;
@@ -21,6 +23,18 @@ const ZERO_SHA = '0'.repeat(64);
 const BASE_CAPTURED_AT = 1_788_220_800_000;
 const BASE_CREATED_AT = 1_788_220_860_000;
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const CLEANUP_OPERATION_ID = 'cleanup-generated-artifacts';
+
+export const MALFORMED_CANDIDATE_SUITE = Object.freeze([
+  malformedCandidate('malformed-empty-text', 'empty_text', 'text'),
+  malformedCandidate('malformed-reversed-timing', 'invalid_timing', 'timing'),
+  malformedCandidate('malformed-zero-duration', 'invalid_timing', 'timing'),
+  malformedCandidate('malformed-non-finite-start', 'non_finite_timing', 'startSeconds'),
+  malformedCandidate('malformed-negative-zero-start', 'negative_zero', 'startSeconds'),
+  malformedCandidate('malformed-lone-surrogate-text', 'lone_surrogate', 'text'),
+  malformedCandidate('malformed-invalid-bvid', 'invalid_identity', 'bvid'),
+  malformedCandidate('malformed-invalid-cid', 'invalid_identity', 'cid'),
+]);
 
 const PROFILE_DEFINITIONS = Object.freeze({
   baseline: Object.freeze({
@@ -132,43 +146,125 @@ export function createCustomFixtureDefinition(input) {
 }
 
 export async function createFixtureReceipt(definition, options = {}) {
-  const seed = options.seed ?? DEFAULT_SEED;
+  const seed = assertPublicSafeId(options.seed ?? DEFAULT_SEED, 'seed');
   const builder = new FixtureReceiptBuilder(definition, seed);
   await buildFixture(definition, seed, { builder });
   return builder.toReceipt();
 }
 
 export async function writeFixtureArtifact(definition, options = {}) {
-  const seed = options.seed ?? DEFAULT_SEED;
-  const outputDirectory = path.resolve(options.outputDirectory ?? path.join(REPOSITORY_ROOT, GENERATED_FIXTURE_RELATIVE_DIR));
+  const seed = assertPublicSafeId(options.seed ?? DEFAULT_SEED, 'seed');
+  const outputDirectory = path.resolve(
+    options.outputDirectory ?? path.join(REPOSITORY_ROOT, GENERATED_FIXTURE_RELATIVE_DIR),
+  );
   await mkdir(outputDirectory, { recursive: true });
 
   const artifactPath = path.join(outputDirectory, `${definition.id}.jsonl`);
-  const stream = createWriteStream(artifactPath, { flags: 'w' });
-  const artifactHash = createHash('sha256');
+  let tempPath = path.join(outputDirectory, `.${definition.id}.${process.pid}.${randomUUID()}.tmp`);
+  while (await pathExists(tempPath)) {
+    tempPath = path.join(outputDirectory, `.${definition.id}.${process.pid}.${randomUUID()}.tmp`);
+  }
+  let stream = createWriteStream(tempPath, { flags: 'wx' });
   const builder = new FixtureReceiptBuilder(definition, seed);
 
   try {
+    await once(stream, 'open');
+    if (options.injectFailureAt === 'after-temp-open') {
+      throw injectedArtifactFailure(options.injectFailureAt);
+    }
+
+    let lineCount = 0;
     await buildFixture(definition, seed, {
       builder,
       writeLine: async line => {
-        artifactHash.update(line);
-        artifactHash.update('\n');
         if (!stream.write(`${line}\n`, 'utf8')) {
           await once(stream, 'drain');
         }
+        lineCount += 1;
+        if (options.injectFailureAt === 'after-first-record' && lineCount === 1) {
+          throw injectedArtifactFailure(options.injectFailureAt);
+        }
       },
     });
-  } finally {
+
     stream.end();
     await once(stream, 'finish');
+    await once(stream, 'close');
+    stream = null;
+
+    if (options.injectFailureAt === 'after-close-before-publish') {
+      throw injectedArtifactFailure(options.injectFailureAt);
+    }
+
+    const receipt = builder.toReceipt();
+    const readback = await hashFile(tempPath);
+    if (readback.bytes !== receipt.canonical.totalBytes) {
+      throw new Error(`Artifact readback byte mismatch: expected ${receipt.canonical.totalBytes}, got ${readback.bytes}`);
+    }
+    if (readback.sha256 !== receipt.canonical.fixtureSha256) {
+      throw new Error('Artifact readback hash mismatch');
+    }
+
+    await rename(tempPath, artifactPath);
+    tempPath = null;
+    return {
+      artifactPath,
+      artifactSha256: readback.sha256,
+      receipt,
+    };
+  } catch (error) {
+    await closeArtifactStreamAfterFailure(stream);
+    if (tempPath) {
+      await rm(tempPath, { force: true });
+    }
+    throw error;
+  }
+}
+
+export async function cleanupGeneratedFixtureArtifacts(options = {}) {
+  const outputDirectory = await resolveCleanupDirectory(options);
+  const entries = await readdir(outputDirectory);
+  const knownNames = new Set(FIXTURE_DEFINITIONS.map(definition => `${definition.id}.jsonl`));
+  const candidates = entries.filter(name => (
+    knownNames.has(name) || isKnownGeneratedTempArtifactName(name)
+  ));
+
+  for (const name of candidates) {
+    const target = path.join(outputDirectory, name);
+    const targetStats = await lstat(target);
+    if (targetStats.isSymbolicLink() || !targetStats.isFile()) {
+      throw new Error('Refusing to clean unsafe GATE-014 fixture directory entry');
+    }
+    await rm(target, { force: false });
   }
 
-  return {
-    artifactPath,
-    artifactSha256: artifactHash.digest('hex'),
-    receipt: builder.toReceipt(),
-  };
+  const readbackEntries = await readdir(outputDirectory);
+  const remainingKnownNames = readbackEntries.filter(name => knownNames.has(name));
+  const remainingTempNames = readbackEntries.filter(name => isKnownGeneratedTempArtifactName(name));
+
+  return createCleanupReadbackReceipt({
+    fixtureId: 'gate-014-generated-fixtures',
+    operation: CLEANUP_OPERATION_ID,
+    beforeFileCount: candidates.length,
+    removedFileCount: candidates.length,
+    afterFileCount: remainingKnownNames.length + remainingTempNames.length,
+    tempFileCountAfterCleanup: remainingTempNames.length,
+    finalFileCountAfterCleanup: remainingKnownNames.length,
+    readbackVerified: remainingKnownNames.length === 0 && remainingTempNames.length === 0,
+  });
+}
+
+async function closeArtifactStreamAfterFailure(stream) {
+  if (!stream || stream.destroyed) {
+    return;
+  }
+  const closePromise = once(stream, 'close').catch(() => {});
+  stream.destroy();
+  await closePromise;
+}
+
+function injectedArtifactFailure(injectionPoint) {
+  return new Error(`Injected GATE-014 artifact failure at ${injectionPoint}`);
 }
 
 async function buildFixture(definition, seed, options) {
@@ -246,9 +342,9 @@ function analyzeVersion(definition, profile, seed, plan, plantedTargets, globalS
   const bodyHash = createHash('sha256');
   const timelineHash = createHash('sha256');
   const characterMix = emptyCharacterMix();
-  const segmentLengthBytes = [];
-  const segmentRecordLengthBytes = [];
-  const overlapSeconds = [];
+  const segmentLengthBytes = new BoundedHistogramAccumulator(1);
+  const segmentRecordLengthBytes = new BoundedHistogramAccumulator(1);
+  const overlapSeconds = new BoundedHistogramAccumulator(1);
   const targetLocations = [];
   let bodyBytes = 0;
   let timelineBytes = 0;
@@ -273,11 +369,11 @@ function analyzeVersion(definition, profile, seed, plan, plantedTargets, globalS
     bodyBytes += byteLengthWithLf(bodyLine);
     timelineBytes += byteLengthWithLf(timelineLine);
     segmentCanonicalBytes += byteLengthWithLf(segmentLine);
-    segmentLengthBytes.push(segment.textBytes);
-    segmentRecordLengthBytes.push(byteLengthWithLf(segmentLine));
+    segmentLengthBytes.add(segment.textBytes);
+    segmentRecordLengthBytes.add(byteLengthWithLf(segmentLine));
     addCharacterMix(characterMix, segment.characterMix);
     if (previousEndSeconds !== null && segment.startSeconds < previousEndSeconds) {
-      overlapSeconds.push(previousEndSeconds - segment.startSeconds);
+      overlapSeconds.add(previousEndSeconds - segment.startSeconds);
     }
     previousEndSeconds = segment.endSeconds;
     if (segment.target) {
@@ -336,54 +432,39 @@ function analyzeVersion(definition, profile, seed, plan, plantedTargets, globalS
 function replayVersionSegments(definition, profile, seed, plan, plantedTargets, globalSegmentOffset, visit) {
   const textRng = createRng(`${seed}|${definition.id}|text|${plan.versionOrdinal}`);
   for (let ordinal = 0; ordinal < plan.segmentCount; ordinal += 1) {
-    const target = plantedTargets[globalSegmentOffset + ordinal] ?? null;
-    const text = buildSyntheticTextExactBytes(plan.textByteLengths[ordinal], textRng, profile, target?.targetText);
-    const timing = plan.timings[ordinal];
-    const segmentRecord = {
-      record: 'segment',
-      contract: MANAGED_FULL_TEXT_CONTRACT,
-      ordinal,
-      startSeconds: timing.startSeconds,
-      endSeconds: timing.endSeconds,
-      text: text.value,
-    };
-    visit({
-      ordinal,
-      startSeconds: timing.startSeconds,
-      endSeconds: timing.endSeconds,
-      text: text.value,
-      textBytes: text.bytes,
-      characterMix: text.characterMix,
-      target,
-      segmentRecord,
-    });
+    visit(createVersionSegment(profile, textRng, plan, plantedTargets, globalSegmentOffset, ordinal));
   }
 }
 
 async function replayVersionSegmentsAsync(definition, profile, seed, plan, plantedTargets, globalSegmentOffset, visit) {
   const textRng = createRng(`${seed}|${definition.id}|text|${plan.versionOrdinal}`);
   for (let ordinal = 0; ordinal < plan.segmentCount; ordinal += 1) {
-    const target = plantedTargets[globalSegmentOffset + ordinal] ?? null;
-    const text = buildSyntheticTextExactBytes(plan.textByteLengths[ordinal], textRng, profile, target?.targetText);
-    const timing = plan.timings[ordinal];
-    await visit({
-      ordinal,
-      startSeconds: timing.startSeconds,
-      endSeconds: timing.endSeconds,
-      text: text.value,
-      textBytes: text.bytes,
-      characterMix: text.characterMix,
-      target,
-      segmentRecord: {
-        record: 'segment',
-        contract: MANAGED_FULL_TEXT_CONTRACT,
-        ordinal,
-        startSeconds: timing.startSeconds,
-        endSeconds: timing.endSeconds,
-        text: text.value,
-      },
-    });
+    await visit(createVersionSegment(profile, textRng, plan, plantedTargets, globalSegmentOffset, ordinal));
   }
+}
+
+function createVersionSegment(profile, textRng, plan, plantedTargets, globalSegmentOffset, ordinal) {
+  const target = plantedTargets[globalSegmentOffset + ordinal] ?? null;
+  const text = buildSyntheticTextExactBytes(plan.textByteLengths[ordinal], textRng, profile, target?.targetText);
+  const timing = plan.timings[ordinal];
+  const segmentRecord = {
+    record: 'segment',
+    contract: MANAGED_FULL_TEXT_CONTRACT,
+    ordinal,
+    startSeconds: timing.startSeconds,
+    endSeconds: timing.endSeconds,
+    text: text.value,
+  };
+  return {
+    ordinal,
+    startSeconds: timing.startSeconds,
+    endSeconds: timing.endSeconds,
+    text: text.value,
+    textBytes: text.bytes,
+    characterMix: text.characterMix,
+    target,
+    segmentRecord,
+  };
 }
 
 function createExactVersionPlan(definition, profile, seed, versionOrdinal, targetBytes) {
@@ -546,7 +627,11 @@ function createVersionContext(definition, seed, versionOrdinal) {
     : identityOrdinal > 0 && identityOrdinal % 13 === 0
       ? 'und'
       : 'zh-cn';
-  const sourceVariantKey = identityOrdinal % 11 === 0
+  const sourceType = definition.targetKind === 'single_version_full_text'
+    || (identityOrdinal > 0 && identityOrdinal % 41 === 0)
+    ? 'local_transcript'
+    : 'bilibili_subtitle';
+  const sourceVariantKey = sourceType === 'bilibili_subtitle' && identityOrdinal % 11 === 0
     ? sha256Hex(canonicalLine({
       contract: 'bilibili-subtitle-variant-v1',
       stableTrackId: `synthetic-${definition.id}-${identityOrdinal}`,
@@ -559,7 +644,7 @@ function createVersionContext(definition, seed, versionOrdinal) {
     contract: MANAGED_FULL_TEXT_CONTRACT,
     bvid,
     cid,
-    sourceType: 'bilibili_subtitle',
+    sourceType,
     language,
     sourceVariantKey,
   }));
@@ -576,7 +661,7 @@ function createVersionContext(definition, seed, versionOrdinal) {
     scopeKey,
     bvid,
     cid,
-    sourceType: 'bilibili_subtitle',
+    sourceType,
     language,
     languageLabel: language === 'zh-cn' ? '中文' : language === 'en' ? 'English' : null,
     sourceVariantKey,
@@ -665,6 +750,7 @@ class FixtureReceiptBuilder {
       segmentCount: plan.segmentCount,
       versionState: plan.versionState,
       duplicateScopeOfVersionOrdinal: plan.duplicateScopeOfVersionOrdinal,
+      sourceType: plan.sourceType,
       sourceVersionFingerprint: analysis.sourceVersionFingerprint,
       bodyHash: analysis.bodyHash,
       timelineHash: analysis.timelineHash,
@@ -692,6 +778,7 @@ class FixtureReceiptBuilder {
       segmentCount: plan.segmentCount,
       versionState: plan.versionState,
       duplicateScopeOfVersionOrdinal: plan.duplicateScopeOfVersionOrdinal,
+      sourceType: plan.sourceType,
       bodyHash: analysis.bodyHash,
       timelineHash: analysis.timelineHash,
       sourceVersionFingerprint: analysis.sourceVersionFingerprint,
@@ -787,15 +874,7 @@ class FixtureReceiptBuilder {
       },
       distributionProfile: this.distribution.toReceipt(this.profile),
       syntheticEdgeCaseProfile: this.edgeCases.toReceipt(),
-      malformedRowExclusions: {
-        total: 0,
-        emptyText: 0,
-        invalidTiming: 0,
-        nonFiniteNumber: 0,
-        negativeZero: 0,
-        loneSurrogate: 0,
-        invalidIdentity: 0,
-      },
+      malformedRowExclusions: malformedRowExclusionReceipt(),
       querySuiteSummary: summarizeQueries(this.querySuite),
       plantedRetrievalTargetSummary: summarizeQueries(plantedRetrievalTargets),
       plantedRetrievalTargets,
@@ -819,20 +898,20 @@ class FixtureReceiptBuilder {
 
 class DistributionAccumulator {
   constructor() {
-    this.segmentLengthBytes = [];
-    this.segmentRecordLengthBytes = [];
-    this.segmentsPerVersion = [];
-    this.overlapSeconds = [];
-    this.versionDurationSeconds = [];
+    this.segmentLengthBytes = new BoundedHistogramAccumulator(1);
+    this.segmentRecordLengthBytes = new BoundedHistogramAccumulator(1);
+    this.segmentsPerVersion = new BoundedHistogramAccumulator(1);
+    this.overlapSeconds = new BoundedHistogramAccumulator(1);
+    this.versionDurationBuckets = new DurationBucketAccumulator();
     this.characterMix = emptyCharacterMix();
   }
 
   addVersion(plan, analysis) {
-    this.segmentLengthBytes.push(...analysis.segmentLengthBytes);
-    this.segmentRecordLengthBytes.push(...analysis.segmentRecordLengthBytes);
-    this.segmentsPerVersion.push(plan.segmentCount);
-    this.overlapSeconds.push(...analysis.overlapSeconds);
-    this.versionDurationSeconds.push(plan.coverageEndSeconds - plan.coverageStartSeconds);
+    this.segmentLengthBytes.merge(analysis.segmentLengthBytes);
+    this.segmentRecordLengthBytes.merge(analysis.segmentRecordLengthBytes);
+    this.segmentsPerVersion.add(plan.segmentCount);
+    this.overlapSeconds.merge(analysis.overlapSeconds);
+    this.versionDurationBuckets.add(plan.coverageEndSeconds - plan.coverageStartSeconds);
     addCharacterMix(this.characterMix, analysis.characterMix);
   }
 
@@ -845,24 +924,133 @@ class DistributionAccumulator {
         reason: 'Synthetic public-safe generation was used; no measured public-safe Bilibili subtitle sample is attached.',
       },
       segmentLengthBytes: {
-        count: this.segmentLengthBytes.length,
-        percentiles: percentiles(this.segmentLengthBytes),
+        ...this.segmentLengthBytes.toReceipt(),
       },
       canonicalSegmentRecordBytes: {
-        count: this.segmentRecordLengthBytes.length,
-        percentiles: percentiles(this.segmentRecordLengthBytes),
+        ...this.segmentRecordLengthBytes.toReceipt(),
       },
       segmentsPerVersion: {
-        count: this.segmentsPerVersion.length,
-        percentiles: percentiles(this.segmentsPerVersion),
+        ...this.segmentsPerVersion.toReceipt(),
       },
       overlap: {
-        overlappingSegmentCount: this.overlapSeconds.length,
-        overlapRate: roundRatio(this.overlapSeconds.length, this.segmentLengthBytes.length),
-        overlapSecondsPercentiles: percentiles(this.overlapSeconds),
+        overlappingSegmentCount: this.overlapSeconds.count,
+        overlapRate: roundRatio(this.overlapSeconds.count, this.segmentLengthBytes.count),
+        overlapSeconds: this.overlapSeconds.toReceipt(),
       },
       characterMix: characterMixReceipt(this.characterMix),
-      durationBuckets: durationBuckets(this.versionDurationSeconds),
+      durationBuckets: this.versionDurationBuckets.toReceipt(),
+    };
+  }
+}
+
+class BoundedHistogramAccumulator {
+  constructor(bucketSize) {
+    this.bucketSize = bucketSize;
+    this.count = 0;
+    this.min = null;
+    this.max = null;
+    this.buckets = new Map();
+  }
+
+  add(value) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error('Histogram values must be non-negative safe integers');
+    }
+    const bucket = Math.floor(value / this.bucketSize);
+    this.buckets.set(bucket, (this.buckets.get(bucket) ?? 0) + 1);
+    this.count += 1;
+    this.min = this.min === null ? value : Math.min(this.min, value);
+    this.max = this.max === null ? value : Math.max(this.max, value);
+  }
+
+  merge(other) {
+    if (other.bucketSize !== this.bucketSize) {
+      throw new Error('Cannot merge histograms with different bucket sizes');
+    }
+    for (const [bucket, count] of other.buckets) {
+      this.buckets.set(bucket, (this.buckets.get(bucket) ?? 0) + count);
+    }
+    this.count += other.count;
+    if (other.min !== null) {
+      this.min = this.min === null ? other.min : Math.min(this.min, other.min);
+    }
+    if (other.max !== null) {
+      this.max = this.max === null ? other.max : Math.max(this.max, other.max);
+    }
+  }
+
+  toReceipt() {
+    return {
+      accumulator: 'bounded_histogram_v1',
+      bucketSize: this.bucketSize,
+      count: this.count,
+      min: this.min,
+      max: this.max,
+      bucketCount: this.buckets.size,
+      percentiles: this.percentiles(),
+    };
+  }
+
+  percentiles() {
+    if (this.count === 0) {
+      return emptyPercentiles();
+    }
+    const sortedBuckets = [...this.buckets.entries()].sort((a, b) => a[0] - b[0]);
+    return {
+      p0: this.min,
+      p1: this.percentileFromBuckets(sortedBuckets, 0.01),
+      p5: this.percentileFromBuckets(sortedBuckets, 0.05),
+      p25: this.percentileFromBuckets(sortedBuckets, 0.25),
+      p50: this.percentileFromBuckets(sortedBuckets, 0.5),
+      p75: this.percentileFromBuckets(sortedBuckets, 0.75),
+      p95: this.percentileFromBuckets(sortedBuckets, 0.95),
+      p99: this.percentileFromBuckets(sortedBuckets, 0.99),
+      p100: this.max,
+    };
+  }
+
+  percentileFromBuckets(sortedBuckets, rank) {
+    const targetOrdinal = Math.round((this.count - 1) * rank);
+    let seen = 0;
+    for (const [bucket, count] of sortedBuckets) {
+      seen += count;
+      if (seen > targetOrdinal) {
+        return bucket * this.bucketSize;
+      }
+    }
+    return this.max;
+  }
+}
+
+class DurationBucketAccumulator {
+  constructor() {
+    this.buckets = {
+      under_5m: 0,
+      from_5m_to_20m: 0,
+      from_20m_to_60m: 0,
+      from_60m_to_180m: 0,
+      over_180m: 0,
+    };
+  }
+
+  add(durationSeconds) {
+    if (durationSeconds < 5 * 60) {
+      this.buckets.under_5m += 1;
+    } else if (durationSeconds < 20 * 60) {
+      this.buckets.from_5m_to_20m += 1;
+    } else if (durationSeconds < 60 * 60) {
+      this.buckets.from_20m_to_60m += 1;
+    } else if (durationSeconds < 180 * 60) {
+      this.buckets.from_60m_to_180m += 1;
+    } else {
+      this.buckets.over_180m += 1;
+    }
+  }
+
+  toReceipt() {
+    return {
+      accumulator: 'bounded_duration_buckets_v1',
+      ...this.buckets,
     };
   }
 }
@@ -877,6 +1065,10 @@ class EdgeCaseAccumulator {
     this.originKindCounts = {
       captured: 0,
       restored: 0,
+    };
+    this.sourceTypeCounts = {
+      bilibili_subtitle: 0,
+      local_transcript: 0,
     };
     this.languageCounts = {};
     this.sourceVariantCounts = {
@@ -900,6 +1092,7 @@ class EdgeCaseAccumulator {
   addVersion(plan, analysis) {
     this.versionStateCounts[plan.versionState] += 1;
     this.originKindCounts[plan.originKind] += 1;
+    this.sourceTypeCounts[plan.sourceType] += 1;
     this.languageCounts[plan.language] = (this.languageCounts[plan.language] ?? 0) + 1;
     if (plan.sourceVariantKey === 'default') {
       this.sourceVariantCounts.default += 1;
@@ -942,6 +1135,7 @@ class EdgeCaseAccumulator {
     return {
       versionStates: this.versionStateCounts,
       originKinds: this.originKindCounts,
+      sourceTypes: this.sourceTypeCounts,
       languages: this.languageCounts,
       sourceVariants: this.sourceVariantCounts,
       multiPartVideoCount,
@@ -950,8 +1144,9 @@ class EdgeCaseAccumulator {
       changedTimelineDuplicateSourcePairs: this.changedTimelineDuplicateSourcePairs,
       unicodeCoverage: this.unicodeCoverage,
       futureLocalTranscriptRows: {
-        status: INSUFFICIENT_EVIDENCE,
-        reason: 'This fixture foundation reserves schema testing only and does not claim a local ASR capability.',
+        status: 'synthetic_schema_load_only',
+        rowCount: this.sourceTypeCounts.local_transcript,
+        claimsAsrCapability: false,
       },
     };
   }
@@ -1038,6 +1233,36 @@ function summarizeQueries(queries) {
   return {
     total: queries.length,
     byKind,
+  };
+}
+
+function malformedCandidate(candidateId, reasonCode, invalidField) {
+  return Object.freeze({
+    candidateId,
+    reasonCode,
+    invalidField,
+    excludedBeforeCanonicalBytes: true,
+  });
+}
+
+function malformedRowExclusionReceipt() {
+  const byReason = {};
+  for (const candidate of MALFORMED_CANDIDATE_SUITE) {
+    byReason[candidate.reasonCode] = (byReason[candidate.reasonCode] ?? 0) + 1;
+  }
+  const suiteBody = MALFORMED_CANDIDATE_SUITE
+    .map(candidate => canonicalLine(candidate))
+    .join('\n');
+
+  return {
+    suiteContract: 'gate-014-malformed-candidate-suite-v1',
+    total: MALFORMED_CANDIDATE_SUITE.length,
+    byReason,
+    candidateIds: MALFORMED_CANDIDATE_SUITE.map(candidate => candidate.candidateId),
+    emittedRecordCount: 0,
+    emittedCanonicalBytes: 0,
+    candidateSuiteSha256: sha256Hex(`${suiteBody}\n`),
+    exclusionStage: 'pre_canonical_validation',
   };
 }
 
@@ -1194,61 +1419,18 @@ function characterMixReceipt(mix) {
   return receipt;
 }
 
-function durationBuckets(durations) {
-  const buckets = {
-    under_5m: 0,
-    from_5m_to_20m: 0,
-    from_20m_to_60m: 0,
-    from_60m_to_180m: 0,
-    over_180m: 0,
-  };
-  for (const duration of durations) {
-    if (duration < 5 * 60) {
-      buckets.under_5m += 1;
-    } else if (duration < 20 * 60) {
-      buckets.from_5m_to_20m += 1;
-    } else if (duration < 60 * 60) {
-      buckets.from_20m_to_60m += 1;
-    } else if (duration < 180 * 60) {
-      buckets.from_60m_to_180m += 1;
-    } else {
-      buckets.over_180m += 1;
-    }
-  }
-  return buckets;
-}
-
-function percentiles(values) {
-  if (values.length === 0) {
-    return {
-      p0: null,
-      p1: null,
-      p5: null,
-      p25: null,
-      p50: null,
-      p75: null,
-      p95: null,
-      p99: null,
-      p100: null,
-    };
-  }
-  const sorted = [...values].sort((a, b) => a - b);
+function emptyPercentiles() {
   return {
-    p0: percentile(sorted, 0),
-    p1: percentile(sorted, 0.01),
-    p5: percentile(sorted, 0.05),
-    p25: percentile(sorted, 0.25),
-    p50: percentile(sorted, 0.5),
-    p75: percentile(sorted, 0.75),
-    p95: percentile(sorted, 0.95),
-    p99: percentile(sorted, 0.99),
-    p100: percentile(sorted, 1),
+    p0: null,
+    p1: null,
+    p5: null,
+    p25: null,
+    p50: null,
+    p75: null,
+    p95: null,
+    p99: null,
+    p100: null,
   };
-}
-
-function percentile(sorted, rank) {
-  const index = Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * rank)));
-  return sorted[index];
 }
 
 function roundRatio(numerator, denominator) {
@@ -1311,6 +1493,79 @@ function byteLengthWithLf(value) {
   return byteLength(value) + 1;
 }
 
+async function hashFile(filePath) {
+  const hash = createHash('sha256');
+  let bytes = 0;
+  const stream = createReadStream(filePath);
+  for await (const chunk of stream) {
+    hash.update(chunk);
+    bytes += chunk.length;
+  }
+  return {
+    bytes,
+    sha256: hash.digest('hex'),
+  };
+}
+
+async function pathExists(targetPath) {
+  try {
+    await lstat(targetPath);
+    return true;
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function resolveCleanupDirectory(options) {
+  const intendedDirectory = path.resolve(REPOSITORY_ROOT, GENERATED_FIXTURE_RELATIVE_DIR);
+  const outputDirectory = path.resolve(options.outputDirectory ?? intendedDirectory);
+  const allowCustomOutputDirectoryForTests = options.allowCustomOutputDirectoryForTests === true;
+
+  if (
+    isUnsafeCleanupDirectory(outputDirectory)
+    || (!allowCustomOutputDirectoryForTests && outputDirectory !== intendedDirectory)
+  ) {
+    throw new Error('Refusing to clean unsafe GATE-014 fixture directory');
+  }
+
+  await mkdir(outputDirectory, { recursive: true });
+  const directoryStats = await lstat(outputDirectory);
+  if (!directoryStats.isDirectory() || directoryStats.isSymbolicLink()) {
+    throw new Error('Refusing to clean unsafe GATE-014 fixture directory');
+  }
+
+  const parentRealPath = await realpath(path.dirname(outputDirectory));
+  const directoryRealPath = await realpath(outputDirectory);
+  const expectedRealPath = path.join(parentRealPath, path.basename(outputDirectory));
+  if (normalizePathForCompare(directoryRealPath) !== normalizePathForCompare(expectedRealPath)) {
+    throw new Error('Refusing to clean unsafe GATE-014 fixture directory');
+  }
+  return outputDirectory;
+}
+
+function isUnsafeCleanupDirectory(outputDirectory) {
+  const root = path.parse(outputDirectory).root;
+  return normalizePathForCompare(outputDirectory) === normalizePathForCompare(root)
+    || normalizePathForCompare(outputDirectory) === normalizePathForCompare(REPOSITORY_ROOT)
+    || normalizePathForCompare(outputDirectory) === normalizePathForCompare(path.dirname(REPOSITORY_ROOT));
+}
+
+function normalizePathForCompare(targetPath) {
+  return path.resolve(targetPath).replaceAll('\\', '/').toLowerCase();
+}
+
+function isKnownGeneratedTempArtifactName(name) {
+  for (const definition of FIXTURE_DEFINITIONS) {
+    if (name.startsWith(`.${definition.id}.`) && name.endsWith('.tmp')) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function assertWellFormedString(value) {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -1330,6 +1585,18 @@ async function main(argv) {
   const args = parseArgs(argv);
   if (args.help) {
     printHelp();
+    return;
+  }
+
+  if (args.cleanupGenerated) {
+    const receipt = await cleanupGeneratedFixtureArtifacts({
+      outputDirectory: path.resolve(REPOSITORY_ROOT, args.outputDir),
+    });
+    console.log(JSON.stringify({
+      generatorVersion: GENERATOR_VERSION,
+      cleanupGenerated: true,
+      receipt,
+    }, null, 2));
     return;
   }
 
@@ -1377,6 +1644,7 @@ function parseArgs(argv) {
     receiptDir: GOLDEN_RECEIPT_RELATIVE_DIR,
     outputDir: GENERATED_FIXTURE_RELATIVE_DIR,
     writeArtifacts: false,
+    cleanupGenerated: false,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -1393,6 +1661,8 @@ function parseArgs(argv) {
       result.outputDir = argv[++index];
     } else if (arg === '--write-artifacts') {
       result.writeArtifacts = true;
+    } else if (arg === '--cleanup-generated') {
+      result.cleanupGenerated = true;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
@@ -1408,6 +1678,7 @@ Options:
   --seed <seed>            Deterministic public-safe seed. Default: ${DEFAULT_SEED}
   --receipt-dir <path>     Receipt output directory. Default: ${GOLDEN_RECEIPT_RELATIVE_DIR}
   --write-artifacts        Also write generated JSONL fixtures under --output-dir. Opt-in only.
+  --cleanup-generated      Remove only known generated GATE-014 JSONL/temp artifacts.
   --output-dir <path>      Generated artifact directory. Default: ${GENERATED_FIXTURE_RELATIVE_DIR}
 `);
 }

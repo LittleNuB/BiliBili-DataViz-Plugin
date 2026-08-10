@@ -19,6 +19,7 @@
     "package:release": "npm run build && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1",
     "gate014:fixtures:receipts": "node scripts/gate-014-fixture-generator.mjs --fixture all",
     "gate014:fixtures:write": "node scripts/gate-014-fixture-generator.mjs --fixture all --write-artifacts",
+    "gate014:fixtures:cleanup": "node scripts/gate-014-fixture-generator.mjs --cleanup-generated",
     "test:gate014": "node --test tests/gate-014-fixtures.test.ts",
     "test:experiments": "node --test tests/experiment-blind-boxes.test.ts",
     "test:favorites": "node --test tests/favorite-sync-audit.test.ts tests/favorite-folder-gap-probe.test.ts tests/favorite-itemkey-persistence.test.ts tests/smart-favorite-index.test.ts tests/smart-favorites-qa.test.ts",

@@ -10,7 +10,10 @@ Commands:
 ```sh
 npm run gate014:fixtures:receipts
 npm run gate014:fixtures:write
+npm run gate014:fixtures:cleanup
 npm run test:gate014
 ```
 
-The synthetic profile is public-safe fixture material only. The receipts use `insufficient_evidence` for real Bilibili subtitle representativeness and for browser-only metrics that require later gate runs.
+`gate014:fixtures:cleanup` removes only known generated fixture JSONL and generator temp names after resolving and verifying the intended generated directory.
+
+The synthetic profile is public-safe fixture material only. The receipts use `insufficient_evidence` for real Bilibili subtitle representativeness, maximum measured-tail claims, and browser-only metrics that require later gate runs. Synthetic `local_transcript` rows are schema/load edge cases only and do not claim local ASR availability.
