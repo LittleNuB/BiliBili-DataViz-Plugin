@@ -185,10 +185,6 @@ export async function runFixtureLifecycleAfterRestart(config, checkpoint) {
     operations.push(cancellation);
     checks.cancellation = cancellation.readbackVerified;
 
-    const selectedRemoval = await runSelectedVersionRemoval(database, config);
-    operations.push(selectedRemoval);
-    checks.selectedRemoval = selectedRemoval.readbackVerified;
-
     const fullClear = await runFullClear(database, config);
     operations.push(fullClear);
     checks.fullClear = fullClear.readbackVerified;
@@ -201,6 +197,10 @@ export async function runFixtureLifecycleAfterRestart(config, checkpoint) {
     const quotaFailure = await runQuotaFailure(database, config);
     operations.push(quotaFailure);
     checks.quotaFailure = quotaFailure.readbackVerified;
+
+    const selectedRemoval = await runSelectedVersionRemoval(database, config);
+    operations.push(selectedRemoval);
+    checks.selectedRemoval = selectedRemoval.readbackVerified;
   } finally {
     database?.close();
     const storageBeforeDelete = await readStorageEstimate();
@@ -361,6 +361,7 @@ async function runRestartRecovery(config, operationId) {
         totalDurationMs: operationDurationMs,
         committedBatchCount: 0,
         committedBatchDurationsMs: [],
+        readBatchDurationsMs: [stateReadDurationMs],
         batchDurationsMs: [
           stateReadDurationMs,
           normalizationOperation.batchDurationsMs[0],
@@ -512,6 +513,7 @@ async function runAdmission(database, config, operationKind) {
           return {
             committedBatchCount: 1,
             committedBatchDurationsMs: [duration],
+            readBatchDurationsMs: [],
             batchDurationsMs: [duration],
             progressEventOffsetsMs: [
               performance.now() - commitContext.startedAt,
@@ -531,6 +533,7 @@ async function runAdmission(database, config, operationKind) {
           operationCreateDurationMs,
           ...writeResult.batchDurationsMs,
         ],
+        readBatchDurationsMs: [],
         batchDurationsMs: [
           operationCreateDurationMs,
           ...writeResult.batchDurationsMs,
@@ -587,7 +590,7 @@ async function runOrderedRead(database, config) {
           filter: (value) =>
             value.visible === true || typeof value.operationId === "string",
           byteSelector: (value) => value.canonicalBytes,
-          visitBatch: () => context.metrics.sampleHeap(),
+          afterReadBatch: () => context.metrics.sampleHeap(),
         },
       );
       const segments = await scanStoreInBatches(
@@ -597,12 +600,16 @@ async function runOrderedRead(database, config) {
         {
           startedAt: context.startedAt,
           byteSelector: (value) => value.canonicalBytes,
-          visitBatch: () => context.metrics.sampleHeap(),
+          afterReadBatch: () => context.metrics.sampleHeap(),
         },
       );
       return {
         committedBatchCount: 0,
         committedBatchDurationsMs: [],
+        readBatchDurationsMs: [
+          ...versions.readBatchDurationsMs,
+          ...segments.readBatchDurationsMs,
+        ],
         batchDurationsMs: [
           ...versions.batchDurationsMs,
           ...segments.batchDurationsMs,
@@ -639,7 +646,7 @@ async function runMarkerNormalization(database, config, operationId) {
         config.candidate,
         {
           startedAt: context.startedAt,
-          visitBatch: async (batch) => {
+          writeBatch: async (batch) => {
             await updateValues(database, "versions", batch.values, (value) => ({
               ...value,
               operationId: null,
@@ -658,7 +665,7 @@ async function runMarkerNormalization(database, config, operationId) {
         config.candidate,
         {
           startedAt: context.startedAt,
-          visitBatch: async (batch) => {
+          writeBatch: async (batch) => {
             await updateValues(database, "segments", batch.values, (value) => ({
               ...value,
               operationId: null,
@@ -688,6 +695,10 @@ async function runMarkerNormalization(database, config, operationId) {
           ...versions.committedBatchDurationsMs,
           ...segments.committedBatchDurationsMs,
           operationDeleteDurationMs,
+        ],
+        readBatchDurationsMs: [
+          ...versions.readBatchDurationsMs,
+          ...segments.readBatchDurationsMs,
         ],
         batchDurationsMs: [
           ...versions.batchDurationsMs,
@@ -734,7 +745,7 @@ async function runLedgerRepair(database, config) {
           startedAt: context.startedAt,
           filter: (value) => value.visible === true,
           byteSelector: (value) => value.canonicalBytes,
-          visitBatch: () => context.metrics.sampleHeap(),
+          afterReadBatch: () => context.metrics.sampleHeap(),
         },
       );
       startedAt = performance.now();
@@ -755,6 +766,7 @@ async function runLedgerRepair(database, config) {
       return {
         committedBatchCount: 2,
         committedBatchDurationsMs: [...batchDurationsMs],
+        readBatchDurationsMs: [...versions.readBatchDurationsMs],
         batchDurationsMs: [
           batchDurationsMs[0],
           ...versions.batchDurationsMs,
@@ -1066,7 +1078,7 @@ async function runFullVersionAtomicRollback(database, config) {
         {
           startedAt: context.startedAt,
           byteSelector: (value) => value.canonicalBytes,
-          visitBatch: async (batch) => {
+          writeBatch: async (batch) => {
             await transactionPromise(
               database,
               ["versions", "segments"],
@@ -1185,6 +1197,10 @@ async function runFullVersionAtomicRollback(database, config) {
           ...copied.committedBatchDurationsMs,
           ...cleanup.committedBatchDurationsMs,
         ],
+        readBatchDurationsMs: [
+          ...copied.readBatchDurationsMs,
+          ...cleanup.readBatchDurationsMs,
+        ],
         batchDurationsMs: [
           operationCreateDurationMs,
           ...copied.batchDurationsMs,
@@ -1301,8 +1317,12 @@ async function runCancellation(database, config) {
         committedBatchDurationsMs: [
           operationCreateDurationMs,
           versionCreateDurationMs,
-          ...copyResult.batchDurationsMs,
+          ...copyResult.committedBatchDurationsMs,
           ...cleanup.committedBatchDurationsMs,
+        ],
+        readBatchDurationsMs: [
+          ...copyResult.readBatchDurationsMs,
+          ...cleanup.readBatchDurationsMs,
         ],
         batchDurationsMs: [
           operationCreateDurationMs,
@@ -1335,7 +1355,8 @@ async function runCancellation(database, config) {
 }
 
 async function copySegmentsUntilCancelled(database, options) {
-  const batchDurationsMs = [];
+  const committedBatchDurationsMs = [];
+  const readBatchDurationsMs = [];
   const progressEventOffsetsMs = [];
   let lastKey;
   let nextOrdinal = 0;
@@ -1346,6 +1367,7 @@ async function copySegmentsUntilCancelled(database, options) {
       cancellationAcknowledgedAt = performance.now();
       break;
     }
+    const readStartedAt = performance.now();
     const source = await readStoreBatch(
       database,
       "segments",
@@ -1353,6 +1375,7 @@ async function copySegmentsUntilCancelled(database, options) {
       lastKey,
       (value) => value.operationId === null,
     );
+    readBatchDurationsMs.push(performance.now() - readStartedAt);
     if (options.signal.aborted) {
       cancellationAcknowledgedAt = performance.now();
       break;
@@ -1385,19 +1408,21 @@ async function copySegmentsUntilCancelled(database, options) {
         });
       },
     );
-    batchDurationsMs.push(performance.now() - startedAt);
+    committedBatchDurationsMs.push(performance.now() - startedAt);
     lastKey = source.keys.at(-1);
     progressEventOffsetsMs.push(performance.now() - options.context.startedAt);
     options.context.metrics.sampleHeap();
-    options.onBatch?.(batchDurationsMs.length);
+    options.onBatch?.(committedBatchDurationsMs.length);
     if (source.done) {
       break;
     }
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   return {
-    batchCount: batchDurationsMs.length,
-    batchDurationsMs,
+    batchCount: committedBatchDurationsMs.length,
+    committedBatchDurationsMs,
+    batchDurationsMs: [...readBatchDurationsMs, ...committedBatchDurationsMs],
+    readBatchDurationsMs,
     cancellationAcknowledgedAt,
     progressEventOffsetsMs,
   };
@@ -1443,7 +1468,7 @@ async function cleanupStagedOperation(
     candidate,
     {
       startedAt,
-      visitBatch: (batch) => deleteKeys(database, "segments", batch.keys),
+      writeBatch: (batch) => deleteKeys(database, "segments", batch.keys),
     },
   );
   const metadataStartedAt = performance.now();
@@ -1461,6 +1486,7 @@ async function cleanupStagedOperation(
       ...segments.committedBatchDurationsMs,
       metadataDurationMs,
     ],
+    readBatchDurationsMs: [...segments.readBatchDurationsMs],
     batchDurationsMs: [...segments.batchDurationsMs, metadataDurationMs],
     progressEventOffsetsMs: [
       ...segments.progressEventOffsetsMs,
@@ -1499,7 +1525,11 @@ async function runSelectedVersionRemoval(database, config) {
             transaction.abort();
             return;
           }
-          versions.put({ ...selected, visible: false });
+          versions.put({
+            ...selected,
+            operationId: null,
+            visible: false,
+          });
           state.put({
             ...ledger,
             canonicalBytes: ledger.canonicalBytes - selected.canonicalBytes,
@@ -1521,7 +1551,7 @@ async function runSelectedVersionRemoval(database, config) {
         config.candidate,
         {
           startedAt: context.startedAt,
-          visitBatch: (batch) => deleteKeys(database, "segments", batch.keys),
+          writeBatch: (batch) => deleteKeys(database, "segments", batch.keys),
         },
       );
       startedAt = performance.now();
@@ -1549,6 +1579,7 @@ async function runSelectedVersionRemoval(database, config) {
           ...deletedSegments.committedBatchDurationsMs,
           batchDurationsMs[1],
         ],
+        readBatchDurationsMs: [...deletedSegments.readBatchDurationsMs],
         batchDurationsMs: [
           batchDurationsMs[0],
           ...deletedSegments.batchDurationsMs,
@@ -1578,7 +1609,10 @@ async function runSelectedVersionRemoval(database, config) {
   );
 }
 
-function firstVisibleVersion(database) {
+async function firstVisibleVersion(database) {
+  const committedOperationIds = await collectCommittedOperationIds(
+    database.transaction("operations", "readonly").objectStore("operations"),
+  );
   return new Promise((resolve, reject) => {
     const request = database
       .transaction("versions", "readonly")
@@ -1590,7 +1624,10 @@ function firstVisibleVersion(database) {
         resolve(null);
         return;
       }
-      if (cursor.value.visible === true) {
+      if (
+        cursor.value.visible === true ||
+        committedOperationIds.has(cursor.value.operationId)
+      ) {
         resolve(cursor.value);
         return;
       }
@@ -1603,6 +1640,25 @@ function firstVisibleVersion(database) {
 
 async function runFullClear(database, config) {
   return measureOperation(database, "full_clear", "stable", async (context) => {
+    const [preClearVersionCount, preClearSegmentCount, preClearLedger] =
+      await Promise.all([
+        getStoreCount(database, "versions"),
+        getStoreCount(database, "segments"),
+        requestResult(
+          database
+            .transaction("state", "readonly")
+            .objectStore("state")
+            .get("managed-full-text-ledger"),
+        ),
+      ]);
+    if (
+      preClearVersionCount !== config.expectedVersionCount ||
+      preClearSegmentCount !== config.expectedSegmentCount ||
+      preClearLedger?.canonicalBytes !== config.expectedCanonicalBytes ||
+      preClearLedger?.versionCount !== config.expectedVersionCount
+    ) {
+      throw new Error("fixture_full_clear_precondition_failed");
+    }
     const batchDurationsMs = [];
     let startedAt = performance.now();
     await transactionPromise(database, ["state"], (transaction) => {
@@ -1621,7 +1677,7 @@ async function runFullClear(database, config) {
       config.candidate,
       {
         startedAt: context.startedAt,
-        visitBatch: (batch) => deleteKeys(database, "segments", batch.keys),
+        writeBatch: (batch) => deleteKeys(database, "segments", batch.keys),
       },
     );
     const versions = await scanStoreInBatches(
@@ -1630,7 +1686,7 @@ async function runFullClear(database, config) {
       config.candidate,
       {
         startedAt: context.startedAt,
-        visitBatch: (batch) => deleteKeys(database, "versions", batch.keys),
+        writeBatch: (batch) => deleteKeys(database, "versions", batch.keys),
       },
     );
     startedAt = performance.now();
@@ -1673,6 +1729,10 @@ async function runFullClear(database, config) {
         ...versions.committedBatchDurationsMs,
         batchDurationsMs[1],
       ],
+      readBatchDurationsMs: [
+        ...segments.readBatchDurationsMs,
+        ...versions.readBatchDurationsMs,
+      ],
       batchDurationsMs: [
         batchDurationsMs[0],
         ...segments.batchDurationsMs,
@@ -1693,7 +1753,14 @@ async function runFullClear(database, config) {
         operationCount === 0 &&
         ledger?.canonicalBytes === 0 &&
         ledger?.versionCount === 0,
-      detail: { versionCount, segmentCount, operationCount },
+      detail: {
+        preClearVersionCount,
+        preClearSegmentCount,
+        preClearCanonicalBytes: preClearLedger.canonicalBytes,
+        versionCount,
+        segmentCount,
+        operationCount,
+      },
     };
   });
 }
@@ -1742,10 +1809,12 @@ async function runQuotaFailure(database, config) {
           total + Math.abs(afterCounts[storeName] - beforeCounts[storeName]),
         0,
       );
+      const readDurationMs = performance.now() - startedAt;
       return {
         committedBatchCount: 0,
         committedBatchDurationsMs: [],
-        batchDurationsMs: [performance.now() - startedAt],
+        readBatchDurationsMs: [readDurationMs],
+        batchDurationsMs: [readDurationMs],
         progressEventOffsetsMs: [performance.now() - context.startedAt],
         readbackVerified:
           refusalProbe.refusedBeforeWrite &&
@@ -1827,11 +1896,16 @@ async function measureOperation(database, operation, expectedDirection, task) {
   const result = await task({ startedAt, metrics });
   const committedBatchCount = result.committedBatchCount;
   const committedBatchDurationsMs = result.committedBatchDurationsMs;
+  const readBatchDurationsMs = result.readBatchDurationsMs ?? [];
   if (
     !Number.isSafeInteger(committedBatchCount) ||
     committedBatchCount < 0 ||
     !Array.isArray(committedBatchDurationsMs) ||
-    committedBatchDurationsMs.length !== committedBatchCount
+    committedBatchDurationsMs.length !== committedBatchCount ||
+    !Array.isArray(readBatchDurationsMs) ||
+    readBatchDurationsMs.some(
+      (duration) => !Number.isFinite(duration) || duration < 0,
+    )
   ) {
     throw new Error("fixture_committed_batch_evidence_mismatch");
   }
@@ -1851,6 +1925,7 @@ async function measureOperation(database, operation, expectedDirection, task) {
     totalDurationMs,
     committedBatchCount,
     committedBatchDurationsMs: [...committedBatchDurationsMs],
+    readBatchDurationsMs: [...readBatchDurationsMs],
     batchDurationsMs: result.batchDurationsMs,
     progressEventOffsetsMs: normalizeProgressEvents(
       progressEventOffsetsMs,
@@ -2413,6 +2488,7 @@ async function scanStoreInBatches(
   options = {},
 ) {
   const batches = [];
+  const readBatchDurationsMs = [];
   const committedBatchDurationsMs = [];
   const progressEventOffsetsMs = [];
   const startedAt = options.startedAt ?? performance.now();
@@ -2443,13 +2519,16 @@ async function scanStoreInBatches(
       totalCanonicalBytes +=
         options.byteSelector?.(value) ?? value.canonicalBytes ?? 0;
     }
-    batches.push(performance.now() - batchStartedAt);
-    if (options.visitBatch) {
-      const visitStartedAt = performance.now();
-      await options.visitBatch(batch);
-      const visitDurationMs = performance.now() - visitStartedAt;
-      committedBatchDurationsMs.push(visitDurationMs);
-      batches.push(visitDurationMs);
+    const readDurationMs = performance.now() - batchStartedAt;
+    readBatchDurationsMs.push(readDurationMs);
+    batches.push(readDurationMs);
+    options.afterReadBatch?.(batch);
+    if (options.writeBatch) {
+      const writeStartedAt = performance.now();
+      await options.writeBatch(batch);
+      const writeDurationMs = performance.now() - writeStartedAt;
+      committedBatchDurationsMs.push(writeDurationMs);
+      batches.push(writeDurationMs);
     }
     lastKey = batch.keys.at(-1);
     progressEventOffsetsMs.push(performance.now() - startedAt);
@@ -2459,6 +2538,7 @@ async function scanStoreInBatches(
   }
   return {
     batchDurationsMs: batches,
+    readBatchDurationsMs,
     committedBatchDurationsMs,
     progressEventOffsetsMs,
     totalCount,
@@ -2475,6 +2555,7 @@ async function scanIndexInBatches(
   options = {},
 ) {
   const batches = [];
+  const readBatchDurationsMs = [];
   const committedBatchDurationsMs = [];
   const progressEventOffsetsMs = [];
   const startedAt = options.startedAt ?? performance.now();
@@ -2499,13 +2580,16 @@ async function scanIndexInBatches(
       totalCanonicalBytes +=
         options.byteSelector?.(value) ?? value.canonicalBytes ?? 0;
     }
-    batches.push(performance.now() - batchStartedAt);
-    if (options.visitBatch) {
-      const visitStartedAt = performance.now();
-      await options.visitBatch(batch);
-      const visitDurationMs = performance.now() - visitStartedAt;
-      committedBatchDurationsMs.push(visitDurationMs);
-      batches.push(visitDurationMs);
+    const readDurationMs = performance.now() - batchStartedAt;
+    readBatchDurationsMs.push(readDurationMs);
+    batches.push(readDurationMs);
+    options.afterReadBatch?.(batch);
+    if (options.writeBatch) {
+      const writeStartedAt = performance.now();
+      await options.writeBatch(batch);
+      const writeDurationMs = performance.now() - writeStartedAt;
+      committedBatchDurationsMs.push(writeDurationMs);
+      batches.push(writeDurationMs);
     }
     lastPrimaryKey = batch.keys.at(-1);
     progressEventOffsetsMs.push(performance.now() - startedAt);
@@ -2515,6 +2599,7 @@ async function scanIndexInBatches(
   }
   return {
     batchDurationsMs: batches,
+    readBatchDurationsMs,
     committedBatchDurationsMs,
     progressEventOffsetsMs,
     totalCount,

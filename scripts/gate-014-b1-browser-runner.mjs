@@ -185,10 +185,15 @@ export function validateChromeForTestingMetadata(metadata, officialStable) {
   ) {
     throw new Error("official_cft_stable_metadata_required");
   }
-  const version = metadata?.productVersion?.match(/\d+\.\d+\.\d+\.\d+/)?.[0];
-  if (!/Chrome for Testing/i.test(metadata?.productName ?? "") || !version) {
+  const productName = metadata?.productName;
+  const productVersion = metadata?.productVersion;
+  if (
+    productName !== "Google Chrome for Testing" ||
+    !/^\d+\.\d+\.\d+\.\d+$/.test(productVersion ?? "")
+  ) {
     throw new Error("official_chrome_for_testing_required");
   }
+  const version = productVersion;
   if (version !== officialStable.version) {
     throw new Error("chrome_for_testing_stable_version_mismatch");
   }
@@ -627,6 +632,25 @@ function validateLifecycleAfterRestart(result, config) {
   ) {
     throw new Error("browser_fixture_lifecycle_after_operations_invalid");
   }
+  const expectedOperationOrder = [
+    "restart",
+    "marker_normalization",
+    "ordered_read",
+    "ledger_repair",
+    "capacity_boundary",
+    "atomic_version",
+    "cancellation",
+    "full_clear",
+    "restore_staging",
+    "quota_failure",
+    "selected_version_removal",
+  ];
+  if (
+    result.operations.map((operation) => operation?.operation).join("|") !==
+    expectedOperationOrder.join("|")
+  ) {
+    throw new Error("browser_fixture_lifecycle_after_operation_order_invalid");
+  }
   return result;
 }
 
@@ -847,10 +871,7 @@ async function evaluateInHarnessProfile(
     }
     throw error;
   } finally {
-    if (!chrome.killed) {
-      chrome.kill();
-    }
-    await waitForProcessExit(chrome);
+    await terminateChromeProcessTree(chrome);
   }
 }
 
@@ -1303,14 +1324,48 @@ async function waitForDevToolsPort(profileDirectory, chrome) {
   throw new Error("chrome_devtools_start_timeout");
 }
 
-function waitForProcessExit(child) {
+export function waitForProcessExit(child, timeoutMs = 5_000) {
   if (child.exitCode !== null) {
-    return Promise.resolve();
+    return Promise.resolve(true);
   }
   return new Promise((resolve) => {
-    child.once("exit", resolve);
-    setTimeout(resolve, 5_000).unref();
+    const onExit = () => {
+      clearTimeout(timeoutId);
+      resolve(true);
+    };
+    const timeoutId = setTimeout(() => {
+      child.removeListener("exit", onExit);
+      resolve(false);
+    }, timeoutMs);
+    timeoutId.unref();
+    child.once("exit", onExit);
   });
+}
+
+async function terminateChromeProcessTree(child) {
+  if (child.exitCode !== null) {
+    return;
+  }
+  if (!Number.isSafeInteger(child.pid) || child.pid < 1) {
+    throw new Error("chrome_process_identity_unavailable");
+  }
+  if (process.platform === "win32") {
+    try {
+      await execFile("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+        windowsHide: true,
+        timeout: 10_000,
+      });
+    } catch {
+      if (child.exitCode === null) {
+        throw new Error("chrome_process_tree_termination_failed");
+      }
+    }
+  } else if (!child.kill("SIGKILL")) {
+    throw new Error("chrome_process_tree_termination_failed");
+  }
+  if (!(await waitForProcessExit(child))) {
+    throw new Error("chrome_process_exit_timeout");
+  }
 }
 
 function delay(milliseconds) {

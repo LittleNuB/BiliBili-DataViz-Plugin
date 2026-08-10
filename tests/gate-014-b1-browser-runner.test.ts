@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import path from "node:path";
 import test from "node:test";
 
@@ -13,6 +14,7 @@ import {
   validateChromeForTestingMetadata,
   validateOfficialCftStableMetadata,
   validateSmokeResult,
+  waitForProcessExit,
 } from "../scripts/gate-014-b1-browser-runner.mjs";
 import {
   assertFixtureRecordFitsCandidate,
@@ -131,6 +133,33 @@ test("GATE-014-B1 requires the executable version to match the declared official
       ),
     /official_chrome_for_testing_required/,
   );
+  for (const candidate of [
+    {
+      productName: "Not Google Chrome for Testing",
+      productVersion: "151.0.7922.77",
+    },
+    {
+      productName: "Google Chrome for Testing",
+      productVersion: "151.0.7922.77-custom",
+    },
+    {
+      productName: "Google Chrome for Testing",
+      productVersion: "v151.0.7922.77",
+    },
+    {
+      productName: " Google Chrome for Testing",
+      productVersion: "151.0.7922.77",
+    },
+    {
+      productName: "Google Chrome for Testing",
+      productVersion: "151.0.7922.77 ",
+    },
+  ]) {
+    assert.throws(
+      () => validateChromeForTestingMetadata(candidate, officialStable),
+      /official_chrome_for_testing_required/,
+    );
+  }
   assert.throws(
     () =>
       validateOfficialCftStableMetadata(
@@ -156,6 +185,22 @@ test("GATE-014-B1 requires the executable version to match the declared official
       ),
     /official_cft_stable_metadata_invalid/,
   );
+});
+
+test("GATE-014-B1 process exit observation fails closed on timeout", async () => {
+  const timedOutChild = new EventEmitter();
+  timedOutChild.exitCode = null;
+  assert.equal(await waitForProcessExit(timedOutChild, 5), false);
+  assert.equal(timedOutChild.listenerCount("exit"), 0);
+
+  const exitingChild = new EventEmitter();
+  exitingChild.exitCode = null;
+  const exitPromise = waitForProcessExit(exitingChild, 1_000);
+  setImmediate(() => {
+    exitingChild.exitCode = 0;
+    exitingChild.emit("exit", 0);
+  });
+  assert.equal(await exitPromise, true);
 });
 
 test("GATE-014-B1 browser observation fails closed on external requests or console errors", () => {

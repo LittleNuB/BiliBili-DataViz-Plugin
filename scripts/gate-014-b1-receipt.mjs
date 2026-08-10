@@ -54,6 +54,27 @@ const TOTAL_DURATION_LIMITS_MS = Object.freeze({
 });
 
 const OPERATION_KINDS = new Set(B1_OPERATION_KINDS);
+const OPERATIONS_REQUIRING_COMMITTED_WRITE_TIMING = new Set([
+  "admission",
+  "commit_visibility",
+  "marker_normalization",
+  "ledger_repair",
+  "capacity_boundary",
+  "cancellation",
+  "selected_version_removal",
+  "full_clear",
+  "restore_staging",
+]);
+const OPERATIONS_REQUIRING_READ_BATCH_TIMING = new Set([
+  "restart",
+  "marker_normalization",
+  "ordered_read",
+  "ledger_repair",
+  "cancellation",
+  "selected_version_removal",
+  "full_clear",
+  "quota_failure",
+]);
 
 const ASSERTION_FIELDS = Object.freeze([
   "atomicVersionCommitOrRollback",
@@ -540,6 +561,7 @@ export function createB1OperationReceipt(input) {
     "totalDurationMs",
     "committedBatchCount",
     "committedBatchDurationsMs",
+    "readBatchDurationsMs",
     "batchDurationsMs",
     "progressEventOffsetsMs",
     "restart",
@@ -585,6 +607,11 @@ export function createB1OperationReceipt(input) {
       "committedBatchCount must match committedBatchDurationsMs length",
     );
   }
+  const readBatchDurationsMs = validateNumberArray(
+    input.readBatchDurationsMs,
+    "readBatchDurationsMs",
+    { minimumLength: 0 },
+  );
   const batchDurationsMs = validateNumberArray(
     input.batchDurationsMs,
     "batchDurationsMs",
@@ -611,6 +638,9 @@ export function createB1OperationReceipt(input) {
   const sortedInstrumentedBatchDurations = [...batchDurationsMs].sort(
     (left, right) => left - right,
   );
+  const sortedReadBatchDurations = [...readBatchDurationsMs].sort(
+    (left, right) => left - right,
+  );
   const batchDurationMedianMs =
     sortedCommittedBatchDurations.length === 0
       ? null
@@ -630,6 +660,15 @@ export function createB1OperationReceipt(input) {
   );
   const instrumentedBatchDurationMaximumMs =
     sortedInstrumentedBatchDurations.at(-1);
+  const readBatchDurationMedianMs =
+    sortedReadBatchDurations.length === 0
+      ? null
+      : percentile(sortedReadBatchDurations, 0.5);
+  const readBatchDurationP95Ms =
+    sortedReadBatchDurations.length === 0
+      ? null
+      : percentile(sortedReadBatchDurations, 0.95);
+  const readBatchDurationMaximumMs = sortedReadBatchDurations.at(-1) ?? null;
   const progress = calculateProgressMetrics(
     progressEventOffsetsMs,
     totalDurationMs,
@@ -637,6 +676,24 @@ export function createB1OperationReceipt(input) {
 
   const failures = [];
   const insufficientEvidence = [];
+  if (
+    OPERATIONS_REQUIRING_COMMITTED_WRITE_TIMING.has(operation) &&
+    committedBatchCount === 0
+  ) {
+    insufficientEvidence.push("committed_write_timing_unavailable");
+  }
+  if (
+    OPERATIONS_REQUIRING_READ_BATCH_TIMING.has(operation) &&
+    readBatchDurationsMs.length === 0
+  ) {
+    insufficientEvidence.push("read_batch_timing_unavailable");
+  }
+  if (
+    committedBatchDurationsMs.length + readBatchDurationsMs.length >
+    batchDurationsMs.length
+  ) {
+    failures.push("classified_batch_count_exceeds_instrumented_count");
+  }
   const totalDurationLimitMs = TOTAL_DURATION_LIMITS_MS[operation] ?? null;
   if (totalDurationLimitMs !== null && totalDurationMs > totalDurationLimitMs) {
     failures.push("total_duration_exceeded");
@@ -732,6 +789,10 @@ export function createB1OperationReceipt(input) {
     instrumentedBatchDurationMedianMs,
     instrumentedBatchDurationP95Ms,
     instrumentedBatchDurationMaximumMs,
+    readBatchCount: readBatchDurationsMs.length,
+    readBatchDurationMedianMs,
+    readBatchDurationP95Ms,
+    readBatchDurationMaximumMs,
     firstProgressEventLatencyMs: progress.firstLatencyMs,
     maximumProgressEventGapMs: progress.maximumGapMs,
     restart,
@@ -963,6 +1024,9 @@ function createB1RunSummaries(operations) {
             const committedBatchDurationsMs = matching
               .flatMap((receipt) => receipt.committedBatchDurationsMs)
               .sort((left, right) => left - right);
+            const readBatchDurationsMs = matching
+              .flatMap((receipt) => receipt.readBatchDurationsMs)
+              .sort((left, right) => left - right);
             summaries.push(
               deepFreeze({
                 candidate: deepFreeze({ recordCap, byteCapBytes }),
@@ -991,6 +1055,16 @@ function createB1RunSummaries(operations) {
                     : percentile(committedBatchDurationsMs, 0.95),
                 committedBatchDurationMaximumMs:
                   committedBatchDurationsMs.at(-1) ?? null,
+                readBatchMeasurementCount: readBatchDurationsMs.length,
+                readBatchDurationMedianMs:
+                  readBatchDurationsMs.length === 0
+                    ? null
+                    : percentile(readBatchDurationsMs, 0.5),
+                readBatchDurationP95Ms:
+                  readBatchDurationsMs.length === 0
+                    ? null
+                    : percentile(readBatchDurationsMs, 0.95),
+                readBatchDurationMaximumMs: readBatchDurationsMs.at(-1) ?? null,
               }),
             );
           }

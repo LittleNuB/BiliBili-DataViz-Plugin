@@ -150,6 +150,7 @@ function passingOperation(overrides = {}) {
       ...Array.from({ length: 19 }, () => 2_000),
       5_000,
     ],
+    readBatchDurationsMs: [],
     batchDurationsMs: [...Array.from({ length: 19 }, () => 2_000), 5_000],
     progressEventOffsetsMs: Array.from(
       { length: 450 },
@@ -329,9 +330,13 @@ test("GATE-014-B1 receipt rejects unknown fields, unsafe identities, and non-pla
 test("GATE-014-B1 records committed writes separately from instrumented batch timings", () => {
   const receipt = createB1OperationReceipt(
     passingOperation({
+      operation: "ordered_read",
+      totalDurationMs: 1_000,
       committedBatchCount: 0,
       committedBatchDurationsMs: [],
+      readBatchDurationsMs: [10, 20, 30],
       batchDurationsMs: [10, 20, 30],
+      progressEventOffsetsMs: [],
     }),
   );
 
@@ -340,6 +345,34 @@ test("GATE-014-B1 records committed writes separately from instrumented batch ti
   assert.equal(receipt.batchDurationMaximumMs, null);
   assert.equal(receipt.instrumentedBatchCount, 3);
   assert.equal(receipt.instrumentedBatchDurationMaximumMs, 30);
+  assert.equal(receipt.readBatchCount, 3);
+  assert.equal(receipt.readBatchDurationMaximumMs, 30);
+  const missingWriteTiming = createB1OperationReceipt(
+    passingOperation({
+      committedBatchCount: 0,
+      committedBatchDurationsMs: [],
+      batchDurationsMs: [10],
+    }),
+  );
+  assert.equal(missingWriteTiming.status, "insufficient_evidence");
+  assert.deepEqual(missingWriteTiming.insufficientEvidence, [
+    "committed_write_timing_unavailable",
+  ]);
+  const missingReadTiming = createB1OperationReceipt(
+    passingOperation({
+      operation: "ordered_read",
+      totalDurationMs: 1_000,
+      committedBatchCount: 0,
+      committedBatchDurationsMs: [],
+      readBatchDurationsMs: [],
+      batchDurationsMs: [10],
+      progressEventOffsetsMs: [],
+    }),
+  );
+  assert.equal(missingReadTiming.status, "insufficient_evidence");
+  assert.deepEqual(missingReadTiming.insufficientEvidence, [
+    "read_batch_timing_unavailable",
+  ]);
   assert.throws(
     () =>
       createB1OperationReceipt(
@@ -369,8 +402,10 @@ test("GATE-014-B1 records committed writes separately from instrumented batch ti
   assert.equal(
     createB1OperationReceipt(
       passingOperation({
+        operation: "atomic_version",
         committedBatchCount: 0,
         committedBatchDurationsMs: [],
+        readBatchDurationsMs: [],
         batchDurationsMs: [6_000],
       }),
     ).status,
@@ -395,6 +430,19 @@ function reportOperation({
   ].includes(operation)
     ? 0
     : 1;
+  const readBatchDurationsMs = [
+    "restart",
+    "marker_normalization",
+    "ordered_read",
+    "ledger_repair",
+    "cancellation",
+    "selected_version_removal",
+    "full_clear",
+    "quota_failure",
+  ].includes(operation)
+    ? [80]
+    : [];
+  const committedBatchDurationsMs = committedBatchCount === 0 ? [] : [100];
   return passingOperation({
     fixtureId,
     fixtureReceiptSha256,
@@ -404,8 +452,12 @@ function reportOperation({
     operation,
     totalDurationMs: 1_000,
     committedBatchCount,
-    committedBatchDurationsMs: committedBatchCount === 0 ? [] : [100],
-    batchDurationsMs: [100],
+    committedBatchDurationsMs,
+    readBatchDurationsMs,
+    batchDurationsMs:
+      committedBatchDurationsMs.length + readBatchDurationsMs.length === 0
+        ? [100]
+        : [...committedBatchDurationsMs, ...readBatchDurationsMs],
     progressEventOffsetsMs: [],
     restart:
       operation === "restart"

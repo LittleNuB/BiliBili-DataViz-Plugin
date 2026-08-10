@@ -32,6 +32,7 @@ function lifecycleResult() {
       )
         ? [10]
         : [],
+      readBatchDurationsMs: [],
       batchDurationsMs: [10],
       progressEventOffsetsMs: [],
       restart:
