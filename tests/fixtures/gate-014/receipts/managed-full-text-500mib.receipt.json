@@ -1,0 +1,3224 @@
+{
+  "receiptContract": "gate-014-fixture-receipt-v5",
+  "generatorVersion": "gate-014-fixture-generator-v5",
+  "seed": "gate-014-public-safe-seed-v1",
+  "fixture": {
+    "id": "managed-full-text-500mib",
+    "description": "Exact 524288000-byte synthetic managed-full-text gate fixture managed-full-text-500mib.",
+    "targetKind": "managed_full_text_total",
+    "targetCanonicalBytes": 524288000,
+    "profileName": "public_safe_synthetic_mixed_subtitle_profile_v1",
+    "managedFullTextContract": "managed-full-text-v1"
+  },
+  "generatedArtifactCommitted": false,
+  "generatedArtifactRelativePath": "tests/fixtures/gate-014/generated/managed-full-text-500mib.jsonl",
+  "releasePackagingExcluded": true,
+  "publicSafety": {
+    "sourceText": "synthetic_grammar_only",
+    "containsRealBilibiliSubtitleText": false,
+    "containsUserHistoryOrFavorites": false,
+    "containsAccountIdentifiers": false,
+    "containsCredentialMaterial": false,
+    "localDistributionMeasurement": "insufficient_evidence"
+  },
+  "canonical": {
+    "totalBytes": 524288000,
+    "fixtureSha256": "0bfad1762617af97ab58cd4df072a94e77d9b6b94e7d296b8c285e77edba743a",
+    "bodyManifestSha256": "a02b10c30c3004a67240c8270f94e8bd163831041d3f33312959c62dc47cb2aa",
+    "timelineManifestSha256": "a35ab00a020953e962881676726b559adf1374102768aaa70f22de61fb085230",
+    "versionManifestSha256": "0f75a295a064621aa9ccd4442ee87ffe04fdabc85ce1acd5033c1caca8dab1b2",
+    "querySuiteSha256": "8819d38eaf65b55b9ba5403d355f007d5bb529538d96553ca873b5a4cf71442a",
+    "versionCount": 667,
+    "segmentCount": 381415,
+    "recordCount": 382082,
+    "bodyBytes": 502217288,
+    "timelineBytes": 33305794,
+    "versionSha256Samples": [
+      {
+        "versionOrdinal": 0,
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "serializedBytes": 741636,
+        "segmentCount": 540,
+        "versionState": "current",
+        "duplicateScopeOfVersionOrdinal": null,
+        "sourceType": "bilibili_subtitle",
+        "bodyHash": "fe5a3ec90c4f0662fbb97126cce65f8ce0bc2a7799f9f8c69cd3255d9b712306",
+        "timelineHash": "e615fa251c5c0e23d3965fc709c1929f3e90899af455d92a310a044b3f1fc3e7",
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff"
+      },
+      {
+        "versionOrdinal": 1,
+        "versionId": "d5d0f0ff-9316-53fd-a8bb-55568559cf27",
+        "serializedBytes": 796469,
+        "segmentCount": 580,
+        "versionState": "current",
+        "duplicateScopeOfVersionOrdinal": null,
+        "sourceType": "bilibili_subtitle",
+        "bodyHash": "86936f435372aaa66d7479c07b15291ef106c9f3f3774ea0bdea5dcc50c13a12",
+        "timelineHash": "67d87a3d6a09f4d58377d9e74a86e3febbca55204ba2deac122f29833a88637d",
+        "sourceVersionFingerprint": "22ad5bd3a4e5ab7cc04db5122901149500e3486259b72893936ff761d1c52308"
+      },
+      {
+        "versionOrdinal": 2,
+        "versionId": "bc006ead-33ea-5541-9e33-64b9d5df2b08",
+        "serializedBytes": 768331,
+        "segmentCount": 559,
+        "versionState": "current",
+        "duplicateScopeOfVersionOrdinal": null,
+        "sourceType": "bilibili_subtitle",
+        "bodyHash": "cf00bd3d9ff74458b8fb53aedea1dcfdb3d31121f1f7653de696797a11d3b9b0",
+        "timelineHash": "f18b97e9f0d0e0d2255a8051fdfb938ab51f37ec9aed48a119888c2096471420",
+        "sourceVersionFingerprint": "22c55d2b93ba1cc5d0b356db79e9047c1fb81bc3d3171121851b5c3a50b21e3b"
+      },
+      {
+        "versionOrdinal": 664,
+        "versionId": "651c00f8-e1c4-588a-9796-b73debf7306e",
+        "serializedBytes": 731007,
+        "segmentCount": 532,
+        "versionState": "current",
+        "duplicateScopeOfVersionOrdinal": null,
+        "sourceType": "bilibili_subtitle",
+        "bodyHash": "3c9ffa23f327e56b17db5c7fa238829d5b7b720342677deff9eccd3307d682c7",
+        "timelineHash": "b37e4d25814a65f3369a7455722a4f5492d5b17b27ff4610157983522afc4624",
+        "sourceVersionFingerprint": "bdcd6f2148c5e5bf9c3556c3a6bde766b93e7113cb86732cbfcf5a5790b72066"
+      },
+      {
+        "versionOrdinal": 665,
+        "versionId": "4b6b6f07-6504-5b6a-bff1-b4579edd406a",
+        "serializedBytes": 712202,
+        "segmentCount": 519,
+        "versionState": "pending_revalidation",
+        "duplicateScopeOfVersionOrdinal": null,
+        "sourceType": "bilibili_subtitle",
+        "bodyHash": "9bd4426167d84378863122dbbc657c8b2a3977f1936c25fe03a47fff61e8934a",
+        "timelineHash": "0f59fa494edc014dfed1a39772e2fc550591698644af6123b6458f5b2a4aa4af",
+        "sourceVersionFingerprint": "74465cd4d44eaf19865685e92b58a258b1c77e9e782ddad8a124ac5640b4718d"
+      },
+      {
+        "versionOrdinal": 666,
+        "versionId": "7b44db2e-dc9e-56a7-a2e8-f4f3ab38addc",
+        "serializedBytes": 1450206,
+        "segmentCount": 720,
+        "versionState": "historical",
+        "duplicateScopeOfVersionOrdinal": 665,
+        "sourceType": "bilibili_subtitle",
+        "bodyHash": "dc33cc57c1663e0eeec6f21d512734cd0be91fef333d16b6da8a4a44401ad5be",
+        "timelineHash": "aa962809e17b5621dc787530e1cbddea11411f28eb7631c4d44b73aba274a4e8",
+        "sourceVersionFingerprint": "e18ab9f62f40cafea9f58a1fc2338ff244e07683fe6d7efdb0d950ef599acb75"
+      }
+    ]
+  },
+  "distributionProfile": {
+    "profileName": "public_safe_synthetic_mixed_subtitle_profile_v1",
+    "profileDescription": "Synthetic mixed CJK/Latin/number/punctuation subtitle-like text; no real subtitle distribution claim.",
+    "realBilibiliSubtitleRepresentativeness": {
+      "status": "insufficient_evidence",
+      "reason": "Synthetic public-safe generation was used; no measured public-safe Bilibili subtitle sample is attached."
+    },
+    "maximumMeasuredSegmentCountTail": {
+      "status": "insufficient_evidence",
+      "reason": "Synthetic high-fragmentation stress is not a measured real-subtitle maximum tail."
+    },
+    "segmentLengthBytes": {
+      "accumulator": "bounded_histogram_v1",
+      "bucketSize": 1,
+      "count": 381415,
+      "min": 420,
+      "max": 1920,
+      "bucketCount": 1418,
+      "percentiles": {
+        "p0": 420,
+        "p1": 761,
+        "p5": 802,
+        "p25": 1004,
+        "p50": 1258,
+        "p75": 1513,
+        "p95": 1717,
+        "p99": 1757,
+        "p100": 1920
+      }
+    },
+    "canonicalSegmentRecordBytes": {
+      "accumulator": "bounded_histogram_v1",
+      "bucketSize": 1,
+      "count": 381415,
+      "min": 537,
+      "max": 2037,
+      "bucketCount": 1423,
+      "percentiles": {
+        "p0": 537,
+        "p1": 877,
+        "p5": 918,
+        "p25": 1120,
+        "p50": 1374,
+        "p75": 1630,
+        "p95": 1833,
+        "p99": 1873,
+        "p100": 2037
+      }
+    },
+    "segmentsPerVersion": {
+      "accumulator": "bounded_histogram_v1",
+      "bucketSize": 1,
+      "count": 667,
+      "min": 501,
+      "max": 720,
+      "bucketCount": 143,
+      "percentiles": {
+        "p0": 501,
+        "p1": 504,
+        "p5": 510,
+        "p25": 538,
+        "p50": 572,
+        "p75": 606,
+        "p95": 637,
+        "p99": 643,
+        "p100": 720
+      }
+    },
+    "overlap": {
+      "overlappingSegmentCount": 34603,
+      "overlapRate": 0.090723,
+      "overlapSeconds": {
+        "accumulator": "bounded_histogram_v1",
+        "bucketSize": 1,
+        "count": 34603,
+        "min": 1,
+        "max": 2,
+        "bucketCount": 2,
+        "percentiles": {
+          "p0": 1,
+          "p1": 1,
+          "p5": 1,
+          "p25": 1,
+          "p50": 1,
+          "p75": 2,
+          "p95": 2,
+          "p99": 2,
+          "p100": 2
+        }
+      }
+    },
+    "characterMix": {
+      "totalCodePoints": 270819008,
+      "cjk": {
+        "count": 90821693,
+        "proportion": 0.335359
+      },
+      "latin": {
+        "count": 120951511,
+        "proportion": 0.446614
+      },
+      "number": {
+        "count": 18983381,
+        "proportion": 0.070096
+      },
+      "punctuation": {
+        "count": 16461313,
+        "proportion": 0.060783
+      },
+      "space": {
+        "count": 23601110,
+        "proportion": 0.087147
+      },
+      "other": {
+        "count": 0,
+        "proportion": 0
+      }
+    },
+    "durationBuckets": {
+      "accumulator": "bounded_duration_buckets_v1",
+      "under_5m": 0,
+      "from_5m_to_20m": 0,
+      "from_20m_to_60m": 0,
+      "from_60m_to_180m": 667,
+      "over_180m": 0
+    }
+  },
+  "syntheticEdgeCaseProfile": {
+    "versionStates": {
+      "current": 614,
+      "historical": 18,
+      "pending_revalidation": 35
+    },
+    "originKinds": {
+      "captured": 632,
+      "restored": 35
+    },
+    "sourceTypes": {
+      "bilibili_subtitle": 650,
+      "local_transcript": 17
+    },
+    "languages": {
+      "zh-cn": 581,
+      "und": 47,
+      "en": 39
+    },
+    "sourceVariants": {
+      "default": 606,
+      "stable_hash": 61
+    },
+    "multiPartVideoCount": 222,
+    "maxPartsPerVideo": 3,
+    "duplicateSourceScopePairs": 18,
+    "changedTimelineDuplicateSourcePairs": 18,
+    "unicodeCoverage": {
+      "cjk": true,
+      "latin": true,
+      "number": true,
+      "punctuation": true,
+      "fullwidthPunctuation": true,
+      "loneSurrogateExcluded": true
+    },
+    "futureLocalTranscriptRows": {
+      "status": "synthetic_schema_load_only",
+      "rowCount": 17,
+      "claimsAsrCapability": false
+    }
+  },
+  "malformedRowExclusions": {
+    "suiteContract": "gate-014-malformed-candidate-suite-v2",
+    "candidateCount": 8,
+    "actualRejectedCount": 8,
+    "total": 8,
+    "byReason": {
+      "empty_text": 1,
+      "invalid_timing": 2,
+      "non_finite_timing": 1,
+      "negative_zero": 1,
+      "lone_surrogate": 1,
+      "invalid_identity": 2
+    },
+    "candidateIds": [
+      "malformed-empty-text",
+      "malformed-reversed-timing",
+      "malformed-zero-duration",
+      "malformed-non-finite-start",
+      "malformed-negative-zero-start",
+      "malformed-lone-surrogate-text",
+      "malformed-invalid-bvid",
+      "malformed-invalid-cid"
+    ],
+    "emittedRecordCount": 0,
+    "emittedCanonicalBytes": 0,
+    "candidateSuiteSha256": "805ecd0bdf775d16b2f18d5b9c5ef9d1193b2d9fc5e3940d53ac5128ed56f52c",
+    "exclusionStage": "pre_canonical_validation",
+    "hashProjectionFields": [
+      "candidateId",
+      "reasonCode"
+    ]
+  },
+  "querySuiteSummary": {
+    "total": 145,
+    "byKind": {
+      "chinese_exact": 50,
+      "chinese_multi_term": 25,
+      "mixed_cjk_latin": 20,
+      "english": 20,
+      "punctuation_number": 10,
+      "common_term_distractor": 20
+    }
+  },
+  "plantedRetrievalTargetSummary": {
+    "total": 125,
+    "byKind": {
+      "chinese_exact": 50,
+      "chinese_multi_term": 25,
+      "mixed_cjk_latin": 20,
+      "english": 20,
+      "punctuation_number": 10
+    }
+  },
+  "plantedRetrievalTargets": [
+    {
+      "targetId": "ce-1",
+      "queryId": "ce-1",
+      "kind": "chinese_exact",
+      "query": "合成锚点零一",
+      "targetText": "合成锚点零一",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 0,
+        "startSeconds": 6,
+        "endSeconds": 8
+      }
+    },
+    {
+      "targetId": "ce-2",
+      "queryId": "ce-2",
+      "kind": "chinese_exact",
+      "query": "合成锚点零二",
+      "targetText": "合成锚点零二",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 1,
+        "startSeconds": 9,
+        "endSeconds": 16
+      }
+    },
+    {
+      "targetId": "ce-3",
+      "queryId": "ce-3",
+      "kind": "chinese_exact",
+      "query": "合成锚点零三",
+      "targetText": "合成锚点零三",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 2,
+        "startSeconds": 18,
+        "endSeconds": 29
+      }
+    },
+    {
+      "targetId": "ce-4",
+      "queryId": "ce-4",
+      "kind": "chinese_exact",
+      "query": "合成锚点零四",
+      "targetText": "合成锚点零四",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 3,
+        "startSeconds": 30,
+        "endSeconds": 33
+      }
+    },
+    {
+      "targetId": "ce-5",
+      "queryId": "ce-5",
+      "kind": "chinese_exact",
+      "query": "合成锚点零五",
+      "targetText": "合成锚点零五",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 4,
+        "startSeconds": 35,
+        "endSeconds": 40
+      }
+    },
+    {
+      "targetId": "ce-6",
+      "queryId": "ce-6",
+      "kind": "chinese_exact",
+      "query": "合成锚点零六",
+      "targetText": "合成锚点零六",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 5,
+        "startSeconds": 42,
+        "endSeconds": 50
+      }
+    },
+    {
+      "targetId": "ce-7",
+      "queryId": "ce-7",
+      "kind": "chinese_exact",
+      "query": "合成锚点零七",
+      "targetText": "合成锚点零七",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 6,
+        "startSeconds": 50,
+        "endSeconds": 58
+      }
+    },
+    {
+      "targetId": "ce-8",
+      "queryId": "ce-8",
+      "kind": "chinese_exact",
+      "query": "合成锚点零八",
+      "targetText": "合成锚点零八",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 7,
+        "startSeconds": 58,
+        "endSeconds": 62
+      }
+    },
+    {
+      "targetId": "ce-9",
+      "queryId": "ce-9",
+      "kind": "chinese_exact",
+      "query": "合成锚点零九",
+      "targetText": "合成锚点零九",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 8,
+        "startSeconds": 64,
+        "endSeconds": 68
+      }
+    },
+    {
+      "targetId": "ce-10",
+      "queryId": "ce-10",
+      "kind": "chinese_exact",
+      "query": "合成锚点一零",
+      "targetText": "合成锚点一零",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 9,
+        "startSeconds": 70,
+        "endSeconds": 79
+      }
+    },
+    {
+      "targetId": "ce-11",
+      "queryId": "ce-11",
+      "kind": "chinese_exact",
+      "query": "合成锚点一一",
+      "targetText": "合成锚点一一",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 10,
+        "startSeconds": 79,
+        "endSeconds": 85
+      }
+    },
+    {
+      "targetId": "ce-12",
+      "queryId": "ce-12",
+      "kind": "chinese_exact",
+      "query": "合成锚点一二",
+      "targetText": "合成锚点一二",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 11,
+        "startSeconds": 87,
+        "endSeconds": 92
+      }
+    },
+    {
+      "targetId": "ce-13",
+      "queryId": "ce-13",
+      "kind": "chinese_exact",
+      "query": "合成锚点一三",
+      "targetText": "合成锚点一三",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 12,
+        "startSeconds": 93,
+        "endSeconds": 105
+      }
+    },
+    {
+      "targetId": "ce-14",
+      "queryId": "ce-14",
+      "kind": "chinese_exact",
+      "query": "合成锚点一四",
+      "targetText": "合成锚点一四",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 13,
+        "startSeconds": 107,
+        "endSeconds": 110
+      }
+    },
+    {
+      "targetId": "ce-15",
+      "queryId": "ce-15",
+      "kind": "chinese_exact",
+      "query": "合成锚点一五",
+      "targetText": "合成锚点一五",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 14,
+        "startSeconds": 110,
+        "endSeconds": 121
+      }
+    },
+    {
+      "targetId": "ce-16",
+      "queryId": "ce-16",
+      "kind": "chinese_exact",
+      "query": "合成锚点一六",
+      "targetText": "合成锚点一六",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 15,
+        "startSeconds": 119,
+        "endSeconds": 121
+      }
+    },
+    {
+      "targetId": "ce-17",
+      "queryId": "ce-17",
+      "kind": "chinese_exact",
+      "query": "合成锚点一七",
+      "targetText": "合成锚点一七",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 16,
+        "startSeconds": 122,
+        "endSeconds": 125
+      }
+    },
+    {
+      "targetId": "ce-18",
+      "queryId": "ce-18",
+      "kind": "chinese_exact",
+      "query": "合成锚点一八",
+      "targetText": "合成锚点一八",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 17,
+        "startSeconds": 125,
+        "endSeconds": 137
+      }
+    },
+    {
+      "targetId": "ce-19",
+      "queryId": "ce-19",
+      "kind": "chinese_exact",
+      "query": "合成锚点一九",
+      "targetText": "合成锚点一九",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 18,
+        "startSeconds": 137,
+        "endSeconds": 142
+      }
+    },
+    {
+      "targetId": "ce-20",
+      "queryId": "ce-20",
+      "kind": "chinese_exact",
+      "query": "合成锚点二零",
+      "targetText": "合成锚点二零",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 19,
+        "startSeconds": 142,
+        "endSeconds": 146
+      }
+    },
+    {
+      "targetId": "ce-21",
+      "queryId": "ce-21",
+      "kind": "chinese_exact",
+      "query": "合成锚点二一",
+      "targetText": "合成锚点二一",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 20,
+        "startSeconds": 147,
+        "endSeconds": 156
+      }
+    },
+    {
+      "targetId": "ce-22",
+      "queryId": "ce-22",
+      "kind": "chinese_exact",
+      "query": "合成锚点二二",
+      "targetText": "合成锚点二二",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 21,
+        "startSeconds": 157,
+        "endSeconds": 163
+      }
+    },
+    {
+      "targetId": "ce-23",
+      "queryId": "ce-23",
+      "kind": "chinese_exact",
+      "query": "合成锚点二三",
+      "targetText": "合成锚点二三",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 22,
+        "startSeconds": 163,
+        "endSeconds": 165
+      }
+    },
+    {
+      "targetId": "ce-24",
+      "queryId": "ce-24",
+      "kind": "chinese_exact",
+      "query": "合成锚点二四",
+      "targetText": "合成锚点二四",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 23,
+        "startSeconds": 166,
+        "endSeconds": 178
+      }
+    },
+    {
+      "targetId": "ce-25",
+      "queryId": "ce-25",
+      "kind": "chinese_exact",
+      "query": "合成锚点二五",
+      "targetText": "合成锚点二五",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 24,
+        "startSeconds": 178,
+        "endSeconds": 183
+      }
+    },
+    {
+      "targetId": "ce-26",
+      "queryId": "ce-26",
+      "kind": "chinese_exact",
+      "query": "合成锚点二六",
+      "targetText": "合成锚点二六",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 25,
+        "startSeconds": 185,
+        "endSeconds": 191
+      }
+    },
+    {
+      "targetId": "ce-27",
+      "queryId": "ce-27",
+      "kind": "chinese_exact",
+      "query": "合成锚点二七",
+      "targetText": "合成锚点二七",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 26,
+        "startSeconds": 192,
+        "endSeconds": 197
+      }
+    },
+    {
+      "targetId": "ce-28",
+      "queryId": "ce-28",
+      "kind": "chinese_exact",
+      "query": "合成锚点二八",
+      "targetText": "合成锚点二八",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 27,
+        "startSeconds": 197,
+        "endSeconds": 205
+      }
+    },
+    {
+      "targetId": "ce-29",
+      "queryId": "ce-29",
+      "kind": "chinese_exact",
+      "query": "合成锚点二九",
+      "targetText": "合成锚点二九",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 28,
+        "startSeconds": 205,
+        "endSeconds": 216
+      }
+    },
+    {
+      "targetId": "ce-30",
+      "queryId": "ce-30",
+      "kind": "chinese_exact",
+      "query": "合成锚点三零",
+      "targetText": "合成锚点三零",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 29,
+        "startSeconds": 215,
+        "endSeconds": 219
+      }
+    },
+    {
+      "targetId": "ce-31",
+      "queryId": "ce-31",
+      "kind": "chinese_exact",
+      "query": "合成锚点三一",
+      "targetText": "合成锚点三一",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 30,
+        "startSeconds": 219,
+        "endSeconds": 229
+      }
+    },
+    {
+      "targetId": "ce-32",
+      "queryId": "ce-32",
+      "kind": "chinese_exact",
+      "query": "合成锚点三二",
+      "targetText": "合成锚点三二",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 31,
+        "startSeconds": 230,
+        "endSeconds": 235
+      }
+    },
+    {
+      "targetId": "ce-33",
+      "queryId": "ce-33",
+      "kind": "chinese_exact",
+      "query": "合成锚点三三",
+      "targetText": "合成锚点三三",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 32,
+        "startSeconds": 237,
+        "endSeconds": 242
+      }
+    },
+    {
+      "targetId": "ce-34",
+      "queryId": "ce-34",
+      "kind": "chinese_exact",
+      "query": "合成锚点三四",
+      "targetText": "合成锚点三四",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 33,
+        "startSeconds": 244,
+        "endSeconds": 248
+      }
+    },
+    {
+      "targetId": "ce-35",
+      "queryId": "ce-35",
+      "kind": "chinese_exact",
+      "query": "合成锚点三五",
+      "targetText": "合成锚点三五",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 34,
+        "startSeconds": 250,
+        "endSeconds": 261
+      }
+    },
+    {
+      "targetId": "ce-36",
+      "queryId": "ce-36",
+      "kind": "chinese_exact",
+      "query": "合成锚点三六",
+      "targetText": "合成锚点三六",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 35,
+        "startSeconds": 261,
+        "endSeconds": 265
+      }
+    },
+    {
+      "targetId": "ce-37",
+      "queryId": "ce-37",
+      "kind": "chinese_exact",
+      "query": "合成锚点三七",
+      "targetText": "合成锚点三七",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 36,
+        "startSeconds": 267,
+        "endSeconds": 276
+      }
+    },
+    {
+      "targetId": "ce-38",
+      "queryId": "ce-38",
+      "kind": "chinese_exact",
+      "query": "合成锚点三八",
+      "targetText": "合成锚点三八",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 37,
+        "startSeconds": 278,
+        "endSeconds": 283
+      }
+    },
+    {
+      "targetId": "ce-39",
+      "queryId": "ce-39",
+      "kind": "chinese_exact",
+      "query": "合成锚点三九",
+      "targetText": "合成锚点三九",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 38,
+        "startSeconds": 284,
+        "endSeconds": 292
+      }
+    },
+    {
+      "targetId": "ce-40",
+      "queryId": "ce-40",
+      "kind": "chinese_exact",
+      "query": "合成锚点四零",
+      "targetText": "合成锚点四零",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 39,
+        "startSeconds": 294,
+        "endSeconds": 303
+      }
+    },
+    {
+      "targetId": "ce-41",
+      "queryId": "ce-41",
+      "kind": "chinese_exact",
+      "query": "合成锚点四一",
+      "targetText": "合成锚点四一",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 40,
+        "startSeconds": 303,
+        "endSeconds": 309
+      }
+    },
+    {
+      "targetId": "ce-42",
+      "queryId": "ce-42",
+      "kind": "chinese_exact",
+      "query": "合成锚点四二",
+      "targetText": "合成锚点四二",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 41,
+        "startSeconds": 307,
+        "endSeconds": 311
+      }
+    },
+    {
+      "targetId": "ce-43",
+      "queryId": "ce-43",
+      "kind": "chinese_exact",
+      "query": "合成锚点四三",
+      "targetText": "合成锚点四三",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 42,
+        "startSeconds": 310,
+        "endSeconds": 319
+      }
+    },
+    {
+      "targetId": "ce-44",
+      "queryId": "ce-44",
+      "kind": "chinese_exact",
+      "query": "合成锚点四四",
+      "targetText": "合成锚点四四",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 43,
+        "startSeconds": 320,
+        "endSeconds": 332
+      }
+    },
+    {
+      "targetId": "ce-45",
+      "queryId": "ce-45",
+      "kind": "chinese_exact",
+      "query": "合成锚点四五",
+      "targetText": "合成锚点四五",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 44,
+        "startSeconds": 334,
+        "endSeconds": 336
+      }
+    },
+    {
+      "targetId": "ce-46",
+      "queryId": "ce-46",
+      "kind": "chinese_exact",
+      "query": "合成锚点四六",
+      "targetText": "合成锚点四六",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 45,
+        "startSeconds": 334,
+        "endSeconds": 342
+      }
+    },
+    {
+      "targetId": "ce-47",
+      "queryId": "ce-47",
+      "kind": "chinese_exact",
+      "query": "合成锚点四七",
+      "targetText": "合成锚点四七",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 46,
+        "startSeconds": 342,
+        "endSeconds": 353
+      }
+    },
+    {
+      "targetId": "ce-48",
+      "queryId": "ce-48",
+      "kind": "chinese_exact",
+      "query": "合成锚点四八",
+      "targetText": "合成锚点四八",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 47,
+        "startSeconds": 353,
+        "endSeconds": 362
+      }
+    },
+    {
+      "targetId": "ce-49",
+      "queryId": "ce-49",
+      "kind": "chinese_exact",
+      "query": "合成锚点四九",
+      "targetText": "合成锚点四九",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 48,
+        "startSeconds": 364,
+        "endSeconds": 374
+      }
+    },
+    {
+      "targetId": "ce-50",
+      "queryId": "ce-50",
+      "kind": "chinese_exact",
+      "query": "合成锚点五零",
+      "targetText": "合成锚点五零",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 49,
+        "startSeconds": 376,
+        "endSeconds": 378
+      }
+    },
+    {
+      "targetId": "cm-1",
+      "queryId": "cm-1",
+      "kind": "chinese_multi_term",
+      "query": "校准 轮廓 零一",
+      "targetText": "多词目标零一校准与轮廓",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 50,
+        "startSeconds": 378,
+        "endSeconds": 388
+      }
+    },
+    {
+      "targetId": "cm-2",
+      "queryId": "cm-2",
+      "kind": "chinese_multi_term",
+      "query": "容量 边界 零二",
+      "targetText": "多词目标零二容量与边界",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 51,
+        "startSeconds": 390,
+        "endSeconds": 401
+      }
+    },
+    {
+      "targetId": "cm-3",
+      "queryId": "cm-3",
+      "kind": "chinese_multi_term",
+      "query": "全文 账本 零三",
+      "targetText": "多词目标零三全文与账本",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 52,
+        "startSeconds": 401,
+        "endSeconds": 403
+      }
+    },
+    {
+      "targetId": "cm-4",
+      "queryId": "cm-4",
+      "kind": "chinese_multi_term",
+      "query": "检索 证据 零四",
+      "targetText": "多词目标零四检索与证据",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 53,
+        "startSeconds": 405,
+        "endSeconds": 416
+      }
+    },
+    {
+      "targetId": "cm-5",
+      "queryId": "cm-5",
+      "kind": "chinese_multi_term",
+      "query": "恢复 检查 零五",
+      "targetText": "多词目标零五恢复与检查",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 54,
+        "startSeconds": 416,
+        "endSeconds": 428
+      }
+    },
+    {
+      "targetId": "cm-6",
+      "queryId": "cm-6",
+      "kind": "chinese_multi_term",
+      "query": "校准 轮廓 零六",
+      "targetText": "多词目标零六校准与轮廓",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 55,
+        "startSeconds": 427,
+        "endSeconds": 432
+      }
+    },
+    {
+      "targetId": "cm-7",
+      "queryId": "cm-7",
+      "kind": "chinese_multi_term",
+      "query": "容量 边界 零七",
+      "targetText": "多词目标零七容量与边界",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 56,
+        "startSeconds": 434,
+        "endSeconds": 439
+      }
+    },
+    {
+      "targetId": "cm-8",
+      "queryId": "cm-8",
+      "kind": "chinese_multi_term",
+      "query": "全文 账本 零八",
+      "targetText": "多词目标零八全文与账本",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 57,
+        "startSeconds": 439,
+        "endSeconds": 447
+      }
+    },
+    {
+      "targetId": "cm-9",
+      "queryId": "cm-9",
+      "kind": "chinese_multi_term",
+      "query": "检索 证据 零九",
+      "targetText": "多词目标零九检索与证据",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 58,
+        "startSeconds": 447,
+        "endSeconds": 459
+      }
+    },
+    {
+      "targetId": "cm-10",
+      "queryId": "cm-10",
+      "kind": "chinese_multi_term",
+      "query": "恢复 检查 一零",
+      "targetText": "多词目标一零恢复与检查",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 59,
+        "startSeconds": 460,
+        "endSeconds": 470
+      }
+    },
+    {
+      "targetId": "cm-11",
+      "queryId": "cm-11",
+      "kind": "chinese_multi_term",
+      "query": "校准 轮廓 一一",
+      "targetText": "多词目标一一校准与轮廓",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 60,
+        "startSeconds": 470,
+        "endSeconds": 481
+      }
+    },
+    {
+      "targetId": "cm-12",
+      "queryId": "cm-12",
+      "kind": "chinese_multi_term",
+      "query": "容量 边界 一二",
+      "targetText": "多词目标一二容量与边界",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 61,
+        "startSeconds": 481,
+        "endSeconds": 485
+      }
+    },
+    {
+      "targetId": "cm-13",
+      "queryId": "cm-13",
+      "kind": "chinese_multi_term",
+      "query": "全文 账本 一三",
+      "targetText": "多词目标一三全文与账本",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 62,
+        "startSeconds": 485,
+        "endSeconds": 487
+      }
+    },
+    {
+      "targetId": "cm-14",
+      "queryId": "cm-14",
+      "kind": "chinese_multi_term",
+      "query": "检索 证据 一四",
+      "targetText": "多词目标一四检索与证据",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 63,
+        "startSeconds": 485,
+        "endSeconds": 491
+      }
+    },
+    {
+      "targetId": "cm-15",
+      "queryId": "cm-15",
+      "kind": "chinese_multi_term",
+      "query": "恢复 检查 一五",
+      "targetText": "多词目标一五恢复与检查",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 64,
+        "startSeconds": 492,
+        "endSeconds": 496
+      }
+    },
+    {
+      "targetId": "cm-16",
+      "queryId": "cm-16",
+      "kind": "chinese_multi_term",
+      "query": "校准 轮廓 一六",
+      "targetText": "多词目标一六校准与轮廓",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 65,
+        "startSeconds": 496,
+        "endSeconds": 505
+      }
+    },
+    {
+      "targetId": "cm-17",
+      "queryId": "cm-17",
+      "kind": "chinese_multi_term",
+      "query": "容量 边界 一七",
+      "targetText": "多词目标一七容量与边界",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 66,
+        "startSeconds": 505,
+        "endSeconds": 510
+      }
+    },
+    {
+      "targetId": "cm-18",
+      "queryId": "cm-18",
+      "kind": "chinese_multi_term",
+      "query": "全文 账本 一八",
+      "targetText": "多词目标一八全文与账本",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 67,
+        "startSeconds": 512,
+        "endSeconds": 516
+      }
+    },
+    {
+      "targetId": "cm-19",
+      "queryId": "cm-19",
+      "kind": "chinese_multi_term",
+      "query": "检索 证据 一九",
+      "targetText": "多词目标一九检索与证据",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 68,
+        "startSeconds": 517,
+        "endSeconds": 522
+      }
+    },
+    {
+      "targetId": "cm-20",
+      "queryId": "cm-20",
+      "kind": "chinese_multi_term",
+      "query": "恢复 检查 二零",
+      "targetText": "多词目标二零恢复与检查",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 69,
+        "startSeconds": 523,
+        "endSeconds": 525
+      }
+    },
+    {
+      "targetId": "cm-21",
+      "queryId": "cm-21",
+      "kind": "chinese_multi_term",
+      "query": "校准 轮廓 二一",
+      "targetText": "多词目标二一校准与轮廓",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 70,
+        "startSeconds": 527,
+        "endSeconds": 533
+      }
+    },
+    {
+      "targetId": "cm-22",
+      "queryId": "cm-22",
+      "kind": "chinese_multi_term",
+      "query": "容量 边界 二二",
+      "targetText": "多词目标二二容量与边界",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 71,
+        "startSeconds": 534,
+        "endSeconds": 537
+      }
+    },
+    {
+      "targetId": "cm-23",
+      "queryId": "cm-23",
+      "kind": "chinese_multi_term",
+      "query": "全文 账本 二三",
+      "targetText": "多词目标二三全文与账本",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 72,
+        "startSeconds": 538,
+        "endSeconds": 548
+      }
+    },
+    {
+      "targetId": "cm-24",
+      "queryId": "cm-24",
+      "kind": "chinese_multi_term",
+      "query": "检索 证据 二四",
+      "targetText": "多词目标二四检索与证据",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 73,
+        "startSeconds": 550,
+        "endSeconds": 560
+      }
+    },
+    {
+      "targetId": "cm-25",
+      "queryId": "cm-25",
+      "kind": "chinese_multi_term",
+      "query": "恢复 检查 二五",
+      "targetText": "多词目标二五恢复与检查",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 74,
+        "startSeconds": 559,
+        "endSeconds": 571
+      }
+    },
+    {
+      "targetId": "mx-1",
+      "queryId": "mx-1",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha01 混合",
+      "targetText": "GateAlpha01混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 75,
+        "startSeconds": 571,
+        "endSeconds": 581
+      }
+    },
+    {
+      "targetId": "mx-2",
+      "queryId": "mx-2",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha02 混合",
+      "targetText": "GateAlpha02混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 76,
+        "startSeconds": 583,
+        "endSeconds": 587
+      }
+    },
+    {
+      "targetId": "mx-3",
+      "queryId": "mx-3",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha03 混合",
+      "targetText": "GateAlpha03混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 77,
+        "startSeconds": 588,
+        "endSeconds": 591
+      }
+    },
+    {
+      "targetId": "mx-4",
+      "queryId": "mx-4",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha04 混合",
+      "targetText": "GateAlpha04混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 78,
+        "startSeconds": 592,
+        "endSeconds": 595
+      }
+    },
+    {
+      "targetId": "mx-5",
+      "queryId": "mx-5",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha05 混合",
+      "targetText": "GateAlpha05混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 79,
+        "startSeconds": 597,
+        "endSeconds": 599
+      }
+    },
+    {
+      "targetId": "mx-6",
+      "queryId": "mx-6",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha06 混合",
+      "targetText": "GateAlpha06混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 80,
+        "startSeconds": 598,
+        "endSeconds": 607
+      }
+    },
+    {
+      "targetId": "mx-7",
+      "queryId": "mx-7",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha07 混合",
+      "targetText": "GateAlpha07混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 81,
+        "startSeconds": 608,
+        "endSeconds": 614
+      }
+    },
+    {
+      "targetId": "mx-8",
+      "queryId": "mx-8",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha08 混合",
+      "targetText": "GateAlpha08混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 82,
+        "startSeconds": 615,
+        "endSeconds": 627
+      }
+    },
+    {
+      "targetId": "mx-9",
+      "queryId": "mx-9",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha09 混合",
+      "targetText": "GateAlpha09混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 83,
+        "startSeconds": 627,
+        "endSeconds": 638
+      }
+    },
+    {
+      "targetId": "mx-10",
+      "queryId": "mx-10",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha10 混合",
+      "targetText": "GateAlpha10混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 84,
+        "startSeconds": 639,
+        "endSeconds": 644
+      }
+    },
+    {
+      "targetId": "mx-11",
+      "queryId": "mx-11",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha11 混合",
+      "targetText": "GateAlpha11混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 85,
+        "startSeconds": 645,
+        "endSeconds": 657
+      }
+    },
+    {
+      "targetId": "mx-12",
+      "queryId": "mx-12",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha12 混合",
+      "targetText": "GateAlpha12混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 86,
+        "startSeconds": 658,
+        "endSeconds": 666
+      }
+    },
+    {
+      "targetId": "mx-13",
+      "queryId": "mx-13",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha13 混合",
+      "targetText": "GateAlpha13混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 87,
+        "startSeconds": 666,
+        "endSeconds": 673
+      }
+    },
+    {
+      "targetId": "mx-14",
+      "queryId": "mx-14",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha14 混合",
+      "targetText": "GateAlpha14混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 88,
+        "startSeconds": 673,
+        "endSeconds": 684
+      }
+    },
+    {
+      "targetId": "mx-15",
+      "queryId": "mx-15",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha15 混合",
+      "targetText": "GateAlpha15混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 89,
+        "startSeconds": 685,
+        "endSeconds": 697
+      }
+    },
+    {
+      "targetId": "mx-16",
+      "queryId": "mx-16",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha16 混合",
+      "targetText": "GateAlpha16混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 90,
+        "startSeconds": 698,
+        "endSeconds": 705
+      }
+    },
+    {
+      "targetId": "mx-17",
+      "queryId": "mx-17",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha17 混合",
+      "targetText": "GateAlpha17混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 91,
+        "startSeconds": 705,
+        "endSeconds": 707
+      }
+    },
+    {
+      "targetId": "mx-18",
+      "queryId": "mx-18",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha18 混合",
+      "targetText": "GateAlpha18混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 92,
+        "startSeconds": 708,
+        "endSeconds": 719
+      }
+    },
+    {
+      "targetId": "mx-19",
+      "queryId": "mx-19",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha19 混合",
+      "targetText": "GateAlpha19混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 93,
+        "startSeconds": 719,
+        "endSeconds": 729
+      }
+    },
+    {
+      "targetId": "mx-20",
+      "queryId": "mx-20",
+      "kind": "mixed_cjk_latin",
+      "query": "GateAlpha20 混合",
+      "targetText": "GateAlpha20混合锚点",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 94,
+        "startSeconds": 731,
+        "endSeconds": 739
+      }
+    },
+    {
+      "targetId": "en-1",
+      "queryId": "en-1",
+      "kind": "english",
+      "query": "public gate anchor 01",
+      "targetText": "public-gate-anchor-01",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 95,
+        "startSeconds": 739,
+        "endSeconds": 746
+      }
+    },
+    {
+      "targetId": "en-2",
+      "queryId": "en-2",
+      "kind": "english",
+      "query": "public gate anchor 02",
+      "targetText": "public-gate-anchor-02",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 96,
+        "startSeconds": 748,
+        "endSeconds": 751
+      }
+    },
+    {
+      "targetId": "en-3",
+      "queryId": "en-3",
+      "kind": "english",
+      "query": "public gate anchor 03",
+      "targetText": "public-gate-anchor-03",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 97,
+        "startSeconds": 752,
+        "endSeconds": 761
+      }
+    },
+    {
+      "targetId": "en-4",
+      "queryId": "en-4",
+      "kind": "english",
+      "query": "public gate anchor 04",
+      "targetText": "public-gate-anchor-04",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 98,
+        "startSeconds": 762,
+        "endSeconds": 766
+      }
+    },
+    {
+      "targetId": "en-5",
+      "queryId": "en-5",
+      "kind": "english",
+      "query": "public gate anchor 05",
+      "targetText": "public-gate-anchor-05",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 99,
+        "startSeconds": 768,
+        "endSeconds": 772
+      }
+    },
+    {
+      "targetId": "en-6",
+      "queryId": "en-6",
+      "kind": "english",
+      "query": "public gate anchor 06",
+      "targetText": "public-gate-anchor-06",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 100,
+        "startSeconds": 774,
+        "endSeconds": 778
+      }
+    },
+    {
+      "targetId": "en-7",
+      "queryId": "en-7",
+      "kind": "english",
+      "query": "public gate anchor 07",
+      "targetText": "public-gate-anchor-07",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 101,
+        "startSeconds": 779,
+        "endSeconds": 788
+      }
+    },
+    {
+      "targetId": "en-8",
+      "queryId": "en-8",
+      "kind": "english",
+      "query": "public gate anchor 08",
+      "targetText": "public-gate-anchor-08",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 102,
+        "startSeconds": 788,
+        "endSeconds": 794
+      }
+    },
+    {
+      "targetId": "en-9",
+      "queryId": "en-9",
+      "kind": "english",
+      "query": "public gate anchor 09",
+      "targetText": "public-gate-anchor-09",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 103,
+        "startSeconds": 794,
+        "endSeconds": 803
+      }
+    },
+    {
+      "targetId": "en-10",
+      "queryId": "en-10",
+      "kind": "english",
+      "query": "public gate anchor 10",
+      "targetText": "public-gate-anchor-10",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 104,
+        "startSeconds": 804,
+        "endSeconds": 814
+      }
+    },
+    {
+      "targetId": "en-11",
+      "queryId": "en-11",
+      "kind": "english",
+      "query": "public gate anchor 11",
+      "targetText": "public-gate-anchor-11",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 105,
+        "startSeconds": 813,
+        "endSeconds": 815
+      }
+    },
+    {
+      "targetId": "en-12",
+      "queryId": "en-12",
+      "kind": "english",
+      "query": "public gate anchor 12",
+      "targetText": "public-gate-anchor-12",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 106,
+        "startSeconds": 817,
+        "endSeconds": 825
+      }
+    },
+    {
+      "targetId": "en-13",
+      "queryId": "en-13",
+      "kind": "english",
+      "query": "public gate anchor 13",
+      "targetText": "public-gate-anchor-13",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 107,
+        "startSeconds": 826,
+        "endSeconds": 830
+      }
+    },
+    {
+      "targetId": "en-14",
+      "queryId": "en-14",
+      "kind": "english",
+      "query": "public gate anchor 14",
+      "targetText": "public-gate-anchor-14",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 108,
+        "startSeconds": 832,
+        "endSeconds": 842
+      }
+    },
+    {
+      "targetId": "en-15",
+      "queryId": "en-15",
+      "kind": "english",
+      "query": "public gate anchor 15",
+      "targetText": "public-gate-anchor-15",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 109,
+        "startSeconds": 842,
+        "endSeconds": 849
+      }
+    },
+    {
+      "targetId": "en-16",
+      "queryId": "en-16",
+      "kind": "english",
+      "query": "public gate anchor 16",
+      "targetText": "public-gate-anchor-16",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 110,
+        "startSeconds": 850,
+        "endSeconds": 859
+      }
+    },
+    {
+      "targetId": "en-17",
+      "queryId": "en-17",
+      "kind": "english",
+      "query": "public gate anchor 17",
+      "targetText": "public-gate-anchor-17",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 111,
+        "startSeconds": 861,
+        "endSeconds": 863
+      }
+    },
+    {
+      "targetId": "en-18",
+      "queryId": "en-18",
+      "kind": "english",
+      "query": "public gate anchor 18",
+      "targetText": "public-gate-anchor-18",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 112,
+        "startSeconds": 863,
+        "endSeconds": 872
+      }
+    },
+    {
+      "targetId": "en-19",
+      "queryId": "en-19",
+      "kind": "english",
+      "query": "public gate anchor 19",
+      "targetText": "public-gate-anchor-19",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 113,
+        "startSeconds": 872,
+        "endSeconds": 883
+      }
+    },
+    {
+      "targetId": "en-20",
+      "queryId": "en-20",
+      "kind": "english",
+      "query": "public gate anchor 20",
+      "targetText": "public-gate-anchor-20",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 114,
+        "startSeconds": 883,
+        "endSeconds": 889
+      }
+    },
+    {
+      "targetId": "pn-1",
+      "queryId": "pn-1",
+      "kind": "punctuation_number",
+      "query": "GATE-014-A1 01 500MiB",
+      "targetText": "GATE-014-A1#01/500MiB",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 115,
+        "startSeconds": 890,
+        "endSeconds": 898
+      }
+    },
+    {
+      "targetId": "pn-2",
+      "queryId": "pn-2",
+      "kind": "punctuation_number",
+      "query": "GATE-014-A1 02 500MiB",
+      "targetText": "GATE-014-A1#02/500MiB",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 116,
+        "startSeconds": 896,
+        "endSeconds": 898
+      }
+    },
+    {
+      "targetId": "pn-3",
+      "queryId": "pn-3",
+      "kind": "punctuation_number",
+      "query": "GATE-014-A1 03 500MiB",
+      "targetText": "GATE-014-A1#03/500MiB",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 117,
+        "startSeconds": 900,
+        "endSeconds": 902
+      }
+    },
+    {
+      "targetId": "pn-4",
+      "queryId": "pn-4",
+      "kind": "punctuation_number",
+      "query": "GATE-014-A1 04 500MiB",
+      "targetText": "GATE-014-A1#04/500MiB",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 118,
+        "startSeconds": 903,
+        "endSeconds": 908
+      }
+    },
+    {
+      "targetId": "pn-5",
+      "queryId": "pn-5",
+      "kind": "punctuation_number",
+      "query": "GATE-014-A1 05 500MiB",
+      "targetText": "GATE-014-A1#05/500MiB",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 119,
+        "startSeconds": 910,
+        "endSeconds": 912
+      }
+    },
+    {
+      "targetId": "pn-6",
+      "queryId": "pn-6",
+      "kind": "punctuation_number",
+      "query": "GATE-014-A1 06 500MiB",
+      "targetText": "GATE-014-A1#06/500MiB",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 120,
+        "startSeconds": 914,
+        "endSeconds": 925
+      }
+    },
+    {
+      "targetId": "pn-7",
+      "queryId": "pn-7",
+      "kind": "punctuation_number",
+      "query": "GATE-014-A1 07 500MiB",
+      "targetText": "GATE-014-A1#07/500MiB",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 121,
+        "startSeconds": 927,
+        "endSeconds": 935
+      }
+    },
+    {
+      "targetId": "pn-8",
+      "queryId": "pn-8",
+      "kind": "punctuation_number",
+      "query": "GATE-014-A1 08 500MiB",
+      "targetText": "GATE-014-A1#08/500MiB",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 122,
+        "startSeconds": 936,
+        "endSeconds": 943
+      }
+    },
+    {
+      "targetId": "pn-9",
+      "queryId": "pn-9",
+      "kind": "punctuation_number",
+      "query": "GATE-014-A1 09 500MiB",
+      "targetText": "GATE-014-A1#09/500MiB",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 123,
+        "startSeconds": 943,
+        "endSeconds": 955
+      }
+    },
+    {
+      "targetId": "pn-10",
+      "queryId": "pn-10",
+      "kind": "punctuation_number",
+      "query": "GATE-014-A1 10 500MiB",
+      "targetText": "GATE-014-A1#10/500MiB",
+      "planted": true,
+      "expectedResultContract": "unique_exact_target_rank_1",
+      "expectedResult": {
+        "rank": 1,
+        "fixtureId": "managed-full-text-500mib",
+        "versionId": "b8e82918-ee58-559a-8cb2-ff16b7cf7118",
+        "versionOrdinal": 0,
+        "bvid": "BV014GATEA0000000",
+        "cid": 1400000,
+        "sourceVersionFingerprint": "b5f5910df4e70ed3c45a2d881a72c2e3b73949e924ac30135513653c62a189ff",
+        "segmentOrdinal": 124,
+        "startSeconds": 955,
+        "endSeconds": 964
+      }
+    }
+  ],
+  "commonTermDistractorQueries": [
+    {
+      "queryId": "cd-1",
+      "kind": "common_term_distractor",
+      "query": "合成",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-2",
+      "kind": "common_term_distractor",
+      "query": "本地",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-3",
+      "kind": "common_term_distractor",
+      "query": "片段",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-4",
+      "kind": "common_term_distractor",
+      "query": "容量",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-5",
+      "kind": "common_term_distractor",
+      "query": "公开",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-6",
+      "kind": "common_term_distractor",
+      "query": "合成",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-7",
+      "kind": "common_term_distractor",
+      "query": "本地",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-8",
+      "kind": "common_term_distractor",
+      "query": "片段",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-9",
+      "kind": "common_term_distractor",
+      "query": "容量",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-10",
+      "kind": "common_term_distractor",
+      "query": "公开",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-11",
+      "kind": "common_term_distractor",
+      "query": "合成",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-12",
+      "kind": "common_term_distractor",
+      "query": "本地",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-13",
+      "kind": "common_term_distractor",
+      "query": "片段",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-14",
+      "kind": "common_term_distractor",
+      "query": "容量",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-15",
+      "kind": "common_term_distractor",
+      "query": "公开",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-16",
+      "kind": "common_term_distractor",
+      "query": "合成",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-17",
+      "kind": "common_term_distractor",
+      "query": "本地",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-18",
+      "kind": "common_term_distractor",
+      "query": "片段",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-19",
+      "kind": "common_term_distractor",
+      "query": "容量",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    },
+    {
+      "queryId": "cd-20",
+      "kind": "common_term_distractor",
+      "query": "公开",
+      "expectedResultContract": "non_unique_common_term_distractor"
+    }
+  ],
+  "reusableReceiptHelpers": [
+    {
+      "contract": "gate-014-receipt-helper-v5",
+      "helper": "createTimingReceipt",
+      "requiredFields": [
+        "fixtureId",
+        "operation",
+        "metricAvailable",
+        "startedAtEpochMs",
+        "endedAtEpochMs",
+        "durationMs",
+        "sampleCount"
+      ],
+      "unavailableMetricStatus": "insufficient_evidence",
+      "storesSensitiveText": false
+    },
+    {
+      "contract": "gate-014-receipt-helper-v5",
+      "helper": "createMemoryReceipt",
+      "requiredFields": [
+        "fixtureId",
+        "phase",
+        "metricAvailable",
+        "heapUsedBytes",
+        "heapTotalBytes",
+        "rssBytes",
+        "peakHeapGrowthBytes",
+        "peakHeapGrowthLimitBytes",
+        "metricsConsistent",
+        "withinGateLimit"
+      ],
+      "unavailableMetricStatus": "insufficient_evidence",
+      "storesSensitiveText": false
+    },
+    {
+      "contract": "gate-014-receipt-helper-v5",
+      "helper": "createIndexedDbUsageReceipt",
+      "requiredFields": [
+        "fixtureId",
+        "phase",
+        "metricAvailable",
+        "storageEstimateUsageBeforeBytes",
+        "storageEstimateUsageAfterBytes",
+        "storageEstimateQuotaBytes",
+        "indexedDbDeltaBytes",
+        "expectedDirection",
+        "readbackVerified",
+        "metricsConsistent"
+      ],
+      "unavailableMetricStatus": "insufficient_evidence",
+      "storesSensitiveText": false
+    },
+    {
+      "contract": "gate-014-receipt-helper-v5",
+      "helper": "createPersistedIndexSizeReceipt",
+      "requiredFields": [
+        "fixtureId",
+        "phase",
+        "metricAvailable",
+        "managedSourceBytes",
+        "persistedIndexBytes",
+        "indexToSourceRatioPermille",
+        "maximumIndexToSourceRatioPermille",
+        "metricsConsistent",
+        "withinGateLimit"
+      ],
+      "unavailableMetricStatus": "insufficient_evidence",
+      "storesSensitiveText": false
+    },
+    {
+      "contract": "gate-014-receipt-helper-v5",
+      "helper": "createRestartReceipt",
+      "requiredFields": [
+        "fixtureId",
+        "scenario",
+        "attempted",
+        "completed",
+        "preRestartCheckpoint",
+        "postRestartCheckpoint",
+        "replayedBatchCount",
+        "checkpointNonDecreasing",
+        "checkpointProgressionValid",
+        "readbackVerified",
+        "mixedGenerationVisible",
+        "duplicatePostingsDetected",
+        "fullRebuildStarted"
+      ],
+      "unavailableMetricStatus": "insufficient_evidence",
+      "storesSensitiveText": false
+    },
+    {
+      "contract": "gate-014-receipt-helper-v5",
+      "helper": "createFailureInjectionReceipt",
+      "requiredFields": [
+        "fixtureId",
+        "scenario",
+        "injectionPoint",
+        "attempted",
+        "completed",
+        "visibleRowsAfterFailure",
+        "cleanupRequired",
+        "cleanupCompleted",
+        "cleanupSatisfied",
+        "readbackVerified"
+      ],
+      "unavailableMetricStatus": "insufficient_evidence",
+      "storesSensitiveText": false
+    },
+    {
+      "contract": "gate-014-receipt-helper-v5",
+      "helper": "createCleanupReadbackReceipt",
+      "requiredFields": [
+        "fixtureId",
+        "operation",
+        "beforeFileCount",
+        "removedFileCount",
+        "afterFileCount",
+        "tempFileCountAfterCleanup",
+        "finalFileCountAfterCleanup",
+        "readbackVerified",
+        "countsConsistent"
+      ],
+      "unavailableMetricStatus": "insufficient_evidence",
+      "storesSensitiveText": false
+    }
+  ],
+  "limitations": [
+    {
+      "status": "insufficient_evidence",
+      "subject": "real_bilibili_subtitle_representativeness",
+      "reason": "No public-safe measured subtitle distribution was supplied to this generator run."
+    },
+    {
+      "status": "insufficient_evidence",
+      "subject": "maximum_measured_segment_count_tail",
+      "reason": "No public-safe measured segment-count tail was supplied to this generator run."
+    },
+    {
+      "status": "insufficient_evidence",
+      "subject": "browser_timing_memory_indexeddb_restart_failure_metrics",
+      "reason": "This receipt freezes deterministic fixture bytes; browser gate runs must fill measurement receipts later."
+    }
+  ]
+}
