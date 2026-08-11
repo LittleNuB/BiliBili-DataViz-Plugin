@@ -30,6 +30,7 @@ import {
   removeB1TemporaryProfile,
   readCompletedWindowsTerminationOutcome,
   readB1BrowserControlledFailureCode,
+  readWindowsProcessTable,
   selectProductionServiceWorkerTarget,
   settleB1FixtureServerCleanup,
   uninstallUnpackedExtension,
@@ -1452,6 +1453,83 @@ test("GATE-014-B1 waits within one deadline for the captured Windows lineage to 
   assert.equal(finalReadTimeoutMs, 10);
 });
 
+test("GATE-014-B1 classifies Windows lineage process-table failures without parsing error text", async () => {
+  const commandError = Object.assign(new Error("private command detail"), {
+    cause: new Error("private command cause"),
+  });
+  const observedTimeoutsMs: number[] = [];
+  let commandCallCount = 0;
+  await assert.rejects(
+    readWindowsProcessTable({
+      timeoutMs: 100,
+      deadlineEpochMs: 200,
+      now: () => 100,
+      classifyLineageFailures: true,
+      execFileImpl: async (
+        _file: string,
+        _args: string[],
+        options: { timeout?: number },
+      ) => {
+        commandCallCount += 1;
+        observedTimeoutsMs.push(options.timeout ?? -1);
+        throw commandError;
+      },
+    }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+        "browser_process_lineage_table_command_failed" &&
+      JSON.stringify(error).includes("private") === false,
+  );
+  assert.equal(commandCallCount, 1);
+  assert.deepEqual(observedTimeoutsMs, [100]);
+
+  await assert.rejects(
+    readWindowsProcessTable({
+      timeoutMs: 100,
+      deadlineEpochMs: 200,
+      now: () => 200,
+      classifyLineageFailures: true,
+      execFileImpl: async () => {
+        throw commandError;
+      },
+    }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_lineage_table_command_deadline_elapsed_failed",
+  );
+
+  await assert.rejects(
+    readWindowsProcessTable({
+      timeoutMs: 100,
+      deadlineEpochMs: 200,
+      now: () => 100,
+      classifyLineageFailures: true,
+      execFileImpl: async () => ({ stdout: "not-json" }),
+    }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_lineage_table_json_failed",
+  );
+
+  await assert.rejects(
+    readWindowsProcessTable({
+      timeoutMs: 100,
+      deadlineEpochMs: 200,
+      now: () => 100,
+      classifyLineageFailures: true,
+      execFileImpl: async () => ({
+        stdout: JSON.stringify([
+          { processId: 101, parentProcessId: 100 },
+          { processId: 101, parentProcessId: 100 },
+        ]),
+      }),
+    }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_lineage_table_validation_failed",
+  );
+});
+
 test("GATE-014-B1 accepts a completed native tree termination only after the lineage is gone", () => {
   assert.equal(
     readCompletedWindowsTerminationOutcome({
@@ -1675,6 +1753,10 @@ test("GATE-014-B1 browser stages preserve proven codes and replace spoofed field
     "browser_process_lineage_observation_failed",
     "browser_process_lineage_deadline_before_observation_failed",
     "browser_process_lineage_table_observation_failed",
+    "browser_process_lineage_table_command_failed",
+    "browser_process_lineage_table_command_deadline_elapsed_failed",
+    "browser_process_lineage_table_json_failed",
+    "browser_process_lineage_table_validation_failed",
     "browser_process_lineage_deadline_after_observation_failed",
     "browser_process_lineage_survivors_failed",
     "browser_process_termination_validation_failed",

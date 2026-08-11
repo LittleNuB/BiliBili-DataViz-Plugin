@@ -54,6 +54,10 @@ const B1_BROWSER_STAGE_FAILURE_CODES = Object.freeze([
   "browser_process_lineage_observation_failed",
   "browser_process_lineage_deadline_before_observation_failed",
   "browser_process_lineage_table_observation_failed",
+  "browser_process_lineage_table_command_failed",
+  "browser_process_lineage_table_command_deadline_elapsed_failed",
+  "browser_process_lineage_table_json_failed",
+  "browser_process_lineage_table_validation_failed",
   "browser_process_lineage_deadline_after_observation_failed",
   "browser_process_lineage_survivors_failed",
   "browser_process_termination_validation_failed",
@@ -2965,6 +2969,8 @@ export async function waitForWindowsProcessTreeExit(
       () =>
         readProcessTable({
           timeoutMs: Math.max(1, Math.ceil(remainingBeforeReadMs)),
+          deadlineEpochMs,
+          now,
         }),
     );
     const survivors = findSurvivingWindowsProcessTree(
@@ -3106,9 +3112,19 @@ function collectDescendantProcessIds(processes, seedProcessIds) {
   return lineage;
 }
 
-async function readWindowsProcessTable(options = {}) {
+export async function readWindowsProcessTable(options = {}) {
   const timeoutMs = options.timeoutMs ?? 10_000;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+  const execFileImpl = options.execFileImpl ?? execFile;
+  const classifyLineageFailures = options.classifyLineageFailures === true;
+  const deadlineEpochMs = options.deadlineEpochMs;
+  const now = options.now ?? Date.now;
+  if (
+    !Number.isFinite(timeoutMs) ||
+    timeoutMs <= 0 ||
+    typeof execFileImpl !== "function" ||
+    (classifyLineageFailures &&
+      (!Number.isFinite(deadlineEpochMs) || typeof now !== "function"))
+  ) {
     throw new Error("chrome_process_tree_observation_failed");
   }
   const script = [
@@ -3117,7 +3133,7 @@ async function readWindowsProcessTable(options = {}) {
   ].join("; ");
   let stdout;
   try {
-    ({ stdout } = await execFile(
+    ({ stdout } = await execFileImpl(
       "powershell.exe",
       ["-NoProfile", "-Command", script],
       {
@@ -3126,13 +3142,33 @@ async function readWindowsProcessTable(options = {}) {
         maxBuffer: 16 * 1024 * 1024,
       },
     ));
-  } catch {
+  } catch (error) {
+    if (classifyLineageFailures) {
+      const commandRejectedEpochMs = now();
+      await executeB1BrowserStage(
+        Number.isFinite(commandRejectedEpochMs) &&
+          commandRejectedEpochMs >= deadlineEpochMs
+          ? "browser_process_lineage_table_command_deadline_elapsed_failed"
+          : "browser_process_lineage_table_command_failed",
+        () => {
+          throw error;
+        },
+      );
+    }
     throw new Error("chrome_process_tree_observation_failed");
   }
   let processes;
   try {
     processes = JSON.parse(stdout.trim());
-  } catch {
+  } catch (error) {
+    if (classifyLineageFailures) {
+      await executeB1BrowserStage(
+        "browser_process_lineage_table_json_failed",
+        () => {
+          throw error;
+        },
+      );
+    }
     throw new Error("chrome_process_tree_observation_failed");
   }
   try {
@@ -3140,7 +3176,15 @@ async function readWindowsProcessTable(options = {}) {
       processes,
       "chrome_process_tree_observation",
     );
-  } catch {
+  } catch (error) {
+    if (classifyLineageFailures) {
+      await executeB1BrowserStage(
+        "browser_process_lineage_table_validation_failed",
+        () => {
+          throw error;
+        },
+      );
+    }
     throw new Error("chrome_process_tree_observation_failed");
   }
 }
@@ -3204,6 +3248,11 @@ async function terminateChromeProcessTree(child) {
           () =>
             waitForWindowsProcessTreeExit(initialProcesses, child.pid, {
               deadlineEpochMs: closureDeadlineEpochMs,
+              readProcessTable: (options) =>
+                readWindowsProcessTable({
+                  ...options,
+                  classifyLineageFailures: true,
+                }),
             }),
         );
         await executeB1BrowserStage(
