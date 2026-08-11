@@ -27,6 +27,22 @@ const B1_BROWSER_STAGE_FAILURE_CODES = Object.freeze([
   "browser_lifecycle_server_setup_failed",
   "browser_lifecycle_server_validation_failed",
   "browser_lifecycle_server_cleanup_failed",
+  "browser_production_stage_setup_failed",
+  "browser_production_stage_cleanup_failed",
+  "browser_environment_validation_failed",
+  "browser_process_spawn_failed",
+  "browser_target_observer_setup_failed",
+  "browser_harness_load_failed",
+  "browser_production_load_failed",
+  "browser_runner_target_setup_failed",
+  "browser_harness_ready_failed",
+  "browser_extension_inventory_failed",
+  "browser_production_worker_setup_failed",
+  "browser_synthetic_startup_failed",
+  "browser_production_uninstall_failed",
+  "browser_harness_evaluation_failed",
+  "browser_observation_settle_failed",
+  "browser_process_cleanup_failed",
 ]);
 const B1_BROWSER_FAILURE_CODES = new WeakMap();
 const B1_CDP_SETUP_TIMEOUT_MS = 30_000;
@@ -1001,20 +1017,31 @@ async function evaluateInHarnessProfile(
   const productionExtensionSource = path.resolve(
     options.productionExtension ?? path.join(REPOSITORY_ROOT, "dist"),
   );
-  const productionExtensionStage =
-    await createB1ProductionExtensionStage(productionExtensionSource);
-  try {
-    return await evaluateInStagedHarnessProfile(
-      options,
-      profileDirectory,
-      expression,
-      evaluationErrorCode,
-      productionExtensionStage.directory,
-      forbiddenProductionExtensionIds,
-    );
-  } finally {
-    await removeB1ProductionExtensionStage(productionExtensionStage);
-  }
+  let productionExtensionStage = null;
+  return executeB1BrowserOperationWithCleanup(
+    async () => {
+      productionExtensionStage = await executeB1BrowserStage(
+        "browser_production_stage_setup_failed",
+        () => createB1ProductionExtensionStage(productionExtensionSource),
+      );
+      return evaluateInStagedHarnessProfile(
+        options,
+        profileDirectory,
+        expression,
+        evaluationErrorCode,
+        productionExtensionStage.directory,
+        forbiddenProductionExtensionIds,
+      );
+    },
+    () =>
+      executeB1BrowserStage(
+        "browser_production_stage_cleanup_failed",
+        () =>
+          productionExtensionStage
+            ? removeB1ProductionExtensionStage(productionExtensionStage)
+            : undefined,
+      ),
+  );
 }
 
 async function evaluateInStagedHarnessProfile(
@@ -1025,183 +1052,270 @@ async function evaluateInStagedHarnessProfile(
   productionExtension,
   forbiddenProductionExtensionIds,
 ) {
-  const chromeExecutable = await resolveChromeExecutable(options.chromePath);
-  await readChromeForTestingMetadata(chromeExecutable, options.cftMetadataPath);
-  const harnessExtension = path.resolve(
-    options.harnessExtension ??
-      path.join(
-        REPOSITORY_ROOT,
-        "tests",
-        "fixtures",
-        "gate-014",
-        "b1-extension",
-      ),
-  );
-  await Promise.all([
-    access(path.join(productionExtension, "manifest.json")),
-    access(path.join(harnessExtension, "manifest.json")),
-  ]);
-  const productionIdentity =
-    await readProductionExtensionIdentity(productionExtension);
-  const chromeArguments = buildChromeArguments({ profileDirectory });
-  const chrome = spawn(chromeExecutable, chromeArguments, {
-    stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
-    windowsHide: true,
-  });
-  let stderr = "";
-  chrome.stderr.setEncoding("utf8");
-  chrome.stderr.on("data", (chunk) => {
-    stderr = `${stderr}${chunk}`.slice(-8_192);
-  });
-
-  let client = null;
-  try {
-    const commandPipe = chrome.stdio[3];
-    const eventPipe = chrome.stdio[4];
-    if (!commandPipe || !eventPipe) {
-      throw new Error("cdp_pipe_unavailable");
-    }
-    client = createPipeCdpClient(commandPipe, eventPipe);
-    const observation = createCdpExecutionObservation(client);
-    const targetObserver = createExtensionTargetObserver(client, observation, {
-      forbiddenProductionExtensionIds,
-    });
-    const productionProofDeadlineEpochMs = Date.now() + B1_CDP_SETUP_TIMEOUT_MS;
-    await targetObserver.start({
-      deadlineEpochMs: productionProofDeadlineEpochMs,
-    });
-    const loadedHarnessExtensionId = await loadUnpackedExtension(
-      client,
-      harnessExtension,
-      { deadlineEpochMs: productionProofDeadlineEpochMs },
-    );
-    if (loadedHarnessExtensionId !== B1_HARNESS_EXTENSION_ID) {
-      throw new Error("browser_smoke_extension_identity_mismatch");
-    }
-    const productionExtensionId = await loadUnpackedExtension(
-      client,
-      productionExtension,
-      { deadlineEpochMs: productionProofDeadlineEpochMs },
-    );
-    if (productionExtensionId === B1_HARNESS_EXTENSION_ID) {
-      throw new Error("browser_production_extension_identity_invalid");
-    }
-    targetObserver.requireProductionServiceWorkerBarrier(
-      productionExtensionId,
-    );
-    observation.setRequiredExtensionIds({
-      productionExtensionId,
-      harnessExtensionId: B1_HARNESS_EXTENSION_ID,
-    });
-    const { targetId } = await sendCdpWithinDeadline(
-      client,
-      "Target.createTarget",
-      {
-        url: `chrome-extension://${B1_HARNESS_EXTENSION_ID}/runner.html`,
-      },
-      undefined,
-      productionProofDeadlineEpochMs,
-    );
-    const runnerAttachmentRemainingMs = remainingSetupMs(
-      productionProofDeadlineEpochMs,
-    );
-    const sessionId = await settleWithin(
-      targetObserver.ensureTargetId(targetId, runnerAttachmentRemainingMs),
-      runnerAttachmentRemainingMs,
-    );
-    if (!sessionId) {
-      throw new Error("browser_runner_target_not_observed");
-    }
-    await waitForHarnessReady(client, sessionId, {
-      deadlineEpochMs: productionProofDeadlineEpochMs,
-    });
-    const inventory = await readLoadedExtensionInventory(client, sessionId, {
-      deadlineEpochMs: productionProofDeadlineEpochMs,
-    });
-    const inventoryIdentity = validateLoadedExtensionInventory(
-      inventory,
-      productionIdentity,
-    );
-    if (inventoryIdentity.productionExtensionId !== productionExtensionId) {
-      throw new Error("browser_production_extension_identity_invalid");
-    }
-    const productionSessionId = await findProductionServiceWorkerSession(
-      client,
-      targetObserver,
-      productionExtensionId,
-      { deadlineEpochMs: productionProofDeadlineEpochMs },
-    );
-    if (!productionSessionId) {
-      throw new Error("browser_production_extension_target_not_observed");
-    }
-    await waitForProductionExtensionReady(
-      client,
-      productionSessionId,
-      productionExtensionId,
-      productionIdentity,
-      { deadlineEpochMs: productionProofDeadlineEpochMs },
-    );
-    await observation.waitForSyntheticUnauthenticatedResponse({
-      deadlineEpochMs: productionProofDeadlineEpochMs,
-    });
-    await uninstallUnpackedExtension(client, productionExtensionId, {
-      deadlineEpochMs: productionProofDeadlineEpochMs,
-    });
-    targetObserver.completeSetup();
-    const resolvedExpression =
-      typeof expression === "function"
-        ? expression({ harnessReadyEpochMs: Date.now() })
-        : expression;
-    const controlledExpression =
-      createControlledHarnessEvaluationExpression(resolvedExpression);
-    const evaluation = await client.send(
-      "Runtime.evaluate",
-      {
-        expression: controlledExpression,
-        awaitPromise: true,
-        returnByValue: true,
-      },
-      sessionId,
-      B1_LIFECYCLE_EVALUATION_TIMEOUT_MS,
-    );
-    if (evaluation.exceptionDetails) {
-      const failure = createHarnessEvaluationError(evaluationErrorCode);
-      if (process.env.GATE_014_B1_DEBUG === "1") {
-        process.stderr.write("Harness exception code: unknown_exception\n");
-      }
-      throw failure;
-    }
-    const controlledValue = unwrapControlledHarnessEvaluation(
-      evaluation.result?.value,
-      evaluationErrorCode,
-    );
-    await targetObserver.settle();
-    await observation.settle();
-    await targetObserver.stop();
-    await observation.settle();
-    const observationReceipt = observation.finish();
-    if (process.env.GATE_014_B1_DEBUG === "1") {
-      process.stderr.write(
-        `Browser observation counts: ${JSON.stringify(observationReceipt)}\n`,
+  const environment = await executeB1BrowserStage(
+    "browser_environment_validation_failed",
+    async () => {
+      const chromeExecutable = await resolveChromeExecutable(options.chromePath);
+      await readChromeForTestingMetadata(
+        chromeExecutable,
+        options.cftMetadataPath,
       );
-    }
-    return {
-      value: controlledValue,
-      observation: validateBrowserExecutionObservation(observationReceipt),
-      productionExtensionId,
-    };
-  } catch (error) {
-    if (stderr && process.env.GATE_014_B1_DEBUG === "1") {
-      process.stderr.write(stderr);
-    }
-    throw error;
-  } finally {
-    try {
-      await terminateChromeProcessTree(chrome);
-    } finally {
-      client?.close();
-    }
-  }
+      const harnessExtension = path.resolve(
+        options.harnessExtension ??
+          path.join(
+            REPOSITORY_ROOT,
+            "tests",
+            "fixtures",
+            "gate-014",
+            "b1-extension",
+          ),
+      );
+      await Promise.all([
+        access(path.join(productionExtension, "manifest.json")),
+        access(path.join(harnessExtension, "manifest.json")),
+      ]);
+      return {
+        chromeArguments: buildChromeArguments({ profileDirectory }),
+        chromeExecutable,
+        harnessExtension,
+        productionIdentity:
+          await readProductionExtensionIdentity(productionExtension),
+      };
+    },
+  );
+  let chrome = null;
+  let stderr = "";
+  let client = null;
+  return executeB1BrowserOperationWithCleanup(
+    async () => {
+      await executeB1BrowserStage("browser_process_spawn_failed", async () => {
+        chrome = spawn(
+          environment.chromeExecutable,
+          environment.chromeArguments,
+          {
+            stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
+            windowsHide: true,
+          },
+        );
+        await waitForB1BrowserProcessSpawn(chrome);
+        if (!chrome.stderr) {
+          throw new Error("chrome_stderr_pipe_unavailable");
+        }
+        chrome.stderr.setEncoding("utf8");
+        chrome.stderr.on("data", (chunk) => {
+          stderr = `${stderr}${chunk}`.slice(-8_192);
+        });
+      });
+      try {
+        const setup = await executeB1BrowserStage(
+          "browser_target_observer_setup_failed",
+          async () => {
+            const commandPipe = chrome.stdio[3];
+            const eventPipe = chrome.stdio[4];
+            if (!commandPipe || !eventPipe) {
+              throw new Error("cdp_pipe_unavailable");
+            }
+            client = createPipeCdpClient(commandPipe, eventPipe);
+            const observation = createCdpExecutionObservation(client);
+            const targetObserver = createExtensionTargetObserver(
+              client,
+              observation,
+              { forbiddenProductionExtensionIds },
+            );
+            const deadlineEpochMs = Date.now() + B1_CDP_SETUP_TIMEOUT_MS;
+            await targetObserver.start({ deadlineEpochMs });
+            return { deadlineEpochMs, observation, targetObserver };
+          },
+        );
+        const { deadlineEpochMs, observation, targetObserver } = setup;
+        await executeB1BrowserStage("browser_harness_load_failed", async () => {
+          const loadedHarnessExtensionId = await loadUnpackedExtension(
+            client,
+            environment.harnessExtension,
+            { deadlineEpochMs },
+          );
+          if (loadedHarnessExtensionId !== B1_HARNESS_EXTENSION_ID) {
+            throw new Error("browser_smoke_extension_identity_mismatch");
+          }
+        });
+        const productionExtensionId = await executeB1BrowserStage(
+          "browser_production_load_failed",
+          async () => {
+            const loadedProductionExtensionId = await loadUnpackedExtension(
+              client,
+              productionExtension,
+              { deadlineEpochMs },
+            );
+            if (loadedProductionExtensionId === B1_HARNESS_EXTENSION_ID) {
+              throw new Error("browser_production_extension_identity_invalid");
+            }
+            targetObserver.requireProductionServiceWorkerBarrier(
+              loadedProductionExtensionId,
+            );
+            observation.setRequiredExtensionIds({
+              productionExtensionId: loadedProductionExtensionId,
+              harnessExtensionId: B1_HARNESS_EXTENSION_ID,
+            });
+            return loadedProductionExtensionId;
+          },
+        );
+        const sessionId = await executeB1BrowserStage(
+          "browser_runner_target_setup_failed",
+          async () => {
+            const { targetId } = await sendCdpWithinDeadline(
+              client,
+              "Target.createTarget",
+              {
+                url: `chrome-extension://${B1_HARNESS_EXTENSION_ID}/runner.html`,
+              },
+              undefined,
+              deadlineEpochMs,
+            );
+            const runnerAttachmentRemainingMs = remainingSetupMs(deadlineEpochMs);
+            const observedSessionId = await settleWithin(
+              targetObserver.ensureTargetId(
+                targetId,
+                runnerAttachmentRemainingMs,
+              ),
+              runnerAttachmentRemainingMs,
+            );
+            if (!observedSessionId) {
+              throw new Error("browser_runner_target_not_observed");
+            }
+            return observedSessionId;
+          },
+        );
+        await executeB1BrowserStage("browser_harness_ready_failed", () =>
+          waitForHarnessReady(client, sessionId, { deadlineEpochMs }),
+        );
+        await executeB1BrowserStage(
+          "browser_extension_inventory_failed",
+          async () => {
+            const inventory = await readLoadedExtensionInventory(
+              client,
+              sessionId,
+              { deadlineEpochMs },
+            );
+            const inventoryIdentity = validateLoadedExtensionInventory(
+              inventory,
+              environment.productionIdentity,
+            );
+            if (
+              inventoryIdentity.productionExtensionId !== productionExtensionId
+            ) {
+              throw new Error("browser_production_extension_identity_invalid");
+            }
+          },
+        );
+        await executeB1BrowserStage(
+          "browser_production_worker_setup_failed",
+          async () => {
+            const productionSessionId =
+              await findProductionServiceWorkerSession(
+                client,
+                targetObserver,
+                productionExtensionId,
+                { deadlineEpochMs },
+              );
+            if (!productionSessionId) {
+              throw new Error("browser_production_extension_target_not_observed");
+            }
+            await waitForProductionExtensionReady(
+              client,
+              productionSessionId,
+              productionExtensionId,
+              environment.productionIdentity,
+              { deadlineEpochMs },
+            );
+          },
+        );
+        await executeB1BrowserStage(
+          "browser_synthetic_startup_failed",
+          () =>
+            observation.waitForSyntheticUnauthenticatedResponse({
+              deadlineEpochMs,
+            }),
+        );
+        await executeB1BrowserStage(
+          "browser_production_uninstall_failed",
+          async () => {
+            await uninstallUnpackedExtension(client, productionExtensionId, {
+              deadlineEpochMs,
+            });
+            targetObserver.completeSetup();
+          },
+        );
+        const controlledValue = await executeB1BrowserStage(
+          "browser_harness_evaluation_failed",
+          async () => {
+            const resolvedExpression =
+              typeof expression === "function"
+                ? expression({ harnessReadyEpochMs: Date.now() })
+                : expression;
+            const controlledExpression =
+              createControlledHarnessEvaluationExpression(resolvedExpression);
+            const evaluation = await client.send(
+              "Runtime.evaluate",
+              {
+                expression: controlledExpression,
+                awaitPromise: true,
+                returnByValue: true,
+              },
+              sessionId,
+              B1_LIFECYCLE_EVALUATION_TIMEOUT_MS,
+            );
+            if (evaluation.exceptionDetails) {
+              const failure = createHarnessEvaluationError(evaluationErrorCode);
+              if (process.env.GATE_014_B1_DEBUG === "1") {
+                process.stderr.write(
+                  "Harness exception code: unknown_exception\n",
+                );
+              }
+              throw failure;
+            }
+            return unwrapControlledHarnessEvaluation(
+              evaluation.result?.value,
+              evaluationErrorCode,
+            );
+          },
+        );
+        const observationReceipt = await executeB1BrowserStage(
+          "browser_observation_settle_failed",
+          async () => {
+            await targetObserver.settle();
+            await observation.settle();
+            await targetObserver.stop();
+            await observation.settle();
+            return observation.finish();
+          },
+        );
+        if (process.env.GATE_014_B1_DEBUG === "1") {
+          process.stderr.write(
+            `Browser observation counts: ${JSON.stringify(observationReceipt)}\n`,
+          );
+        }
+        return {
+          value: controlledValue,
+          observation: validateBrowserExecutionObservation(observationReceipt),
+          productionExtensionId,
+        };
+      } catch (error) {
+        if (stderr && process.env.GATE_014_B1_DEBUG === "1") {
+          process.stderr.write(stderr);
+        }
+        throw error;
+      }
+    },
+    () =>
+      chrome
+        ? executeB1BrowserStage("browser_process_cleanup_failed", () =>
+            executeB1BrowserOperationWithCleanup(
+              () => terminateChromeProcessTree(chrome),
+              () => client?.close(),
+            ),
+          )
+        : undefined,
+  );
 }
 
 export function validateControlledHarnessEvaluation(value) {
@@ -1302,6 +1416,33 @@ export async function executeB1BrowserStage(stageCode, task) {
     B1_BROWSER_FAILURE_CODES.set(controlled, stageCode);
     throw controlled;
   }
+}
+
+export async function waitForB1BrowserProcessSpawn(child) {
+  if (
+    !child ||
+    typeof child.once !== "function" ||
+    typeof child.removeListener !== "function"
+  ) {
+    throw new Error("browser_process_spawn_observer_invalid");
+  }
+  await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      child.removeListener("spawn", onSpawn);
+      child.removeListener("error", onError);
+    };
+    const onSpawn = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
+    child.once("spawn", onSpawn);
+    child.once("error", onError);
+  });
+  return child;
 }
 
 export async function executeB1BrowserOperationWithCleanup(task, cleanup) {

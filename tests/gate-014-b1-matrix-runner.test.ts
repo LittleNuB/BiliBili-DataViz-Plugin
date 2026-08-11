@@ -32,7 +32,10 @@ import {
   B1_OPERATION_KINDS,
   createB1OperationReceipt,
 } from "../scripts/gate-014-b1-receipt.mjs";
-import { unwrapControlledHarnessEvaluation } from "../scripts/gate-014-b1-browser-runner.mjs";
+import {
+  executeB1BrowserStage,
+  unwrapControlledHarnessEvaluation,
+} from "../scripts/gate-014-b1-browser-runner.mjs";
 
 const FIXTURE_SHA = "a".repeat(64);
 const ENVIRONMENT_SHA = "b".repeat(64);
@@ -94,6 +97,53 @@ test("GATE-014-B1 failure latch records only controlled public-safe fields", () 
       }),
     /harnessCode is invalid/,
   );
+});
+
+test("GATE-014-B1 latches an asynchronous browser spawn failure code", async () => {
+  let controlledError: unknown;
+  try {
+    await executeB1BrowserStage("browser_process_spawn_failed", async () => {
+      throw new Error("synthetic asynchronous spawn failure");
+    });
+  } catch (error) {
+    controlledError = error;
+  }
+  let leaseInstalled = false;
+  let marker: ReturnType<typeof createB1RunFailureMarker> | null = null;
+  await assert.rejects(
+    executeB1LatchedPhase(
+      {
+        sessionBindingSha256: SESSION_SHA,
+        environmentFingerprintSha256: ENVIRONMENT_SHA,
+        spec: PUBLIC_RUN_SPEC,
+        leasePhase: "run_attempt",
+        failureState: {
+          phase: "browser_lifecycle",
+          failureClass: "execution_failure",
+        },
+        completedCheckpointCount: 5,
+      },
+      async () => {
+        throw controlledError;
+      },
+      {
+        async writeLease() {
+          leaseInstalled = true;
+        },
+        async clearLease() {
+          leaseInstalled = false;
+        },
+        async writeFailure(value) {
+          marker = value;
+        },
+      },
+    ),
+    /checkpoint cleanup required/,
+  );
+  assert.equal(leaseInstalled, true);
+  assert.equal(marker?.harnessCode, "browser_process_spawn_failed");
+  assert.equal(marker?.completedCheckpointCount, 5);
+  assert.equal(marker?.storesSensitiveText, false);
 });
 
 test("GATE-014-B1 profile cleanup does not replace a proven lifecycle failure", () => {

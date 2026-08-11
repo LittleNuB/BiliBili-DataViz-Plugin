@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn as spawnChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -40,6 +41,7 @@ import {
   validateControlledHarnessEvaluation,
   validateSmokeResult,
   validateWindowsChromeTerminationEvidence,
+  waitForB1BrowserProcessSpawn,
   waitForWindowsProcessTreeExit,
   waitForProductionExtensionReady,
   waitForProcessExit,
@@ -1638,6 +1640,34 @@ test("GATE-014-B1 browser stages preserve proven codes and replace spoofed field
     executeB1BrowserStage("untrusted_stage", async () => undefined),
     /browser_controlled_stage_invalid/,
   );
+
+  const diagnosticStages = [
+    "browser_production_stage_setup_failed",
+    "browser_production_stage_cleanup_failed",
+    "browser_environment_validation_failed",
+    "browser_process_spawn_failed",
+    "browser_target_observer_setup_failed",
+    "browser_harness_load_failed",
+    "browser_production_load_failed",
+    "browser_runner_target_setup_failed",
+    "browser_harness_ready_failed",
+    "browser_extension_inventory_failed",
+    "browser_production_worker_setup_failed",
+    "browser_synthetic_startup_failed",
+    "browser_production_uninstall_failed",
+    "browser_harness_evaluation_failed",
+    "browser_observation_settle_failed",
+    "browser_process_cleanup_failed",
+  ];
+  for (const stageCode of diagnosticStages) {
+    await assert.rejects(
+      executeB1BrowserStage(stageCode, () => {
+        throw new Error("synthetic stage failure");
+      }),
+      (error: unknown) =>
+        readB1BrowserControlledFailureCode(error) === stageCode,
+    );
+  }
 });
 
 test("GATE-014-B1 browser cleanup runs without replacing a proven primary failure", async () => {
@@ -1696,6 +1726,48 @@ test("GATE-014-B1 browser cleanup runs without replacing a proven primary failur
       "browser_lifecycle_server_setup_failed",
   );
   assert.equal(firstServerClosed, true);
+});
+
+test("GATE-014-B1 async browser spawn errors stay controlled and still clean up", async () => {
+  const child = new EventEmitter();
+  let cleanupAttempted = false;
+  const operation = executeB1BrowserOperationWithCleanup(
+    () =>
+      executeB1BrowserStage("browser_process_spawn_failed", () =>
+        waitForB1BrowserProcessSpawn(child),
+      ),
+    async () => {
+      cleanupAttempted = true;
+    },
+  );
+  queueMicrotask(() => {
+    child.emit("error", new Error("synthetic asynchronous spawn failure"));
+  });
+  await assert.rejects(
+    operation,
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_spawn_failed",
+  );
+  assert.equal(cleanupAttempted, true);
+  assert.equal(child.listenerCount("spawn"), 0);
+  assert.equal(child.listenerCount("error"), 0);
+});
+
+test("GATE-014-B1 observes the real asynchronous spawn error boundary", async () => {
+  const child = spawnChildProcess(
+    path.join(tmpdir(), "gate-014-b1-executable-does-not-exist"),
+    [],
+    { stdio: "ignore" },
+  );
+  await assert.rejects(
+    executeB1BrowserStage("browser_process_spawn_failed", () =>
+      waitForB1BrowserProcessSpawn(child),
+    ),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_spawn_failed",
+  );
 });
 
 test("GATE-014-B1 browser cleanup treats nullish throws as failures and awaits every close", async () => {
