@@ -2475,11 +2475,21 @@ export function findSurvivingWindowsProcessTree(
 }
 
 export function validateWindowsChromeTerminationEvidence({
-  terminationCommandSucceeded,
+  nativeTerminationCompleted,
+  nativeTerminationOutcome,
+  rootObservedBeforeTermination,
+  rootRunningBeforeTermination,
   parentExited,
   survivingProcessIds,
 }) {
-  if (terminationCommandSucceeded !== true) {
+  if (
+    nativeTerminationCompleted !== true ||
+    !["exit_zero", "exit_numeric_nonzero"].includes(
+      nativeTerminationOutcome,
+    ) ||
+    rootObservedBeforeTermination !== true ||
+    rootRunningBeforeTermination !== true
+  ) {
     throw new Error("chrome_process_tree_termination_failed");
   }
   if (parentExited !== true) {
@@ -2494,6 +2504,20 @@ export function validateWindowsChromeTerminationEvidence({
   ) {
     throw new Error("chrome_process_tree_termination_failed");
   }
+}
+
+export function readCompletedWindowsTerminationOutcome(error) {
+  if (
+    error === null ||
+    typeof error !== "object" ||
+    !Number.isSafeInteger(error.code) ||
+    error.code < 1 ||
+    error.killed !== false ||
+    error.signal !== null
+  ) {
+    throw new Error("chrome_process_tree_termination_failed");
+  }
+  return "exit_numeric_nonzero";
 }
 
 function validateWindowsProcessTable(processes, label) {
@@ -2576,15 +2600,27 @@ async function terminateChromeProcessTree(child) {
   }
   if (process.platform === "win32") {
     const initialProcesses = await readWindowsProcessTable();
-    if (child.exitCode !== null) {
+    const rootObservedBeforeTermination = initialProcesses.some(
+      (candidate) => candidate.processId === child.pid,
+    );
+    const rootRunningBeforeTermination = child.exitCode === null;
+    if (!rootRunningBeforeTermination || !rootObservedBeforeTermination) {
       throw new Error("chrome_process_tree_termination_failed");
     }
-    await execFile("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
-      windowsHide: true,
-      timeout: 10_000,
-    }).catch(() => {
-      throw new Error("chrome_process_tree_termination_failed");
-    });
+    let nativeTerminationOutcome = "exit_zero";
+    try {
+      await execFile(
+        "taskkill.exe",
+        ["/PID", String(child.pid), "/T", "/F"],
+        {
+          windowsHide: true,
+          timeout: 10_000,
+        },
+      );
+    } catch (error) {
+      nativeTerminationOutcome =
+        readCompletedWindowsTerminationOutcome(error);
+    }
     const parentExited = await waitForProcessExit(child);
     const currentProcesses = await readWindowsProcessTable();
     const survivors = findSurvivingWindowsProcessTree(
@@ -2593,7 +2629,10 @@ async function terminateChromeProcessTree(child) {
       child.pid,
     );
     validateWindowsChromeTerminationEvidence({
-      terminationCommandSucceeded: true,
+      nativeTerminationCompleted: true,
+      nativeTerminationOutcome,
+      rootObservedBeforeTermination,
+      rootRunningBeforeTermination,
       parentExited,
       survivingProcessIds: survivors,
     });

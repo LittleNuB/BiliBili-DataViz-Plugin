@@ -22,6 +22,7 @@ import {
   loadUnpackedExtension,
   removeB1ProductionExtensionStage,
   removeB1TemporaryProfile,
+  readCompletedWindowsTerminationOutcome,
   selectProductionServiceWorkerTarget,
   uninstallUnpackedExtension,
   validateBrowserExecutionObservation,
@@ -655,10 +656,43 @@ test("GATE-014-B1 process-tree verification catches surviving descendants after 
   );
 });
 
-test("GATE-014-B1 requires successful native tree termination with no surviving lineage", () => {
+test("GATE-014-B1 accepts a completed native tree termination only after the lineage is gone", () => {
+  assert.equal(
+    readCompletedWindowsTerminationOutcome({
+      code: 128,
+      killed: false,
+      signal: null,
+    }),
+    "exit_numeric_nonzero",
+  );
+  for (const error of [
+    { code: "ENOENT", killed: false, signal: null },
+    { code: null, killed: true, signal: "SIGTERM" },
+    { code: 128, killed: false, signal: "SIGTERM" },
+    { code: 128, killed: undefined, signal: null },
+    { code: 128, killed: false, signal: undefined },
+  ]) {
+    assert.throws(
+      () => readCompletedWindowsTerminationOutcome(error),
+      /chrome_process_tree_termination_failed/,
+    );
+  }
   assert.doesNotThrow(() =>
     validateWindowsChromeTerminationEvidence({
-      terminationCommandSucceeded: true,
+      nativeTerminationCompleted: true,
+      nativeTerminationOutcome: "exit_zero",
+      rootObservedBeforeTermination: true,
+      rootRunningBeforeTermination: true,
+      parentExited: true,
+      survivingProcessIds: [],
+    }),
+  );
+  assert.doesNotThrow(() =>
+    validateWindowsChromeTerminationEvidence({
+      nativeTerminationCompleted: true,
+      nativeTerminationOutcome: "exit_numeric_nonzero",
+      rootObservedBeforeTermination: true,
+      rootRunningBeforeTermination: true,
       parentExited: true,
       survivingProcessIds: [],
     }),
@@ -666,7 +700,10 @@ test("GATE-014-B1 requires successful native tree termination with no surviving 
   assert.throws(
     () =>
       validateWindowsChromeTerminationEvidence({
-        terminationCommandSucceeded: false,
+        nativeTerminationCompleted: false,
+        nativeTerminationOutcome: null,
+        rootObservedBeforeTermination: true,
+        rootRunningBeforeTermination: true,
         parentExited: true,
         survivingProcessIds: [],
       }),
@@ -675,7 +712,46 @@ test("GATE-014-B1 requires successful native tree termination with no surviving 
   assert.throws(
     () =>
       validateWindowsChromeTerminationEvidence({
-        terminationCommandSucceeded: true,
+        nativeTerminationCompleted: true,
+        nativeTerminationOutcome: "exit_zero",
+        rootObservedBeforeTermination: false,
+        rootRunningBeforeTermination: true,
+        parentExited: true,
+        survivingProcessIds: [],
+      }),
+    /chrome_process_tree_termination_failed/,
+  );
+  assert.throws(
+    () =>
+      validateWindowsChromeTerminationEvidence({
+        nativeTerminationCompleted: true,
+        nativeTerminationOutcome: "unexpected",
+        rootObservedBeforeTermination: true,
+        rootRunningBeforeTermination: true,
+        parentExited: true,
+        survivingProcessIds: [],
+      }),
+    /chrome_process_tree_termination_failed/,
+  );
+  assert.throws(
+    () =>
+      validateWindowsChromeTerminationEvidence({
+        nativeTerminationCompleted: true,
+        nativeTerminationOutcome: "exit_zero",
+        rootObservedBeforeTermination: true,
+        rootRunningBeforeTermination: false,
+        parentExited: true,
+        survivingProcessIds: [],
+      }),
+    /chrome_process_tree_termination_failed/,
+  );
+  assert.throws(
+    () =>
+      validateWindowsChromeTerminationEvidence({
+        nativeTerminationCompleted: true,
+        nativeTerminationOutcome: "exit_zero",
+        rootObservedBeforeTermination: true,
+        rootRunningBeforeTermination: true,
         parentExited: false,
         survivingProcessIds: [],
       }),
@@ -684,7 +760,10 @@ test("GATE-014-B1 requires successful native tree termination with no surviving 
   assert.throws(
     () =>
       validateWindowsChromeTerminationEvidence({
-        terminationCommandSucceeded: true,
+        nativeTerminationCompleted: true,
+        nativeTerminationOutcome: "exit_zero",
+        rootObservedBeforeTermination: true,
+        rootRunningBeforeTermination: true,
         parentExited: true,
         survivingProcessIds: [101],
       }),
