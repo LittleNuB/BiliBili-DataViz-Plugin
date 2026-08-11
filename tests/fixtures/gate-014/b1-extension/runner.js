@@ -1,4 +1,5 @@
 import {
+  readFixtureHarnessFailureCode,
   runFixtureLifecycleAfterRestart,
   runFixtureLifecycleBeforeRestart,
   runFixtureSmoke,
@@ -54,6 +55,27 @@ globalThis.runGate014B1FixtureLifecycleBeforeRestart =
   runFixtureLifecycleBeforeRestart;
 globalThis.runGate014B1FixtureLifecycleAfterRestart =
   runFixtureLifecycleAfterRestart;
+
+globalThis.runGate014B1ControlledEvaluation = async (operation) => {
+  try {
+    return {
+      contract: "gate-014-b1-controlled-evaluation-v1",
+      status: "pass",
+      value: await operation(),
+      failureCode: null,
+      storesSensitiveText: false,
+    };
+  } catch (error) {
+    const failureCode = readFixtureHarnessFailureCode(error);
+    return {
+      contract: "gate-014-b1-controlled-evaluation-v1",
+      status: "fail",
+      value: null,
+      failureCode,
+      storesSensitiveText: false,
+    };
+  }
+};
 
 globalThis.runGate014B1LoadedExtensionInventory = async () => {
   if (typeof chrome.management?.getAll !== "function") {

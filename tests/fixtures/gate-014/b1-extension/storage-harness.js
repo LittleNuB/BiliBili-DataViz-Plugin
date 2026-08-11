@@ -4,6 +4,32 @@ const DATABASE_VERSION = 1;
 const MAX_MANAGED_BYTES = 500 * 1024 * 1024;
 const LONG_TASK_REPORTING_THRESHOLD_MS = 50;
 const TEXT_ENCODER = new TextEncoder();
+const FIXTURE_HARNESS_FAILURE_CODES = new WeakMap();
+
+export function createFixtureHarnessError(code) {
+  if (typeof code !== "string" || !/^[a-z0-9_:-]{1,96}$/.test(code)) {
+    return new Error("fixture_failure_code_invalid");
+  }
+  const error = new Error(code);
+  Object.defineProperty(error, "gate014FailureCode", {
+    configurable: false,
+    enumerable: false,
+    value: code,
+    writable: false,
+  });
+  FIXTURE_HARNESS_FAILURE_CODES.set(error, code);
+  return error;
+}
+
+export function readFixtureHarnessFailureCode(error) {
+  if (
+    !error ||
+    (typeof error !== "object" && typeof error !== "function")
+  ) {
+    return null;
+  }
+  return FIXTURE_HARNESS_FAILURE_CODES.get(error) ?? null;
+}
 
 export async function runFixtureSmoke(config) {
   validateConfig(config);
@@ -283,7 +309,7 @@ async function prepareWarmSeedGeneration(config) {
       visible.segmentCount === config.expectedSegmentCount &&
       visible.canonicalBytes === config.expectedCanonicalBytes;
     if (!generationVerified || !ledgerConsistency.matches) {
-      throw new Error("fixture_warm_seed_verification_failed");
+      throw createFixtureHarnessError("fixture_warm_seed_verification_failed");
     }
     return {
       database,
@@ -322,7 +348,7 @@ async function runRestartRecovery(config, operationId) {
     const initialLedgerConsistency = await readLedgerConsistency(database);
     const stateReadDurationMs = performance.now() - stateReadStartedAt;
     if (stateReadDurationMs <= 0) {
-      throw new Error("fixture_read_timing_unavailable");
+      throw createFixtureHarnessError("fixture_read_timing_unavailable");
     }
     const stateVisibleMs = Math.max(
       0,
@@ -346,7 +372,7 @@ async function runRestartRecovery(config, operationId) {
     const firstNormalizationProgressMs =
       normalizationOperation.progressEventOffsetsMs[0];
     if (!Number.isFinite(firstNormalizationProgressMs)) {
-      throw new Error("fixture_restart_progress_missing");
+      throw createFixtureHarnessError("fixture_restart_progress_missing");
     }
     const nextProgressMs = Math.max(0, firstNormalizationProgressMs);
     const normalizationProgressOffsetsMs =
@@ -447,14 +473,14 @@ export async function runNormalizationThenFinalLedgerRead({
     typeof readFinalLedger !== "function" ||
     typeof now !== "function"
   ) {
-    throw new Error("fixture_restart_final_read_invalid");
+    throw createFixtureHarnessError("fixture_restart_final_read_invalid");
   }
   const normalizationOperation = await normalize();
   const finalReadStartedAt = now();
   const finalLedgerConsistency = await readFinalLedger();
   const finalReadDurationMs = now() - finalReadStartedAt;
   if (!Number.isFinite(finalReadDurationMs) || finalReadDurationMs <= 0) {
-    throw new Error("fixture_read_timing_unavailable");
+    throw createFixtureHarnessError("fixture_read_timing_unavailable");
   }
   return {
     normalizationOperation,
@@ -475,7 +501,7 @@ export function createRestartTimingEvidence({
       finalReadDurationMs,
     ].some((duration) => !Number.isFinite(duration) || duration <= 0)
   ) {
-    throw new Error("fixture_read_timing_unavailable");
+    throw createFixtureHarnessError("fixture_read_timing_unavailable");
   }
   return {
     readBatchDurationsMs: [stateReadDurationMs, finalReadDurationMs],
@@ -514,7 +540,7 @@ async function runAdmission(database, config, operationKind) {
       if (operationKind === "restore_staging") {
         const estimate = await readStorageEstimate();
         if (estimate === null) {
-          throw new Error("fixture_restore_preflight_metric_unavailable");
+          throw createFixtureHarnessError("fixture_restore_preflight_metric_unavailable");
         }
         const availableFreeQuotaBytes = Math.max(
           0,
@@ -528,7 +554,7 @@ async function runAdmission(database, config, operationKind) {
           requiredFreeQuotaBytes,
         );
         if (!measuredQuotaAllowed) {
-          throw new Error("fixture_restore_preflight_quota_refused");
+          throw createFixtureHarnessError("fixture_restore_preflight_quota_refused");
         }
         const exactBoundaryProbe = await beginRestoreAfterPreflight(
           artifactUrl,
@@ -550,7 +576,7 @@ async function runAdmission(database, config, operationKind) {
           artifactFetchAttempted: exactBoundaryProbe.artifactFetchAttempted,
         };
         if (!preflightBoundaryVerified) {
-          throw new Error("fixture_restore_preflight_exact_boundary_refused");
+          throw createFixtureHarnessError("fixture_restore_preflight_exact_boundary_refused");
         }
       }
       const operationCreateStartedAt = performance.now();
@@ -1056,7 +1082,7 @@ async function runCapacityBoundary(database, config) {
         probeDatabase.close();
         await deleteDatabase(probeDatabaseName);
         if (!(await confirmDatabaseDeleted(probeDatabaseName))) {
-          throw new Error("fixture_capacity_probe_cleanup_failed");
+          throw createFixtureHarnessError("fixture_capacity_probe_cleanup_failed");
         }
       }
     },
@@ -1152,7 +1178,7 @@ async function runFullVersionAtomicRollback(database, config) {
         sourceVersion?.canonicalBytes !== config.expectedCanonicalBytes ||
         sourceVersion?.segmentCount !== config.expectedSegmentCount
       ) {
-        throw new Error("fixture_atomic_stress_source_invalid");
+        throw createFixtureHarnessError("fixture_atomic_stress_source_invalid");
       }
       const operationId = crypto.randomUUID();
       const stagedVersionId = crypto.randomUUID();
@@ -1369,7 +1395,7 @@ async function runCancellation(database, config) {
         cancellationReady,
         copyTask.then((result) => {
           if (result.batchCount < 2) {
-            throw new Error("fixture_cancellation_probe_too_small");
+            throw createFixtureHarnessError("fixture_cancellation_probe_too_small");
           }
         }),
       ]);
@@ -1377,7 +1403,7 @@ async function runCancellation(database, config) {
       controller.abort();
       const copyResult = await copyTask;
       if (copyResult.cancellationAcknowledgedAt === null) {
-        throw new Error("fixture_cancellation_not_acknowledged");
+        throw createFixtureHarnessError("fixture_cancellation_not_acknowledged");
       }
       const progressEventOffsetsMs = [
         ...copyResult.progressEventOffsetsMs,
@@ -1605,7 +1631,7 @@ async function runSelectedVersionRemoval(database, config) {
     async (context) => {
       const selected = await firstVisibleVersion(database);
       if (!selected) {
-        throw new Error("fixture_selected_version_missing");
+        throw createFixtureHarnessError("fixture_selected_version_missing");
       }
       const batchDurationsMs = [];
       let startedAt = performance.now();
@@ -1640,9 +1666,9 @@ async function runSelectedVersionRemoval(database, config) {
         };
         transaction.oncomplete = () => resolve();
         transaction.onabort = () =>
-          reject(new Error("fixture_selected_version_hide_failed"));
+          reject(createFixtureHarnessError("fixture_selected_version_hide_failed"));
         transaction.onerror = () =>
-          reject(new Error("fixture_selected_version_hide_failed"));
+          reject(createFixtureHarnessError("fixture_selected_version_hide_failed"));
       });
       batchDurationsMs.push(performance.now() - startedAt);
       const deletedSegments = await scanIndexInBatches(
@@ -1737,7 +1763,7 @@ async function firstVisibleVersion(database) {
       cursor.continue();
     };
     request.onerror = () =>
-      reject(new Error("fixture_visible_version_lookup_failed"));
+      reject(createFixtureHarnessError("fixture_visible_version_lookup_failed"));
   });
 }
 
@@ -1760,7 +1786,7 @@ async function runFullClear(database, config) {
       preClearLedger?.canonicalBytes !== config.expectedCanonicalBytes ||
       preClearLedger?.versionCount !== config.expectedVersionCount
     ) {
-      throw new Error("fixture_full_clear_precondition_failed");
+      throw createFixtureHarnessError("fixture_full_clear_precondition_failed");
     }
     const batchDurationsMs = [];
     let startedAt = performance.now();
@@ -1965,7 +1991,7 @@ async function beginRestoreAfterPreflight(
     credentials: "omit",
   });
   if (!response.ok || !response.body) {
-    throw new Error("fixture_restore_fetch_failed");
+    throw createFixtureHarnessError("fixture_restore_fetch_failed");
   }
   if (!options.retainResponse) {
     await response.body.cancel();
@@ -2042,7 +2068,7 @@ async function measureOperation(database, operation, expectedDirection, task) {
     evidenceFailure = "unexpected_visibility_timing";
   }
   if (evidenceFailure !== null) {
-    throw new Error(
+    throw createFixtureHarnessError(
       `fixture_committed_batch_evidence_mismatch:${operation}:${evidenceFailure}`,
     );
   }
@@ -2053,7 +2079,7 @@ async function measureOperation(database, operation, expectedDirection, task) {
   });
   const ledgerReadDurationMs = performance.now() - ledgerReadStartedAt;
   if (ledgerReadDurationMs <= 0) {
-    throw new Error("fixture_read_timing_unavailable");
+    throw createFixtureHarnessError("fixture_read_timing_unavailable");
   }
   const readBatchDurationsMs = [
     ...taskReadBatchDurationsMs,
@@ -2080,7 +2106,7 @@ async function measureOperation(database, operation, expectedDirection, task) {
       Object.values(readTimingEvidence).filter((duration) => duration !== null),
     )
   ) {
-    throw new Error("fixture_classified_batch_evidence_mismatch");
+    throw createFixtureHarnessError("fixture_classified_batch_evidence_mismatch");
   }
   const totalDurationMs = performance.now() - startedAt;
   const storageAfter =
@@ -2180,7 +2206,7 @@ export async function writeFixture(
       credentials: "omit",
     }));
   if (!response.ok || !response.body) {
-    throw new Error("fixture_fetch_failed");
+    throw createFixtureHarnessError("fixture_fetch_failed");
   }
   const startedAt = performance.now();
   const batchDurationsMs = [];
@@ -2239,7 +2265,7 @@ export async function writeFixture(
       commands.push({ kind: "version", record, lineBytes });
     } else {
       if (currentVersionId === null) {
-        throw new Error("fixture_segment_before_version");
+        throw createFixtureHarnessError("fixture_segment_before_version");
       }
       currentVersionBytes += lineBytes;
       commands.push({
@@ -2296,13 +2322,13 @@ export function assertFixtureRecordFitsCandidate(candidate, recordBytes) {
     recordBytes < 1 ||
     recordBytes > candidate.byteCapBytes
   ) {
-    throw new Error("fixture_record_exceeds_candidate_byte_cap");
+    throw createFixtureHarnessError("fixture_record_exceeds_candidate_byte_cap");
   }
 }
 
 export function createStoredFixtureVersion(record, operationId, lineBytes) {
   if (!Number.isSafeInteger(lineBytes) || lineBytes < 1) {
-    throw new Error("fixture_version_record_bytes_invalid");
+    throw createFixtureHarnessError("fixture_version_record_bytes_invalid");
   }
   return {
     ...record,
@@ -2368,8 +2394,8 @@ function writeCommands(database, operationId, commands) {
       });
     };
     transaction.oncomplete = () => resolve();
-    transaction.onabort = () => reject(new Error("fixture_batch_aborted"));
-    transaction.onerror = () => reject(new Error("fixture_batch_failed"));
+    transaction.onabort = () => reject(createFixtureHarnessError("fixture_batch_aborted"));
+    transaction.onerror = () => reject(createFixtureHarnessError("fixture_batch_failed"));
   });
 }
 
@@ -2435,8 +2461,8 @@ function commitOperation(database, operationId, canonicalBytes, versionCount) {
       commitWhenReady();
     };
     transaction.oncomplete = () => resolve();
-    transaction.onabort = () => reject(new Error("fixture_commit_aborted"));
-    transaction.onerror = () => reject(new Error("fixture_commit_failed"));
+    transaction.onabort = () => reject(createFixtureHarnessError("fixture_commit_aborted"));
+    transaction.onerror = () => reject(createFixtureHarnessError("fixture_commit_failed"));
   });
 }
 
@@ -2500,7 +2526,7 @@ function commitOperationWithInjectedAbort(
         resolve(true);
         return;
       }
-      reject(new Error("fixture_atomic_abort_failed"));
+      reject(createFixtureHarnessError("fixture_atomic_abort_failed"));
     };
     transaction.onerror = (event) => {
       if (abortInjected) {
@@ -2630,7 +2656,7 @@ function collectCommittedOperationIds(store, reportProgress = null) {
       reportProgress?.();
       cursor.continue();
     };
-    request.onerror = () => reject(new Error("fixture_operation_scan_failed"));
+    request.onerror = () => reject(createFixtureHarnessError("fixture_operation_scan_failed"));
   });
 }
 
@@ -2659,7 +2685,7 @@ function collectVisibleVersions(
       reportProgress?.();
       cursor.continue();
     };
-    request.onerror = () => reject(new Error("fixture_version_sum_failed"));
+    request.onerror = () => reject(createFixtureHarnessError("fixture_version_sum_failed"));
   });
 }
 
@@ -2679,7 +2705,7 @@ function countVisibleSegments(store, visibleVersionIds, reportProgress = null) {
       reportProgress?.();
       cursor.continue();
     };
-    request.onerror = () => reject(new Error("fixture_segment_scan_failed"));
+    request.onerror = () => reject(createFixtureHarnessError("fixture_segment_scan_failed"));
   });
 }
 
@@ -2714,7 +2740,7 @@ async function scanStoreInBatches(
     for (let index = 0; index < batch.keys.length; index += 1) {
       const key = batch.keys[index];
       if (previousKey !== undefined && indexedDB.cmp(previousKey, key) >= 0) {
-        throw new Error("fixture_ordered_scan_regressed");
+        throw createFixtureHarnessError("fixture_ordered_scan_regressed");
       }
       previousKey = key;
       const value = batch.values[index];
@@ -2724,7 +2750,7 @@ async function scanStoreInBatches(
     }
     const readDurationMs = performance.now() - batchStartedAt;
     if (!Number.isFinite(readDurationMs) || readDurationMs <= 0) {
-      throw new Error(`fixture_read_batch_timing_unavailable:${storeName}`);
+      throw createFixtureHarnessError(`fixture_read_batch_timing_unavailable:${storeName}`);
     }
     readBatchDurationsMs.push(readDurationMs);
     batches.push(readDurationMs);
@@ -2789,7 +2815,7 @@ async function scanIndexInBatches(
     }
     const readDurationMs = performance.now() - batchStartedAt;
     if (!Number.isFinite(readDurationMs) || readDurationMs <= 0) {
-      throw new Error(`fixture_read_batch_timing_unavailable:${storeName}`);
+      throw createFixtureHarnessError(`fixture_read_batch_timing_unavailable:${storeName}`);
     }
     readBatchDurationsMs.push(readDurationMs);
     batches.push(readDurationMs);
@@ -2828,7 +2854,7 @@ export function readIndexBatch(
 ) {
   if (typeof batchByteSelector !== "function") {
     return Promise.reject(
-      new Error("fixture_bounded_index_scan_byte_selector_invalid"),
+      createFixtureHarnessError("fixture_bounded_index_scan_byte_selector_invalid"),
     );
   }
   return new Promise((resolve, reject) => {
@@ -2839,19 +2865,19 @@ export function readIndexBatch(
     let batchResult = null;
     const freezeBatchResult = (result) => {
       if (batchResult !== null) {
-        reject(new Error("fixture_bounded_index_scan_result_duplicate"));
+        reject(createFixtureHarnessError("fixture_bounded_index_scan_result_duplicate"));
         return false;
       }
       batchResult = result;
       return true;
     };
     transaction.onabort = () =>
-      reject(new Error("fixture_bounded_index_scan_aborted"));
+      reject(createFixtureHarnessError("fixture_bounded_index_scan_aborted"));
     transaction.onerror = () =>
-      reject(new Error("fixture_bounded_index_scan_failed"));
+      reject(createFixtureHarnessError("fixture_bounded_index_scan_failed"));
     transaction.oncomplete = () => {
       if (batchResult === null) {
-        reject(new Error("fixture_bounded_index_scan_result_missing"));
+        reject(createFixtureHarnessError("fixture_bounded_index_scan_result_missing"));
         return;
       }
       resolve(batchResult);
@@ -2885,7 +2911,7 @@ export function readIndexBatch(
         valueBytes > candidate.byteCapBytes
       ) {
         reject(
-          new Error("fixture_bounded_index_scan_record_bytes_invalid"),
+          createFixtureHarnessError("fixture_bounded_index_scan_record_bytes_invalid"),
         );
         return;
       }
@@ -2903,7 +2929,7 @@ export function readIndexBatch(
       cursor.continue();
     };
     request.onerror = () =>
-      reject(new Error("fixture_bounded_index_scan_failed"));
+      reject(createFixtureHarnessError("fixture_bounded_index_scan_failed"));
   });
 }
 
@@ -2917,7 +2943,7 @@ export function readStoreBatch(
 ) {
   if (typeof batchByteSelector !== "function") {
     return Promise.reject(
-      new Error("fixture_bounded_scan_byte_selector_invalid"),
+      createFixtureHarnessError("fixture_bounded_scan_byte_selector_invalid"),
     );
   }
   return new Promise((resolve, reject) => {
@@ -2928,19 +2954,19 @@ export function readStoreBatch(
     let batchResult = null;
     const freezeBatchResult = (result) => {
       if (batchResult !== null) {
-        reject(new Error("fixture_bounded_scan_result_duplicate"));
+        reject(createFixtureHarnessError("fixture_bounded_scan_result_duplicate"));
         return false;
       }
       batchResult = result;
       return true;
     };
     transaction.onabort = () =>
-      reject(new Error("fixture_bounded_scan_aborted"));
+      reject(createFixtureHarnessError("fixture_bounded_scan_aborted"));
     transaction.onerror = () =>
-      reject(new Error("fixture_bounded_scan_failed"));
+      reject(createFixtureHarnessError("fixture_bounded_scan_failed"));
     transaction.oncomplete = () => {
       if (batchResult === null) {
-        reject(new Error("fixture_bounded_scan_result_missing"));
+        reject(createFixtureHarnessError("fixture_bounded_scan_result_missing"));
         return;
       }
       resolve(batchResult);
@@ -2972,7 +2998,7 @@ export function readStoreBatch(
         valueBytes < 1 ||
         valueBytes > candidate.byteCapBytes
       ) {
-        reject(new Error("fixture_bounded_scan_record_bytes_invalid"));
+        reject(createFixtureHarnessError("fixture_bounded_scan_record_bytes_invalid"));
         return;
       }
       if (
@@ -2988,14 +3014,14 @@ export function readStoreBatch(
       canonicalBytes += valueBytes;
       cursor.continue();
     };
-    request.onerror = () => reject(new Error("fixture_bounded_scan_failed"));
+    request.onerror = () => reject(createFixtureHarnessError("fixture_bounded_scan_failed"));
   });
 }
 
 function readVersionRecordCanonicalBytes(value) {
   const recordBytes = value?.versionRecordCanonicalBytes;
   if (!Number.isSafeInteger(recordBytes) || recordBytes < 1) {
-    throw new Error("fixture_version_record_bytes_invalid");
+    throw createFixtureHarnessError("fixture_version_record_bytes_invalid");
   }
   return recordBytes;
 }
@@ -3003,7 +3029,7 @@ function readVersionRecordCanonicalBytes(value) {
 function readCanonicalPayloadBytes(value) {
   const recordBytes = value?.canonicalBytes;
   if (!Number.isSafeInteger(recordBytes) || recordBytes < 1) {
-    throw new Error("fixture_record_bytes_invalid");
+    throw createFixtureHarnessError("fixture_record_bytes_invalid");
   }
   return recordBytes;
 }
@@ -3049,7 +3075,7 @@ async function* readLines(stream) {
       }
     }
     if (carry) {
-      throw new Error("fixture_missing_trailing_newline");
+      throw createFixtureHarnessError("fixture_missing_trailing_newline");
     }
   } finally {
     reader.releaseLock();
@@ -3061,13 +3087,13 @@ function parseFixtureLine(line) {
   try {
     record = JSON.parse(line);
   } catch {
-    throw new Error("fixture_json_invalid");
+    throw createFixtureHarnessError("fixture_json_invalid");
   }
   if (
     record?.contract !== "managed-full-text-v1" ||
     !["version", "segment"].includes(record.record)
   ) {
-    throw new Error("fixture_record_contract_invalid");
+    throw createFixtureHarnessError("fixture_record_contract_invalid");
   }
   return record;
 }
@@ -3090,9 +3116,9 @@ export function openDatabase(name) {
       database.createObjectStore("state", { keyPath: "id" });
     };
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(new Error("fixture_database_open_failed"));
+    request.onerror = () => reject(createFixtureHarnessError("fixture_database_open_failed"));
     request.onblocked = () =>
-      reject(new Error("fixture_database_open_blocked"));
+      reject(createFixtureHarnessError("fixture_database_open_blocked"));
   });
 }
 
@@ -3106,15 +3132,15 @@ function transactionDone(transaction) {
   return new Promise((resolve, reject) => {
     transaction.oncomplete = () => resolve();
     transaction.onabort = () =>
-      reject(new Error("fixture_transaction_aborted"));
-    transaction.onerror = () => reject(new Error("fixture_transaction_failed"));
+      reject(createFixtureHarnessError("fixture_transaction_aborted"));
+    transaction.onerror = () => reject(createFixtureHarnessError("fixture_transaction_failed"));
   });
 }
 
 function requestResult(request) {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(new Error("fixture_request_failed"));
+    request.onerror = () => reject(createFixtureHarnessError("fixture_request_failed"));
   });
 }
 
@@ -3123,9 +3149,9 @@ function deleteDatabase(name) {
     const request = indexedDB.deleteDatabase(name);
     request.onsuccess = () => resolve();
     request.onerror = () =>
-      reject(new Error("fixture_database_cleanup_failed"));
+      reject(createFixtureHarnessError("fixture_database_cleanup_failed"));
     request.onblocked = () =>
-      reject(new Error("fixture_database_cleanup_blocked"));
+      reject(createFixtureHarnessError("fixture_database_cleanup_blocked"));
   });
 }
 
@@ -3218,10 +3244,10 @@ function readHeapUsedBytes() {
 
 function validateConfig(config, options = {}) {
   if (!config || typeof config !== "object" || Array.isArray(config)) {
-    throw new Error("fixture_config_invalid");
+    throw createFixtureHarnessError("fixture_config_invalid");
   }
   if (!/^[a-z0-9][a-z0-9._-]{0,95}$/.test(config.fixtureId)) {
-    throw new Error("fixture_config_id_invalid");
+    throw createFixtureHarnessError("fixture_config_id_invalid");
   }
   validateArtifactUrl(config.artifactUrl, "fixture_config_url_invalid");
   if (options.lifecycle) {
@@ -3230,14 +3256,14 @@ function validateConfig(config, options = {}) {
       "fixture_config_restore_url_invalid",
     );
     if (!/^gate-014-b1-lifecycle-[a-f0-9-]{36}$/.test(config.databaseName)) {
-      throw new Error("fixture_config_database_name_invalid");
+      throw createFixtureHarnessError("fixture_config_database_name_invalid");
     }
     if (
       config.restorePreflightRequiredFreeQuotaBytes !== undefined &&
       (!Number.isSafeInteger(config.restorePreflightRequiredFreeQuotaBytes) ||
         config.restorePreflightRequiredFreeQuotaBytes < 1)
     ) {
-      throw new Error("fixture_config_restore_preflight_bytes_invalid");
+      throw createFixtureHarnessError("fixture_config_restore_preflight_bytes_invalid");
     }
   }
   if (
@@ -3247,7 +3273,7 @@ function validateConfig(config, options = {}) {
       !Number.isSafeInteger(config.restartHarnessReadyEpochMs) ||
       config.restartHarnessReadyEpochMs < config.restartStartedEpochMs)
   ) {
-    throw new Error("fixture_config_restart_epoch_invalid");
+    throw createFixtureHarnessError("fixture_config_restart_epoch_invalid");
   }
   for (const field of [
     "expectedCanonicalBytes",
@@ -3256,21 +3282,21 @@ function validateConfig(config, options = {}) {
     "expectedSegmentCount",
   ]) {
     if (!Number.isSafeInteger(config[field]) || config[field] < 1) {
-      throw new Error(`fixture_config_${field}_invalid`);
+      throw createFixtureHarnessError(`fixture_config_${field}_invalid`);
     }
   }
   if (![256, 512, 1024].includes(config.candidate?.recordCap)) {
-    throw new Error("fixture_config_record_cap_invalid");
+    throw createFixtureHarnessError("fixture_config_record_cap_invalid");
   }
   if (
     ![1, 2, 4]
       .map((value) => value * 1024 * 1024)
       .includes(config.candidate?.byteCapBytes)
   ) {
-    throw new Error("fixture_config_byte_cap_invalid");
+    throw createFixtureHarnessError("fixture_config_byte_cap_invalid");
   }
   if (options.lifecycle && !["cold", "warm"].includes(config.runMode)) {
-    throw new Error("fixture_config_run_mode_invalid");
+    throw createFixtureHarnessError("fixture_config_run_mode_invalid");
   }
 }
 
@@ -3280,7 +3306,7 @@ function validateArtifactUrl(value, errorCode) {
       value,
     )
   ) {
-    throw new Error(errorCode);
+    throw createFixtureHarnessError(errorCode);
   }
 }
 
@@ -3299,6 +3325,6 @@ function validateLifecycleCheckpoint(checkpoint, config) {
     checkpoint.warmStartCompleteGenerationVerified !== true ||
     !warmSeedNameValid
   ) {
-    throw new Error("fixture_lifecycle_checkpoint_invalid");
+    throw createFixtureHarnessError("fixture_lifecycle_checkpoint_invalid");
   }
 }

@@ -16,6 +16,7 @@ import {
   createB1ProductionExtensionStage,
   createB1TemporaryProfile,
   createCdpExecutionObservation,
+  createControlledHarnessEvaluationExpression,
   createHarnessEvaluationError,
   createExtensionTargetObserver,
   createPipeCdpClient,
@@ -27,10 +28,12 @@ import {
   readCompletedWindowsTerminationOutcome,
   selectProductionServiceWorkerTarget,
   uninstallUnpackedExtension,
+  unwrapControlledHarnessEvaluation,
   validateBrowserExecutionObservation,
   validateChromeForTestingMetadata,
   validateLoadedExtensionInventory,
   validateOfficialCftStableMetadata,
+  validateControlledHarnessEvaluation,
   validateSmokeResult,
   validateWindowsChromeTerminationEvidence,
   waitForWindowsProcessTreeExit,
@@ -43,11 +46,13 @@ import {
 } from "../scripts/gate-014-fixture-generator.mjs";
 import {
   assertFixtureRecordFitsCandidate,
+  createFixtureHarnessError,
   createOperation,
   createStoredFixtureVersion,
   createRestartTimingEvidence,
   openDatabase,
   readIndexBatch,
+  readFixtureHarnessFailureCode,
   readStoreBatch,
   runNormalizationThenFinalLedgerRead,
   shouldFlushFixtureBatch,
@@ -1550,9 +1555,10 @@ test("GATE-014-B1 accepts a completed native tree termination only after the lin
   );
 });
 
-test("GATE-014-B1 never promotes raw harness exception text into a failure code", () => {
+test("GATE-014-B1 accepts only an explicit structured harness failure code", () => {
   const controlled = createHarnessEvaluationError(
     "browser_fixture_lifecycle_after_restart_failed",
+    "fixture_read_batch_timing_unavailable:versions",
   );
   assert.equal(
     controlled.message,
@@ -1560,9 +1566,142 @@ test("GATE-014-B1 never promotes raw harness exception text into a failure code"
   );
   assert.equal(
     Object.hasOwn(controlled, "gate014FailureCode"),
-    false,
+    true,
+  );
+  assert.equal(
+    (controlled as Error & { gate014FailureCode?: string })
+      .gate014FailureCode,
+    "fixture_read_batch_timing_unavailable:versions",
   );
   assert.equal(JSON.stringify(controlled), "{}");
+
+  const unstructured = createHarnessEvaluationError(
+    "browser_fixture_lifecycle_after_restart_failed",
+  );
+  assert.equal(Object.hasOwn(unstructured, "gate014FailureCode"), false);
+});
+
+test("GATE-014-B1 validates the controlled browser evaluation envelope", () => {
+  const pass = {
+    contract: "gate-014-b1-controlled-evaluation-v1",
+    status: "pass",
+    value: { status: "pass" },
+    failureCode: null,
+    storesSensitiveText: false,
+  };
+  assert.equal(validateControlledHarnessEvaluation(pass), pass);
+  const fail = {
+    contract: "gate-014-b1-controlled-evaluation-v1",
+    status: "fail",
+    value: null,
+    failureCode: "fixture_read_batch_timing_unavailable:versions",
+    storesSensitiveText: false,
+  };
+  assert.equal(validateControlledHarnessEvaluation(fail), fail);
+  for (const invalid of [
+    { ...pass, extra: true },
+    { ...pass, status: "fail" },
+    { ...fail, failureCode: "C:\\private\\raw-error" },
+    { ...fail, value: {} },
+  ]) {
+    assert.throws(
+      () => validateControlledHarnessEvaluation(invalid),
+      /browser_controlled_harness_evaluation_invalid/,
+    );
+  }
+});
+
+test("GATE-014-B1 harness wrapper returns only an owned controlled code", async () => {
+  await import("./fixtures/gate-014/b1-extension/runner.js");
+  const runControlled = (
+    globalThis as typeof globalThis & {
+      runGate014B1ControlledEvaluation: (
+        operation: () => unknown,
+      ) => Promise<Record<string, unknown>>;
+    }
+  ).runGate014B1ControlledEvaluation;
+  const controlledCode = "fixture_read_batch_timing_unavailable:versions";
+  const factoryError = createFixtureHarnessError(controlledCode);
+  assert.equal(readFixtureHarnessFailureCode(factoryError), controlledCode);
+  const controlled = await runControlled(() => {
+    throw factoryError;
+  });
+  assert.equal(controlled.status, "fail");
+  assert.equal(controlled.failureCode, controlledCode);
+  assert.equal(JSON.stringify(controlled).includes("private"), false);
+
+  const raw = await runControlled(() => {
+    throw new Error("C:\\private\\raw browser error");
+  });
+  assert.equal(raw.status, "fail");
+  assert.equal(raw.failureCode, null);
+  assert.equal(JSON.stringify(raw).includes("private"), false);
+
+  const spoofed = new Error("generic harness failure") as Error & {
+    gate014FailureCode?: string;
+  };
+  Object.defineProperty(spoofed, "gate014FailureCode", {
+    enumerable: false,
+    value: "synthetic_untrusted_code",
+  });
+  assert.equal(readFixtureHarnessFailureCode(spoofed), null);
+  const rejectedSpoof = await runControlled(() => {
+    throw spoofed;
+  });
+  assert.equal(rejectedSpoof.status, "fail");
+  assert.equal(rejectedSpoof.failureCode, null);
+});
+
+test("GATE-014-B1 generated controlled evaluation expression compiles and unwraps both outcomes", async () => {
+  const expression = createControlledHarnessEvaluationExpression(
+    "Promise.resolve({ status: 'pass', operationCount: 13 })",
+  );
+  const evaluate = new Function("globalThis", `return ${expression}`) as (
+    controlledGlobal: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>>;
+  const envelope = await evaluate({
+    async runGate014B1ControlledEvaluation(operation: () => unknown) {
+      return {
+        contract: "gate-014-b1-controlled-evaluation-v1",
+        status: "pass",
+        value: await operation(),
+        failureCode: null,
+        storesSensitiveText: false,
+      };
+    },
+  });
+  assert.deepEqual(
+    unwrapControlledHarnessEvaluation(
+      envelope,
+      "browser_fixture_lifecycle_after_restart_failed",
+    ),
+    { status: "pass", operationCount: 13 },
+  );
+
+  const failureEnvelope = {
+    contract: "gate-014-b1-controlled-evaluation-v1",
+    status: "fail",
+    value: null,
+    failureCode: "fixture_read_batch_timing_unavailable:versions",
+    storesSensitiveText: false,
+  };
+  assert.throws(
+    () =>
+      unwrapControlledHarnessEvaluation(
+        failureEnvelope,
+        "browser_fixture_lifecycle_after_restart_failed",
+      ),
+    (error: unknown) =>
+      error instanceof Error &&
+      (
+        error as Error & { gate014FailureCode?: string }
+      ).gate014FailureCode ===
+        "fixture_read_batch_timing_unavailable:versions",
+  );
+  assert.throws(
+    () => createControlledHarnessEvaluationExpression("  "),
+    /browser_controlled_harness_expression_invalid/,
+  );
 });
 
 test("GATE-014-B1 attributes extension errors without treating Chrome internal logs as extension failures", () => {

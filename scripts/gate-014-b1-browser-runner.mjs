@@ -1108,10 +1108,12 @@ async function evaluateInStagedHarnessProfile(
       typeof expression === "function"
         ? expression({ harnessReadyEpochMs: Date.now() })
         : expression;
+    const controlledExpression =
+      createControlledHarnessEvaluationExpression(resolvedExpression);
     const evaluation = await client.send(
       "Runtime.evaluate",
       {
-        expression: resolvedExpression,
+        expression: controlledExpression,
         awaitPromise: true,
         returnByValue: true,
       },
@@ -1125,6 +1127,10 @@ async function evaluateInStagedHarnessProfile(
       }
       throw failure;
     }
+    const controlledValue = unwrapControlledHarnessEvaluation(
+      evaluation.result?.value,
+      evaluationErrorCode,
+    );
     await targetObserver.settle();
     await observation.settle();
     await targetObserver.stop();
@@ -1136,7 +1142,7 @@ async function evaluateInStagedHarnessProfile(
       );
     }
     return {
-      value: evaluation.result?.value,
+      value: controlledValue,
       observation: validateBrowserExecutionObservation(observationReceipt),
       productionExtensionId,
     };
@@ -1154,8 +1160,68 @@ async function evaluateInStagedHarnessProfile(
   }
 }
 
-export function createHarnessEvaluationError(evaluationErrorCode) {
-  return new Error(evaluationErrorCode);
+export function validateControlledHarnessEvaluation(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Object.keys(value).sort().join("|") !==
+      ["contract", "failureCode", "status", "storesSensitiveText", "value"]
+        .sort()
+        .join("|") ||
+    value.contract !== "gate-014-b1-controlled-evaluation-v1" ||
+    value.storesSensitiveText !== false ||
+    !["pass", "fail"].includes(value.status) ||
+    (value.status === "pass" && value.failureCode !== null) ||
+    (value.status === "fail" && value.value !== null) ||
+    (value.failureCode !== null &&
+      (typeof value.failureCode !== "string" ||
+        !/^[a-z0-9_:-]{1,96}$/.test(value.failureCode)))
+  ) {
+    throw new Error("browser_controlled_harness_evaluation_invalid");
+  }
+  return value;
+}
+
+export function createControlledHarnessEvaluationExpression(expression) {
+  if (typeof expression !== "string" || expression.trim() === "") {
+    throw new Error("browser_controlled_harness_expression_invalid");
+  }
+  return (
+    `globalThis.runGate014B1ControlledEvaluation(` +
+    `() => (${expression}))`
+  );
+}
+
+export function unwrapControlledHarnessEvaluation(value, evaluationErrorCode) {
+  const controlled = validateControlledHarnessEvaluation(value);
+  if (controlled.status === "fail") {
+    throw createHarnessEvaluationError(
+      evaluationErrorCode,
+      controlled.failureCode,
+    );
+  }
+  return controlled.value;
+}
+
+export function createHarnessEvaluationError(
+  evaluationErrorCode,
+  structuredFailureCode = null,
+) {
+  const error = new Error(evaluationErrorCode);
+  if (
+    typeof structuredFailureCode === "string" &&
+    /^[a-z0-9_:-]{1,96}$/.test(structuredFailureCode)
+  ) {
+    Object.defineProperty(error, "gate014FailureCode", {
+      configurable: false,
+      enumerable: false,
+      value: structuredFailureCode,
+      writable: false,
+    });
+  }
+  return error;
 }
 
 export function createCdpExecutionObservation(client) {
