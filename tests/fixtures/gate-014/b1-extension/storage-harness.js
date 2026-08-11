@@ -681,6 +681,7 @@ async function runOrderedRead(database, config) {
           startedAt: context.startedAt,
           filter: (value) =>
             value.visible === true || typeof value.operationId === "string",
+          batchByteSelector: readVersionRecordCanonicalBytes,
           byteSelector: (value) => value.canonicalBytes,
           afterReadBatch: () => context.metrics.sampleHeap(),
         },
@@ -691,6 +692,7 @@ async function runOrderedRead(database, config) {
         config.candidate,
         {
           startedAt: context.startedAt,
+          batchByteSelector: readCanonicalPayloadBytes,
           byteSelector: (value) => value.canonicalBytes,
           afterReadBatch: () => context.metrics.sampleHeap(),
         },
@@ -738,6 +740,7 @@ async function runMarkerNormalization(database, config, operationId) {
         config.candidate,
         {
           startedAt: context.startedAt,
+          batchByteSelector: readVersionRecordCanonicalBytes,
           writeBatch: async (batch) => {
             await updateValues(database, "versions", batch.values, (value) => ({
               ...value,
@@ -757,6 +760,7 @@ async function runMarkerNormalization(database, config, operationId) {
         config.candidate,
         {
           startedAt: context.startedAt,
+          batchByteSelector: readCanonicalPayloadBytes,
           writeBatch: async (batch) => {
             await updateValues(database, "segments", batch.values, (value) => ({
               ...value,
@@ -836,6 +840,7 @@ async function runLedgerRepair(database, config) {
         {
           startedAt: context.startedAt,
           filter: (value) => value.visible === true,
+          batchByteSelector: readVersionRecordCanonicalBytes,
           byteSelector: (value) => value.canonicalBytes,
           afterReadBatch: () => context.metrics.sampleHeap(),
         },
@@ -1169,7 +1174,8 @@ async function runFullVersionAtomicRollback(database, config) {
         config.candidate,
         {
           startedAt: context.startedAt,
-          byteSelector: (value) => value.canonicalBytes,
+          batchByteSelector: readCanonicalPayloadBytes,
+          byteSelector: readCanonicalPayloadBytes,
           writeBatch: async (batch) => {
             await transactionPromise(
               database,
@@ -1189,6 +1195,8 @@ async function runFullVersionAtomicRollback(database, config) {
                   versionId: stagedVersionId,
                   operationId,
                   canonicalBytes: sourceVersion.canonicalBytes,
+                  versionRecordCanonicalBytes:
+                    sourceVersion.versionRecordCanonicalBytes,
                   segmentCount: copiedSegmentCount,
                   visible: false,
                 });
@@ -1466,6 +1474,7 @@ async function copySegmentsUntilCancelled(database, options) {
       options.candidate,
       lastKey,
       (value) => value.operationId === null,
+      readCanonicalPayloadBytes,
     );
     readBatchDurationsMs.push(performance.now() - readStartedAt);
     if (options.signal.aborted) {
@@ -1560,6 +1569,7 @@ async function cleanupStagedOperation(
     candidate,
     {
       startedAt,
+      batchByteSelector: readCanonicalPayloadBytes,
       writeBatch: (batch) => deleteKeys(database, "segments", batch.keys),
     },
   );
@@ -1643,6 +1653,7 @@ async function runSelectedVersionRemoval(database, config) {
         config.candidate,
         {
           startedAt: context.startedAt,
+          batchByteSelector: readCanonicalPayloadBytes,
           writeBatch: (batch) => deleteKeys(database, "segments", batch.keys),
         },
       );
@@ -1769,6 +1780,7 @@ async function runFullClear(database, config) {
       config.candidate,
       {
         startedAt: context.startedAt,
+        batchByteSelector: readCanonicalPayloadBytes,
         writeBatch: (batch) => deleteKeys(database, "segments", batch.keys),
       },
     );
@@ -1778,6 +1790,7 @@ async function runFullClear(database, config) {
       config.candidate,
       {
         startedAt: context.startedAt,
+        batchByteSelector: readVersionRecordCanonicalBytes,
         writeBatch: (batch) => deleteKeys(database, "versions", batch.keys),
       },
     );
@@ -1998,27 +2011,40 @@ async function measureOperation(database, operation, expectedDirection, task) {
     "preCommitLedgerAndVisibleReadbackMs",
     "postCommitVisibleGraphMs",
   ];
-  if (
-    !Number.isSafeInteger(committedBatchCount) ||
-    committedBatchCount < 0 ||
+  let evidenceFailure = null;
+  if (!Number.isSafeInteger(committedBatchCount) || committedBatchCount < 0) {
+    evidenceFailure = "count_invalid";
+  } else if (
     !Array.isArray(committedBatchDurationsMs) ||
-    committedBatchDurationsMs.length !== committedBatchCount ||
+    committedBatchDurationsMs.length !== committedBatchCount
+  ) {
+    evidenceFailure = "count_duration_mismatch";
+  } else if (
     !Array.isArray(taskReadBatchDurationsMs) ||
     taskReadBatchDurationsMs.some(
       (duration) => !Number.isFinite(duration) || duration <= 0,
-    ) ||
-    (requiresVisibilityTiming &&
-      (taskReadTimingEvidence === null ||
-        Object.keys(taskReadTimingEvidence).sort().join("|") !==
-          [...visibilityTimingFields].sort().join("|") ||
-        visibilityTimingFields.some(
-          (field) =>
-            !Number.isFinite(taskReadTimingEvidence[field]) ||
-            taskReadTimingEvidence[field] <= 0,
-        ))) ||
-    (!requiresVisibilityTiming && taskReadTimingEvidence !== null)
+    )
   ) {
-    throw new Error("fixture_committed_batch_evidence_mismatch");
+    evidenceFailure = "read_duration_invalid";
+  } else if (
+    requiresVisibilityTiming &&
+    (taskReadTimingEvidence === null ||
+      Object.keys(taskReadTimingEvidence).sort().join("|") !==
+        [...visibilityTimingFields].sort().join("|") ||
+      visibilityTimingFields.some(
+        (field) =>
+          !Number.isFinite(taskReadTimingEvidence[field]) ||
+          taskReadTimingEvidence[field] <= 0,
+      ))
+  ) {
+    evidenceFailure = "visibility_timing_invalid";
+  } else if (!requiresVisibilityTiming && taskReadTimingEvidence !== null) {
+    evidenceFailure = "unexpected_visibility_timing";
+  }
+  if (evidenceFailure !== null) {
+    throw new Error(
+      `fixture_committed_batch_evidence_mismatch:${operation}:${evidenceFailure}`,
+    );
   }
   const progressEventOffsetsMs = result.progressEventOffsetsMs;
   const ledgerReadStartedAt = performance.now();
@@ -2140,7 +2166,7 @@ async function confirmDatabaseDeleted(databaseName) {
   return !databases.some((database) => database.name === databaseName);
 }
 
-async function writeFixture(
+export async function writeFixture(
   database,
   operationId,
   config,
@@ -2274,6 +2300,19 @@ export function assertFixtureRecordFitsCandidate(candidate, recordBytes) {
   }
 }
 
+export function createStoredFixtureVersion(record, operationId, lineBytes) {
+  if (!Number.isSafeInteger(lineBytes) || lineBytes < 1) {
+    throw new Error("fixture_version_record_bytes_invalid");
+  }
+  return {
+    ...record,
+    operationId,
+    canonicalBytes: 0,
+    versionRecordCanonicalBytes: lineBytes,
+    normalized: false,
+  };
+}
+
 function writeCommands(database, operationId, commands) {
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(
@@ -2285,12 +2324,13 @@ function writeCommands(database, operationId, commands) {
     const operations = transaction.objectStore("operations");
     for (const command of commands) {
       if (command.kind === "version") {
-        versions.put({
-          ...command.record,
-          operationId,
-          canonicalBytes: 0,
-          normalized: false,
-        });
+        versions.put(
+          createStoredFixtureVersion(
+            command.record,
+            operationId,
+            command.lineBytes,
+          ),
+        );
       } else if (command.kind === "segment") {
         segments.put({
           versionId: command.versionId,
@@ -2333,7 +2373,7 @@ function writeCommands(database, operationId, commands) {
   });
 }
 
-function createOperation(database, operationId, config) {
+export function createOperation(database, operationId, config) {
   return transactionPromise(database, ["operations"], (transaction) => {
     transaction.objectStore("operations").add({
       id: operationId,
@@ -2666,6 +2706,7 @@ async function scanStoreInBatches(
       candidate,
       lastKey,
       options.filter,
+      options.batchByteSelector,
     );
     if (batch.values.length === 0) {
       break;
@@ -2682,6 +2723,9 @@ async function scanStoreInBatches(
         options.byteSelector?.(value) ?? value.canonicalBytes ?? 0;
     }
     const readDurationMs = performance.now() - batchStartedAt;
+    if (!Number.isFinite(readDurationMs) || readDurationMs <= 0) {
+      throw new Error(`fixture_read_batch_timing_unavailable:${storeName}`);
+    }
     readBatchDurationsMs.push(readDurationMs);
     batches.push(readDurationMs);
     options.afterReadBatch?.(batch);
@@ -2733,6 +2777,7 @@ async function scanIndexInBatches(
       indexValue,
       candidate,
       lastPrimaryKey,
+      options.batchByteSelector,
     );
     if (batch.values.length === 0) {
       break;
@@ -2743,6 +2788,9 @@ async function scanIndexInBatches(
         options.byteSelector?.(value) ?? value.canonicalBytes ?? 0;
     }
     const readDurationMs = performance.now() - batchStartedAt;
+    if (!Number.isFinite(readDurationMs) || readDurationMs <= 0) {
+      throw new Error(`fixture_read_batch_timing_unavailable:${storeName}`);
+    }
     readBatchDurationsMs.push(readDurationMs);
     batches.push(readDurationMs);
     options.afterReadBatch?.(batch);
@@ -2769,25 +2817,51 @@ async function scanIndexInBatches(
   };
 }
 
-function readIndexBatch(
+export function readIndexBatch(
   database,
   storeName,
   indexName,
   indexValue,
   candidate,
   lastPrimaryKey,
+  batchByteSelector,
 ) {
+  if (typeof batchByteSelector !== "function") {
+    return Promise.reject(
+      new Error("fixture_bounded_index_scan_byte_selector_invalid"),
+    );
+  }
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(storeName, "readonly");
-    const index = transaction.objectStore(storeName).index(indexName);
-    const request = index.openCursor(IDBKeyRange.only(indexValue));
     const values = [];
     const keys = [];
     let canonicalBytes = 0;
+    let batchResult = null;
+    const freezeBatchResult = (result) => {
+      if (batchResult !== null) {
+        reject(new Error("fixture_bounded_index_scan_result_duplicate"));
+        return false;
+      }
+      batchResult = result;
+      return true;
+    };
+    transaction.onabort = () =>
+      reject(new Error("fixture_bounded_index_scan_aborted"));
+    transaction.onerror = () =>
+      reject(new Error("fixture_bounded_index_scan_failed"));
+    transaction.oncomplete = () => {
+      if (batchResult === null) {
+        reject(new Error("fixture_bounded_index_scan_result_missing"));
+        return;
+      }
+      resolve(batchResult);
+    };
+    const index = transaction.objectStore(storeName).index(indexName);
+    const request = index.openCursor(IDBKeyRange.only(indexValue));
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor) {
-        resolve({ values, keys, done: true });
+        freezeBatchResult({ values, keys, done: true });
         return;
       }
       if (
@@ -2798,13 +2872,29 @@ function readIndexBatch(
         return;
       }
       const value = cursor.value;
-      const valueBytes = value.canonicalBytes ?? 0;
+      let valueBytes;
+      try {
+        valueBytes = batchByteSelector(value);
+      } catch (error) {
+        reject(error);
+        return;
+      }
+      if (
+        !Number.isSafeInteger(valueBytes) ||
+        valueBytes < 1 ||
+        valueBytes > candidate.byteCapBytes
+      ) {
+        reject(
+          new Error("fixture_bounded_index_scan_record_bytes_invalid"),
+        );
+        return;
+      }
       if (
         values.length > 0 &&
         (values.length >= candidate.recordCap ||
           canonicalBytes + valueBytes > candidate.byteCapBytes)
       ) {
-        resolve({ values, keys, done: false });
+        freezeBatchResult({ values, keys, done: false });
         return;
       }
       values.push(value);
@@ -2814,27 +2904,55 @@ function readIndexBatch(
     };
     request.onerror = () =>
       reject(new Error("fixture_bounded_index_scan_failed"));
-    transaction.onabort = () =>
-      reject(new Error("fixture_bounded_index_scan_aborted"));
   });
 }
 
-function readStoreBatch(database, storeName, candidate, lastKey, filter) {
+export function readStoreBatch(
+  database,
+  storeName,
+  candidate,
+  lastKey,
+  filter,
+  batchByteSelector,
+) {
+  if (typeof batchByteSelector !== "function") {
+    return Promise.reject(
+      new Error("fixture_bounded_scan_byte_selector_invalid"),
+    );
+  }
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(storeName, "readonly");
+    const values = [];
+    const keys = [];
+    let canonicalBytes = 0;
+    let batchResult = null;
+    const freezeBatchResult = (result) => {
+      if (batchResult !== null) {
+        reject(new Error("fixture_bounded_scan_result_duplicate"));
+        return false;
+      }
+      batchResult = result;
+      return true;
+    };
+    transaction.onabort = () =>
+      reject(new Error("fixture_bounded_scan_aborted"));
+    transaction.onerror = () =>
+      reject(new Error("fixture_bounded_scan_failed"));
+    transaction.oncomplete = () => {
+      if (batchResult === null) {
+        reject(new Error("fixture_bounded_scan_result_missing"));
+        return;
+      }
+      resolve(batchResult);
+    };
     const store = transaction.objectStore(storeName);
     const range =
       lastKey === undefined ? undefined : IDBKeyRange.lowerBound(lastKey, true);
     const request = store.openCursor(range);
-    const values = [];
-    const keys = [];
-    let canonicalBytes = 0;
-    let done = false;
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor) {
-        done = true;
-        resolve({ values, keys, done });
+        freezeBatchResult({ values, keys, done: true });
         return;
       }
       const value = cursor.value;
@@ -2842,13 +2960,27 @@ function readStoreBatch(database, storeName, candidate, lastKey, filter) {
         cursor.continue();
         return;
       }
-      const valueBytes = value.canonicalBytes ?? 0;
+      let valueBytes;
+      try {
+        valueBytes = batchByteSelector(value);
+      } catch (error) {
+        reject(error);
+        return;
+      }
+      if (
+        !Number.isSafeInteger(valueBytes) ||
+        valueBytes < 1 ||
+        valueBytes > candidate.byteCapBytes
+      ) {
+        reject(new Error("fixture_bounded_scan_record_bytes_invalid"));
+        return;
+      }
       if (
         values.length > 0 &&
         (values.length >= candidate.recordCap ||
           canonicalBytes + valueBytes > candidate.byteCapBytes)
       ) {
-        resolve({ values, keys, done: false });
+        freezeBatchResult({ values, keys, done: false });
         return;
       }
       values.push(value);
@@ -2857,9 +2989,23 @@ function readStoreBatch(database, storeName, candidate, lastKey, filter) {
       cursor.continue();
     };
     request.onerror = () => reject(new Error("fixture_bounded_scan_failed"));
-    transaction.onabort = () =>
-      reject(new Error("fixture_bounded_scan_aborted"));
   });
+}
+
+function readVersionRecordCanonicalBytes(value) {
+  const recordBytes = value?.versionRecordCanonicalBytes;
+  if (!Number.isSafeInteger(recordBytes) || recordBytes < 1) {
+    throw new Error("fixture_version_record_bytes_invalid");
+  }
+  return recordBytes;
+}
+
+function readCanonicalPayloadBytes(value) {
+  const recordBytes = value?.canonicalBytes;
+  if (!Number.isSafeInteger(recordBytes) || recordBytes < 1) {
+    throw new Error("fixture_record_bytes_invalid");
+  }
+  return recordBytes;
 }
 
 function updateValues(database, storeName, values, transform) {
@@ -2926,7 +3072,7 @@ function parseFixtureLine(line) {
   return record;
 }
 
-function openDatabase(name) {
+export function openDatabase(name) {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(name, DATABASE_VERSION);
     request.onupgradeneeded = () => {

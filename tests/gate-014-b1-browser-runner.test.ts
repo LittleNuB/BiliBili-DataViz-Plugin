@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
+import "fake-indexeddb/auto";
 
 import {
   B1_HARNESS_EXTENSION_ID,
@@ -31,14 +32,25 @@ import {
   validateOfficialCftStableMetadata,
   validateSmokeResult,
   validateWindowsChromeTerminationEvidence,
+  waitForWindowsProcessTreeExit,
   waitForProductionExtensionReady,
   waitForProcessExit,
 } from "../scripts/gate-014-b1-browser-runner.mjs";
 import {
+  createCustomFixtureDefinition,
+  writeFixtureArtifact,
+} from "../scripts/gate-014-fixture-generator.mjs";
+import {
   assertFixtureRecordFitsCandidate,
+  createOperation,
+  createStoredFixtureVersion,
   createRestartTimingEvidence,
+  openDatabase,
+  readIndexBatch,
+  readStoreBatch,
   runNormalizationThenFinalLedgerRead,
   shouldFlushFixtureBatch,
+  writeFixture,
 } from "./fixtures/gate-014/b1-extension/storage-harness.js";
 import { restorePreflightAllows } from "./fixtures/gate-014/b1-extension/restore-preflight.js";
 
@@ -113,6 +125,492 @@ test("GATE-014-B1 reads the final restart ledger only after normalization and pr
   assert.deepEqual(timing.readBatchDurationsMs, [3, 3]);
   assert.deepEqual(timing.batchDurationsMs, [3, 5, 3]);
   assert.equal(timing.readTimingEvidence.finalLedgerAndVisibleReadbackMs, 3);
+});
+
+test("GATE-014-B1 read batches wait for readonly transaction completion", async () => {
+  for (const kind of ["store", "index"]) {
+    const request: Record<string, unknown> = {};
+    const transaction: Record<string, unknown> = {};
+    const cursorSource = {
+      openCursor() {
+        assert.equal(typeof transaction.oncomplete, "function");
+        assert.equal(typeof transaction.onerror, "function");
+        assert.equal(typeof transaction.onabort, "function");
+        return request;
+      },
+    };
+    transaction.objectStore = () => ({
+      ...cursorSource,
+      index() {
+        return cursorSource;
+      },
+    });
+    const database = {
+      transaction() {
+        return transaction;
+      },
+    };
+    const candidate = { recordCap: 1024, byteCapBytes: 1024 * 1024 };
+    const readPromise = (
+      kind === "store"
+        ? readStoreBatch(
+            database,
+            "segments",
+            candidate,
+            undefined,
+            undefined,
+            (value: { canonicalBytes: number }) => value.canonicalBytes,
+          )
+        : readIndexBatch(
+            database,
+            "segments",
+            "operationId",
+            "operation-1",
+            candidate,
+            undefined,
+            (value: { canonicalBytes: number }) => value.canonicalBytes,
+          )
+    ).then((result) => ({ settled: true, result }));
+    let settled = false;
+    void readPromise.then(() => {
+      settled = true;
+    });
+    request.result = null;
+    (request.onsuccess as () => void)();
+    await Promise.resolve();
+    assert.equal(settled, false);
+    (transaction.oncomplete as () => void)();
+    assert.deepEqual((await readPromise).result, {
+      values: [],
+      keys: [],
+      done: true,
+    });
+  }
+});
+
+test("GATE-014-B1 freezes capped read batches and rejects transaction failures", async () => {
+  for (const kind of ["store", "index"]) {
+    const request: Record<string, unknown> = {};
+    const transaction: Record<string, unknown> = {};
+    const cursorSource = {
+      openCursor() {
+        return request;
+      },
+    };
+    transaction.objectStore = () => ({
+      ...cursorSource,
+      index() {
+        return cursorSource;
+      },
+    });
+    const database = { transaction: () => transaction };
+    const candidate = { recordCap: 1, byteCapBytes: 1024 * 1024 };
+    const readPromise =
+      kind === "store"
+        ? readStoreBatch(
+            database,
+            "segments",
+            candidate,
+            undefined,
+            undefined,
+            (value: { canonicalBytes: number }) => value.canonicalBytes,
+          )
+        : readIndexBatch(
+            database,
+            "segments",
+            "operationId",
+            "operation-1",
+            candidate,
+            undefined,
+            (value: { canonicalBytes: number }) => value.canonicalBytes,
+          );
+    const firstValue = { canonicalBytes: 32 };
+    request.result = {
+      primaryKey: 1,
+      value: firstValue,
+      continue() {},
+    };
+    (request.onsuccess as () => void)();
+    request.result = {
+      primaryKey: 2,
+      value: { canonicalBytes: 32 },
+      continue() {},
+    };
+    (request.onsuccess as () => void)();
+    (transaction.oncomplete as () => void)();
+    assert.deepEqual(await readPromise, {
+      values: [firstValue],
+      keys: [1],
+      done: false,
+    });
+  }
+
+  for (const eventName of ["onerror", "onabort"]) {
+    const request: Record<string, unknown> = {};
+    const transaction: Record<string, unknown> = {
+      objectStore() {
+        return { openCursor: () => request };
+      },
+    };
+    const readPromise = readStoreBatch(
+      { transaction: () => transaction },
+      "segments",
+      { recordCap: 1, byteCapBytes: 1024 },
+      undefined,
+      undefined,
+      (value: { canonicalBytes: number }) => value.canonicalBytes,
+    );
+    (transaction[eventName] as () => void)();
+    await assert.rejects(
+      () => readPromise,
+      /fixture_bounded_scan_(failed|aborted)/,
+    );
+  }
+});
+
+test("GATE-014-B1 caps version scans by the canonical metadata rows actually read", async () => {
+  await assert.rejects(
+    () =>
+      readStoreBatch(
+        { transaction: () => ({}) },
+        "versions",
+        { recordCap: 256, byteCapBytes: 1024 },
+      ),
+    /fixture_bounded_scan_byte_selector_invalid/,
+  );
+  const request: Record<string, unknown> = {};
+  const transaction: Record<string, unknown> = {
+    objectStore() {
+      return { openCursor: () => request };
+    },
+  };
+  const readPromise = readStoreBatch(
+    { transaction: () => transaction },
+    "versions",
+    { recordCap: 256, byteCapBytes: 1024 },
+    undefined,
+    undefined,
+    (value: { versionRecordCanonicalBytes: number }) =>
+      value.versionRecordCanonicalBytes,
+  );
+  const values = [
+    { canonicalBytes: 800_000, versionRecordCanonicalBytes: 128 },
+    { canonicalBytes: 900_000, versionRecordCanonicalBytes: 144 },
+  ];
+  for (let index = 0; index < values.length; index += 1) {
+    request.result = {
+      primaryKey: index + 1,
+      value: values[index],
+      continue() {},
+    };
+    (request.onsuccess as () => void)();
+  }
+  request.result = null;
+  (request.onsuccess as () => void)();
+  (transaction.oncomplete as () => void)();
+  assert.deepEqual(await readPromise, {
+    values,
+    keys: [1, 2],
+    done: true,
+  });
+
+  for (const invalidBytes of [undefined, 0, 1025]) {
+    const invalidRequest: Record<string, unknown> = {};
+    const invalidTransaction: Record<string, unknown> = {
+      objectStore() {
+        return { openCursor: () => invalidRequest };
+      },
+    };
+    const invalidRead = readStoreBatch(
+      { transaction: () => invalidTransaction },
+      "versions",
+      { recordCap: 256, byteCapBytes: 1024 },
+      undefined,
+      undefined,
+      () => invalidBytes,
+    );
+    invalidRequest.result = {
+      primaryKey: 1,
+      value: { canonicalBytes: 800_000 },
+      continue() {},
+    };
+    (invalidRequest.onsuccess as () => void)();
+    await assert.rejects(
+      () => invalidRead,
+      /fixture_bounded_scan_record_bytes_invalid/,
+    );
+  }
+
+  const cappedRequest: Record<string, unknown> = {};
+  const cappedTransaction: Record<string, unknown> = {
+    objectStore() {
+      return { openCursor: () => cappedRequest };
+    },
+  };
+  const cappedRead = readStoreBatch(
+    { transaction: () => cappedTransaction },
+    "versions",
+    { recordCap: 256, byteCapBytes: 1024 },
+    undefined,
+    undefined,
+    (value: { versionRecordCanonicalBytes: number }) =>
+      value.versionRecordCanonicalBytes,
+  );
+  const exactCapValues = [
+    { canonicalBytes: 800_000, versionRecordCanonicalBytes: 512 },
+    { canonicalBytes: 900_000, versionRecordCanonicalBytes: 512 },
+  ];
+  for (let index = 0; index < exactCapValues.length; index += 1) {
+    cappedRequest.result = {
+      primaryKey: index + 1,
+      value: exactCapValues[index],
+      continue() {},
+    };
+    (cappedRequest.onsuccess as () => void)();
+  }
+  cappedRequest.result = {
+    primaryKey: 3,
+    value: { canonicalBytes: 700_000, versionRecordCanonicalBytes: 1 },
+    continue() {},
+  };
+  (cappedRequest.onsuccess as () => void)();
+  (cappedTransaction.oncomplete as () => void)();
+  assert.deepEqual(await cappedRead, {
+    values: exactCapValues,
+    keys: [1, 2],
+    done: false,
+  });
+});
+
+test("GATE-014-B1 derives version metadata bytes from the exact UTF-8 fixture line", () => {
+  const line = JSON.stringify({
+    record: "version",
+    contract: "managed-full-text-v1",
+    versionId: "version-1",
+    languageLabel: "\u4e2d\u6587",
+  });
+  const lineBytes = new TextEncoder().encode(`${line}\n`).byteLength;
+  const stored = createStoredFixtureVersion(
+    JSON.parse(line),
+    "operation-1",
+    lineBytes,
+  );
+  assert.equal(stored.versionRecordCanonicalBytes, lineBytes);
+  assert.equal(stored.canonicalBytes, 0);
+  assert.equal(stored.operationId, "operation-1");
+  assert.throws(
+    () => createStoredFixtureVersion(JSON.parse(line), "operation-1", 0),
+    /fixture_version_record_bytes_invalid/,
+  );
+});
+
+test("GATE-014-B1 caps indexed version scans by canonical metadata row bytes", async () => {
+  const candidate = { recordCap: 256, byteCapBytes: 1024 };
+  await assert.rejects(
+    () =>
+      readIndexBatch(
+        { transaction: () => ({}) },
+        "versions",
+        "operationId",
+        "operation-1",
+        candidate,
+      ),
+    /fixture_bounded_index_scan_byte_selector_invalid/,
+  );
+
+  const startRead = (
+    byteSelector: (value: {
+      versionRecordCanonicalBytes?: number;
+    }) => number | undefined,
+  ) => {
+    const request: Record<string, unknown> = {};
+    const transaction: Record<string, unknown> = {
+      objectStore() {
+        return {
+          index() {
+            return { openCursor: () => request };
+          },
+        };
+      },
+    };
+    return {
+      request,
+      transaction,
+      promise: readIndexBatch(
+        { transaction: () => transaction },
+        "versions",
+        "operationId",
+        "operation-1",
+        candidate,
+        undefined,
+        byteSelector,
+      ),
+    };
+  };
+
+  const grouped = startRead(
+    (value) => value.versionRecordCanonicalBytes,
+  );
+  const groupedValues = [
+    { canonicalBytes: 800_000, versionRecordCanonicalBytes: 128 },
+    { canonicalBytes: 900_000, versionRecordCanonicalBytes: 144 },
+  ];
+  for (let index = 0; index < groupedValues.length; index += 1) {
+    grouped.request.result = {
+      primaryKey: index + 1,
+      value: groupedValues[index],
+      continue() {},
+    };
+    (grouped.request.onsuccess as () => void)();
+  }
+  grouped.request.result = null;
+  (grouped.request.onsuccess as () => void)();
+  (grouped.transaction.oncomplete as () => void)();
+  assert.deepEqual(await grouped.promise, {
+    values: groupedValues,
+    keys: [1, 2],
+    done: true,
+  });
+
+  const capped = startRead((value) => value.versionRecordCanonicalBytes);
+  const exactCapValues = [
+    { canonicalBytes: 800_000, versionRecordCanonicalBytes: 512 },
+    { canonicalBytes: 900_000, versionRecordCanonicalBytes: 512 },
+  ];
+  for (let index = 0; index < exactCapValues.length; index += 1) {
+    capped.request.result = {
+      primaryKey: index + 1,
+      value: exactCapValues[index],
+      continue() {},
+    };
+    (capped.request.onsuccess as () => void)();
+  }
+  capped.request.result = {
+    primaryKey: 3,
+    value: { canonicalBytes: 700_000, versionRecordCanonicalBytes: 1 },
+    continue() {},
+  };
+  (capped.request.onsuccess as () => void)();
+  (capped.transaction.oncomplete as () => void)();
+  assert.deepEqual(await capped.promise, {
+    values: exactCapValues,
+    keys: [1, 2],
+    done: false,
+  });
+
+  for (const invalidBytes of [undefined, 0, 1025]) {
+    const invalid = startRead(() => invalidBytes);
+    invalid.request.result = {
+      primaryKey: 1,
+      value: { canonicalBytes: 800_000 },
+      continue() {},
+    };
+    (invalid.request.onsuccess as () => void)();
+    await assert.rejects(
+      () => invalid.promise,
+      /fixture_bounded_index_scan_record_bytes_invalid/,
+    );
+  }
+});
+
+test("GATE-014-B1 preserves generated fixture metadata bytes through finalize", async () => {
+  const definition = createCustomFixtureDefinition({
+    id: "b1-metadata-ingest-regression",
+    targetCanonicalBytes: 192 * 1024,
+    profile: "baseline",
+    targetKind: "managed_full_text_total",
+  });
+  const repositoryRoot = await mkdtemp(
+    path.join(tmpdir(), "gate-014-b1-ingest-repo-"),
+  );
+  await writeFile(
+    path.join(repositoryRoot, "package.json"),
+    `${JSON.stringify({ name: "bili-bill", private: true })}\n`,
+    "utf8",
+  );
+  const databaseName = `gate-014-b1-ingest-${crypto.randomUUID()}`;
+  let database: IDBDatabase | null = null;
+  try {
+    const generated = await writeFixtureArtifact(definition, {
+      seed: "b1-metadata-ingest-seed",
+      repositoryRoot,
+    });
+    const artifactBytes = await readFile(generated.artifactPath);
+    const expectedVersions = [];
+    let currentVersion: {
+      canonicalBytes: number;
+      versionId: string;
+      versionRecordCanonicalBytes: number;
+    } | null = null;
+    for (const line of artifactBytes.toString("utf8").trimEnd().split("\n")) {
+      const lineBytes = new TextEncoder().encode(`${line}\n`).byteLength;
+      const record = JSON.parse(line);
+      if (record.record === "version") {
+        currentVersion = {
+          canonicalBytes: lineBytes,
+          versionId: record.versionId,
+          versionRecordCanonicalBytes: lineBytes,
+        };
+        expectedVersions.push(currentVersion);
+      } else {
+        assert.notEqual(currentVersion, null);
+        currentVersion.canonicalBytes += lineBytes;
+      }
+    }
+
+    database = (await openDatabase(databaseName)) as IDBDatabase;
+    const operationId = "b1-metadata-ingest-operation";
+    const config = {
+      fixtureId: definition.id,
+      candidate: { recordCap: 256, byteCapBytes: 1024 * 1024 },
+    };
+    await createOperation(database, operationId, config);
+    const writeResult = await writeFixture(
+      database,
+      operationId,
+      config,
+      { sampleHeap() {} },
+      new Response(new Uint8Array(artifactBytes)),
+    );
+    const storedVersions = await new Promise<Record<string, unknown>[]>(
+      (resolve, reject) => {
+        const request = database
+          ?.transaction("versions", "readonly")
+          .objectStore("versions")
+          .getAll();
+        if (!request) {
+          reject(new Error("fixture_test_database_unavailable"));
+          return;
+        }
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      },
+    );
+    assert.equal(writeResult.canonicalBytes, generated.receipt.canonical.totalBytes);
+    assert.deepEqual(
+      storedVersions
+        .map((version) => ({
+          canonicalBytes: version.canonicalBytes,
+          versionId: version.versionId,
+          versionRecordCanonicalBytes: version.versionRecordCanonicalBytes,
+        }))
+        .sort((left, right) =>
+          String(left.versionId).localeCompare(String(right.versionId)),
+        ),
+      expectedVersions.sort((left, right) =>
+        left.versionId.localeCompare(right.versionId),
+      ),
+    );
+  } finally {
+    database?.close();
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(databaseName);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error("fixture_test_cleanup_blocked"));
+    });
+    await rm(repositoryRoot, { recursive: true, force: true });
+  }
 });
 
 test("GATE-014-B1 Chrome arguments isolate a fresh profile and block external name resolution", () => {
@@ -802,6 +1300,14 @@ test("GATE-014-B1 process-tree verification catches surviving descendants after 
     ),
     [103],
   );
+  assert.deepEqual(
+    findSurvivingWindowsProcessTree(
+      initial,
+      [{ processId: 101, parentProcessId: 900 }],
+      100,
+    ),
+    [101],
+  );
   assert.deepEqual(findSurvivingWindowsProcessTree(initial, [], 100), []);
   assert.throws(
     () =>
@@ -815,6 +1321,117 @@ test("GATE-014-B1 process-tree verification catches surviving descendants after 
       ),
     /current_process_table_invalid/,
   );
+});
+
+test("GATE-014-B1 waits within one deadline for the captured Windows lineage to disappear", async () => {
+  const initial = [
+    { processId: 100, parentProcessId: 1 },
+    { processId: 101, parentProcessId: 100 },
+  ];
+  let nowMs = 0;
+  let readCount = 0;
+  const readTimeoutsMs: number[] = [];
+  const transient = await waitForWindowsProcessTreeExit(initial, 100, {
+    deadlineEpochMs: 100,
+    now: () => nowMs,
+    wait: async (milliseconds: number) => {
+      nowMs += milliseconds;
+    },
+    readProcessTable: async (options: { timeoutMs?: number } = {}) => {
+      readTimeoutsMs.push(options.timeoutMs ?? -1);
+      readCount += 1;
+      if (readCount === 1) {
+        return [
+          { processId: 101, parentProcessId: 100 },
+          { processId: 102, parentProcessId: 101 },
+          { processId: 103, parentProcessId: 102 },
+        ];
+      }
+      if (readCount === 2) {
+        return [{ processId: 103, parentProcessId: 102 }];
+      }
+      return [];
+    },
+    pollIntervalMs: 40,
+  });
+  assert.deepEqual(transient, []);
+  assert.equal(readCount, 3);
+  assert.deepEqual(readTimeoutsMs, [100, 60, 20]);
+
+  nowMs = 100;
+  let deadlineReadCount = 0;
+  await assert.rejects(
+    () =>
+      waitForWindowsProcessTreeExit(initial, 100, {
+        deadlineEpochMs: 100,
+        now: () => nowMs,
+        wait: async () => {},
+        readProcessTable: async () => {
+          deadlineReadCount += 1;
+          return [];
+        },
+      }),
+    /chrome_process_tree_wait_timeout/,
+  );
+  assert.equal(deadlineReadCount, 0);
+
+  nowMs = 0;
+  const persistent = await waitForWindowsProcessTreeExit(initial, 100, {
+    deadlineEpochMs: 100,
+    now: () => nowMs,
+    wait: async (milliseconds: number) => {
+      nowMs += milliseconds;
+    },
+    readProcessTable: async () => [
+      { processId: 101, parentProcessId: 100 },
+    ],
+  });
+  assert.deepEqual(persistent, [101]);
+  assert.throws(
+    () =>
+      validateWindowsChromeTerminationEvidence({
+        nativeTerminationCompleted: true,
+        nativeTerminationOutcome: "exit_zero",
+        rootObservedBeforeTermination: true,
+        rootRunningBeforeTermination: true,
+        parentExited: true,
+        survivingProcessIds: persistent,
+      }),
+    /chrome_process_tree_termination_failed/,
+  );
+
+  await assert.rejects(
+    () =>
+      waitForWindowsProcessTreeExit(initial, 100, {
+        deadlineEpochMs: 100,
+        now: () => 0,
+        wait: async () => {},
+        readProcessTable: async () => {
+          throw new Error("process_table_unavailable");
+        },
+      }),
+    /process_table_unavailable/,
+  );
+
+  nowMs = 90;
+  let finalReadTimeoutMs = null;
+  await assert.rejects(
+    () =>
+      waitForWindowsProcessTreeExit(initial, 100, {
+        deadlineEpochMs: 100,
+        now: () => nowMs,
+        wait: async (milliseconds: number) => {
+          nowMs += milliseconds;
+        },
+        readProcessTable: async (options: { timeoutMs?: number } = {}) => {
+          finalReadTimeoutMs = options.timeoutMs ?? null;
+          nowMs = 101;
+          return [];
+        },
+      }),
+    /chrome_process_tree_wait_timeout/,
+  );
+  assert.equal(finalReadTimeoutMs, 10);
 });
 
 test("GATE-014-B1 accepts a completed native tree termination only after the lineage is gone", () => {

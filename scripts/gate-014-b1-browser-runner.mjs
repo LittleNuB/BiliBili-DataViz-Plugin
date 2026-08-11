@@ -2507,6 +2507,7 @@ export function findSurvivingWindowsProcessTree(
   initialProcesses,
   currentProcesses,
   rootProcessId,
+  observedLineageProcessIds = [],
 ) {
   if (!Number.isSafeInteger(rootProcessId) || rootProcessId < 1) {
     throw new Error("chrome_process_identity_unavailable");
@@ -2519,8 +2520,14 @@ export function findSurvivingWindowsProcessTree(
     currentProcesses,
     "current_process_table",
   );
+  const observedLineage = validateWindowsLineageProcessIds(
+    observedLineageProcessIds,
+  );
   const initialLineage = collectDescendantProcessIds(initial, [rootProcessId]);
-  const currentLineage = collectDescendantProcessIds(current, initialLineage);
+  const currentLineage = collectDescendantProcessIds(current, [
+    ...initialLineage,
+    ...observedLineage,
+  ]);
   const currentProcessIds = new Set(
     current.map((process) => process.processId),
   );
@@ -2529,6 +2536,84 @@ export function findSurvivingWindowsProcessTree(
       .filter((processId) => currentProcessIds.has(processId))
       .sort((left, right) => left - right),
   );
+}
+
+export async function waitForWindowsProcessTreeExit(
+  initialProcesses,
+  rootProcessId,
+  options = {},
+) {
+  const deadlineEpochMs = options.deadlineEpochMs;
+  const now = options.now ?? Date.now;
+  const wait = options.wait ?? delay;
+  const readProcessTable =
+    options.readProcessTable ?? readWindowsProcessTable;
+  const pollIntervalMs = options.pollIntervalMs ?? 50;
+  if (
+    !Number.isFinite(deadlineEpochMs) ||
+    typeof now !== "function" ||
+    typeof wait !== "function" ||
+    typeof readProcessTable !== "function" ||
+    !Number.isFinite(pollIntervalMs) ||
+    pollIntervalMs <= 0
+  ) {
+    throw new Error("chrome_process_tree_wait_invalid");
+  }
+  const immutableInitialProcesses = Object.freeze(
+    validateWindowsProcessTable(
+      initialProcesses,
+      "initial_process_table",
+    ).map((process) => Object.freeze(process)),
+  );
+  const observedLineageProcessIds = new Set();
+  let lastSurvivors = null;
+  while (true) {
+    const readStartedEpochMs = now();
+    const remainingBeforeReadMs = deadlineEpochMs - readStartedEpochMs;
+    if (
+      !Number.isFinite(readStartedEpochMs) ||
+      !Number.isFinite(remainingBeforeReadMs)
+    ) {
+      throw new Error("chrome_process_tree_wait_invalid");
+    }
+    if (remainingBeforeReadMs <= 0) {
+      if (lastSurvivors !== null) {
+        return lastSurvivors;
+      }
+      throw new Error("chrome_process_tree_wait_timeout");
+    }
+    const currentProcesses = await readProcessTable({
+      timeoutMs: Math.max(1, Math.ceil(remainingBeforeReadMs)),
+    });
+    const survivors = findSurvivingWindowsProcessTree(
+      immutableInitialProcesses,
+      currentProcesses,
+      rootProcessId,
+      [...observedLineageProcessIds],
+    );
+    for (const processId of survivors) {
+      observedLineageProcessIds.add(processId);
+    }
+    const readCompletedEpochMs = now();
+    if (!Number.isFinite(readCompletedEpochMs)) {
+      throw new Error("chrome_process_tree_wait_invalid");
+    }
+    if (readCompletedEpochMs > deadlineEpochMs) {
+      throw new Error("chrome_process_tree_wait_timeout");
+    }
+    if (survivors.length === 0) {
+      return survivors;
+    }
+    lastSurvivors = survivors;
+    const remainingMs = deadlineEpochMs - readCompletedEpochMs;
+    if (!Number.isFinite(remainingMs)) {
+      throw new Error("chrome_process_tree_wait_invalid");
+    }
+    if (remainingMs <= 0) {
+      return survivors;
+    }
+    await wait(Math.min(pollIntervalMs, remainingMs));
+  }
 }
 
 export function validateWindowsChromeTerminationEvidence({
@@ -2603,6 +2688,19 @@ function validateWindowsProcessTable(processes, label) {
   });
 }
 
+function validateWindowsLineageProcessIds(processIds) {
+  if (
+    !Array.isArray(processIds) ||
+    processIds.some(
+      (processId) => !Number.isSafeInteger(processId) || processId < 1,
+    ) ||
+    new Set(processIds).size !== processIds.length
+  ) {
+    throw new Error("observed_process_lineage_invalid");
+  }
+  return processIds;
+}
+
 function collectDescendantProcessIds(processes, seedProcessIds) {
   const lineage = new Set(seedProcessIds);
   let changed = true;
@@ -2621,20 +2719,29 @@ function collectDescendantProcessIds(processes, seedProcessIds) {
   return lineage;
 }
 
-async function readWindowsProcessTable() {
+async function readWindowsProcessTable(options = {}) {
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("chrome_process_tree_observation_failed");
+  }
   const script = [
     "$rows = @(Get-CimInstance -ClassName Win32_Process | ForEach-Object { [pscustomobject]@{ processId = [int64]$_.ProcessId; parentProcessId = [int64]$_.ParentProcessId } })",
     "ConvertTo-Json -Compress -InputObject $rows",
   ].join("; ");
-  const { stdout } = await execFile(
-    "powershell.exe",
-    ["-NoProfile", "-Command", script],
-    {
-      windowsHide: true,
-      timeout: 10_000,
-      maxBuffer: 16 * 1024 * 1024,
-    },
-  );
+  let stdout;
+  try {
+    ({ stdout } = await execFile(
+      "powershell.exe",
+      ["-NoProfile", "-Command", script],
+      {
+        windowsHide: true,
+        timeout: Math.max(1, Math.floor(timeoutMs)),
+        maxBuffer: 16 * 1024 * 1024,
+      },
+    ));
+  } catch {
+    throw new Error("chrome_process_tree_observation_failed");
+  }
   let processes;
   try {
     processes = JSON.parse(stdout.trim());
@@ -2678,13 +2785,16 @@ async function terminateChromeProcessTree(child) {
       nativeTerminationOutcome =
         readCompletedWindowsTerminationOutcome(error);
     }
-    const parentExited = await waitForProcessExit(child);
-    const currentProcesses = await readWindowsProcessTable();
-    const survivors = findSurvivingWindowsProcessTree(
-      initialProcesses,
-      currentProcesses,
-      child.pid,
+    const closureDeadlineEpochMs = Date.now() + 5_000;
+    const parentExited = await waitForProcessExit(
+      child,
+      Math.max(0, closureDeadlineEpochMs - Date.now()),
     );
+    const survivors = parentExited
+      ? await waitForWindowsProcessTreeExit(initialProcesses, child.pid, {
+          deadlineEpochMs: closureDeadlineEpochMs,
+        })
+      : [];
     validateWindowsChromeTerminationEvidence({
       nativeTerminationCompleted: true,
       nativeTerminationOutcome,
