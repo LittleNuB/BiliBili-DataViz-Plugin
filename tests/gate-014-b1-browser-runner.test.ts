@@ -1658,6 +1658,15 @@ test("GATE-014-B1 browser stages preserve proven codes and replace spoofed field
     "browser_harness_evaluation_failed",
     "browser_observation_settle_failed",
     "browser_process_cleanup_failed",
+    "browser_process_termination_failed",
+    "browser_cdp_close_failed",
+    "browser_process_identity_failed",
+    "browser_process_table_observation_failed",
+    "browser_process_pretermination_state_failed",
+    "browser_process_native_termination_failed",
+    "browser_process_parent_exit_failed",
+    "browser_process_lineage_cleanup_failed",
+    "browser_process_termination_validation_failed",
   ];
   for (const stageCode of diagnosticStages) {
     await assert.rejects(
@@ -1752,6 +1761,29 @@ test("GATE-014-B1 async browser spawn errors stay controlled and still clean up"
   assert.equal(cleanupAttempted, true);
   assert.equal(child.listenerCount("spawn"), 0);
   assert.equal(child.listenerCount("error"), 0);
+});
+
+test("GATE-014-B1 process termination failure wins while CDP close still runs", async () => {
+  let cdpCloseAttempted = false;
+  await assert.rejects(
+    executeB1BrowserStage("browser_process_cleanup_failed", () =>
+      executeB1BrowserOperationWithCleanup(
+        () =>
+          executeB1BrowserStage("browser_process_parent_exit_failed", () => {
+            throw new Error("synthetic parent exit timeout");
+          }),
+        () =>
+          executeB1BrowserStage("browser_cdp_close_failed", () => {
+            cdpCloseAttempted = true;
+            throw new Error("synthetic CDP close failure");
+          }),
+      ),
+    ),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_parent_exit_failed",
+  );
+  assert.equal(cdpCloseAttempted, true);
 });
 
 test("GATE-014-B1 observes the real asynchronous spawn error boundary", async () => {
