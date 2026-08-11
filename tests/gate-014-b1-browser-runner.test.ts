@@ -26,6 +26,7 @@ import {
   findSurvivingWindowsProcessTree,
   findProductionServiceWorkerSession,
   loadUnpackedExtension,
+  observeWindowsChromeClosure,
   removeB1ProductionExtensionStage,
   removeB1TemporaryProfile,
   readCompletedWindowsTerminationOutcome,
@@ -33,6 +34,7 @@ import {
   readWindowsProcessTable,
   selectProductionServiceWorkerTarget,
   settleB1FixtureServerCleanup,
+  settleWindowsChromeClosureObservations,
   uninstallUnpackedExtension,
   unwrapControlledHarnessEvaluation,
   validateBrowserExecutionObservation,
@@ -66,6 +68,17 @@ import {
   writeFixture,
 } from "./fixtures/gate-014/b1-extension/storage-harness.js";
 import { restorePreflightAllows } from "./fixtures/gate-014/b1-extension/restore-preflight.js";
+
+async function createControlledBrowserFailureForTest(stageCode: string) {
+  try {
+    await executeB1BrowserStage(stageCode, () => {
+      throw new Error("synthetic_controlled_failure");
+    });
+  } catch (error) {
+    return error;
+  }
+  throw new Error("synthetic_controlled_failure_missing");
+}
 
 test("GATE-014-B1 bounds a single browser lifecycle without masking gate thresholds", () => {
   assert.equal(B1_LIFECYCLE_EVALUATION_TIMEOUT_MS, 45 * 60 * 1_000);
@@ -1285,6 +1298,188 @@ test("GATE-014-B1 process exit observation fails closed on timeout", async () =>
   assert.equal(await exitPromise, true);
 });
 
+test("GATE-014-B1 settles concurrent Windows parent and lineage observations with deterministic failure priority", async () => {
+  let releaseObservations: (() => void) | null = null;
+  const observationBarrier = new Promise<void>((resolve) => {
+    releaseObservations = resolve;
+  });
+  const starts: string[] = [];
+  const pending = settleWindowsChromeClosureObservations(
+    async () => {
+      starts.push("parent");
+      await observationBarrier;
+      return true;
+    },
+    async () => {
+      starts.push("lineage");
+      await observationBarrier;
+      return [];
+    },
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(starts, ["parent", "lineage"]);
+  releaseObservations?.();
+  assert.deepEqual(await pending, {
+    parentExited: true,
+    survivors: [],
+  });
+
+  const parentFailure = new Error("parent_failed");
+  const lineageFailure = new Error("lineage_failed");
+  let lineageSettled = false;
+  await assert.rejects(
+    settleWindowsChromeClosureObservations(
+      async () => {
+        throw parentFailure;
+      },
+      async () => {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        lineageSettled = true;
+        throw lineageFailure;
+      },
+    ),
+    (error: unknown) => error === parentFailure,
+  );
+  assert.equal(lineageSettled, true);
+  await assert.rejects(
+    settleWindowsChromeClosureObservations(
+      async () => true,
+      async () => {
+        throw lineageFailure;
+      },
+    ),
+    (error: unknown) => error === lineageFailure,
+  );
+  await assert.rejects(
+    settleWindowsChromeClosureObservations(
+      null as unknown as () => Promise<boolean>,
+      async () => [],
+    ),
+    /chrome_process_closure_observation_invalid/,
+  );
+});
+
+test("GATE-014-B1 observes Windows parent exit and lineage concurrently inside one immutable deadline", async () => {
+  const initialProcesses = [
+    { processId: 100, parentProcessId: 10 },
+    { processId: 101, parentProcessId: 100 },
+  ];
+  const child = { pid: 100 };
+  const now = () => 1_000;
+  const starts: string[] = [];
+  const parentTimeoutsMs: number[] = [];
+  const lineageDeadlinesMs: number[] = [];
+  let releaseObservations: (() => void) | null = null;
+  const observationBarrier = new Promise<void>((resolve) => {
+    releaseObservations = resolve;
+  });
+  const passing = observeWindowsChromeClosure({
+    child,
+    initialProcesses,
+    closureDeadlineEpochMs: 5_000,
+    now,
+    waitForParentExit: async (
+      observedChild: { pid: number },
+      timeoutMs: number,
+    ) => {
+      starts.push("parent");
+      assert.equal(observedChild, child);
+      parentTimeoutsMs.push(timeoutMs);
+      await observationBarrier;
+      return true;
+    },
+    waitForLineageExit: async (
+      observedInitialProcesses: Array<{
+        processId: number;
+        parentProcessId: number;
+      }>,
+      rootProcessId: number,
+      options: {
+        deadlineEpochMs: number;
+        now: () => number;
+        readProcessTable: () => Promise<unknown[]>;
+      },
+    ) => {
+      starts.push("lineage");
+      assert.equal(observedInitialProcesses, initialProcesses);
+      assert.equal(rootProcessId, child.pid);
+      assert.equal(options.now, now);
+      assert.equal(typeof options.readProcessTable, "function");
+      lineageDeadlinesMs.push(options.deadlineEpochMs);
+      await observationBarrier;
+      return [];
+    },
+    readProcessTable: async () => [],
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(starts, ["parent", "lineage"]);
+  releaseObservations?.();
+  assert.deepEqual(await passing, {
+    parentExited: true,
+    survivors: [],
+  });
+  assert.deepEqual(parentTimeoutsMs, [4_000]);
+  assert.deepEqual(lineageDeadlinesMs, [5_000]);
+
+  const lineageDeadlineFailure = await createControlledBrowserFailureForTest(
+    "browser_process_lineage_table_command_deadline_elapsed_failed",
+  );
+  const parentAndLineageStarts: string[] = [];
+  await assert.rejects(
+    observeWindowsChromeClosure({
+      child,
+      initialProcesses,
+      closureDeadlineEpochMs: 5_000,
+      now,
+      waitForParentExit: async () => {
+        parentAndLineageStarts.push("parent");
+        return false;
+      },
+      waitForLineageExit: async () => {
+        parentAndLineageStarts.push("lineage");
+        throw lineageDeadlineFailure;
+      },
+      readProcessTable: async () => [],
+    }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_parent_exit_failed",
+  );
+  assert.deepEqual(parentAndLineageStarts, ["parent", "lineage"]);
+
+  await assert.rejects(
+    observeWindowsChromeClosure({
+      child,
+      initialProcesses,
+      closureDeadlineEpochMs: 5_000,
+      now,
+      waitForParentExit: async () => true,
+      waitForLineageExit: async () => {
+        throw lineageDeadlineFailure;
+      },
+      readProcessTable: async () => [],
+    }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_lineage_table_command_deadline_elapsed_failed",
+  );
+
+  await assert.rejects(
+    observeWindowsChromeClosure({
+      child,
+      initialProcesses,
+      closureDeadlineEpochMs: 5_000,
+      now,
+      waitForParentExit: async () => true,
+      waitForLineageExit: async () => [101],
+      readProcessTable: async () => [],
+    }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_lineage_survivors_failed",
+  );
+});
+
 test("GATE-014-B1 process-tree verification catches surviving descendants after the root exits", () => {
   const initial = [
     { processId: 100, parentProcessId: 10 },
@@ -1292,6 +1487,14 @@ test("GATE-014-B1 process-tree verification catches surviving descendants after 
     { processId: 102, parentProcessId: 101 },
     { processId: 900, parentProcessId: 10 },
   ];
+  assert.deepEqual(
+    findSurvivingWindowsProcessTree(
+      initial,
+      [{ processId: 100, parentProcessId: 10 }],
+      100,
+    ),
+    [100],
+  );
   assert.deepEqual(
     findSurvivingWindowsProcessTree(
       initial,
