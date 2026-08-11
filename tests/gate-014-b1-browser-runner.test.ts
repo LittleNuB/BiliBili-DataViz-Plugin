@@ -11,22 +11,26 @@ import {
   B1_HARNESS_EXTENSION_ID,
   B1_LIFECYCLE_EVALUATION_TIMEOUT_MS,
   buildChromeArguments,
+  closeB1FixtureHttpServer,
   classifyObservedErrorEvent,
   combineBrowserExecutionObservations,
   createB1ProductionExtensionStage,
   createB1TemporaryProfile,
   createCdpExecutionObservation,
   createControlledHarnessEvaluationExpression,
-  createHarnessEvaluationError,
   createExtensionTargetObserver,
   createPipeCdpClient,
+  executeB1BrowserStage,
+  executeB1BrowserOperationWithCleanup,
   findSurvivingWindowsProcessTree,
   findProductionServiceWorkerSession,
   loadUnpackedExtension,
   removeB1ProductionExtensionStage,
   removeB1TemporaryProfile,
   readCompletedWindowsTerminationOutcome,
+  readB1BrowserControlledFailureCode,
   selectProductionServiceWorkerTarget,
+  settleB1FixtureServerCleanup,
   uninstallUnpackedExtension,
   unwrapControlledHarnessEvaluation,
   validateBrowserExecutionObservation,
@@ -1556,29 +1560,193 @@ test("GATE-014-B1 accepts a completed native tree termination only after the lin
 });
 
 test("GATE-014-B1 accepts only an explicit structured harness failure code", () => {
-  const controlled = createHarnessEvaluationError(
+  const failureEnvelope = {
+    contract: "gate-014-b1-controlled-evaluation-v1",
+    status: "fail",
+    value: null,
+    failureCode: "fixture_read_batch_timing_unavailable:versions",
+    storesSensitiveText: false,
+  };
+  let controlled: Error | null = null;
+  try {
+    unwrapControlledHarnessEvaluation(
+      failureEnvelope,
+      "browser_fixture_lifecycle_after_restart_failed",
+    );
+  } catch (error) {
+    controlled = error as Error;
+  }
+  assert.notEqual(controlled, null);
+  assert.equal(
+    controlled?.message,
     "browser_fixture_lifecycle_after_restart_failed",
-    "fixture_read_batch_timing_unavailable:versions",
   );
   assert.equal(
-    controlled.message,
-    "browser_fixture_lifecycle_after_restart_failed",
-  );
-  assert.equal(
-    Object.hasOwn(controlled, "gate014FailureCode"),
+    Object.hasOwn(controlled ?? {}, "gate014FailureCode"),
     true,
   );
   assert.equal(
-    (controlled as Error & { gate014FailureCode?: string })
-      .gate014FailureCode,
+    readB1BrowserControlledFailureCode(controlled),
     "fixture_read_batch_timing_unavailable:versions",
   );
   assert.equal(JSON.stringify(controlled), "{}");
+});
 
-  const unstructured = createHarnessEvaluationError(
-    "browser_fixture_lifecycle_after_restart_failed",
+test("GATE-014-B1 browser stages preserve proven codes and replace spoofed fields", async () => {
+  const structuredEnvelope = {
+    contract: "gate-014-b1-controlled-evaluation-v1",
+    status: "fail",
+    value: null,
+    failureCode: "fixture_read_batch_timing_unavailable:versions",
+    storesSensitiveText: false,
+  };
+  let proven: Error | null = null;
+  try {
+    unwrapControlledHarnessEvaluation(
+      structuredEnvelope,
+      "browser_fixture_lifecycle_after_restart_failed",
+    );
+  } catch (error) {
+    proven = error as Error;
+  }
+  await assert.rejects(
+    executeB1BrowserStage("browser_after_restart_control_failed", () => {
+      throw proven;
+    }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "fixture_read_batch_timing_unavailable:versions",
   );
-  assert.equal(Object.hasOwn(unstructured, "gate014FailureCode"), false);
+
+  const spoofed = new Error("C:\\private\\raw browser failure") as Error & {
+    gate014FailureCode?: string;
+  };
+  Object.defineProperty(spoofed, "gate014FailureCode", {
+    enumerable: false,
+    value: "synthetic_untrusted_code",
+  });
+  await assert.rejects(
+    executeB1BrowserStage("browser_before_restart_control_failed", () => {
+      throw spoofed;
+    }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+        "browser_before_restart_control_failed" &&
+      JSON.stringify(error).includes("private") === false,
+  );
+  await assert.rejects(
+    executeB1BrowserStage("untrusted_stage", async () => undefined),
+    /browser_controlled_stage_invalid/,
+  );
+});
+
+test("GATE-014-B1 browser cleanup runs without replacing a proven primary failure", async () => {
+  let proven: Error | null = null;
+  try {
+    unwrapControlledHarnessEvaluation(
+      {
+        contract: "gate-014-b1-controlled-evaluation-v1",
+        status: "fail",
+        value: null,
+        failureCode: "fixture_read_batch_timing_unavailable:versions",
+        storesSensitiveText: false,
+      },
+      "browser_fixture_lifecycle_after_restart_failed",
+    );
+  } catch (error) {
+    proven = error as Error;
+  }
+  let cleanupAttempted = false;
+  await assert.rejects(
+    executeB1BrowserOperationWithCleanup(
+      async () => {
+        throw proven;
+      },
+      () =>
+        executeB1BrowserStage(
+          "browser_lifecycle_server_cleanup_failed",
+          async () => {
+            cleanupAttempted = true;
+            throw new Error("C:\\private\\server cleanup failed");
+          },
+        ),
+    ),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "fixture_read_batch_timing_unavailable:versions",
+  );
+  assert.equal(cleanupAttempted, true);
+
+  let firstServerClosed = false;
+  await assert.rejects(
+    executeB1BrowserOperationWithCleanup(
+      () =>
+        executeB1BrowserStage(
+          "browser_lifecycle_server_setup_failed",
+          async () => {
+            throw new Error("second synthetic server failed");
+          },
+        ),
+      async () => {
+        firstServerClosed = true;
+      },
+    ),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_lifecycle_server_setup_failed",
+  );
+  assert.equal(firstServerClosed, true);
+});
+
+test("GATE-014-B1 browser cleanup treats nullish throws as failures and awaits every close", async () => {
+  let primaryRejected = false;
+  try {
+    await executeB1BrowserOperationWithCleanup(
+      async () => {
+        throw null;
+      },
+      async () => undefined,
+    );
+  } catch (error) {
+    primaryRejected = true;
+    assert.equal(error, null);
+  }
+  assert.equal(primaryRejected, true);
+
+  let cleanupRejected = false;
+  try {
+    await executeB1BrowserOperationWithCleanup(
+      async () => "completed",
+      async () => Promise.reject(undefined),
+    );
+  } catch (error) {
+    cleanupRejected = true;
+    assert.equal(error, undefined);
+  }
+  assert.equal(cleanupRejected, true);
+
+  let delayedCloseSettled = false;
+  const delayedClose = new Promise<void>((resolve) => {
+    setTimeout(() => {
+      delayedCloseSettled = true;
+      resolve();
+    }, 30);
+  });
+  await assert.rejects(
+    settleB1FixtureServerCleanup([
+      {
+        close: () =>
+          closeB1FixtureHttpServer({
+            close: (callback: (error?: Error) => void) => {
+              callback(new Error("synthetic callback close failure"));
+            },
+          }),
+      },
+      { close: async () => delayedClose },
+    ]),
+    /browser_fixture_server_cleanup_incomplete/,
+  );
+  assert.equal(delayedCloseSettled, true);
 });
 
 test("GATE-014-B1 validates the controlled browser evaluation envelope", () => {

@@ -22,6 +22,7 @@ import {
   mapB1LifecycleToRawOperations,
   readControlledHarnessFailureCode,
   resolveNpmBuildInvocation,
+  selectB1FailureAfterCleanup,
   validateB1CheckpointDirectoryEntries,
   validateB1WorktreeStatus,
   validateProductionSourceInputsTracked,
@@ -31,6 +32,7 @@ import {
   B1_OPERATION_KINDS,
   createB1OperationReceipt,
 } from "../scripts/gate-014-b1-receipt.mjs";
+import { unwrapControlledHarnessEvaluation } from "../scripts/gate-014-b1-browser-runner.mjs";
 
 const FIXTURE_SHA = "a".repeat(64);
 const ENVIRONMENT_SHA = "b".repeat(64);
@@ -43,13 +45,7 @@ const PUBLIC_RUN_SPEC = {
 };
 
 test("GATE-014-B1 failure latch records only controlled public-safe fields", () => {
-  const controlledError = new Error(
-    "C:\\private\\profile https://secret.invalid raw provider failure",
-  ) as Error & { gate014FailureCode?: string };
-  Object.defineProperty(controlledError, "gate014FailureCode", {
-    enumerable: false,
-    value: "fixture_read_batch_timing_unavailable:versions",
-  });
+  const controlledError = controlledErrorForLatch();
   assert.equal(
     readControlledHarnessFailureCode(controlledError),
     "fixture_read_batch_timing_unavailable:versions",
@@ -97,6 +93,59 @@ test("GATE-014-B1 failure latch records only controlled public-safe fields", () 
         harnessCode: "a".repeat(97),
       }),
     /harnessCode is invalid/,
+  );
+});
+
+test("GATE-014-B1 profile cleanup does not replace a proven lifecycle failure", () => {
+  const primary = controlledErrorForLatch();
+  const cleanup = new Error("C:\\private\\profile cleanup failed");
+  const provenSelection = selectB1FailureAfterCleanup(
+    true,
+    primary,
+    true,
+    cleanup,
+  );
+  assert.equal(provenSelection.error, primary);
+  assert.equal(provenSelection.source, "primary");
+
+  const unproven = new Error("unproven lifecycle failure") as Error & {
+    gate014FailureCode?: string;
+  };
+  Object.defineProperty(unproven, "gate014FailureCode", {
+    enumerable: false,
+    value: "fixture_spoofed_code",
+  });
+  assert.equal(readControlledHarnessFailureCode(unproven), null);
+  const cleanupSelection = selectB1FailureAfterCleanup(
+    true,
+    unproven,
+    true,
+    cleanup,
+  );
+  assert.equal(cleanupSelection.error, cleanup);
+  assert.equal(cleanupSelection.source, "cleanup");
+
+  const undefinedCleanup = selectB1FailureAfterCleanup(
+    false,
+    undefined,
+    true,
+    undefined,
+  );
+  assert.equal(undefinedCleanup.failed, true);
+  assert.equal(undefinedCleanup.source, "cleanup");
+  assert.equal(undefinedCleanup.error, undefined);
+  const nullPrimary = selectB1FailureAfterCleanup(
+    true,
+    null,
+    false,
+    undefined,
+  );
+  assert.equal(nullPrimary.failed, true);
+  assert.equal(nullPrimary.source, "primary");
+  assert.equal(nullPrimary.error, null);
+  assert.deepEqual(
+    selectB1FailureAfterCleanup(false, undefined, false, undefined),
+    { failed: false, error: undefined, source: null },
   );
 });
 
@@ -485,14 +534,21 @@ test("GATE-014-B1 shared run and verify audit rejects a residual temporary entry
 });
 
 function controlledErrorForLatch() {
-  const error = new Error(
-    "C:\\private\\profile https://secret.invalid raw browser failure",
-  ) as Error & { gate014FailureCode?: string };
-  Object.defineProperty(error, "gate014FailureCode", {
-    enumerable: false,
-    value: "fixture_read_batch_timing_unavailable:versions",
-  });
-  return error;
+  try {
+    unwrapControlledHarnessEvaluation(
+      {
+        contract: "gate-014-b1-controlled-evaluation-v1",
+        status: "fail",
+        value: null,
+        failureCode: "fixture_read_batch_timing_unavailable:versions",
+        storesSensitiveText: false,
+      },
+      "browser_fixture_lifecycle_after_restart_failed",
+    );
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("controlled latch error unavailable");
 }
 
 test("GATE-014-B1 rejects tracked and untracked worktree inputs", () => {

@@ -20,6 +20,8 @@ import { promisify } from "node:util";
 import {
   combineBrowserExecutionObservations,
   createB1TemporaryProfile,
+  executeB1BrowserStage,
+  readB1BrowserControlledFailureCode,
   readChromeForTestingMetadata,
   removeB1TemporaryProfile,
   runBrowserFixtureLifecycleWithPreparedFixture,
@@ -284,17 +286,42 @@ export function createB1RunFailureMarker(input) {
 }
 
 export function readControlledHarnessFailureCode(error) {
+  return readB1BrowserControlledFailureCode(error);
+}
+
+export function selectB1FailureAfterCleanup(
+  primaryFailed,
+  primaryError,
+  cleanupFailed,
+  cleanupError,
+) {
   if (
-    !error ||
-    (typeof error !== "object" && typeof error !== "function") ||
-    !Object.hasOwn(error, "gate014FailureCode")
+    typeof primaryFailed !== "boolean" ||
+    typeof cleanupFailed !== "boolean"
   ) {
-    return null;
+    throw new Error("B1 failure selection state invalid");
   }
-  const code = error.gate014FailureCode;
-  return typeof code === "string" && /^[a-z0-9_:-]{1,96}$/.test(code)
-    ? code
-    : null;
+  if (
+    primaryFailed &&
+    readControlledHarnessFailureCode(primaryError) !== null
+  ) {
+    return Object.freeze({
+      failed: true,
+      error: primaryError,
+      source: "primary",
+    });
+  }
+  if (cleanupFailed) {
+    return Object.freeze({ failed: true, error: cleanupError, source: "cleanup" });
+  }
+  if (primaryFailed) {
+    return Object.freeze({
+      failed: true,
+      error: primaryError,
+      source: "primary",
+    });
+  }
+  return Object.freeze({ failed: false, error: undefined, source: null });
 }
 
 export function validateB1CheckpointDirectoryEntries(
@@ -485,24 +512,28 @@ export async function runB1Matrix(options = {}) {
       runLatchContext,
       async () => {
         let profile = null;
-        let taskError = null;
+        let taskFailed = false;
+        let taskError;
         let taskFailureState = null;
         let completedCheckpoint = null;
         try {
           profile = await createB1TemporaryProfile();
           failureState.phase = "browser_lifecycle";
           failureState.failureClass = "execution_failure";
-          const lifecycle =
-            await runBrowserFixtureLifecycleWithPreparedFixture({
-              chromePath,
-              cftMetadataPath,
-              fixtureId: spec.fixtureId,
-              recordCap: spec.candidate.recordCap,
-              byteCapBytes: spec.candidate.byteCapBytes,
-              preparedFixture,
-              profile,
-              runMode: spec.runMode,
-            });
+          const lifecycle = await executeB1BrowserStage(
+            "browser_lifecycle_execution_failed",
+            () =>
+              runBrowserFixtureLifecycleWithPreparedFixture({
+                chromePath,
+                cftMetadataPath,
+                fixtureId: spec.fixtureId,
+                recordCap: spec.candidate.recordCap,
+                byteCapBytes: spec.candidate.byteCapBytes,
+                preparedFixture,
+                profile,
+                runMode: spec.runMode,
+              }),
+          );
           failureState.phase = "operation_mapping";
           failureState.failureClass = "validation_failure";
           const rawOperations = mapB1LifecycleToRawOperations(lifecycle, {
@@ -535,6 +566,7 @@ export async function runB1Matrix(options = {}) {
           await writeCheckpoint(spec, completedCheckpoint);
           runLatchContext.completedCheckpointCount = checkpoints.size + 1;
         } catch (error) {
+          taskFailed = true;
           taskError = error;
           taskFailureState = { ...failureState };
         }
@@ -544,11 +576,20 @@ export async function runB1Matrix(options = {}) {
             failureState.failureClass = "cleanup_failure";
             await removeB1TemporaryProfile(profile);
           } catch (error) {
-            taskError = error;
-            taskFailureState = { ...failureState };
+            const selectedFailure = selectB1FailureAfterCleanup(
+              taskFailed,
+              taskError,
+              true,
+              error,
+            );
+            taskFailed = selectedFailure.failed;
+            taskError = selectedFailure.error;
+            if (selectedFailure.source === "cleanup") {
+              taskFailureState = { ...failureState };
+            }
           }
         }
-        if (taskError) {
+        if (taskFailed) {
           Object.assign(failureState, taskFailureState);
           throw taskError;
         }

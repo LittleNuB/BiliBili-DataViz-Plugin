@@ -18,6 +18,17 @@ import { B1_OPERATION_KINDS } from "./gate-014-b1-receipt.mjs";
 
 export const B1_HARNESS_EXTENSION_ID = "aeangaiofkodlenmmejflbojmomlamoj";
 export const B1_LIFECYCLE_EVALUATION_TIMEOUT_MS = 45 * 60 * 1_000;
+const B1_BROWSER_STAGE_FAILURE_CODES = Object.freeze([
+  "browser_lifecycle_execution_failed",
+  "browser_before_restart_control_failed",
+  "browser_before_restart_validation_failed",
+  "browser_after_restart_control_failed",
+  "browser_after_restart_validation_failed",
+  "browser_lifecycle_server_setup_failed",
+  "browser_lifecycle_server_validation_failed",
+  "browser_lifecycle_server_cleanup_failed",
+]);
+const B1_BROWSER_FAILURE_CODES = new WeakMap();
 const B1_CDP_SETUP_TIMEOUT_MS = 30_000;
 const B1_HARNESS_EXTENSION_NAME = "Bili-Bill GATE-014-B1 Harness";
 const B1_HARNESS_EXTENSION_VERSION = "1.0.0";
@@ -594,15 +605,23 @@ export async function runBrowserFixtureLifecycleWithPreparedFixture(
     definition,
   );
   const profileDirectory = requireManagedProfile(options.profile);
-  const admissionServer = await serveFixture(
-    preparedFixture.artifactPath,
-    fixtureId,
-  );
-  const restoreServer = await serveFixture(
-    preparedFixture.artifactPath,
-    fixtureId,
-  );
-  try {
+  let admissionServer = null;
+  let restoreServer = null;
+  return executeB1BrowserOperationWithCleanup(
+    async () => {
+      await executeB1BrowserStage(
+        "browser_lifecycle_server_setup_failed",
+        async () => {
+          admissionServer = await serveFixture(
+            preparedFixture.artifactPath,
+            fixtureId,
+          );
+          restoreServer = await serveFixture(
+            preparedFixture.artifactPath,
+            fixtureId,
+          );
+        },
+      );
     const receipt = preparedFixture.receipt;
     const config = {
       fixtureId,
@@ -625,41 +644,62 @@ export async function runBrowserFixtureLifecycleWithPreparedFixture(
         byteCapBytes: options.byteCapBytes ?? 4 * 1024 * 1024,
       },
     };
-    const beforeExecution = await evaluateInHarnessProfile(
-      options,
-      profileDirectory,
-      `globalThis.runGate014B1FixtureLifecycleBeforeRestart(${JSON.stringify(config)})`,
-      "browser_fixture_lifecycle_before_restart_failed",
+    const beforeExecution = await executeB1BrowserStage(
+      "browser_before_restart_control_failed",
+      () =>
+        evaluateInHarnessProfile(
+          options,
+          profileDirectory,
+          `globalThis.runGate014B1FixtureLifecycleBeforeRestart(${JSON.stringify(config)})`,
+          "browser_fixture_lifecycle_before_restart_failed",
+        ),
     );
     const beforeRestart = beforeExecution.value;
-    validateLifecycleBeforeRestart(beforeRestart, config);
+    await executeB1BrowserStage(
+      "browser_before_restart_validation_failed",
+      () => validateLifecycleBeforeRestart(beforeRestart, config),
+    );
 
     const restartStartedEpochMs = Date.now();
-    const afterExecution = await evaluateInHarnessProfile(
-      options,
-      profileDirectory,
-      ({ harnessReadyEpochMs }) => {
-        const restartedConfig = {
-          ...config,
-          restartStartedEpochMs,
-          restartHarnessReadyEpochMs: harnessReadyEpochMs,
-        };
-        return `globalThis.runGate014B1FixtureLifecycleAfterRestart(${JSON.stringify(
-          restartedConfig,
-        )}, ${JSON.stringify(beforeRestart.checkpoint)})`;
-      },
-      "browser_fixture_lifecycle_after_restart_failed",
-      [beforeExecution.productionExtensionId],
+    const afterExecution = await executeB1BrowserStage(
+      "browser_after_restart_control_failed",
+      () =>
+        evaluateInHarnessProfile(
+          options,
+          profileDirectory,
+          ({ harnessReadyEpochMs }) => {
+            const restartedConfig = {
+              ...config,
+              restartStartedEpochMs,
+              restartHarnessReadyEpochMs: harnessReadyEpochMs,
+            };
+            return `globalThis.runGate014B1FixtureLifecycleAfterRestart(${JSON.stringify(
+              restartedConfig,
+            )}, ${JSON.stringify(beforeRestart.checkpoint)})`;
+          },
+          "browser_fixture_lifecycle_after_restart_failed",
+          [beforeExecution.productionExtensionId],
+        ),
     );
     const afterRestart = afterExecution.value;
-    validateLifecycleAfterRestart(afterRestart, config);
+    await executeB1BrowserStage(
+      "browser_after_restart_validation_failed",
+      () => validateLifecycleAfterRestart(afterRestart, config),
+    );
     const expectedAdmissionRequestCount = config.runMode === "warm" ? 2 : 1;
-    if (
-      admissionServer.getRequestCount() !== expectedAdmissionRequestCount ||
-      restoreServer.getRequestCount() !== 1
-    ) {
-      throw new Error("browser_fixture_lifecycle_server_request_count_invalid");
-    }
+    await executeB1BrowserStage(
+      "browser_lifecycle_server_validation_failed",
+      () => {
+        if (
+          admissionServer.getRequestCount() !== expectedAdmissionRequestCount ||
+          restoreServer.getRequestCount() !== 1
+        ) {
+          throw new Error(
+            "browser_fixture_lifecycle_server_request_count_invalid",
+          );
+        }
+      },
+    );
     return validateFixtureLifecycleResult(
       {
         contract: "gate-014-b1-browser-lifecycle-v1",
@@ -690,9 +730,13 @@ export async function runBrowserFixtureLifecycleWithPreparedFixture(
       },
       config,
     );
-  } finally {
-    await Promise.all([admissionServer.close(), restoreServer.close()]);
-  }
+    },
+    () =>
+      executeB1BrowserStage(
+        "browser_lifecycle_server_cleanup_failed",
+        () => settleB1FixtureServerCleanup([admissionServer, restoreServer]),
+      ),
+  );
 }
 
 export function validateFixtureLifecycleResult(result, config) {
@@ -1205,7 +1249,7 @@ export function unwrapControlledHarnessEvaluation(value, evaluationErrorCode) {
   return controlled.value;
 }
 
-export function createHarnessEvaluationError(
+function createHarnessEvaluationError(
   evaluationErrorCode,
   structuredFailureCode = null,
 ) {
@@ -1220,8 +1264,94 @@ export function createHarnessEvaluationError(
       value: structuredFailureCode,
       writable: false,
     });
+    B1_BROWSER_FAILURE_CODES.set(error, structuredFailureCode);
   }
   return error;
+}
+
+export function readB1BrowserControlledFailureCode(error) {
+  if (
+    !error ||
+    (typeof error !== "object" && typeof error !== "function")
+  ) {
+    return null;
+  }
+  return B1_BROWSER_FAILURE_CODES.get(error) ?? null;
+}
+
+export async function executeB1BrowserStage(stageCode, task) {
+  if (
+    !B1_BROWSER_STAGE_FAILURE_CODES.includes(stageCode) ||
+    typeof task !== "function"
+  ) {
+    throw new Error("browser_controlled_stage_invalid");
+  }
+  try {
+    return await task();
+  } catch (error) {
+    if (readB1BrowserControlledFailureCode(error) !== null) {
+      throw error;
+    }
+    const controlled = new Error("browser_controlled_stage_failed");
+    Object.defineProperty(controlled, "gate014FailureCode", {
+      configurable: false,
+      enumerable: false,
+      value: stageCode,
+      writable: false,
+    });
+    B1_BROWSER_FAILURE_CODES.set(controlled, stageCode);
+    throw controlled;
+  }
+}
+
+export async function executeB1BrowserOperationWithCleanup(task, cleanup) {
+  if (typeof task !== "function" || typeof cleanup !== "function") {
+    throw new Error("browser_controlled_cleanup_invalid");
+  }
+  let result;
+  let primaryFailed = false;
+  let primaryError;
+  try {
+    result = await task();
+  } catch (error) {
+    primaryFailed = true;
+    primaryError = error;
+  }
+  let cleanupFailed = false;
+  let cleanupError;
+  try {
+    await cleanup();
+  } catch (error) {
+    cleanupFailed = true;
+    cleanupError = error;
+  }
+  if (
+    primaryFailed &&
+    readB1BrowserControlledFailureCode(primaryError) !== null
+  ) {
+    throw primaryError;
+  }
+  if (cleanupFailed) {
+    throw cleanupError;
+  }
+  if (primaryFailed) {
+    throw primaryError;
+  }
+  return result;
+}
+
+export async function settleB1FixtureServerCleanup(servers) {
+  if (!Array.isArray(servers)) {
+    throw new Error("browser_fixture_server_cleanup_invalid");
+  }
+  const closeResults = await Promise.allSettled(
+    servers
+      .filter((server) => server != null)
+      .map((server) => Promise.resolve().then(() => server.close())),
+  );
+  if (closeResults.some((result) => result.status === "rejected")) {
+    throw new Error("browser_fixture_server_cleanup_incomplete");
+  }
 }
 
 export function createCdpExecutionObservation(client) {
@@ -2351,7 +2481,7 @@ async function serveFixture(artifactPath, fixtureId) {
   });
   const address = server.address();
   if (!address || typeof address === "string") {
-    server.close();
+    await closeB1FixtureHttpServer(server);
     throw new Error("browser_fixture_server_address_invalid");
   }
   return {
@@ -2361,9 +2491,24 @@ async function serveFixture(artifactPath, fixtureId) {
       return requestCount;
     },
     async close() {
-      await new Promise((resolve) => server.close(resolve));
+      await closeB1FixtureHttpServer(server);
     },
   };
+}
+
+export async function closeB1FixtureHttpServer(server) {
+  if (!server || typeof server.close !== "function") {
+    throw new Error("browser_fixture_server_close_invalid");
+  }
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
 async function waitForHarnessReady(client, sessionId, options = {}) {
