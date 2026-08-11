@@ -52,6 +52,9 @@ const B1_BROWSER_STAGE_FAILURE_CODES = Object.freeze([
   "browser_process_parent_exit_failed",
   "browser_process_lineage_cleanup_failed",
   "browser_process_lineage_observation_failed",
+  "browser_process_lineage_deadline_before_observation_failed",
+  "browser_process_lineage_table_observation_failed",
+  "browser_process_lineage_deadline_after_observation_failed",
   "browser_process_lineage_survivors_failed",
   "browser_process_termination_validation_failed",
 ]);
@@ -2950,11 +2953,20 @@ export async function waitForWindowsProcessTreeExit(
       if (lastSurvivors !== null) {
         return lastSurvivors;
       }
-      throw new Error("chrome_process_tree_wait_timeout");
+      await executeB1BrowserStage(
+        "browser_process_lineage_deadline_before_observation_failed",
+        () => {
+          throw new Error("chrome_process_tree_wait_timeout");
+        },
+      );
     }
-    const currentProcesses = await readProcessTable({
-      timeoutMs: Math.max(1, Math.ceil(remainingBeforeReadMs)),
-    });
+    const currentProcesses = await executeB1BrowserStage(
+      "browser_process_lineage_table_observation_failed",
+      () =>
+        readProcessTable({
+          timeoutMs: Math.max(1, Math.ceil(remainingBeforeReadMs)),
+        }),
+    );
     const survivors = findSurvivingWindowsProcessTree(
       immutableInitialProcesses,
       currentProcesses,
@@ -2969,7 +2981,12 @@ export async function waitForWindowsProcessTreeExit(
       throw new Error("chrome_process_tree_wait_invalid");
     }
     if (readCompletedEpochMs > deadlineEpochMs) {
-      throw new Error("chrome_process_tree_wait_timeout");
+      await executeB1BrowserStage(
+        "browser_process_lineage_deadline_after_observation_failed",
+        () => {
+          throw new Error("chrome_process_tree_wait_timeout");
+        },
+      );
     }
     if (survivors.length === 0) {
       return survivors;

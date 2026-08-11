@@ -1383,7 +1383,9 @@ test("GATE-014-B1 waits within one deadline for the captured Windows lineage to 
           return [];
         },
       }),
-    /chrome_process_tree_wait_timeout/,
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_lineage_deadline_before_observation_failed",
   );
   assert.equal(deadlineReadCount, 0);
 
@@ -1422,7 +1424,9 @@ test("GATE-014-B1 waits within one deadline for the captured Windows lineage to 
           throw new Error("process_table_unavailable");
         },
       }),
-    /process_table_unavailable/,
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_lineage_table_observation_failed",
   );
 
   nowMs = 90;
@@ -1441,7 +1445,9 @@ test("GATE-014-B1 waits within one deadline for the captured Windows lineage to 
           return [];
         },
       }),
-    /chrome_process_tree_wait_timeout/,
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_lineage_deadline_after_observation_failed",
   );
   assert.equal(finalReadTimeoutMs, 10);
 });
@@ -1667,6 +1673,9 @@ test("GATE-014-B1 browser stages preserve proven codes and replace spoofed field
     "browser_process_parent_exit_failed",
     "browser_process_lineage_cleanup_failed",
     "browser_process_lineage_observation_failed",
+    "browser_process_lineage_deadline_before_observation_failed",
+    "browser_process_lineage_table_observation_failed",
+    "browser_process_lineage_deadline_after_observation_failed",
     "browser_process_lineage_survivors_failed",
     "browser_process_termination_validation_failed",
   ];
