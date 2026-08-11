@@ -649,6 +649,7 @@ export async function runBrowserFixtureLifecycleWithPreparedFixture(
         )}, ${JSON.stringify(beforeRestart.checkpoint)})`;
       },
       "browser_fixture_lifecycle_after_restart_failed",
+      [beforeExecution.productionExtensionId],
     );
     const afterRestart = afterExecution.value;
     validateLifecycleAfterRestart(afterRestart, config);
@@ -951,6 +952,7 @@ async function evaluateInHarnessProfile(
   profileDirectory,
   expression,
   evaluationErrorCode,
+  forbiddenProductionExtensionIds = [],
 ) {
   const productionExtensionSource = path.resolve(
     options.productionExtension ?? path.join(REPOSITORY_ROOT, "dist"),
@@ -964,6 +966,7 @@ async function evaluateInHarnessProfile(
       expression,
       evaluationErrorCode,
       productionExtensionStage.directory,
+      forbiddenProductionExtensionIds,
     );
   } finally {
     await removeB1ProductionExtensionStage(productionExtensionStage);
@@ -976,6 +979,7 @@ async function evaluateInStagedHarnessProfile(
   expression,
   evaluationErrorCode,
   productionExtension,
+  forbiddenProductionExtensionIds,
 ) {
   const chromeExecutable = await resolveChromeExecutable(options.chromePath);
   await readChromeForTestingMetadata(chromeExecutable, options.cftMetadataPath);
@@ -1015,7 +1019,9 @@ async function evaluateInStagedHarnessProfile(
     }
     client = createPipeCdpClient(commandPipe, eventPipe);
     const observation = createCdpExecutionObservation(client);
-    const targetObserver = createExtensionTargetObserver(client, observation);
+    const targetObserver = createExtensionTargetObserver(client, observation, {
+      forbiddenProductionExtensionIds,
+    });
     const productionProofDeadlineEpochMs = Date.now() + B1_CDP_SETUP_TIMEOUT_MS;
     await targetObserver.start({
       deadlineEpochMs: productionProofDeadlineEpochMs,
@@ -1036,6 +1042,9 @@ async function evaluateInStagedHarnessProfile(
     if (productionExtensionId === B1_HARNESS_EXTENSION_ID) {
       throw new Error("browser_production_extension_identity_invalid");
     }
+    targetObserver.requireProductionServiceWorkerBarrier(
+      productionExtensionId,
+    );
     observation.setRequiredExtensionIds({
       productionExtensionId,
       harnessExtensionId: B1_HARNESS_EXTENSION_ID,
@@ -1134,6 +1143,7 @@ async function evaluateInStagedHarnessProfile(
     return {
       value: evaluation.result?.value,
       observation: validateBrowserExecutionObservation(observationReceipt),
+      productionExtensionId,
     };
   } catch (error) {
     if (stderr && process.env.GATE_014_B1_DEBUG === "1") {
@@ -1588,7 +1598,11 @@ export async function uninstallUnpackedExtension(
   }
 }
 
-export function createExtensionTargetObserver(client, observation) {
+export function createExtensionTargetObserver(
+  client,
+  observation,
+  options = {},
+) {
   const observedTargetTypes = new Set([
     "page",
     "background_page",
@@ -1597,6 +1611,25 @@ export function createExtensionTargetObserver(client, observation) {
   ]);
   const attachedTargets = new Map();
   const attachmentPromises = new Set();
+  const forbiddenProductionExtensionIdList =
+    options.forbiddenProductionExtensionIds ?? [];
+  if (!Array.isArray(forbiddenProductionExtensionIdList)) {
+    throw new Error("browser_production_extension_identity_invalid");
+  }
+  const forbiddenProductionExtensionIds = new Set(
+    forbiddenProductionExtensionIdList,
+  );
+  if (
+    [...forbiddenProductionExtensionIds].some(
+      (extensionId) =>
+        !EXTENSION_ID_PATTERN.test(extensionId ?? "") ||
+        extensionId === B1_HARNESS_EXTENSION_ID,
+    )
+  ) {
+    throw new Error("browser_production_extension_identity_invalid");
+  }
+  const unpausedServiceWorkerExtensionIds = new Set();
+  let requiredProductionExtensionId = null;
   let attachmentFailure = null;
   let unsubscribe = null;
   let setupDeadlineEpochMs = null;
@@ -1718,23 +1751,33 @@ export function createExtensionTargetObserver(client, observation) {
         ),
       );
     }
+    const extensionId = getExtensionIdFromTargetUrl(targetInfo.url);
+    if (forbiddenProductionExtensionIds.has(extensionId)) {
+      return trackAttachment(
+        targetInfo.targetId,
+        Promise.reject(new Error("browser_extension_startup_barrier_missing")),
+      );
+    }
     if (waitingForDebugger !== true) {
-      if (getExtensionIdFromTargetUrl(targetInfo.url) === B1_HARNESS_EXTENSION_ID) {
+      if (extensionId !== B1_HARNESS_EXTENSION_ID) {
+        unpausedServiceWorkerExtensionIds.add(extensionId);
+      }
+      if (extensionId === requiredProductionExtensionId) {
         return trackAttachment(
           targetInfo.targetId,
-          configureObservedSession(
-            client,
-            observation,
-            targetInfo,
-            sessionId,
-            timeoutMs,
-            false,
-          ),
+          Promise.reject(new Error("browser_extension_startup_barrier_missing")),
         );
       }
       return trackAttachment(
         targetInfo.targetId,
-        Promise.reject(new Error("browser_extension_startup_barrier_missing")),
+        configureObservedSession(
+          client,
+          observation,
+          targetInfo,
+          sessionId,
+          timeoutMs,
+          false,
+        ),
       );
     }
     return trackAttachment(
@@ -1842,6 +1885,19 @@ export function createExtensionTargetObserver(client, observation) {
     async ensureTargetId(targetId, timeoutMs = B1_CDP_SETUP_TIMEOUT_MS) {
       return waitForObservedTargetId(targetId, timeoutMs);
     },
+    requireProductionServiceWorkerBarrier(extensionId) {
+      if (
+        !EXTENSION_ID_PATTERN.test(extensionId ?? "") ||
+        extensionId === B1_HARNESS_EXTENSION_ID ||
+        forbiddenProductionExtensionIds.has(extensionId)
+      ) {
+        throw new Error("browser_production_extension_identity_invalid");
+      }
+      requiredProductionExtensionId = extensionId;
+      if (unpausedServiceWorkerExtensionIds.has(extensionId)) {
+        throw new Error("browser_extension_startup_barrier_missing");
+      }
+    },
     async ensureServiceWorkerTargetId(
       targetId,
       extensionId,
@@ -1885,6 +1941,7 @@ export function createExtensionTargetObserver(client, observation) {
         undefined,
         B1_CDP_SETUP_TIMEOUT_MS,
       );
+      await settleAttachments();
       unsubscribe?.();
       unsubscribe = null;
     },

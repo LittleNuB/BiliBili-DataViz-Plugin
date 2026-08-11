@@ -362,6 +362,13 @@ test("GATE-014-B1 configures a paused production worker before resuming it", asy
       waitingForDebugger: false,
     },
   });
+  eventListener?.({
+    method: "Target.detachedFromTarget",
+    params: {
+      sessionId: "already-running-production-session",
+      targetId: "already-running-production-worker",
+    },
+  });
   await observer.settle();
 
   assert.deepEqual(calls[0], {
@@ -451,7 +458,7 @@ test("GATE-014-B1 waits for a newly created runner target to reach its extension
   await observer.stop();
 });
 
-test("GATE-014-B1 never accepts an already-running production worker", async () => {
+test("GATE-014-B1 rejects a current production worker that attached before its ID was known", async () => {
   const productionExtensionId = "b".repeat(32);
   let eventListener: ((message: Record<string, unknown>) => void) | null = null;
   const client = {
@@ -484,8 +491,162 @@ test("GATE-014-B1 never accepts an already-running production worker", async () 
       waitingForDebugger: false,
     },
   });
+  await observer.settle();
+  assert.throws(
+    () => observer.requireProductionServiceWorkerBarrier(productionExtensionId),
+    /browser_extension_startup_barrier_missing/,
+  );
+});
+
+test("GATE-014-B1 observes an unrelated running extension worker without using it as production proof", async () => {
+  const productionExtensionId = "b".repeat(32);
+  const unrelatedExtensionId = "c".repeat(32);
+  let eventListener: ((message: Record<string, unknown>) => void) | null = null;
+  const observedSessions: Array<Record<string, unknown>> = [];
+  const client = {
+    onEvent(listener: (message: Record<string, unknown>) => void) {
+      eventListener = listener;
+      return () => {
+        eventListener = null;
+      };
+    },
+    async send(method: string) {
+      if (method === "Target.getTargets") {
+        return { targetInfos: [] };
+      }
+      return {};
+    },
+  };
+  const observer = createExtensionTargetObserver(client, {
+    observeSession(sessionId: string, extensionId: string) {
+      observedSessions.push({ sessionId, extensionId });
+    },
+  });
+  await observer.start({ timeoutMs: 1_000 });
+  eventListener?.({
+    method: "Target.attachedToTarget",
+    params: {
+      sessionId: "unrelated-running-session",
+      targetInfo: {
+        targetId: "unrelated-running-worker",
+        type: "service_worker",
+        url: `chrome-extension://${unrelatedExtensionId}/background.js`,
+      },
+      waitingForDebugger: false,
+    },
+  });
+  await observer.settle();
+  assert.doesNotThrow(() =>
+    observer.requireProductionServiceWorkerBarrier(productionExtensionId),
+  );
+  assert.deepEqual(observedSessions, [
+    {
+      sessionId: "unrelated-running-session",
+      extensionId: unrelatedExtensionId,
+    },
+  ]);
+});
+
+test("GATE-014-B1 rejects a prior production worker before it can resume", async () => {
+  const firstPriorProductionExtensionId = "d".repeat(32);
+  const secondPriorProductionExtensionId = "e".repeat(32);
+  let eventListener: ((message: Record<string, unknown>) => void) | null = null;
+  const calls: Array<{ method: string }> = [];
+  const client = {
+    onEvent(listener: (message: Record<string, unknown>) => void) {
+      eventListener = listener;
+      return () => {
+        eventListener = null;
+      };
+    },
+    async send(method: string) {
+      calls.push({ method });
+      if (method === "Target.getTargets") {
+        return { targetInfos: [] };
+      }
+      return {};
+    },
+  };
+  const observer = createExtensionTargetObserver(
+    client,
+    { observeSession() {} },
+    {
+      forbiddenProductionExtensionIds: [
+        firstPriorProductionExtensionId,
+        secondPriorProductionExtensionId,
+      ],
+    },
+  );
+  await observer.start({ timeoutMs: 1_000 });
+  assert.throws(
+    () =>
+      observer.requireProductionServiceWorkerBarrier(
+        firstPriorProductionExtensionId,
+      ),
+    /browser_production_extension_identity_invalid/,
+  );
+  eventListener?.({
+    method: "Target.attachedToTarget",
+    params: {
+      sessionId: "prior-production-session",
+      targetInfo: {
+        targetId: "prior-production-worker",
+        type: "service_worker",
+        url: `chrome-extension://${secondPriorProductionExtensionId}/background.js`,
+      },
+      waitingForDebugger: true,
+    },
+  });
   await assert.rejects(
     () => observer.settle(),
+    /browser_extension_startup_barrier_missing/,
+  );
+  assert.equal(
+    calls.some(({ method }) => method === "Runtime.runIfWaitingForDebugger"),
+    false,
+  );
+});
+
+test("GATE-014-B1 rejects a forbidden worker attached while auto-attach is shutting down", async () => {
+  const priorProductionExtensionId = "f".repeat(32);
+  let eventListener: ((message: Record<string, unknown>) => void) | null = null;
+  const client = {
+    onEvent(listener: (message: Record<string, unknown>) => void) {
+      eventListener = listener;
+      return () => {
+        eventListener = null;
+      };
+    },
+    async send(method: string, params: Record<string, unknown>) {
+      if (method === "Target.getTargets") {
+        return { targetInfos: [] };
+      }
+      if (method === "Target.setAutoAttach" && params.autoAttach === false) {
+        eventListener?.({
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "teardown-prior-production-session",
+            targetInfo: {
+              targetId: "teardown-prior-production-worker",
+              type: "service_worker",
+              url: `chrome-extension://${priorProductionExtensionId}/background.js`,
+            },
+            waitingForDebugger: true,
+          },
+        });
+      }
+      return {};
+    },
+  };
+  const observer = createExtensionTargetObserver(
+    client,
+    { observeSession() {} },
+    { forbiddenProductionExtensionIds: [priorProductionExtensionId] },
+  );
+  await observer.start({ timeoutMs: 1_000 });
+  observer.completeSetup();
+  await assert.rejects(
+    () => observer.stop(),
     /browser_extension_startup_barrier_missing/,
   );
 });
