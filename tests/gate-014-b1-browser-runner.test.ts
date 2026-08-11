@@ -1666,6 +1666,8 @@ test("GATE-014-B1 browser stages preserve proven codes and replace spoofed field
     "browser_process_native_termination_failed",
     "browser_process_parent_exit_failed",
     "browser_process_lineage_cleanup_failed",
+    "browser_process_lineage_observation_failed",
+    "browser_process_lineage_survivors_failed",
     "browser_process_termination_validation_failed",
   ];
   for (const stageCode of diagnosticStages) {

@@ -51,6 +51,8 @@ const B1_BROWSER_STAGE_FAILURE_CODES = Object.freeze([
   "browser_process_native_termination_failed",
   "browser_process_parent_exit_failed",
   "browser_process_lineage_cleanup_failed",
+  "browser_process_lineage_observation_failed",
+  "browser_process_lineage_survivors_failed",
   "browser_process_termination_validation_failed",
 ]);
 const B1_BROWSER_FAILURE_CODES = new WeakMap();
@@ -3180,14 +3182,21 @@ async function terminateChromeProcessTree(child) {
     const survivors = await executeB1BrowserStage(
       "browser_process_lineage_cleanup_failed",
       async () => {
-        const remaining = await waitForWindowsProcessTreeExit(
-          initialProcesses,
-          child.pid,
-          { deadlineEpochMs: closureDeadlineEpochMs },
+        const remaining = await executeB1BrowserStage(
+          "browser_process_lineage_observation_failed",
+          () =>
+            waitForWindowsProcessTreeExit(initialProcesses, child.pid, {
+              deadlineEpochMs: closureDeadlineEpochMs,
+            }),
         );
-        if (remaining.length > 0) {
-          throw new Error("chrome_process_tree_termination_failed");
-        }
+        await executeB1BrowserStage(
+          "browser_process_lineage_survivors_failed",
+          () => {
+            if (remaining.length > 0) {
+              throw new Error("chrome_process_tree_termination_failed");
+            }
+          },
+        );
         return remaining;
       },
     );
