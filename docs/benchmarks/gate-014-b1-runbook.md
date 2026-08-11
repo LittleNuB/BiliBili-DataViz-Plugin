@@ -44,15 +44,19 @@ npm run gate014:b1:browser-smoke
 npm run gate014:b1:matrix
 ```
 
-官方元数据下载发生在基准启动前，仅用于固定离线执行输入；矩阵与 smoke 运行期间不依赖外部网络。中断续跑时 Chrome 路径、元数据路径及该文件内容都必须保持不变。
+官方元数据下载发生在基准启动前，仅用于固定离线执行输入；矩阵与 smoke 运行期间不依赖外部网络。只有 `--max-new-runs` 在某一轮 checkpoint、profile 清理和 active lease 删除全部完成后产生的受控暂停才能续跑；续跑时 Chrome 路径、元数据路径及该文件内容都必须保持不变。浏览器轮次失败、进程崩溃、signal 中断或清理/报告安装失败不属于可续跑中断。
 
-矩阵命令要求 worktree 中没有已修改、已暂存或未跟踪的非忽略文件；只有 `.gitignore` 明确排除且位于生产输入之外的本门禁生成物和检查点可以存在。runner 还会把实际生产输入文件清单与 Git 跟踪清单逐项比对，因此 `public/*.local` 之类被忽略但会进入构建的文件也会在读取和构建前失败关闭。随后 runner 在采集环境指纹前自行执行一次 `npm run build`。环境收据分别哈希完整生产源码输入和新生成的 `dist`，防止本地未提交输入或旧构建被误归因给记录的 HEAD。命令可在中断后原样重跑；它只接受环境指纹、夹具收据和运行身份完全一致的检查点，生产源码、基准源码、构建、浏览器、官方元数据、运行文档或黄金收据发生变化时会拒绝续跑，必须先清理旧检查点：
+矩阵命令要求 worktree 中没有已修改、已暂存或未跟踪的非忽略文件；只有 `.gitignore` 明确排除且位于生产输入之外的本门禁生成物和检查点可以存在。runner 还会把实际生产输入文件清单与 Git 跟踪清单逐项比对，因此 `public/*.local` 之类被忽略但会进入构建的文件也会在读取和构建前失败关闭。随后 runner 在采集环境指纹前自行执行一次 `npm run build`。环境收据分别哈希完整生产源码输入和新生成的 `dist`，防止本地未提交输入或旧构建被误归因给记录的 HEAD。受控暂停后可原样重跑；它只接受环境指纹、夹具收据和运行身份完全一致的检查点，生产源码、基准源码、构建、浏览器、官方元数据、运行文档或黄金收据发生变化时会拒绝续跑，必须先清理旧检查点：
 
 ```powershell
 npm run gate014:b1:cleanup
 ```
 
 清理命令只删除固定的 `tests/fixtures/gate-014/b1-runs/` 目录。生成的大型 JSONL 夹具位于 `tests/fixtures/gate-014/generated/`，逐夹具运行后自动清理，也可使用 `npm run gate014:fixtures:cleanup` 单独清理。两类目录均被 Git 忽略。
+
+每次夹具准备、单轮运行、夹具清理和最终报告安装前，runner 都会在检查点目录中安装唯一 `active-run.json`。单轮只有在 lifecycle、checkpoint 校验/安装、profile 清理全部完成后才删除 lease；删除后才把该轮计为完成。任一异常会尝试以不覆盖方式安装 `failure.json`，并保留 active lease。failure marker 只含 session/环境绑定摘要、公开夹具与候选身份、封闭阶段/分类、可选的受控 harness code 和已完成 checkpoint 数；不写异常正文、stack、stderr、URL、路径、PID 或凭据。这里的安装原子性仅指同目录 Node 可观察边界，不宣称断电持久性。
+
+`run` 与 `verify` 共用同一目录审计；`run` 会在构建、创建 session 或启动浏览器前完成审计，`verify` 会在读取报告前完成审计。任一 active lease、failure marker、残留 `.tmp`、未知文件/目录、无 session 的 checkpoint 或损坏状态均永久拒绝当前 session，不允许通过重跑选取更好样本。后续同配置诊断运行即使通过，也不能恢复失败的矩阵。唯一恢复方式是执行 `npm run gate014:b1:cleanup`，并从 0 重跑全部 360 轮。
 
 ## 验证与产物
 

@@ -1,15 +1,31 @@
 import assert from "node:assert/strict";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import {
+  assertB1CheckpointDirectoryReady,
+  assertB1CheckpointStateAllowsUse,
+  createB1ActiveRunLease,
+  createB1FileLatchHooks,
   createB1RestorePreflightValidationFromLifecycle,
+  createB1RunFailureMarker,
+  executeB1LatchedPhase,
   mapB1LifecycleToRawOperations,
+  readControlledHarnessFailureCode,
   resolveNpmBuildInvocation,
+  validateB1CheckpointDirectoryEntries,
   validateB1WorktreeStatus,
   validateProductionSourceInputsTracked,
+  verifyB1ReportArtifacts,
 } from "../scripts/gate-014-b1-matrix-runner.mjs";
 import {
   B1_OPERATION_KINDS,
@@ -18,6 +34,466 @@ import {
 
 const FIXTURE_SHA = "a".repeat(64);
 const ENVIRONMENT_SHA = "b".repeat(64);
+const SESSION_SHA = "c".repeat(64);
+const PUBLIC_RUN_SPEC = {
+  fixtureId: "managed-full-text-100mib",
+  candidate: { recordCap: 512, byteCapBytes: 2 * 1024 * 1024 },
+  runMode: "warm",
+  runOrdinal: 2,
+};
+
+test("GATE-014-B1 failure latch records only controlled public-safe fields", () => {
+  const controlledError = new Error(
+    "C:\\private\\profile https://secret.invalid raw provider failure",
+  ) as Error & { gate014FailureCode?: string };
+  Object.defineProperty(controlledError, "gate014FailureCode", {
+    enumerable: false,
+    value: "fixture_read_batch_timing_unavailable:versions",
+  });
+  assert.equal(
+    readControlledHarnessFailureCode(controlledError),
+    "fixture_read_batch_timing_unavailable:versions",
+  );
+  const marker = createB1RunFailureMarker({
+    sessionBindingSha256: SESSION_SHA,
+    environmentFingerprintSha256: ENVIRONMENT_SHA,
+    spec: PUBLIC_RUN_SPEC,
+    phase: "browser_lifecycle",
+    failureClass: "execution_failure",
+    harnessCode: readControlledHarnessFailureCode(controlledError),
+    completedCheckpointCount: 108,
+  });
+  assert.equal(marker.contract, "gate-014-b1-run-failure-v1");
+  assert.equal(marker.storesSensitiveText, false);
+  assert.equal(Object.isFrozen(marker), true);
+  const serialized = JSON.stringify(marker);
+  assert.equal(serialized.includes("private"), false);
+  assert.equal(serialized.includes("secret.invalid"), false);
+  assert.equal(serialized.includes("provider failure"), false);
+
+  const inherited = Object.create({
+    gate014FailureCode: "fixture_read_batch_timing_unavailable:versions",
+  });
+  assert.equal(readControlledHarnessFailureCode(inherited), null);
+  assert.equal(
+    readControlledHarnessFailureCode({ gate014FailureCode: "invalid code" }),
+    null,
+  );
+  assert.equal(readControlledHarnessFailureCode(new Error(serialized)), null);
+
+  const lease = createB1ActiveRunLease({
+    sessionBindingSha256: SESSION_SHA,
+    environmentFingerprintSha256: ENVIRONMENT_SHA,
+    spec: PUBLIC_RUN_SPEC,
+    phase: "run_attempt",
+  });
+  assert.equal(lease.contract, "gate-014-b1-active-run-v1");
+  assert.equal(Object.isFrozen(lease.spec?.candidate), true);
+  assert.throws(
+    () =>
+      createB1RunFailureMarker({
+        ...marker,
+        contract: undefined,
+        harnessCode: "a".repeat(97),
+      }),
+    /harnessCode is invalid/,
+  );
+});
+
+test("GATE-014-B1 checkpoint directory rejects failed, incomplete, and unknown state", () => {
+  const checkpointName =
+    "managed-full-text-100mib__r512__b2097152__warm__2.checkpoint.json";
+  const expected = [checkpointName];
+  const healthy = validateB1CheckpointDirectoryEntries(
+    [
+      { name: "session.json", isFile: true },
+      { name: checkpointName, isFile: true },
+    ],
+    expected,
+  );
+  assert.equal(assertB1CheckpointStateAllowsUse(healthy), healthy);
+
+  for (const latchedName of ["active-run.json", "failure.json"]) {
+    const state = validateB1CheckpointDirectoryEntries(
+      [
+        { name: "session.json", isFile: true },
+        { name: checkpointName, isFile: true },
+        { name: latchedName, isFile: true },
+      ],
+      expected,
+    );
+    assert.throws(
+      () => assertB1CheckpointStateAllowsUse(state),
+      /requires checkpoint cleanup/,
+    );
+  }
+  assert.throws(
+    () =>
+      validateB1CheckpointDirectoryEntries(
+        [{ name: checkpointName, isFile: true }],
+        expected,
+      ),
+    /without their session binding/,
+  );
+  for (const entry of [
+    { name: "active-run.json.123.tmp", isFile: true },
+    { name: "unexpected.json", isFile: true },
+    { name: "session.json", isFile: false },
+  ]) {
+    assert.throws(
+      () => validateB1CheckpointDirectoryEntries([entry], expected),
+      /unknown entry/,
+    );
+  }
+});
+
+test("GATE-014-B1 latched phases clear only after success and retain failures", async () => {
+  const context = (failureState: {
+    phase: string;
+    failureClass: string;
+  }) => ({
+    sessionBindingSha256: SESSION_SHA,
+    environmentFingerprintSha256: ENVIRONMENT_SHA,
+    spec: PUBLIC_RUN_SPEC,
+    leasePhase: "run_attempt",
+    failureState,
+    completedCheckpointCount: 108,
+  });
+
+  const successEvents: string[] = [];
+  const success = await executeB1LatchedPhase(
+    context({
+      phase: "profile_setup",
+      failureClass: "setup_failure",
+    }),
+    async (failureState) => {
+      successEvents.push("task");
+      failureState.phase = "checkpoint_write";
+      failureState.failureClass = "persistence_failure";
+      return "checkpoint-written";
+    },
+    {
+      async writeLease() {
+        successEvents.push("lease");
+      },
+      async clearLease() {
+        successEvents.push("clear");
+      },
+      async writeFailure() {
+        successEvents.push("failure");
+      },
+    },
+  );
+  assert.equal(success, "checkpoint-written");
+  assert.deepEqual(successEvents, ["lease", "task", "clear"]);
+
+  for (const scenario of [
+    {
+      phase: "browser_lifecycle",
+      failureClass: "execution_failure",
+      clearFails: false,
+      completedCheckpointCount: 108,
+    },
+    {
+      phase: "profile_cleanup",
+      failureClass: "cleanup_failure",
+      clearFails: false,
+      completedCheckpointCount: 109,
+    },
+    {
+      phase: "checkpoint_write",
+      failureClass: "persistence_failure",
+      clearFails: true,
+      completedCheckpointCount: 109,
+    },
+  ]) {
+    let leaseInstalled = false;
+    let writtenMarker: ReturnType<typeof createB1RunFailureMarker> | null =
+      null;
+    const failureState = {
+      phase: scenario.phase,
+      failureClass: scenario.failureClass,
+    };
+    const attemptContext = context(failureState);
+    await assert.rejects(
+      () =>
+        executeB1LatchedPhase(
+          attemptContext,
+          async () => {
+            attemptContext.completedCheckpointCount =
+              scenario.completedCheckpointCount;
+            if (!scenario.clearFails) {
+              throw controlledErrorForLatch();
+            }
+            return "checkpoint-written";
+          },
+          {
+            async writeLease() {
+              leaseInstalled = true;
+            },
+            async clearLease() {
+              if (scenario.clearFails) {
+                throw new Error("C:\\private\\lease cleanup failed");
+              }
+              leaseInstalled = false;
+            },
+            async writeFailure(marker) {
+              writtenMarker = marker;
+            },
+          },
+        ),
+      /checkpoint cleanup required/,
+    );
+    assert.equal(leaseInstalled, true);
+    assert.notEqual(writtenMarker, null);
+    assert.equal(writtenMarker?.storesSensitiveText, false);
+    assert.equal(
+      writtenMarker?.completedCheckpointCount,
+      scenario.completedCheckpointCount,
+    );
+    assert.equal(JSON.stringify(writtenMarker).includes("private"), false);
+    if (scenario.clearFails) {
+      assert.equal(writtenMarker?.phase, "lease_release");
+      assert.equal(writtenMarker?.failureClass, "persistence_failure");
+    } else {
+      assert.equal(writtenMarker?.phase, scenario.phase);
+      assert.equal(writtenMarker?.failureClass, scenario.failureClass);
+      assert.equal(
+        writtenMarker?.harnessCode,
+        "fixture_read_batch_timing_unavailable:versions",
+      );
+    }
+  }
+
+  let markerWriteAttempted = false;
+  await assert.rejects(
+    () =>
+      executeB1LatchedPhase(
+        context({
+          phase: "report_finalize",
+          failureClass: "finalization_failure",
+        }),
+        async () => {
+          throw new Error("C:\\private\\report failed");
+        },
+        {
+          async writeLease() {},
+          async clearLease() {},
+          async writeFailure() {
+            markerWriteAttempted = true;
+            throw new Error("marker write failed");
+          },
+        },
+      ),
+    /failure latch unavailable/,
+  );
+  assert.equal(markerWriteAttempted, true);
+});
+
+test("GATE-014-B1 file latches publish exclusively and retain the lease when failure publication is unavailable", async () => {
+  const checkpointRoot = path.resolve(
+    "tests",
+    "fixtures",
+    "gate-014",
+    "b1-runs",
+  );
+  await mkdir(checkpointRoot, { recursive: true });
+  const latchDirectory = await mkdtemp(path.join(checkpointRoot, "latch-fs-"));
+  const activeRunPath = path.join(latchDirectory, "active-run.json");
+  const failurePath = path.join(latchDirectory, "failure.json");
+  const hooks = createB1FileLatchHooks({ activeRunPath, failurePath });
+  const lease = createB1ActiveRunLease({
+    sessionBindingSha256: SESSION_SHA,
+    environmentFingerprintSha256: ENVIRONMENT_SHA,
+    spec: PUBLIC_RUN_SPEC,
+    phase: "run_attempt",
+  });
+  const marker = createB1RunFailureMarker({
+    sessionBindingSha256: SESSION_SHA,
+    environmentFingerprintSha256: ENVIRONMENT_SHA,
+    spec: PUBLIC_RUN_SPEC,
+    phase: "browser_lifecycle",
+    failureClass: "execution_failure",
+    harnessCode: null,
+    completedCheckpointCount: 108,
+  });
+  try {
+    await hooks.writeLease(lease);
+    const retainedLease = await readFile(activeRunPath, "utf8");
+    await assert.rejects(
+      hooks.writeLease(
+        createB1ActiveRunLease({
+          sessionBindingSha256: SESSION_SHA,
+          environmentFingerprintSha256: ENVIRONMENT_SHA,
+          spec: null,
+          phase: "fixture_cleanup",
+        }),
+      ),
+      /EEXIST/,
+    );
+    assert.equal(await readFile(activeRunPath, "utf8"), retainedLease);
+
+    await hooks.writeFailure(marker);
+    const retainedFailure = await readFile(failurePath, "utf8");
+    await assert.rejects(
+      hooks.writeFailure(
+        createB1RunFailureMarker({
+          sessionBindingSha256: SESSION_SHA,
+          environmentFingerprintSha256: ENVIRONMENT_SHA,
+          spec: null,
+          phase: "fixture_cleanup",
+          failureClass: "cleanup_failure",
+          harnessCode: null,
+          completedCheckpointCount: 109,
+        }),
+      ),
+      /EEXIST/,
+    );
+    assert.equal(await readFile(failurePath, "utf8"), retainedFailure);
+
+    await hooks.clearLease();
+    await assert.rejects(readFile(activeRunPath, "utf8"), /ENOENT/);
+    await assert.rejects(
+      executeB1LatchedPhase(
+        {
+          sessionBindingSha256: SESSION_SHA,
+          environmentFingerprintSha256: ENVIRONMENT_SHA,
+          spec: PUBLIC_RUN_SPEC,
+          leasePhase: "run_attempt",
+          failureState: {
+            phase: "browser_lifecycle",
+            failureClass: "execution_failure",
+          },
+          completedCheckpointCount: 108,
+        },
+        async () => {
+          throw new Error("C:\\private\\raw browser failure");
+        },
+        { ...hooks, emitFailure() {} },
+      ),
+      /failure latch unavailable/,
+    );
+    assert.equal(JSON.parse(await readFile(activeRunPath, "utf8")).contract,
+      "gate-014-b1-active-run-v1");
+    assert.equal(await readFile(failurePath, "utf8"), retainedFailure);
+  } finally {
+    await rm(latchDirectory, { recursive: true, force: true });
+  }
+});
+
+test("GATE-014-B1 controlled pause is observable only after run and fixture-cleanup leases clear", async () => {
+  const checkpointRoot = path.resolve(
+    "tests",
+    "fixtures",
+    "gate-014",
+    "b1-runs",
+  );
+  await mkdir(checkpointRoot, { recursive: true });
+  const latchDirectory = await mkdtemp(path.join(checkpointRoot, "pause-fs-"));
+  const activeRunPath = path.join(latchDirectory, "active-run.json");
+  const failurePath = path.join(latchDirectory, "failure.json");
+  const fileHooks = createB1FileLatchHooks({ activeRunPath, failurePath });
+  const events: string[] = [];
+  const trackedHooks = {
+    async writeLease(lease: ReturnType<typeof createB1ActiveRunLease>) {
+      events.push(`lease:${lease.phase}`);
+      await fileHooks.writeLease(lease);
+    },
+    async clearLease() {
+      await fileHooks.clearLease();
+      events.push("lease:cleared");
+    },
+    writeFailure: fileHooks.writeFailure,
+  };
+  try {
+    await executeB1LatchedPhase(
+      {
+        sessionBindingSha256: SESSION_SHA,
+        environmentFingerprintSha256: ENVIRONMENT_SHA,
+        spec: PUBLIC_RUN_SPEC,
+        leasePhase: "run_attempt",
+        failureState: {
+          phase: "profile_setup",
+          failureClass: "setup_failure",
+        },
+        completedCheckpointCount: 0,
+      },
+      async (failureState) => {
+        events.push("checkpoint:installed");
+        failureState.phase = "profile_cleanup";
+        failureState.failureClass = "cleanup_failure";
+        events.push("profile:cleaned");
+      },
+      trackedHooks,
+    );
+    await executeB1LatchedPhase(
+      {
+        sessionBindingSha256: SESSION_SHA,
+        environmentFingerprintSha256: ENVIRONMENT_SHA,
+        spec: null,
+        leasePhase: "fixture_cleanup",
+        failureState: {
+          phase: "fixture_cleanup",
+          failureClass: "cleanup_failure",
+        },
+        completedCheckpointCount: 1,
+      },
+      async () => {
+        events.push("fixture:cleaned");
+      },
+      trackedHooks,
+    );
+    events.push("matrix:paused");
+    assert.deepEqual(events, [
+      "lease:run_attempt",
+      "checkpoint:installed",
+      "profile:cleaned",
+      "lease:cleared",
+      "lease:fixture_cleanup",
+      "fixture:cleaned",
+      "lease:cleared",
+      "matrix:paused",
+    ]);
+    await assert.rejects(readFile(activeRunPath, "utf8"), /ENOENT/);
+  } finally {
+    await rm(latchDirectory, { recursive: true, force: true });
+  }
+});
+
+test("GATE-014-B1 shared run and verify audit rejects a residual temporary entry", async () => {
+  const checkpointRoot = path.resolve(
+    "tests",
+    "fixtures",
+    "gate-014",
+    "b1-runs",
+  );
+  await mkdir(checkpointRoot, { recursive: true });
+  const residualPath = path.join(
+    checkpointRoot,
+    `active-run.json.${process.pid}.tmp`,
+  );
+  await writeFile(residualPath, "{}\n", { encoding: "utf8", flag: "wx" });
+  try {
+    await assert.rejects(
+      assertB1CheckpointDirectoryReady(),
+      /unknown entry/,
+    );
+    await assert.rejects(verifyB1ReportArtifacts(), /unknown entry/);
+  } finally {
+    await rm(residualPath, { force: true });
+  }
+});
+
+function controlledErrorForLatch() {
+  const error = new Error(
+    "C:\\private\\profile https://secret.invalid raw browser failure",
+  ) as Error & { gate014FailureCode?: string };
+  Object.defineProperty(error, "gate014FailureCode", {
+    enumerable: false,
+    value: "fixture_read_batch_timing_unavailable:versions",
+  });
+  return error;
+}
 
 test("GATE-014-B1 rejects tracked and untracked worktree inputs", () => {
   assert.doesNotThrow(() => validateB1WorktreeStatus(""));

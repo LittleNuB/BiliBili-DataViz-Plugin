@@ -16,6 +16,7 @@ import {
   createB1ProductionExtensionStage,
   createB1TemporaryProfile,
   createCdpExecutionObservation,
+  createHarnessEvaluationError,
   createExtensionTargetObserver,
   createPipeCdpClient,
   findSurvivingWindowsProcessTree,
@@ -1547,6 +1548,21 @@ test("GATE-014-B1 accepts a completed native tree termination only after the lin
       }),
     /chrome_process_tree_termination_failed/,
   );
+});
+
+test("GATE-014-B1 never promotes raw harness exception text into a failure code", () => {
+  const controlled = createHarnessEvaluationError(
+    "browser_fixture_lifecycle_after_restart_failed",
+  );
+  assert.equal(
+    controlled.message,
+    "browser_fixture_lifecycle_after_restart_failed",
+  );
+  assert.equal(
+    Object.hasOwn(controlled, "gate014FailureCode"),
+    false,
+  );
+  assert.equal(JSON.stringify(controlled), "{}");
 });
 
 test("GATE-014-B1 attributes extension errors without treating Chrome internal logs as extension failures", () => {

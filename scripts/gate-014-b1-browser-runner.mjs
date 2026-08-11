@@ -1119,16 +1119,11 @@ async function evaluateInStagedHarnessProfile(
       B1_LIFECYCLE_EVALUATION_TIMEOUT_MS,
     );
     if (evaluation.exceptionDetails) {
+      const failure = createHarnessEvaluationError(evaluationErrorCode);
       if (process.env.GATE_014_B1_DEBUG === "1") {
-        const description =
-          evaluation.exceptionDetails.exception?.description ??
-          "unknown_exception";
-        const safeCode =
-          description.match(/Error: ([a-z0-9_:-]+)/i)?.[1] ??
-          "unknown_exception";
-        process.stderr.write(`Harness exception code: ${safeCode}\n`);
+        process.stderr.write("Harness exception code: unknown_exception\n");
       }
-      throw new Error(evaluationErrorCode);
+      throw failure;
     }
     await targetObserver.settle();
     await observation.settle();
@@ -1157,6 +1152,10 @@ async function evaluateInStagedHarnessProfile(
       client?.close();
     }
   }
+}
+
+export function createHarnessEvaluationError(evaluationErrorCode) {
+  return new Error(evaluationErrorCode);
 }
 
 export function createCdpExecutionObservation(client) {

@@ -2,6 +2,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   access,
+  link,
   mkdir,
   readFile,
   readdir,
@@ -69,7 +70,36 @@ const RAW_OPERATIONS_REPORT_PATH = path.join(
 const REPORT_PATH = path.join(REPORT_DIRECTORY, "gate-014-b1-report.json");
 const SUMMARY_PATH = path.join(REPORT_DIRECTORY, "gate-014-b1-summary.md");
 const SESSION_PATH = path.join(CHECKPOINT_DIRECTORY, "session.json");
+const ACTIVE_RUN_PATH = path.join(CHECKPOINT_DIRECTORY, "active-run.json");
+const FAILURE_PATH = path.join(CHECKPOINT_DIRECTORY, "failure.json");
 const CHECKPOINT_ENVIRONMENT_SHA = "0".repeat(64);
+const B1_LEASE_PHASES = Object.freeze([
+  "fixture_setup",
+  "run_attempt",
+  "fixture_cleanup",
+  "report_finalize",
+]);
+const B1_FAILURE_PHASES = Object.freeze([
+  "fixture_setup",
+  "profile_setup",
+  "browser_lifecycle",
+  "operation_mapping",
+  "checkpoint_validation",
+  "checkpoint_write",
+  "profile_cleanup",
+  "fixture_cleanup",
+  "report_finalize",
+  "lease_release",
+]);
+const B1_FAILURE_CLASSES = Object.freeze([
+  "setup_failure",
+  "execution_failure",
+  "validation_failure",
+  "persistence_failure",
+  "cleanup_failure",
+  "finalization_failure",
+  "unclassified_failure",
+]);
 const FIXTURE_EXECUTION_ORDER = Object.freeze([
   "high-fragmentation-pathological",
   "single-version-64mib",
@@ -201,6 +231,189 @@ export function mapB1LifecycleToRawOperations(lifecycle, metadata) {
   );
 }
 
+export function createB1ActiveRunLease(input) {
+  assertPlainObject(input, "active run lease input");
+  const lease = {
+    contract: "gate-014-b1-active-run-v1",
+    sessionBindingSha256: assertSha256(
+      input.sessionBindingSha256,
+      "sessionBindingSha256",
+    ),
+    environmentFingerprintSha256: assertSha256(
+      input.environmentFingerprintSha256,
+      "environmentFingerprintSha256",
+    ),
+    spec: normalizePublicRunSpec(input.spec),
+    phase: assertEnum(input.phase, B1_LEASE_PHASES, "phase"),
+    storesSensitiveText: false,
+  };
+  return freezeB1LatchRecord(lease);
+}
+
+export function createB1RunFailureMarker(input) {
+  assertPlainObject(input, "run failure marker input");
+  const harnessCode =
+    input.harnessCode === null
+      ? null
+      : assertSafeHarnessFailureCode(input.harnessCode);
+  const marker = {
+    contract: "gate-014-b1-run-failure-v1",
+    sessionBindingSha256: assertSha256(
+      input.sessionBindingSha256,
+      "sessionBindingSha256",
+    ),
+    environmentFingerprintSha256: assertSha256(
+      input.environmentFingerprintSha256,
+      "environmentFingerprintSha256",
+    ),
+    spec: normalizePublicRunSpec(input.spec),
+    phase: assertEnum(input.phase, B1_FAILURE_PHASES, "phase"),
+    failureClass: assertEnum(
+      input.failureClass,
+      B1_FAILURE_CLASSES,
+      "failureClass",
+    ),
+    harnessCode,
+    completedCheckpointCount: assertNonNegativeSafeInteger(
+      input.completedCheckpointCount,
+      "completedCheckpointCount",
+    ),
+    storesSensitiveText: false,
+  };
+  return freezeB1LatchRecord(marker);
+}
+
+export function readControlledHarnessFailureCode(error) {
+  if (
+    !error ||
+    (typeof error !== "object" && typeof error !== "function") ||
+    !Object.hasOwn(error, "gate014FailureCode")
+  ) {
+    return null;
+  }
+  const code = error.gate014FailureCode;
+  return typeof code === "string" && /^[a-z0-9_:-]{1,96}$/.test(code)
+    ? code
+    : null;
+}
+
+export function validateB1CheckpointDirectoryEntries(
+  entries,
+  expectedCheckpointNames,
+) {
+  if (!Array.isArray(entries) || !Array.isArray(expectedCheckpointNames)) {
+    throw new Error("B1 checkpoint directory state invalid");
+  }
+  const expected = new Set(expectedCheckpointNames);
+  if (
+    expected.size !== expectedCheckpointNames.length ||
+    [...expected].some(
+      (name) =>
+        typeof name !== "string" || !name.endsWith(".checkpoint.json"),
+    )
+  ) {
+    throw new Error("B1 checkpoint filename set invalid");
+  }
+  const seen = new Set();
+  let checkpointCount = 0;
+  let hasSession = false;
+  let hasActiveRun = false;
+  let hasFailure = false;
+  for (const entry of entries) {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      typeof entry.name !== "string" ||
+      typeof entry.isFile !== "boolean" ||
+      seen.has(entry.name)
+    ) {
+      throw new Error("B1 checkpoint directory state invalid");
+    }
+    seen.add(entry.name);
+    if (!entry.isFile) {
+      throw new Error("B1 checkpoint directory contains an unknown entry");
+    }
+    if (entry.name === "session.json") {
+      hasSession = true;
+    } else if (entry.name === "active-run.json") {
+      hasActiveRun = true;
+    } else if (entry.name === "failure.json") {
+      hasFailure = true;
+    } else if (expected.has(entry.name)) {
+      checkpointCount += 1;
+    } else {
+      throw new Error("B1 checkpoint directory contains an unknown entry");
+    }
+  }
+  if (checkpointCount > 0 && !hasSession) {
+    throw new Error("B1 checkpoints exist without their session binding");
+  }
+  return Object.freeze({
+    checkpointCount,
+    hasSession,
+    hasActiveRun,
+    hasFailure,
+  });
+}
+
+export function assertB1CheckpointStateAllowsUse(state) {
+  assertPlainObject(state, "checkpoint directory state");
+  if (state.hasActiveRun === true || state.hasFailure === true) {
+    throw new Error(
+      "B1 failed or incomplete session requires checkpoint cleanup",
+    );
+  }
+  return state;
+}
+
+export async function executeB1LatchedPhase(context, task, hooks) {
+  assertPlainObject(context, "latched phase context");
+  if (typeof task !== "function") {
+    throw new Error("latched phase task invalid");
+  }
+  for (const name of ["writeLease", "clearLease", "writeFailure"]) {
+    if (typeof hooks?.[name] !== "function") {
+      throw new Error("latched phase hooks invalid");
+    }
+  }
+  const failureState = context.failureState;
+  assertPlainObject(failureState, "failureState");
+  const lease = createB1ActiveRunLease({
+    sessionBindingSha256: context.sessionBindingSha256,
+    environmentFingerprintSha256: context.environmentFingerprintSha256,
+    spec: context.spec,
+    phase: context.leasePhase,
+  });
+  try {
+    await hooks.writeLease(lease);
+    const result = await task(failureState);
+    failureState.phase = "lease_release";
+    failureState.failureClass = "persistence_failure";
+    await hooks.clearLease();
+    return result;
+  } catch (error) {
+    let marker;
+    try {
+      marker = createB1RunFailureMarker({
+        sessionBindingSha256: context.sessionBindingSha256,
+        environmentFingerprintSha256: context.environmentFingerprintSha256,
+        spec: context.spec,
+        phase: failureState.phase,
+        failureClass: failureState.failureClass,
+        harnessCode: readControlledHarnessFailureCode(error),
+        completedCheckpointCount: context.completedCheckpointCount,
+      });
+      await hooks.writeFailure(marker);
+      hooks.emitFailure?.(marker);
+    } catch {
+      throw new Error(
+        "B1 failure latch unavailable; checkpoint cleanup required",
+      );
+    }
+    throw new Error("B1 run session failed; checkpoint cleanup required");
+  }
+}
+
 export async function runB1Matrix(options = {}) {
   const invocationStartedAtEpochMs = Date.now();
   const chromePath = path.resolve(options.chromePath ?? "");
@@ -217,11 +430,13 @@ export async function runB1Matrix(options = {}) {
   await access(cftMetadataPath);
   await assertWorktreeClean();
   await assertProductionSourceInputsTracked();
-  await buildProductionDist();
   const maxNewRuns =
     options.maxNewRuns === undefined
       ? Number.POSITIVE_INFINITY
       : assertPositiveSafeInteger(options.maxNewRuns, "maxNewRuns");
+  const expectedSpecs = createExpectedRunSpecs();
+  await assertB1CheckpointDirectoryReady(expectedSpecs);
+  await buildProductionDist();
   const environmentCore = await collectEnvironmentCore(
     chromePath,
     cftMetadataPath,
@@ -235,6 +450,7 @@ export async function runB1Matrix(options = {}) {
     freeDiskBytesAtStart,
     invocationStartedAtEpochMs,
   );
+  const sessionBindingSha256 = sha256Text(stableStringify(session));
   const fixtureReceipts = Object.fromEntries(
     Object.entries(session.fixtureReceipts).map(([fixtureId, receipt]) => [
       fixtureId,
@@ -244,7 +460,6 @@ export async function runB1Matrix(options = {}) {
   const fixtureReceiptDetails = new Map(
     Object.entries(session.fixtureReceipts),
   );
-  const expectedSpecs = createExpectedRunSpecs();
   const checkpoints = await loadCheckpoints(
     expectedSpecs,
     environmentFingerprintSha256,
@@ -253,42 +468,94 @@ export async function runB1Matrix(options = {}) {
   let newRunCount = 0;
   let paused = false;
 
-  const recordRun = async (preparedFixture, profile, spec) => {
-    const lifecycle = await runBrowserFixtureLifecycleWithPreparedFixture({
-      chromePath,
-      cftMetadataPath,
-      fixtureId: spec.fixtureId,
-      recordCap: spec.candidate.recordCap,
-      byteCapBytes: spec.candidate.byteCapBytes,
-      preparedFixture,
-      profile,
-      runMode: spec.runMode,
-    });
-    const rawOperations = mapB1LifecycleToRawOperations(lifecycle, {
-      fixtureReceiptSha256: fixtureReceipts[spec.fixtureId],
-      environmentReceiptSha256: CHECKPOINT_ENVIRONMENT_SHA,
-      runMode: spec.runMode,
-      runOrdinal: spec.runOrdinal,
-    });
-    const checkpoint = {
-      contract: "gate-014-b1-run-checkpoint-v1",
-      environmentFingerprintSha256,
-      fixtureId: spec.fixtureId,
-      fixtureReceiptSha256: fixtureReceipts[spec.fixtureId],
-      candidate: { ...spec.candidate },
-      runMode: spec.runMode,
-      runOrdinal: spec.runOrdinal,
-      rawOperations,
-      browserObservation: lifecycle.executionObservation,
-      storesSensitiveText: false,
+  const recordRun = async (preparedFixture, spec) => {
+    const failureState = {
+      phase: "profile_setup",
+      failureClass: "setup_failure",
     };
-    validateCheckpoint(
-      checkpoint,
-      spec,
+    const runLatchContext = {
+      sessionBindingSha256,
       environmentFingerprintSha256,
-      fixtureReceipts,
+      spec,
+      leasePhase: "run_attempt",
+      failureState,
+      completedCheckpointCount: checkpoints.size,
+    };
+    const checkpoint = await executeB1LatchedPhase(
+      runLatchContext,
+      async () => {
+        let profile = null;
+        let taskError = null;
+        let taskFailureState = null;
+        let completedCheckpoint = null;
+        try {
+          profile = await createB1TemporaryProfile();
+          failureState.phase = "browser_lifecycle";
+          failureState.failureClass = "execution_failure";
+          const lifecycle =
+            await runBrowserFixtureLifecycleWithPreparedFixture({
+              chromePath,
+              cftMetadataPath,
+              fixtureId: spec.fixtureId,
+              recordCap: spec.candidate.recordCap,
+              byteCapBytes: spec.candidate.byteCapBytes,
+              preparedFixture,
+              profile,
+              runMode: spec.runMode,
+            });
+          failureState.phase = "operation_mapping";
+          failureState.failureClass = "validation_failure";
+          const rawOperations = mapB1LifecycleToRawOperations(lifecycle, {
+            fixtureReceiptSha256: fixtureReceipts[spec.fixtureId],
+            environmentReceiptSha256: CHECKPOINT_ENVIRONMENT_SHA,
+            runMode: spec.runMode,
+            runOrdinal: spec.runOrdinal,
+          });
+          completedCheckpoint = {
+            contract: "gate-014-b1-run-checkpoint-v1",
+            environmentFingerprintSha256,
+            fixtureId: spec.fixtureId,
+            fixtureReceiptSha256: fixtureReceipts[spec.fixtureId],
+            candidate: { ...spec.candidate },
+            runMode: spec.runMode,
+            runOrdinal: spec.runOrdinal,
+            rawOperations,
+            browserObservation: lifecycle.executionObservation,
+            storesSensitiveText: false,
+          };
+          failureState.phase = "checkpoint_validation";
+          validateCheckpoint(
+            completedCheckpoint,
+            spec,
+            environmentFingerprintSha256,
+            fixtureReceipts,
+          );
+          failureState.phase = "checkpoint_write";
+          failureState.failureClass = "persistence_failure";
+          await writeCheckpoint(spec, completedCheckpoint);
+          runLatchContext.completedCheckpointCount = checkpoints.size + 1;
+        } catch (error) {
+          taskError = error;
+          taskFailureState = { ...failureState };
+        }
+        if (profile) {
+          try {
+            failureState.phase = "profile_cleanup";
+            failureState.failureClass = "cleanup_failure";
+            await removeB1TemporaryProfile(profile);
+          } catch (error) {
+            taskError = error;
+            taskFailureState = { ...failureState };
+          }
+        }
+        if (taskError) {
+          Object.assign(failureState, taskFailureState);
+          throw taskError;
+        }
+        return completedCheckpoint;
+      },
+      createB1FileLatchHooks(),
     );
-    await writeCheckpoint(spec, checkpoint);
     checkpoints.set(runIdentity(spec), checkpoint);
     newRunCount += 1;
     process.stdout.write(
@@ -310,25 +577,44 @@ export async function runB1Matrix(options = {}) {
 
   try {
     for (const fixtureId of FIXTURE_EXECUTION_ORDER) {
-      const definition = FIXTURE_DEFINITIONS.find(
-        (candidate) => candidate.id === fixtureId,
+      const setupFailureState = {
+        phase: "fixture_setup",
+        failureClass: "setup_failure",
+      };
+      const preparedFixture = await executeB1LatchedPhase(
+        {
+          sessionBindingSha256,
+          environmentFingerprintSha256,
+          spec: null,
+          leasePhase: "fixture_setup",
+          failureState: setupFailureState,
+          completedCheckpointCount: checkpoints.size,
+        },
+        async () => {
+          const definition = FIXTURE_DEFINITIONS.find(
+            (candidate) => candidate.id === fixtureId,
+          );
+          const golden = fixtureReceiptDetails.get(fixtureId);
+          if (!definition || !golden) {
+            throw new Error("fixture_receipt_unavailable");
+          }
+          await cleanupGeneratedFixtureArtifacts({
+            repositoryRoot: REPOSITORY_ROOT,
+          });
+          const prepared = await writeFixtureArtifact(definition, {
+            repositoryRoot: REPOSITORY_ROOT,
+          });
+          if (
+            prepared.artifactSha256 !== golden.fixtureSha256 ||
+            prepared.receipt.canonical.totalBytes !== golden.canonicalBytes
+          ) {
+            throw new Error("generated_fixture_drift_detected");
+          }
+          return prepared;
+        },
+        createB1FileLatchHooks(),
       );
-      const golden = fixtureReceiptDetails.get(fixtureId);
-      if (!definition || !golden) {
-        throw new Error(`fixture receipt unavailable: ${fixtureId}`);
-      }
-      await cleanupGeneratedFixtureArtifacts({
-        repositoryRoot: REPOSITORY_ROOT,
-      });
-      const preparedFixture = await writeFixtureArtifact(definition, {
-        repositoryRoot: REPOSITORY_ROOT,
-      });
-      if (
-        preparedFixture.artifactSha256 !== golden.fixtureSha256 ||
-        preparedFixture.receipt.canonical.totalBytes !== golden.canonicalBytes
-      ) {
-        throw new Error(`generated fixture drift detected: ${fixtureId}`);
-      }
+      let fixtureLoopError = null;
       try {
         for (const candidate of createCandidateOrder()) {
           const candidateSpecs = [
@@ -349,18 +635,42 @@ export async function runB1Matrix(options = {}) {
             if (checkpoints.has(runIdentity(spec))) {
               continue;
             }
-            const profile = await createB1TemporaryProfile();
-            try {
-              await recordRun(preparedFixture, profile, spec);
-            } finally {
-              await removeB1TemporaryProfile(profile);
-            }
+            await recordRun(preparedFixture, spec);
           }
         }
+      } catch (error) {
+        fixtureLoopError = error;
+        throw error;
       } finally {
-        await cleanupGeneratedFixtureArtifacts({
-          repositoryRoot: REPOSITORY_ROOT,
-        });
+        if (fixtureLoopError && !(fixtureLoopError instanceof MatrixPause)) {
+          try {
+            await cleanupGeneratedFixtureArtifacts({
+              repositoryRoot: REPOSITORY_ROOT,
+            });
+          } catch {
+            // The run lease and failure marker already reject this session.
+          }
+        } else {
+          const cleanupFailureState = {
+            phase: "fixture_cleanup",
+            failureClass: "cleanup_failure",
+          };
+          await executeB1LatchedPhase(
+            {
+              sessionBindingSha256,
+              environmentFingerprintSha256,
+              spec: null,
+              leasePhase: "fixture_cleanup",
+              failureState: cleanupFailureState,
+              completedCheckpointCount: checkpoints.size,
+            },
+            () =>
+              cleanupGeneratedFixtureArtifacts({
+                repositoryRoot: REPOSITORY_ROOT,
+              }),
+            createB1FileLatchHooks(),
+          );
+        }
       }
     }
   } catch (error) {
@@ -369,8 +679,6 @@ export async function runB1Matrix(options = {}) {
     } else {
       throw error;
     }
-  } finally {
-    await cleanupGeneratedFixtureArtifacts({ repositoryRoot: REPOSITORY_ROOT });
   }
 
   if (paused || checkpoints.size !== expectedSpecs.length) {
@@ -382,6 +690,44 @@ export async function runB1Matrix(options = {}) {
     });
   }
 
+  const finalizationFailureState = {
+    phase: "report_finalize",
+    failureClass: "finalization_failure",
+  };
+  return executeB1LatchedPhase(
+    {
+      sessionBindingSha256,
+      environmentFingerprintSha256,
+      spec: null,
+      leasePhase: "report_finalize",
+      failureState: finalizationFailureState,
+      completedCheckpointCount: checkpoints.size,
+    },
+    () =>
+      finalizeB1MatrixArtifacts({
+        chromePath,
+        cftMetadataPath,
+        session,
+        environmentCore,
+        checkpoints,
+        expectedSpecs,
+        fixtureReceipts,
+        fixtureReceiptDetails,
+      }),
+    createB1FileLatchHooks(),
+  );
+}
+
+async function finalizeB1MatrixArtifacts({
+  chromePath,
+  cftMetadataPath,
+  session,
+  environmentCore,
+  checkpoints,
+  expectedSpecs,
+  fixtureReceipts,
+  fixtureReceiptDetails,
+}) {
   const matrixBrowserObservation = combineBrowserExecutionObservations(
     [...checkpoints.values()].map(
       (checkpoint) => checkpoint.browserObservation,
@@ -786,6 +1132,84 @@ async function openOrCreateSession(
   return session;
 }
 
+export async function assertB1CheckpointDirectoryReady(
+  expectedSpecs = createExpectedRunSpecs(),
+  options = {},
+) {
+  if (options.createIfMissing !== false) {
+    await mkdir(CHECKPOINT_DIRECTORY, { recursive: true });
+  }
+  let entries;
+  try {
+    entries = await readdir(CHECKPOINT_DIRECTORY, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT" && options.createIfMissing === false) {
+      entries = [];
+    } else {
+      throw error;
+    }
+  }
+  const state = validateB1CheckpointDirectoryEntries(
+    entries.map((entry) => ({
+      name: entry.name,
+      isFile: entry.isFile(),
+    })),
+    expectedSpecs.map(checkpointFileName),
+  );
+  return assertB1CheckpointStateAllowsUse(state);
+}
+
+export function createB1FileLatchHooks(options = {}) {
+  assertPlainObject(options, "file latch options");
+  const activeRunPath = assertB1LatchPath(
+    options.activeRunPath ?? ACTIVE_RUN_PATH,
+    "active-run.json",
+  );
+  const failurePath = assertB1LatchPath(
+    options.failurePath ?? FAILURE_PATH,
+    "failure.json",
+  );
+  return {
+    writeLease: (lease) =>
+      writeNewExclusiveAtomic(
+        activeRunPath,
+        `${JSON.stringify(lease)}\n`,
+      ),
+    clearLease: () => rm(activeRunPath),
+    writeFailure: (marker) =>
+      writeNewExclusiveAtomic(
+        failurePath,
+        `${JSON.stringify(marker)}\n`,
+      ),
+    emitFailure(marker) {
+      process.stderr.write(
+        `${JSON.stringify({
+          event: "gate014_b1_run_failed",
+          spec: marker.spec,
+          phase: marker.phase,
+          failureClass: marker.failureClass,
+          harnessCode: marker.harnessCode,
+          completedCheckpointCount: marker.completedCheckpointCount,
+        })}\n`,
+      );
+    },
+  };
+}
+
+function assertB1LatchPath(targetPath, expectedBasename) {
+  const resolved = path.resolve(targetPath);
+  const relative = path.relative(CHECKPOINT_DIRECTORY, resolved);
+  if (
+    path.basename(resolved) !== expectedBasename ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error("refusing latch path outside B1 checkpoint directory");
+  }
+  return resolved;
+}
+
 function validateSessionFixtureReceipts(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -971,6 +1395,9 @@ function createSummaryMarkdown(report) {
 }
 
 export async function verifyB1ReportArtifacts() {
+  await assertB1CheckpointDirectoryReady(createExpectedRunSpecs(), {
+    createIfMissing: false,
+  });
   const [environmentText, rawText, reportText, summaryText] = await Promise.all(
     [
       readFile(ENVIRONMENT_REPORT_PATH, "utf8"),
@@ -1099,6 +1526,23 @@ async function writeNewAtomic(targetPath, contents) {
     await rename(temporaryPath, targetPath);
   } catch (error) {
     await rm(temporaryPath, { force: true });
+    throw error;
+  }
+}
+
+async function writeNewExclusiveAtomic(targetPath, contents) {
+  assertKnownWritePath(targetPath);
+  const temporaryPath = `${targetPath}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPath, contents, { encoding: "utf8", flag: "wx" });
+  try {
+    await link(temporaryPath, targetPath);
+    await rm(temporaryPath);
+  } catch (error) {
+    try {
+      await rm(temporaryPath, { force: true });
+    } catch {
+      // A retained temp entry makes the next run fail its directory audit.
+    }
     throw error;
   }
 }
@@ -1416,6 +1860,48 @@ function isStorageMeasurement(value) {
   );
 }
 
+function normalizePublicRunSpec(spec) {
+  if (spec === null) {
+    return null;
+  }
+  assertExactFields(
+    spec,
+    ["fixtureId", "candidate", "runMode", "runOrdinal"],
+    "run spec",
+  );
+  if (!B1_REQUIRED_FIXTURE_IDS.includes(spec.fixtureId)) {
+    throw new Error("run spec fixtureId is invalid");
+  }
+  assertExactFields(
+    spec.candidate,
+    ["recordCap", "byteCapBytes"],
+    "run spec candidate",
+  );
+  if (
+    !B1_RECORD_CAPS.includes(spec.candidate.recordCap) ||
+    !B1_BYTE_CAPS.includes(spec.candidate.byteCapBytes)
+  ) {
+    throw new Error("run spec candidate is invalid");
+  }
+  return Object.freeze({
+    fixtureId: spec.fixtureId,
+    candidate: Object.freeze({ ...spec.candidate }),
+    runMode: assertEnum(spec.runMode, ["cold", "warm"], "runMode"),
+    runOrdinal: assertPositiveSafeInteger(spec.runOrdinal, "runOrdinal"),
+  });
+}
+
+function freezeB1LatchRecord(record) {
+  return Object.freeze(record);
+}
+
+function assertSafeHarnessFailureCode(value) {
+  if (typeof value !== "string" || !/^[a-z0-9_:-]{1,96}$/.test(value)) {
+    throw new Error("harnessCode is invalid");
+  }
+  return value;
+}
+
 function assertPlainObject(value, label) {
   if (
     value === null ||
@@ -1445,6 +1931,13 @@ function assertEnum(value, values, label) {
 function assertPositiveSafeInteger(value, label) {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${label} must be a positive safe integer`);
+  }
+  return value;
+}
+
+function assertNonNegativeSafeInteger(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative safe integer`);
   }
   return value;
 }
