@@ -60,6 +60,10 @@ const B1_BROWSER_STAGE_FAILURE_CODES = Object.freeze([
   "browser_process_lineage_table_validation_failed",
   "browser_process_lineage_deadline_after_observation_failed",
   "browser_process_lineage_survivors_failed",
+  "browser_process_lineage_cleared_by_10s_failed",
+  "browser_process_lineage_cleared_by_15s_failed",
+  "browser_process_lineage_persistent_at_15s_failed",
+  "browser_process_lineage_diagnostic_observation_failed",
   "browser_process_termination_validation_failed",
 ]);
 const B1_BROWSER_FAILURE_CODES = new WeakMap();
@@ -71,6 +75,14 @@ const BILIBILI_API_HOSTNAME = "api.bilibili.com";
 const BILIBILI_HISTORY_CURSOR_PATH = "/x/web-interface/history/cursor";
 const BILIBILI_HISTORY_CURSOR_URL = `https://${BILIBILI_API_HOSTNAME}${BILIBILI_HISTORY_CURSOR_PATH}?ps=30`;
 const B1_SYNTHETIC_RESPONSE_SETTLE_TIMEOUT_MS = 5_000;
+const B1_WINDOWS_CHROME_CLOSURE_TIMEOUT_MS = 5_000;
+const B1_WINDOWS_CHROME_DIAGNOSTIC_WINDOW_MS = 5_000;
+const B1_WINDOWS_CHROME_DIAGNOSTIC_FAILURE_CODES = new Set([
+  "browser_process_lineage_cleared_by_10s_failed",
+  "browser_process_lineage_cleared_by_15s_failed",
+  "browser_process_lineage_persistent_at_15s_failed",
+  "browser_process_lineage_diagnostic_observation_failed",
+]);
 const B1_MAX_QUEUED_SYNTHETIC_REQUESTS = 8;
 const B1_MAX_CDP_PIPE_MESSAGE_BYTES = 8 * 1024 * 1024;
 const SYNTHETIC_UNAUTHENTICATED_RESPONSE_BODY = Buffer.from(
@@ -2921,6 +2933,9 @@ export async function observeWindowsChromeClosure(options = {}) {
         ...readOptions,
         classifyLineageFailures: true,
       }));
+  const diagnoseLineageAfterGate =
+    options.diagnoseLineageAfterGate ??
+    diagnoseWindowsChromeLineageAfterGate;
   if (
     !child ||
     !Number.isSafeInteger(child.pid) ||
@@ -2930,11 +2945,12 @@ export async function observeWindowsChromeClosure(options = {}) {
     typeof now !== "function" ||
     typeof waitForParentExit !== "function" ||
     typeof waitForLineageExit !== "function" ||
-    typeof readProcessTable !== "function"
+    typeof readProcessTable !== "function" ||
+    typeof diagnoseLineageAfterGate !== "function"
   ) {
     throw new Error("chrome_process_closure_observation_invalid");
   }
-  return settleWindowsChromeClosureObservations(
+  const closure = await settleWindowsChromeClosureObservations(
     () =>
       executeB1BrowserStage(
         "browser_process_parent_exit_failed",
@@ -2969,18 +2985,31 @@ export async function observeWindowsChromeClosure(options = {}) {
                 readProcessTable,
               }),
           );
-          await executeB1BrowserStage(
-            "browser_process_lineage_survivors_failed",
-            () => {
-              if (remaining.length > 0) {
-                throw new Error("chrome_process_tree_termination_failed");
-              }
-            },
-          );
           return remaining;
         },
       ),
   );
+  if (closure.survivors.length === 0) {
+    return closure;
+  }
+  const diagnosticFailureCode = await diagnoseLineageAfterGate(
+    initialProcesses,
+    child.pid,
+    closure.survivors,
+    {
+      gateDeadlineEpochMs: closureDeadlineEpochMs,
+      now,
+      waitForLineageExit,
+      readProcessTable,
+    },
+  );
+  if (!B1_WINDOWS_CHROME_DIAGNOSTIC_FAILURE_CODES.has(diagnosticFailureCode)) {
+    throw new Error("chrome_process_lineage_diagnostic_invalid");
+  }
+  await executeB1BrowserStage(diagnosticFailureCode, () => {
+    throw new Error("chrome_process_tree_termination_failed");
+  });
+  throw new Error("chrome_process_lineage_diagnostic_invalid");
 }
 
 export function findSurvivingWindowsProcessTree(
@@ -3045,7 +3074,11 @@ export async function waitForWindowsProcessTreeExit(
       "initial_process_table",
     ).map((process) => Object.freeze(process)),
   );
-  const observedLineageProcessIds = new Set();
+  const observedLineageProcessIds = new Set(
+    validateWindowsLineageProcessIds(
+      options.observedLineageProcessIds ?? [],
+    ),
+  );
   let lastSurvivors = null;
   while (true) {
     const readStartedEpochMs = now();
@@ -3110,6 +3143,70 @@ export async function waitForWindowsProcessTreeExit(
     }
     await wait(Math.min(pollIntervalMs, remainingMs));
   }
+}
+
+export async function diagnoseWindowsChromeLineageAfterGate(
+  initialProcesses,
+  rootProcessId,
+  survivingProcessIds,
+  options = {},
+) {
+  const gateDeadlineEpochMs = options.gateDeadlineEpochMs;
+  const now = options.now ?? Date.now;
+  const waitForLineageExit =
+    options.waitForLineageExit ?? waitForWindowsProcessTreeExit;
+  const readProcessTable =
+    options.readProcessTable ??
+    ((readOptions) => readWindowsProcessTable(readOptions));
+  if (
+    !Number.isFinite(gateDeadlineEpochMs) ||
+    typeof now !== "function" ||
+    typeof waitForLineageExit !== "function" ||
+    typeof readProcessTable !== "function"
+  ) {
+    throw new Error("chrome_process_lineage_diagnostic_invalid");
+  }
+  let observedLineageProcessIds = [
+    ...validateWindowsLineageProcessIds(survivingProcessIds),
+  ];
+  const diagnosticWindows = [
+    Object.freeze({
+      deadlineEpochMs:
+        gateDeadlineEpochMs + B1_WINDOWS_CHROME_DIAGNOSTIC_WINDOW_MS,
+      clearedFailureCode:
+        "browser_process_lineage_cleared_by_10s_failed",
+    }),
+    Object.freeze({
+      deadlineEpochMs:
+        gateDeadlineEpochMs + 2 * B1_WINDOWS_CHROME_DIAGNOSTIC_WINDOW_MS,
+      clearedFailureCode:
+        "browser_process_lineage_cleared_by_15s_failed",
+    }),
+  ];
+  for (const diagnosticWindow of diagnosticWindows) {
+    let remaining;
+    try {
+      remaining = await waitForLineageExit(
+        initialProcesses,
+        rootProcessId,
+        {
+          deadlineEpochMs: diagnosticWindow.deadlineEpochMs,
+          now,
+          observedLineageProcessIds,
+          readProcessTable,
+        },
+      );
+    } catch {
+      return "browser_process_lineage_diagnostic_observation_failed";
+    }
+    if (remaining.length === 0) {
+      return diagnosticWindow.clearedFailureCode;
+    }
+    observedLineageProcessIds = validateWindowsLineageProcessIds([
+      ...remaining,
+    ]);
+  }
+  return "browser_process_lineage_persistent_at_15s_failed";
 }
 
 export function validateWindowsChromeTerminationEvidence({
@@ -3333,7 +3430,8 @@ async function terminateChromeProcessTree(child) {
         }
       },
     );
-    const closureDeadlineEpochMs = Date.now() + 5_000;
+    const closureDeadlineEpochMs =
+      Date.now() + B1_WINDOWS_CHROME_CLOSURE_TIMEOUT_MS;
     const { parentExited, survivors } = await observeWindowsChromeClosure({
       child,
       initialProcesses,
