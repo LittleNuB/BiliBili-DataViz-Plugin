@@ -46,6 +46,8 @@ const B1_BROWSER_STAGE_FAILURE_CODES = Object.freeze([
   "browser_process_termination_failed",
   "browser_cdp_close_failed",
   "browser_process_identity_failed",
+  "browser_process_observer_setup_failed",
+  "browser_process_observer_cleanup_failed",
   "browser_process_table_observation_failed",
   "browser_process_pretermination_state_failed",
   "browser_process_native_termination_failed",
@@ -80,6 +82,11 @@ const BILIBILI_HISTORY_CURSOR_URL = `https://${BILIBILI_API_HOSTNAME}${BILIBILI_
 const B1_SYNTHETIC_RESPONSE_SETTLE_TIMEOUT_MS = 5_000;
 const B1_WINDOWS_CHROME_CLOSURE_TIMEOUT_MS = 5_000;
 const B1_WINDOWS_CHROME_DIAGNOSTIC_WINDOW_MS = 5_000;
+const B1_WINDOWS_PROCESS_OBSERVER_STARTUP_TIMEOUT_MS = 10_000;
+const B1_WINDOWS_PROCESS_OBSERVER_CLOSE_TIMEOUT_MS = 5_000;
+const B1_WINDOWS_PROCESS_OBSERVER_MAX_LINE_BYTES = 4 * 1024 * 1024;
+const B1_WINDOWS_PROCESS_OBSERVER_CONTRACT =
+  "gate-014-b1-process-table-observer-v1";
 const B1_WINDOWS_CHROME_DIAGNOSTIC_FAILURE_CODES = new Set([
   "browser_process_lineage_cleared_by_10s_failed",
   "browser_process_lineage_cleared_by_15s_failed",
@@ -3495,67 +3502,488 @@ export async function readWindowsProcessTable(options = {}) {
   }
 }
 
-async function terminateChromeProcessTree(child) {
+export async function createWindowsProcessTableObserver(options = {}) {
+  const spawnImpl = options.spawnImpl ?? spawn;
+  const startupTimeoutMs =
+    options.startupTimeoutMs ?? B1_WINDOWS_PROCESS_OBSERVER_STARTUP_TIMEOUT_MS;
+  const closeTimeoutMs =
+    options.closeTimeoutMs ?? B1_WINDOWS_PROCESS_OBSERVER_CLOSE_TIMEOUT_MS;
+  if (
+    typeof spawnImpl !== "function" ||
+    !Number.isFinite(startupTimeoutMs) ||
+    startupTimeoutMs <= 0 ||
+    !Number.isFinite(closeTimeoutMs) ||
+    closeTimeoutMs <= 0
+  ) {
+    throw new Error("chrome_process_observer_setup_invalid");
+  }
+  const child = spawnImpl(
+    "powershell.exe",
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      createWindowsProcessTableObserverScript(),
+    ],
+    {
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
+  if (
+    !child ||
+    !child.stdin ||
+    !child.stdout ||
+    !child.stderr ||
+    typeof child.once !== "function" ||
+    typeof child.kill !== "function"
+  ) {
+    throw new Error("chrome_process_observer_spawn_invalid");
+  }
+  let state = "starting";
+  let stdoutBuffer = "";
+  let requestId = 0;
+  let pendingRequest = null;
+  let readyResolve;
+  let readyReject;
+  const readyPromise = new Promise((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+  let exited = child.exitCode !== null;
+  let processCloseResolve;
+  const processClosePromise = new Promise((resolve) => {
+    processCloseResolve = resolve;
+  });
+  let processClosed = false;
+
+  const rejectPending = (error) => {
+    if (pendingRequest !== null) {
+      clearTimeout(pendingRequest.timeoutId);
+      const reject = pendingRequest.reject;
+      pendingRequest = null;
+      reject(error);
+    }
+  };
+  const poison = (error) => {
+    if (state === "closed" || state === "poisoned") {
+      return;
+    }
+    const wasStarting = state === "starting";
+    state = "poisoned";
+    if (wasStarting) {
+      readyReject(error);
+    }
+    rejectPending(error);
+    if (!exited) {
+      try {
+        child.kill();
+      } catch {
+        // Cleanup reports a bounded exit failure if the process remains alive.
+      }
+    }
+  };
+  child.stderr.on("data", () => {
+    poison(new Error("chrome_process_observer_stderr_observed"));
+  });
+  const handleLine = (line) => {
+    let value;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      poison(new Error("chrome_process_observer_protocol_invalid"));
+      return;
+    }
+    if (state === "starting") {
+      try {
+        validateWindowsProcessObserverReady(value);
+      } catch (error) {
+        poison(error);
+        return;
+      }
+      state = "ready";
+      readyResolve();
+      return;
+    }
+    if (state !== "ready" || pendingRequest === null) {
+      poison(new Error("chrome_process_observer_protocol_invalid"));
+      return;
+    }
+    let processes;
+    try {
+      processes = validateWindowsProcessObserverResponse(
+        value,
+        pendingRequest.requestId,
+      );
+    } catch (error) {
+      poison(error);
+      return;
+    }
+    clearTimeout(pendingRequest.timeoutId);
+    const resolve = pendingRequest.resolve;
+    pendingRequest = null;
+    resolve(processes);
+  };
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    if (state === "closed" || state === "poisoned") {
+      return;
+    }
+    stdoutBuffer += chunk;
+    if (
+      Buffer.byteLength(stdoutBuffer, "utf8") >
+      B1_WINDOWS_PROCESS_OBSERVER_MAX_LINE_BYTES
+    ) {
+      poison(new Error("chrome_process_observer_protocol_invalid"));
+      return;
+    }
+    while (stdoutBuffer.includes("\n")) {
+      const newlineIndex = stdoutBuffer.indexOf("\n");
+      const line = stdoutBuffer.slice(0, newlineIndex).replace(/\r$/, "");
+      stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+      if (line === "") {
+        poison(new Error("chrome_process_observer_protocol_invalid"));
+        return;
+      }
+      handleLine(line);
+      if (state === "poisoned") {
+        return;
+      }
+    }
+  });
+  child.once("error", (error) => {
+    poison(error);
+  });
+  child.once("exit", (code) => {
+    exited = true;
+    if (state === "starting" || state === "ready") {
+      poison(new Error("chrome_process_observer_exited"));
+    }
+  });
+  child.once("close", (code) => {
+    processClosed = true;
+    processCloseResolve(code);
+  });
+
+  const waitForBoundedProcessClose = async (timeoutMs) => {
+    if (processClosed) {
+      return true;
+    }
+    let timeoutId;
+    const completed = await Promise.race([
+      processClosePromise.then(() => true),
+      new Promise((resolve) => {
+        timeoutId = setTimeout(
+          () => resolve(false),
+          Math.max(1, Math.floor(timeoutMs)),
+        );
+        timeoutId.unref();
+      }),
+    ]);
+    clearTimeout(timeoutId);
+    return completed;
+  };
+  const forceObserverExit = async () => {
+    if (!exited) {
+      try {
+        child.kill();
+      } catch {
+        // The bounded exit check below remains authoritative.
+      }
+    }
+    return waitForBoundedProcessClose(closeTimeoutMs);
+  };
+
+  const startupTimeoutId = setTimeout(
+    () => {
+      poison(new Error("chrome_process_observer_startup_timeout"));
+    },
+    Math.max(1, Math.floor(startupTimeoutMs)),
+  );
+  startupTimeoutId.unref();
+  try {
+    await readyPromise;
+  } catch (error) {
+    if (!(await forceObserverExit())) {
+      throw new Error("chrome_process_observer_startup_cleanup_failed");
+    }
+    throw error;
+  } finally {
+    clearTimeout(startupTimeoutId);
+  }
+
+  return Object.freeze({
+    async read(readOptions = {}) {
+      const timeoutMs = readOptions.timeoutMs;
+      const classifyLineageFailures =
+        readOptions.classifyLineageFailures === true;
+      const deadlineEpochMs = readOptions.deadlineEpochMs;
+      const now = readOptions.now ?? Date.now;
+      if (
+        !Number.isFinite(timeoutMs) ||
+        timeoutMs <= 0 ||
+        (classifyLineageFailures &&
+          (!Number.isFinite(deadlineEpochMs) || typeof now !== "function"))
+      ) {
+        throw new Error("chrome_process_observer_read_invalid");
+      }
+      if (state !== "ready") {
+        throw new Error("chrome_process_observer_unavailable");
+      }
+      if (pendingRequest !== null) {
+        const error = new Error("chrome_process_observer_concurrent_read");
+        poison(error);
+        throw error;
+      }
+      requestId += 1;
+      const currentRequestId = requestId;
+      try {
+        return await new Promise((resolve, reject) => {
+          const timeoutId = setTimeout(
+            () => {
+              const error = new Error("chrome_process_observer_query_timeout");
+              poison(error);
+            },
+            Math.max(1, Math.floor(timeoutMs)),
+          );
+          timeoutId.unref();
+          pendingRequest = {
+            reject,
+            requestId: currentRequestId,
+            resolve,
+            timeoutId,
+          };
+          const request = `${JSON.stringify({
+            contract: B1_WINDOWS_PROCESS_OBSERVER_CONTRACT,
+            kind: "process_table",
+            requestId: currentRequestId,
+            storesSensitiveText: false,
+          })}\n`;
+          child.stdin.write(request, "utf8", (error) => {
+            if (error) {
+              poison(error);
+            }
+          });
+        });
+      } catch (error) {
+        if (classifyLineageFailures) {
+          const commandRejectedEpochMs = now();
+          await executeB1BrowserStage(
+            Number.isFinite(commandRejectedEpochMs) &&
+              commandRejectedEpochMs >= deadlineEpochMs
+              ? "browser_process_lineage_table_command_deadline_elapsed_failed"
+              : "browser_process_lineage_table_command_failed",
+            () => {
+              throw error;
+            },
+          );
+        }
+        throw error;
+      }
+    },
+    async close() {
+      if (state === "closed") {
+        return;
+      }
+      if (pendingRequest !== null) {
+        poison(new Error("chrome_process_observer_closed_with_pending_read"));
+      }
+      const wasPoisoned = state === "poisoned";
+      if (!wasPoisoned) {
+        state = "closing";
+        child.stdin.end();
+      }
+      const gracefulExit = await waitForBoundedProcessClose(closeTimeoutMs);
+      let forcedExit = gracefulExit;
+      if (!gracefulExit) {
+        forcedExit = await forceObserverExit();
+      }
+      const finalState = state;
+      const pendingAtClose = pendingRequest !== null;
+      const residualOutput = stdoutBuffer !== "";
+      state = "closed";
+      rejectPending(new Error("chrome_process_observer_closed"));
+      child.stdout.removeAllListeners("data");
+      child.stderr.removeAllListeners("data");
+      if (
+        !forcedExit ||
+        wasPoisoned ||
+        finalState === "poisoned" ||
+        pendingAtClose ||
+        residualOutput ||
+        !gracefulExit ||
+        child.exitCode !== 0
+      ) {
+        throw new Error("chrome_process_observer_close_failed");
+      }
+    },
+  });
+}
+
+function createWindowsProcessTableObserverScript() {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
+    "$InformationPreference = 'SilentlyContinue'",
+    "$WarningPreference = 'SilentlyContinue'",
+    "$contract = 'gate-014-b1-process-table-observer-v1'",
+    "$lastRequestId = 0L",
+    "$utf8 = [System.Text.UTF8Encoding]::new($false)",
+    "[Console]::OutputEncoding = $utf8",
+    "function Write-ProtocolLine([object]$value) { [Console]::Out.WriteLine((ConvertTo-Json -Compress -Depth 4 -InputObject $value)); [Console]::Out.Flush() }",
+    "Write-ProtocolLine ([ordered]@{ contract = $contract; kind = 'ready'; storesSensitiveText = $false })",
+    "while (($line = [Console]::In.ReadLine()) -ne $null) {",
+    "  try {",
+    "    $request = ConvertFrom-Json -InputObject $line",
+    "    $names = @($request.PSObject.Properties.Name | Sort-Object)",
+    "    $expected = @('contract','kind','requestId','storesSensitiveText')",
+    "    if (($names.Count -ne $expected.Count) -or ((Compare-Object $names $expected).Count -ne 0)) { throw 'invalid request shape' }",
+    "    $requestId = [int64]$request.requestId",
+    "    if (($request.contract -ne $contract) -or ($request.kind -ne 'process_table') -or ($request.storesSensitiveText -ne $false) -or ($requestId -le $lastRequestId)) { throw 'invalid request' }",
+    "    $lastRequestId = $requestId",
+    "    $rows = @(Get-CimInstance -ClassName Win32_Process -Property ProcessId,ParentProcessId | ForEach-Object { [ordered]@{ processId = [int64]$_.ProcessId; parentProcessId = [int64]$_.ParentProcessId } })",
+    "    Write-ProtocolLine ([ordered]@{ contract = $contract; kind = 'process_table'; requestId = $requestId; status = 'pass'; processes = $rows; storesSensitiveText = $false })",
+    "  } catch { exit 1 }",
+    "}",
+    "exit 0",
+  ].join("; ");
+}
+
+function validateWindowsProcessObserverReady(value) {
+  if (
+    !isExactPlainObject(value, ["contract", "kind", "storesSensitiveText"]) ||
+    value.contract !== B1_WINDOWS_PROCESS_OBSERVER_CONTRACT ||
+    value.kind !== "ready" ||
+    value.storesSensitiveText !== false
+  ) {
+    throw new Error("chrome_process_observer_ready_invalid");
+  }
+}
+
+function validateWindowsProcessObserverResponse(value, expectedRequestId) {
+  if (
+    !isExactPlainObject(value, [
+      "contract",
+      "kind",
+      "processes",
+      "requestId",
+      "status",
+      "storesSensitiveText",
+    ]) ||
+    value.contract !== B1_WINDOWS_PROCESS_OBSERVER_CONTRACT ||
+    value.kind !== "process_table" ||
+    value.requestId !== expectedRequestId ||
+    value.status !== "pass" ||
+    value.storesSensitiveText !== false
+  ) {
+    throw new Error("chrome_process_observer_response_invalid");
+  }
+  if (
+    !Array.isArray(value.processes) ||
+    value.processes.some(
+      (process) =>
+        !isExactPlainObject(process, ["parentProcessId", "processId"]),
+    )
+  ) {
+    throw new Error("chrome_process_observer_response_invalid");
+  }
+  return validateWindowsProcessTable(
+    value.processes,
+    "chrome_process_observer_response",
+  );
+}
+
+function isExactPlainObject(value, expectedKeys) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    Object.keys(value).sort().join("|") === [...expectedKeys].sort().join("|")
+  );
+}
+
+export async function terminateChromeProcessTree(child, options = {}) {
   await executeB1BrowserStage("browser_process_identity_failed", () => {
     if (!Number.isSafeInteger(child.pid) || child.pid < 1) {
       throw new Error("chrome_process_identity_unavailable");
     }
   });
-  if (process.platform === "win32") {
-    const initialProcesses = await executeB1BrowserStage(
-      "browser_process_table_observation_failed",
-      () => readWindowsProcessTable(),
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32") {
+    const createProcessTableObserver =
+      options.createProcessTableObserver ?? createWindowsProcessTableObserver;
+    const runNativeTermination =
+      options.runNativeTermination ?? runWindowsNativeProcessTreeTermination;
+    const now = options.now ?? Date.now;
+    const wait = options.wait ?? delay;
+    const processObserver = await executeB1BrowserStage(
+      "browser_process_observer_setup_failed",
+      () => createProcessTableObserver(),
     );
-    const rootObservedBeforeTermination = initialProcesses.some(
-      (candidate) => candidate.processId === child.pid,
-    );
-    const rootRunningBeforeTermination = child.exitCode === null;
-    await executeB1BrowserStage(
-      "browser_process_pretermination_state_failed",
-      () => {
-        if (!rootRunningBeforeTermination || !rootObservedBeforeTermination) {
-          throw new Error("chrome_process_tree_termination_failed");
-        }
-      },
-    );
-    const nativeTerminationOutcome = await executeB1BrowserStage(
-      "browser_process_native_termination_failed",
+    return executeB1BrowserOperationWithCleanup(
       async () => {
-        try {
-          await execFile(
-            "taskkill.exe",
-            ["/PID", String(child.pid), "/T", "/F"],
-            {
-              windowsHide: true,
-              timeout: 10_000,
-            },
-          );
-          return "exit_zero";
-        } catch (error) {
-          return readCompletedWindowsTerminationOutcome(error);
-        }
+        const initialProcesses = await executeB1BrowserStage(
+          "browser_process_table_observation_failed",
+          () => processObserver.read({ timeoutMs: 10_000 }),
+        );
+        const rootObservedBeforeTermination = initialProcesses.some(
+          (candidate) => candidate.processId === child.pid,
+        );
+        const rootRunningBeforeTermination = child.exitCode === null;
+        await executeB1BrowserStage(
+          "browser_process_pretermination_state_failed",
+          () => {
+            if (
+              !rootRunningBeforeTermination ||
+              !rootObservedBeforeTermination
+            ) {
+              throw new Error("chrome_process_tree_termination_failed");
+            }
+          },
+        );
+        const nativeTerminationOutcome = await executeB1BrowserStage(
+          "browser_process_native_termination_failed",
+          () => runNativeTermination(child.pid),
+        );
+        const closureDeadlineEpochMs =
+          now() + B1_WINDOWS_CHROME_CLOSURE_TIMEOUT_MS;
+        const { parentExited, survivors } = await observeWindowsChromeClosure({
+          child,
+          initialProcesses,
+          closureDeadlineEpochMs,
+          now,
+          readProcessTable: (readOptions) =>
+            processObserver.read({
+              ...readOptions,
+              classifyLineageFailures: true,
+              now,
+            }),
+          waitForLineageExit: (initial, rootProcessId, readOptions) =>
+            waitForWindowsProcessTreeExit(initial, rootProcessId, {
+              ...readOptions,
+              wait,
+            }),
+        });
+        await executeB1BrowserStage(
+          "browser_process_termination_validation_failed",
+          () =>
+            validateWindowsChromeTerminationEvidence({
+              nativeTerminationCompleted: true,
+              nativeTerminationOutcome,
+              rootObservedBeforeTermination,
+              rootRunningBeforeTermination,
+              parentExited,
+              survivingProcessIds: survivors,
+            }),
+        );
       },
-    );
-    const closureDeadlineEpochMs =
-      Date.now() + B1_WINDOWS_CHROME_CLOSURE_TIMEOUT_MS;
-    const { parentExited, survivors } = await observeWindowsChromeClosure({
-      child,
-      initialProcesses,
-      closureDeadlineEpochMs,
-    });
-    await executeB1BrowserStage(
-      "browser_process_termination_validation_failed",
       () =>
-        validateWindowsChromeTerminationEvidence({
-          nativeTerminationCompleted: true,
-          nativeTerminationOutcome,
-          rootObservedBeforeTermination,
-          rootRunningBeforeTermination,
-          parentExited,
-          survivingProcessIds: survivors,
-        }),
+        executeB1BrowserStage("browser_process_observer_cleanup_failed", () =>
+          processObserver.close(),
+        ),
     );
-    return;
   }
   await executeB1BrowserStage(
     "browser_process_native_termination_failed",
@@ -3571,6 +3999,18 @@ async function terminateChromeProcessTree(child) {
       throw new Error("chrome_process_exit_timeout");
     }
   });
+}
+
+async function runWindowsNativeProcessTreeTermination(processId) {
+  try {
+    await execFile("taskkill.exe", ["/PID", String(processId), "/T", "/F"], {
+      windowsHide: true,
+      timeout: 10_000,
+    });
+    return "exit_zero";
+  } catch (error) {
+    return readCompletedWindowsTerminationOutcome(error);
+  }
 }
 
 function delay(milliseconds) {

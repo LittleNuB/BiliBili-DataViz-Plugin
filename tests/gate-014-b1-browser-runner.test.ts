@@ -15,6 +15,7 @@ import {
   closeB1FixtureHttpServer,
   classifyObservedErrorEvent,
   combineBrowserExecutionObservations,
+  createWindowsProcessTableObserver,
   createB1ProductionExtensionStage,
   createB1TemporaryProfile,
   createCdpExecutionObservation,
@@ -36,6 +37,7 @@ import {
   selectProductionServiceWorkerTarget,
   settleB1FixtureServerCleanup,
   settleWindowsChromeClosureObservations,
+  terminateChromeProcessTree,
   uninstallUnpackedExtension,
   unwrapControlledHarnessEvaluation,
   validateBrowserExecutionObservation,
@@ -79,6 +81,95 @@ async function createControlledBrowserFailureForTest(stageCode: string) {
     return error;
   }
   throw new Error("synthetic_controlled_failure_missing");
+}
+
+function createSyntheticWindowsProcessObserverChild(
+  onRequest: (request: Record<string, unknown>, child: any) => void,
+) {
+  const child = new EventEmitter() as EventEmitter & {
+    exitCode: number | null;
+    killed: boolean;
+    pid: number;
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    kill: () => boolean;
+  };
+  child.exitCode = null;
+  child.killed = false;
+  child.pid = 90_001;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const closeChild = (exitCode: number) => {
+    if (child.exitCode !== null) {
+      return;
+    }
+    child.exitCode = exitCode;
+    queueMicrotask(() => {
+      child.emit("exit", exitCode, null);
+      child.stdout.end();
+      child.stderr.end();
+      setImmediate(() => child.emit("close", exitCode, null));
+    });
+  };
+  child.kill = () => {
+    if (child.exitCode === null) {
+      child.killed = true;
+      closeChild(1);
+    }
+    return true;
+  };
+  let requestBuffer = "";
+  child.stdin.setEncoding("utf8");
+  child.stdin.on("data", (chunk: string) => {
+    requestBuffer += chunk;
+    while (requestBuffer.includes("\n")) {
+      const newlineIndex = requestBuffer.indexOf("\n");
+      const line = requestBuffer.slice(0, newlineIndex);
+      requestBuffer = requestBuffer.slice(newlineIndex + 1);
+      if (line !== "") {
+        onRequest(JSON.parse(line), child);
+      }
+    }
+  });
+  child.stdin.on("finish", () => {
+    if (child.exitCode === null) {
+      closeChild(0);
+    }
+  });
+  return child;
+}
+
+function writeSyntheticObserverReady(child: any) {
+  const ready = `${JSON.stringify({
+    contract: "gate-014-b1-process-table-observer-v1",
+    kind: "ready",
+    storesSensitiveText: false,
+  })}\n`;
+  child.stdout.write(ready.slice(0, 9));
+  child.stdout.write(ready.slice(9));
+}
+
+function writeSyntheticObserverResponse(
+  child: any,
+  requestId: number,
+  processes: Array<{ processId: number; parentProcessId: number }>,
+) {
+  const response = `${JSON.stringify({
+    contract: "gate-014-b1-process-table-observer-v1",
+    kind: "process_table",
+    requestId,
+    status: "pass",
+    processes,
+    storesSensitiveText: false,
+  })}\n`;
+  child.stdout.write(response.slice(0, 13));
+  child.stdout.write(response.slice(13));
+}
+
+function writeSyntheticObserverProtocolLine(child: any, value: unknown) {
+  child.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
 test("GATE-014-B1 bounds a single browser lifecycle without masking gate thresholds", () => {
@@ -1299,6 +1390,516 @@ test("GATE-014-B1 process exit observation fails closed on timeout", async () =>
   assert.equal(await exitPromise, true);
 });
 
+test("GATE-014-B1 persistent Windows process observer frames strict sequential responses", async () => {
+  const observedRequests: Array<Record<string, unknown>> = [];
+  const child = createSyntheticWindowsProcessObserverChild(
+    (request, observerChild) => {
+      observedRequests.push(request);
+      writeSyntheticObserverResponse(
+        observerChild,
+        request.requestId as number,
+        [{ processId: 100, parentProcessId: 1 }],
+      );
+    },
+  );
+  const observerPromise = createWindowsProcessTableObserver({
+    spawnImpl: () => child,
+    startupTimeoutMs: 100,
+    closeTimeoutMs: 100,
+  });
+  queueMicrotask(() => writeSyntheticObserverReady(child));
+  const observer = await observerPromise;
+  assert.deepEqual(await observer.read({ timeoutMs: 100 }), [
+    { processId: 100, parentProcessId: 1 },
+  ]);
+  assert.deepEqual(await observer.read({ timeoutMs: 100 }), [
+    { processId: 100, parentProcessId: 1 },
+  ]);
+  assert.deepEqual(observedRequests, [
+    {
+      contract: "gate-014-b1-process-table-observer-v1",
+      kind: "process_table",
+      requestId: 1,
+      storesSensitiveText: false,
+    },
+    {
+      contract: "gate-014-b1-process-table-observer-v1",
+      kind: "process_table",
+      requestId: 2,
+      storesSensitiveText: false,
+    },
+  ]);
+  await observer.close();
+  assert.equal(child.exitCode, 0);
+});
+
+test("GATE-014-B1 persistent Windows process observer poisons timeout and rejects late reuse", async () => {
+  let requestCount = 0;
+  const child = createSyntheticWindowsProcessObserverChild(
+    (request, observerChild) => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        setTimeout(
+          () =>
+            writeSyntheticObserverResponse(
+              observerChild,
+              request.requestId as number,
+              [{ processId: 100, parentProcessId: 1 }],
+            ),
+          30,
+        ).unref();
+      }
+    },
+  );
+  const observerPromise = createWindowsProcessTableObserver({
+    spawnImpl: () => child,
+    startupTimeoutMs: 100,
+    closeTimeoutMs: 100,
+  });
+  queueMicrotask(() => writeSyntheticObserverReady(child));
+  const observer = await observerPromise;
+  await assert.rejects(() => observer.read({ timeoutMs: 5 }));
+  await assert.rejects(() => observer.read({ timeoutMs: 100 }));
+  assert.equal(requestCount, 1);
+  assert.equal(child.killed, true);
+  await assert.rejects(
+    () => observer.close(),
+    /chrome_process_observer_close_failed/,
+  );
+});
+
+test("GATE-014-B1 persistent Windows process observer rejects response sequence spoofing", async () => {
+  const child = createSyntheticWindowsProcessObserverChild(
+    (request, observerChild) => {
+      writeSyntheticObserverResponse(
+        observerChild,
+        (request.requestId as number) + 1,
+        [],
+      );
+    },
+  );
+  const observerPromise = createWindowsProcessTableObserver({
+    spawnImpl: () => child,
+    startupTimeoutMs: 100,
+    closeTimeoutMs: 100,
+  });
+  queueMicrotask(() => writeSyntheticObserverReady(child));
+  const observer = await observerPromise;
+  await assert.rejects(() => observer.read({ timeoutMs: 100 }));
+  await assert.rejects(() => observer.read({ timeoutMs: 100 }));
+  assert.equal(child.killed, true);
+  await assert.rejects(
+    () => observer.close(),
+    /chrome_process_observer_close_failed/,
+  );
+});
+
+test("GATE-014-B1 persistent Windows process observer poisons concurrent reads", async () => {
+  let firstRequest: Record<string, unknown> | null = null;
+  const child = createSyntheticWindowsProcessObserverChild((request) => {
+    firstRequest = request;
+  });
+  const observerPromise = createWindowsProcessTableObserver({
+    spawnImpl: () => child,
+    startupTimeoutMs: 100,
+    closeTimeoutMs: 100,
+  });
+  queueMicrotask(() => writeSyntheticObserverReady(child));
+  const observer = await observerPromise;
+  const firstRead = observer.read({ timeoutMs: 100 });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(firstRequest?.requestId, 1);
+  await assert.rejects(
+    () => observer.read({ timeoutMs: 100 }),
+    /chrome_process_observer_concurrent_read/,
+  );
+  await assert.rejects(firstRead, /chrome_process_observer_concurrent_read/);
+  await assert.rejects(
+    () => observer.read({ timeoutMs: 100 }),
+    /chrome_process_observer_unavailable/,
+  );
+  assert.equal(child.killed, true);
+  await assert.rejects(
+    () => observer.close(),
+    /chrome_process_observer_close_failed/,
+  );
+});
+
+test("GATE-014-B1 persistent Windows process observer rejects extra process fields", async () => {
+  const child = createSyntheticWindowsProcessObserverChild(
+    (request, observerChild) => {
+      writeSyntheticObserverProtocolLine(observerChild, {
+        contract: "gate-014-b1-process-table-observer-v1",
+        kind: "process_table",
+        requestId: request.requestId,
+        status: "pass",
+        processes: [
+          {
+            processId: 100,
+            parentProcessId: 1,
+            commandLine: "must-not-cross-the-protocol",
+          },
+        ],
+        storesSensitiveText: false,
+      });
+    },
+  );
+  const observerPromise = createWindowsProcessTableObserver({
+    spawnImpl: () => child,
+    startupTimeoutMs: 100,
+    closeTimeoutMs: 100,
+  });
+  queueMicrotask(() => writeSyntheticObserverReady(child));
+  const observer = await observerPromise;
+  await assert.rejects(
+    () => observer.read({ timeoutMs: 100 }),
+    /chrome_process_observer_response_invalid/,
+  );
+  assert.equal(child.killed, true);
+  await assert.rejects(
+    () => observer.close(),
+    /chrome_process_observer_close_failed/,
+  );
+});
+
+test("GATE-014-B1 persistent Windows process observer rejects unsolicited duplicate output", async () => {
+  const child = createSyntheticWindowsProcessObserverChild(
+    (request, observerChild) => {
+      const response = {
+        contract: "gate-014-b1-process-table-observer-v1",
+        kind: "process_table",
+        requestId: request.requestId,
+        status: "pass",
+        processes: [],
+        storesSensitiveText: false,
+      };
+      observerChild.stdout.write(
+        `${JSON.stringify(response)}\n${JSON.stringify(response)}\n`,
+      );
+    },
+  );
+  const observerPromise = createWindowsProcessTableObserver({
+    spawnImpl: () => child,
+    startupTimeoutMs: 100,
+    closeTimeoutMs: 100,
+  });
+  queueMicrotask(() => writeSyntheticObserverReady(child));
+  const observer = await observerPromise;
+  assert.deepEqual(await observer.read({ timeoutMs: 100 }), []);
+  await assert.rejects(
+    () => observer.read({ timeoutMs: 100 }),
+    /chrome_process_observer_unavailable/,
+  );
+  assert.equal(child.killed, true);
+  await assert.rejects(
+    () => observer.close(),
+    /chrome_process_observer_close_failed/,
+  );
+});
+
+test("GATE-014-B1 persistent Windows process observer terminates a pending read on close", async () => {
+  let requestObserved = false;
+  const child = createSyntheticWindowsProcessObserverChild(() => {
+    requestObserved = true;
+  });
+  const observerPromise = createWindowsProcessTableObserver({
+    spawnImpl: () => child,
+    startupTimeoutMs: 100,
+    closeTimeoutMs: 100,
+  });
+  queueMicrotask(() => writeSyntheticObserverReady(child));
+  const observer = await observerPromise;
+  const pendingRead = observer.read({ timeoutMs: 1_000 });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(requestObserved, true);
+  const closePromise = observer.close();
+  await assert.rejects(
+    pendingRead,
+    /chrome_process_observer_closed_with_pending_read/,
+  );
+  await assert.rejects(closePromise, /chrome_process_observer_close_failed/);
+  assert.equal(child.killed, true);
+});
+
+test("GATE-014-B1 persistent Windows process observer rejects protocol output during close", async () => {
+  const child = createSyntheticWindowsProcessObserverChild(
+    (request, observerChild) => {
+      writeSyntheticObserverResponse(
+        observerChild,
+        request.requestId as number,
+        [],
+      );
+    },
+  );
+  const observerPromise = createWindowsProcessTableObserver({
+    spawnImpl: () => child,
+    startupTimeoutMs: 100,
+    closeTimeoutMs: 100,
+  });
+  queueMicrotask(() => writeSyntheticObserverReady(child));
+  const observer = await observerPromise;
+  assert.deepEqual(await observer.read({ timeoutMs: 100 }), []);
+  child.stdin.once("finish", () => {
+    writeSyntheticObserverProtocolLine(child, {
+      contract: "gate-014-b1-process-table-observer-v1",
+      kind: "process_table",
+      requestId: 2,
+      status: "pass",
+      processes: [],
+      storesSensitiveText: false,
+    });
+  });
+  await assert.rejects(
+    () => observer.close(),
+    /chrome_process_observer_close_failed/,
+  );
+});
+
+test("GATE-014-B1 persistent Windows process observer rejects stderr without retaining it", async () => {
+  const child = createSyntheticWindowsProcessObserverChild(
+    (request, observerChild) => {
+      writeSyntheticObserverResponse(
+        observerChild,
+        request.requestId as number,
+        [],
+      );
+    },
+  );
+  const observerPromise = createWindowsProcessTableObserver({
+    spawnImpl: () => child,
+    startupTimeoutMs: 100,
+    closeTimeoutMs: 100,
+  });
+  queueMicrotask(() => writeSyntheticObserverReady(child));
+  const observer = await observerPromise;
+  child.stderr.write("synthetic private observer detail");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await assert.rejects(
+    () => observer.read({ timeoutMs: 100 }),
+    /chrome_process_observer_unavailable/,
+  );
+  await assert.rejects(
+    () => observer.close(),
+    /chrome_process_observer_close_failed/,
+  );
+});
+
+test("GATE-014-B1 persistent Windows process observer reaps a failed ready handshake", async () => {
+  const child = createSyntheticWindowsProcessObserverChild(() => undefined);
+  let exitObserved = false;
+  child.kill = () => {
+    if (child.exitCode === null && !child.killed) {
+      child.killed = true;
+      setTimeout(() => {
+        child.exitCode = 1;
+        child.emit("exit", 1, null);
+        child.stdout.end();
+        child.stderr.end();
+        setImmediate(() => child.emit("close", 1, null));
+      }, 20).unref();
+    }
+    return true;
+  };
+  child.once("exit", () => {
+    exitObserved = true;
+  });
+  await assert.rejects(() =>
+    createWindowsProcessTableObserver({
+      spawnImpl: () => child,
+      startupTimeoutMs: 5,
+      closeTimeoutMs: 100,
+    }),
+  );
+  assert.equal(child.killed, true);
+  assert.equal(exitObserved, true);
+});
+
+test("GATE-014-B1 Windows termination reuses one persistent process observer", async () => {
+  const chrome = new EventEmitter() as EventEmitter & {
+    exitCode: number | null;
+    pid: number;
+  };
+  chrome.exitCode = null;
+  chrome.pid = 100;
+  const observerReads: Array<number> = [];
+  let observerCloseCount = 0;
+  let observerFactoryCount = 0;
+  const observer = {
+    async read(options: { timeoutMs?: number } = {}) {
+      observerReads.push(options.timeoutMs ?? -1);
+      if (observerReads.length === 1) {
+        return [
+          { processId: 100, parentProcessId: 1 },
+          { processId: 101, parentProcessId: 100 },
+          { processId: 90_001, parentProcessId: 42 },
+        ];
+      }
+      return [{ processId: 90_001, parentProcessId: 42 }];
+    },
+    async close() {
+      observerCloseCount += 1;
+    },
+  };
+  await terminateChromeProcessTree(chrome, {
+    platform: "win32",
+    createProcessTableObserver: async () => {
+      observerFactoryCount += 1;
+      return observer;
+    },
+    runNativeTermination: async () => {
+      chrome.exitCode = 0;
+      queueMicrotask(() => chrome.emit("exit", 0, null));
+      return "exit_zero";
+    },
+    now: (() => {
+      let value = 1_000;
+      return () => value++;
+    })(),
+    wait: async () => undefined,
+  });
+  assert.equal(observerFactoryCount, 1);
+  assert.ok(observerReads.length >= 2);
+  assert.equal(observerCloseCount, 1);
+});
+
+test("GATE-014-B1 Windows termination preserves primary failure over observer cleanup failure", async () => {
+  const chrome = new EventEmitter() as EventEmitter & {
+    exitCode: number | null;
+    pid: number;
+  };
+  chrome.exitCode = null;
+  chrome.pid = 100;
+  let observerCloseCount = 0;
+  await assert.rejects(
+    terminateChromeProcessTree(chrome, {
+      platform: "win32",
+      createProcessTableObserver: async () => ({
+        async read() {
+          return [{ processId: 200, parentProcessId: 1 }];
+        },
+        async close() {
+          observerCloseCount += 1;
+          throw new Error("synthetic observer close failure");
+        },
+      }),
+      runNativeTermination: async () => {
+        throw new Error("native termination must not run");
+      },
+    }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_pretermination_state_failed",
+  );
+  assert.equal(observerCloseCount, 1);
+});
+
+test("GATE-014-B1 Windows termination surfaces observer cleanup failure after success", async () => {
+  const chrome = new EventEmitter() as EventEmitter & {
+    exitCode: number | null;
+    pid: number;
+  };
+  chrome.exitCode = null;
+  chrome.pid = 100;
+  let readCount = 0;
+  await assert.rejects(
+    terminateChromeProcessTree(chrome, {
+      platform: "win32",
+      createProcessTableObserver: async () => ({
+        async read() {
+          readCount += 1;
+          return readCount === 1
+            ? [{ processId: 100, parentProcessId: 1 }]
+            : [];
+        },
+        async close() {
+          throw new Error("synthetic observer close failure");
+        },
+      }),
+      runNativeTermination: async () => {
+        chrome.exitCode = 0;
+        queueMicrotask(() => chrome.emit("exit", 0, null));
+        return "exit_zero";
+      },
+      now: (() => {
+        let value = 1_000;
+        return () => value++;
+      })(),
+      wait: async () => undefined,
+    }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_observer_cleanup_failed",
+  );
+});
+
+test("GATE-014-B1 Windows termination reuses one observer across both diagnostic windows", async () => {
+  const chrome = new EventEmitter() as EventEmitter & {
+    exitCode: number | null;
+    pid: number;
+  };
+  chrome.exitCode = null;
+  chrome.pid = 100;
+  let observerFactoryCount = 0;
+  let observerCloseCount = 0;
+  let observerReadCount = 0;
+  let nowMs = 0;
+  const unrelatedObserverProcess = {
+    processId: 90_001,
+    parentProcessId: 42,
+  };
+  await assert.rejects(
+    terminateChromeProcessTree(chrome, {
+      platform: "win32",
+      createProcessTableObserver: async () => {
+        observerFactoryCount += 1;
+        return {
+          async read() {
+            observerReadCount += 1;
+            if (observerReadCount === 1) {
+              return [
+                { processId: 100, parentProcessId: 1 },
+                { processId: 101, parentProcessId: 100 },
+                unrelatedObserverProcess,
+              ];
+            }
+            if (observerReadCount === 2) {
+              nowMs = 5_000;
+              return [
+                { processId: 101, parentProcessId: 100 },
+                unrelatedObserverProcess,
+              ];
+            }
+            if (observerReadCount === 3) {
+              nowMs = 10_000;
+              return [
+                { processId: 101, parentProcessId: 100 },
+                unrelatedObserverProcess,
+              ];
+            }
+            nowMs = 10_001;
+            return [unrelatedObserverProcess];
+          },
+          async close() {
+            observerCloseCount += 1;
+          },
+        };
+      },
+      runNativeTermination: async () => {
+        chrome.exitCode = 0;
+        return "exit_zero";
+      },
+      now: () => nowMs,
+      wait: async () => undefined,
+    }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_lineage_cleared_by_15s_failed",
+  );
+  assert.equal(observerFactoryCount, 1);
+  assert.equal(observerReadCount, 4);
+  assert.equal(observerCloseCount, 1);
+});
+
 test("GATE-014-B1 settles concurrent Windows parent and lineage observations with deterministic failure priority", async () => {
   let releaseObservations: (() => void) | null = null;
   const observationBarrier = new Promise<void>((resolve) => {
@@ -2274,6 +2875,8 @@ test("GATE-014-B1 browser stages preserve proven codes and replace spoofed field
     "browser_production_stage_cleanup_failed",
     "browser_environment_validation_failed",
     "browser_process_spawn_failed",
+    "browser_process_observer_setup_failed",
+    "browser_process_observer_cleanup_failed",
     "browser_target_observer_setup_failed",
     "browser_harness_load_failed",
     "browser_production_load_failed",
