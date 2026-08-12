@@ -21,6 +21,7 @@ import {
   combineBrowserExecutionObservations,
   createB1TemporaryProfile,
   executeB1BrowserStage,
+  readB1WindowsJobLauncherCompilerIdentity,
   readB1BrowserControlledFailureCode,
   readChromeForTestingMetadata,
   removeB1TemporaryProfile,
@@ -112,6 +113,7 @@ const FIXTURE_EXECUTION_ORDER = Object.freeze([
 const BENCHMARK_SOURCE_FILES = Object.freeze([
   "package.json",
   "scripts/gate-014-b1-browser-runner.mjs",
+  "scripts/gate-014-b1-windows-job-launcher.cs",
   "scripts/gate-014-b1-matrix-runner.mjs",
   "scripts/gate-014-b1-receipt.mjs",
   "scripts/gate-014-fixture-generator.mjs",
@@ -122,6 +124,8 @@ const BENCHMARK_SOURCE_FILES = Object.freeze([
   "tests/fixtures/gate-014/b1-extension/restore-preflight.js",
   "tests/fixtures/gate-014/b1-extension/service-worker.js",
   "tests/fixtures/gate-014/b1-extension/storage-harness.js",
+  "tests/fixtures/gate-014/b1-job-deadline-probe.cs",
+  "tests/fixtures/gate-014/b1-job-descendant-probe.cs",
   "docs/development-plan-0.14.md",
   "docs/benchmarks/gate-014-b1-runbook.md",
   "docs/architecture/gate-contract-0.14-storage-search-and-backup.md",
@@ -1024,13 +1028,15 @@ class MatrixPause extends Error {}
 
 async function collectEnvironmentCore(chromePath, cftMetadataPath) {
   await access(path.join(REPOSITORY_ROOT, "dist", "manifest.json"));
-  const [{ stdout: commitStdout }, browser] = await Promise.all([
-    execFile("git", ["rev-parse", "HEAD"], {
-      cwd: REPOSITORY_ROOT,
-      windowsHide: true,
-    }),
-    readChromeForTestingMetadata(chromePath, cftMetadataPath),
-  ]);
+  const [{ stdout: commitStdout }, browser, launcherCompiler] =
+    await Promise.all([
+      execFile("git", ["rev-parse", "HEAD"], {
+        cwd: REPOSITORY_ROOT,
+        windowsHide: true,
+      }),
+      readChromeForTestingMetadata(chromePath, cftMetadataPath),
+      readB1WindowsJobLauncherCompilerIdentity(),
+    ]);
   const repositoryCommitSha = commitStdout.trim();
   if (!/^[a-f0-9]{40}$/.test(repositoryCommitSha)) {
     throw new Error("repository commit SHA unavailable");
@@ -1060,7 +1066,11 @@ async function collectEnvironmentCore(chromePath, cftMetadataPath) {
       logicalCoreCount: os.cpus().length,
       totalMemoryBytes: os.totalmem(),
     },
-    runtime: { nodeVersion: process.version },
+    runtime: {
+      nodeVersion: process.version,
+      windowsJobLauncherCompilerSha256: launcherCompiler.sha256,
+      windowsJobLauncherReferencesSha256: launcherCompiler.referencesSha256,
+    },
     browser,
     execution: {
       commandId: "gate014_b1_full_matrix",
@@ -1531,6 +1541,19 @@ async function verifyCurrentArtifactBindings(environment) {
   }
   if (environment.fixtureGeneratorVersion !== GENERATOR_VERSION) {
     throw new Error("B1 fixture generator binding mismatch");
+  }
+  const launcherCompiler = await readB1WindowsJobLauncherCompilerIdentity();
+  if (
+    launcherCompiler.sha256 !==
+    environment.runtime.windowsJobLauncherCompilerSha256
+  ) {
+    throw new Error("B1 Windows Job launcher compiler binding mismatch");
+  }
+  if (
+    launcherCompiler.referencesSha256 !==
+    environment.runtime.windowsJobLauncherReferencesSha256
+  ) {
+    throw new Error("B1 Windows Job launcher reference binding mismatch");
   }
   const { stdout: headStdout } = await execFile("git", ["rev-parse", "HEAD"], {
     cwd: REPOSITORY_ROOT,

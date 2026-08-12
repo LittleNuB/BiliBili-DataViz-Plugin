@@ -175,12 +175,24 @@ export function createB1EnvironmentReceipt(input) {
   };
 
   assertPlainObject(input.runtime, "runtime");
-  assertAllowedFields(input.runtime, ["nodeVersion"]);
+  assertAllowedFields(input.runtime, [
+    "nodeVersion",
+    "windowsJobLauncherCompilerSha256",
+    "windowsJobLauncherReferencesSha256",
+  ]);
   const runtime = {
     nodeVersion: assertPattern(
       input.runtime.nodeVersion,
       /^v\d+\.\d+\.\d+$/,
       "runtime.nodeVersion",
+    ),
+    windowsJobLauncherCompilerSha256: assertSha256(
+      input.runtime.windowsJobLauncherCompilerSha256,
+      "runtime.windowsJobLauncherCompilerSha256",
+    ),
+    windowsJobLauncherReferencesSha256: assertSha256(
+      input.runtime.windowsJobLauncherReferencesSha256,
+      "runtime.windowsJobLauncherReferencesSha256",
     ),
   };
 

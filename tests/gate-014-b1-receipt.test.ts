@@ -38,7 +38,11 @@ const ENVIRONMENT_INPUT = {
     freeDiskBytesAtStart: 200_000_000_000,
     freeDiskBytesAtEnd: 199_000_000_000,
   },
-  runtime: { nodeVersion: "v24.14.1" },
+  runtime: {
+    nodeVersion: "v24.14.1",
+    windowsJobLauncherCompilerSha256: "9".repeat(64),
+    windowsJobLauncherReferencesSha256: "8".repeat(64),
+  },
   browser: {
     flavor: "chrome_for_testing_stable",
     version: "151.0.7922.77",

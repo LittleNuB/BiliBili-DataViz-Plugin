@@ -15,29 +15,24 @@ import {
   closeB1FixtureHttpServer,
   classifyObservedErrorEvent,
   combineBrowserExecutionObservations,
-  createWindowsProcessTableObserver,
   createB1ProductionExtensionStage,
   createB1TemporaryProfile,
   createCdpExecutionObservation,
   createControlledHarnessEvaluationExpression,
   createExtensionTargetObserver,
   createPipeCdpClient,
-  diagnoseWindowsChromeLineageAfterGate,
   executeB1BrowserStage,
   executeB1BrowserOperationWithCleanup,
-  findSurvivingWindowsProcessTree,
   findProductionServiceWorkerSession,
   loadUnpackedExtension,
-  observeWindowsChromeClosure,
   removeB1ProductionExtensionStage,
   removeB1TemporaryProfile,
-  readCompletedWindowsTerminationOutcome,
   readB1BrowserControlledFailureCode,
-  readWindowsProcessTable,
   selectProductionServiceWorkerTarget,
+  spawnB1ChromeProcess,
   settleB1FixtureServerCleanup,
-  settleWindowsChromeClosureObservations,
   terminateChromeProcessTree,
+  terminateB1WindowsJob,
   uninstallUnpackedExtension,
   unwrapControlledHarnessEvaluation,
   validateBrowserExecutionObservation,
@@ -46,9 +41,8 @@ import {
   validateOfficialCftStableMetadata,
   validateControlledHarnessEvaluation,
   validateSmokeResult,
-  validateWindowsChromeTerminationEvidence,
   waitForB1BrowserProcessSpawn,
-  waitForWindowsProcessTreeExit,
+  waitForB1WindowsJobLauncherReady,
   waitForProductionExtensionReady,
   waitForProcessExit,
 } from "../scripts/gate-014-b1-browser-runner.mjs";
@@ -81,95 +75,6 @@ async function createControlledBrowserFailureForTest(stageCode: string) {
     return error;
   }
   throw new Error("synthetic_controlled_failure_missing");
-}
-
-function createSyntheticWindowsProcessObserverChild(
-  onRequest: (request: Record<string, unknown>, child: any) => void,
-) {
-  const child = new EventEmitter() as EventEmitter & {
-    exitCode: number | null;
-    killed: boolean;
-    pid: number;
-    stdin: PassThrough;
-    stdout: PassThrough;
-    stderr: PassThrough;
-    kill: () => boolean;
-  };
-  child.exitCode = null;
-  child.killed = false;
-  child.pid = 90_001;
-  child.stdin = new PassThrough();
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
-  const closeChild = (exitCode: number) => {
-    if (child.exitCode !== null) {
-      return;
-    }
-    child.exitCode = exitCode;
-    queueMicrotask(() => {
-      child.emit("exit", exitCode, null);
-      child.stdout.end();
-      child.stderr.end();
-      setImmediate(() => child.emit("close", exitCode, null));
-    });
-  };
-  child.kill = () => {
-    if (child.exitCode === null) {
-      child.killed = true;
-      closeChild(1);
-    }
-    return true;
-  };
-  let requestBuffer = "";
-  child.stdin.setEncoding("utf8");
-  child.stdin.on("data", (chunk: string) => {
-    requestBuffer += chunk;
-    while (requestBuffer.includes("\n")) {
-      const newlineIndex = requestBuffer.indexOf("\n");
-      const line = requestBuffer.slice(0, newlineIndex);
-      requestBuffer = requestBuffer.slice(newlineIndex + 1);
-      if (line !== "") {
-        onRequest(JSON.parse(line), child);
-      }
-    }
-  });
-  child.stdin.on("finish", () => {
-    if (child.exitCode === null) {
-      closeChild(0);
-    }
-  });
-  return child;
-}
-
-function writeSyntheticObserverReady(child: any) {
-  const ready = `${JSON.stringify({
-    contract: "gate-014-b1-process-table-observer-v1",
-    kind: "ready",
-    storesSensitiveText: false,
-  })}\n`;
-  child.stdout.write(ready.slice(0, 9));
-  child.stdout.write(ready.slice(9));
-}
-
-function writeSyntheticObserverResponse(
-  child: any,
-  requestId: number,
-  processes: Array<{ processId: number; parentProcessId: number }>,
-) {
-  const response = `${JSON.stringify({
-    contract: "gate-014-b1-process-table-observer-v1",
-    kind: "process_table",
-    requestId,
-    status: "pass",
-    processes,
-    storesSensitiveText: false,
-  })}\n`;
-  child.stdout.write(response.slice(0, 13));
-  child.stdout.write(response.slice(13));
-}
-
-function writeSyntheticObserverProtocolLine(child: any, value: unknown) {
-  child.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
 test("GATE-014-B1 bounds a single browser lifecycle without masking gate thresholds", () => {
@@ -1377,1418 +1282,415 @@ test("GATE-014-B1 requires the executable version to match the declared official
 test("GATE-014-B1 process exit observation fails closed on timeout", async () => {
   const timedOutChild = new EventEmitter();
   timedOutChild.exitCode = null;
+  timedOutChild.signalCode = null;
   assert.equal(await waitForProcessExit(timedOutChild, 5), false);
   assert.equal(timedOutChild.listenerCount("exit"), 0);
 
   const exitingChild = new EventEmitter();
   exitingChild.exitCode = null;
+  exitingChild.signalCode = null;
   const exitPromise = waitForProcessExit(exitingChild, 1_000);
   setImmediate(() => {
     exitingChild.exitCode = 0;
     exitingChild.emit("exit", 0);
   });
   assert.equal(await exitPromise, true);
+
+  const signaledChild = new EventEmitter();
+  signaledChild.exitCode = null;
+  signaledChild.signalCode = "SIGKILL";
+  assert.equal(await waitForProcessExit(signaledChild, 5), true);
 });
 
-test("GATE-014-B1 persistent Windows process observer frames strict sequential responses", async () => {
-  const observedRequests: Array<Record<string, unknown>> = [];
-  const child = createSyntheticWindowsProcessObserverChild(
-    (request, observerChild) => {
-      observedRequests.push(request);
-      writeSyntheticObserverResponse(
-        observerChild,
-        request.requestId as number,
-        [{ processId: 100, parentProcessId: 1 }],
-      );
-    },
-  );
-  const observerPromise = createWindowsProcessTableObserver({
-    spawnImpl: () => child,
-    startupTimeoutMs: 100,
-    closeTimeoutMs: 100,
-  });
-  queueMicrotask(() => writeSyntheticObserverReady(child));
-  const observer = await observerPromise;
-  assert.deepEqual(await observer.read({ timeoutMs: 100 }), [
-    { processId: 100, parentProcessId: 1 },
-  ]);
-  assert.deepEqual(await observer.read({ timeoutMs: 100 }), [
-    { processId: 100, parentProcessId: 1 },
-  ]);
-  assert.deepEqual(observedRequests, [
-    {
-      contract: "gate-014-b1-process-table-observer-v1",
-      kind: "process_table",
-      requestId: 1,
-      storesSensitiveText: false,
-    },
-    {
-      contract: "gate-014-b1-process-table-observer-v1",
-      kind: "process_table",
-      requestId: 2,
-      storesSensitiveText: false,
-    },
-  ]);
-  await observer.close();
-  assert.equal(child.exitCode, 0);
-});
-
-test("GATE-014-B1 persistent Windows process observer poisons timeout and rejects late reuse", async () => {
-  let requestCount = 0;
-  const child = createSyntheticWindowsProcessObserverChild(
-    (request, observerChild) => {
-      requestCount += 1;
-      if (requestCount === 1) {
-        setTimeout(
-          () =>
-            writeSyntheticObserverResponse(
-              observerChild,
-              request.requestId as number,
-              [{ processId: 100, parentProcessId: 1 }],
-            ),
-          30,
-        ).unref();
-      }
-    },
-  );
-  const observerPromise = createWindowsProcessTableObserver({
-    spawnImpl: () => child,
-    startupTimeoutMs: 100,
-    closeTimeoutMs: 100,
-  });
-  queueMicrotask(() => writeSyntheticObserverReady(child));
-  const observer = await observerPromise;
-  await assert.rejects(() => observer.read({ timeoutMs: 5 }));
-  await assert.rejects(() => observer.read({ timeoutMs: 100 }));
-  assert.equal(requestCount, 1);
-  assert.equal(child.killed, true);
-  await assert.rejects(
-    () => observer.close(),
-    /chrome_process_observer_close_failed/,
-  );
-});
-
-test("GATE-014-B1 persistent Windows process observer rejects response sequence spoofing", async () => {
-  const child = createSyntheticWindowsProcessObserverChild(
-    (request, observerChild) => {
-      writeSyntheticObserverResponse(
-        observerChild,
-        (request.requestId as number) + 1,
-        [],
-      );
-    },
-  );
-  const observerPromise = createWindowsProcessTableObserver({
-    spawnImpl: () => child,
-    startupTimeoutMs: 100,
-    closeTimeoutMs: 100,
-  });
-  queueMicrotask(() => writeSyntheticObserverReady(child));
-  const observer = await observerPromise;
-  await assert.rejects(() => observer.read({ timeoutMs: 100 }));
-  await assert.rejects(() => observer.read({ timeoutMs: 100 }));
-  assert.equal(child.killed, true);
-  await assert.rejects(
-    () => observer.close(),
-    /chrome_process_observer_close_failed/,
-  );
-});
-
-test("GATE-014-B1 persistent Windows process observer poisons concurrent reads", async () => {
-  let firstRequest: Record<string, unknown> | null = null;
-  const child = createSyntheticWindowsProcessObserverChild((request) => {
-    firstRequest = request;
-  });
-  const observerPromise = createWindowsProcessTableObserver({
-    spawnImpl: () => child,
-    startupTimeoutMs: 100,
-    closeTimeoutMs: 100,
-  });
-  queueMicrotask(() => writeSyntheticObserverReady(child));
-  const observer = await observerPromise;
-  const firstRead = observer.read({ timeoutMs: 100 });
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(firstRequest?.requestId, 1);
-  await assert.rejects(
-    () => observer.read({ timeoutMs: 100 }),
-    /chrome_process_observer_concurrent_read/,
-  );
-  await assert.rejects(firstRead, /chrome_process_observer_concurrent_read/);
-  await assert.rejects(
-    () => observer.read({ timeoutMs: 100 }),
-    /chrome_process_observer_unavailable/,
-  );
-  assert.equal(child.killed, true);
-  await assert.rejects(
-    () => observer.close(),
-    /chrome_process_observer_close_failed/,
-  );
-});
-
-test("GATE-014-B1 persistent Windows process observer rejects extra process fields", async () => {
-  const child = createSyntheticWindowsProcessObserverChild(
-    (request, observerChild) => {
-      writeSyntheticObserverProtocolLine(observerChild, {
-        contract: "gate-014-b1-process-table-observer-v1",
-        kind: "process_table",
-        requestId: request.requestId,
-        status: "pass",
-        processes: [
-          {
-            processId: 100,
-            parentProcessId: 1,
-            commandLine: "must-not-cross-the-protocol",
-          },
-        ],
-        storesSensitiveText: false,
-      });
-    },
-  );
-  const observerPromise = createWindowsProcessTableObserver({
-    spawnImpl: () => child,
-    startupTimeoutMs: 100,
-    closeTimeoutMs: 100,
-  });
-  queueMicrotask(() => writeSyntheticObserverReady(child));
-  const observer = await observerPromise;
-  await assert.rejects(
-    () => observer.read({ timeoutMs: 100 }),
-    /chrome_process_observer_response_invalid/,
-  );
-  assert.equal(child.killed, true);
-  await assert.rejects(
-    () => observer.close(),
-    /chrome_process_observer_close_failed/,
-  );
-});
-
-test("GATE-014-B1 persistent Windows process observer rejects unsolicited duplicate output", async () => {
-  const child = createSyntheticWindowsProcessObserverChild(
-    (request, observerChild) => {
-      const response = {
-        contract: "gate-014-b1-process-table-observer-v1",
-        kind: "process_table",
-        requestId: request.requestId,
-        status: "pass",
-        processes: [],
-        storesSensitiveText: false,
-      };
-      observerChild.stdout.write(
-        `${JSON.stringify(response)}\n${JSON.stringify(response)}\n`,
-      );
-    },
-  );
-  const observerPromise = createWindowsProcessTableObserver({
-    spawnImpl: () => child,
-    startupTimeoutMs: 100,
-    closeTimeoutMs: 100,
-  });
-  queueMicrotask(() => writeSyntheticObserverReady(child));
-  const observer = await observerPromise;
-  assert.deepEqual(await observer.read({ timeoutMs: 100 }), []);
-  await assert.rejects(
-    () => observer.read({ timeoutMs: 100 }),
-    /chrome_process_observer_unavailable/,
-  );
-  assert.equal(child.killed, true);
-  await assert.rejects(
-    () => observer.close(),
-    /chrome_process_observer_close_failed/,
-  );
-});
-
-test("GATE-014-B1 persistent Windows process observer terminates a pending read on close", async () => {
-  let requestObserved = false;
-  const child = createSyntheticWindowsProcessObserverChild(() => {
-    requestObserved = true;
-  });
-  const observerPromise = createWindowsProcessTableObserver({
-    spawnImpl: () => child,
-    startupTimeoutMs: 100,
-    closeTimeoutMs: 100,
-  });
-  queueMicrotask(() => writeSyntheticObserverReady(child));
-  const observer = await observerPromise;
-  const pendingRead = observer.read({ timeoutMs: 1_000 });
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(requestObserved, true);
-  const closePromise = observer.close();
-  await assert.rejects(
-    pendingRead,
-    /chrome_process_observer_closed_with_pending_read/,
-  );
-  await assert.rejects(closePromise, /chrome_process_observer_close_failed/);
-  assert.equal(child.killed, true);
-});
-
-test("GATE-014-B1 persistent Windows process observer rejects protocol output during close", async () => {
-  const child = createSyntheticWindowsProcessObserverChild(
-    (request, observerChild) => {
-      writeSyntheticObserverResponse(
-        observerChild,
-        request.requestId as number,
-        [],
-      );
-    },
-  );
-  const observerPromise = createWindowsProcessTableObserver({
-    spawnImpl: () => child,
-    startupTimeoutMs: 100,
-    closeTimeoutMs: 100,
-  });
-  queueMicrotask(() => writeSyntheticObserverReady(child));
-  const observer = await observerPromise;
-  assert.deepEqual(await observer.read({ timeoutMs: 100 }), []);
-  child.stdin.once("finish", () => {
-    writeSyntheticObserverProtocolLine(child, {
-      contract: "gate-014-b1-process-table-observer-v1",
-      kind: "process_table",
-      requestId: 2,
-      status: "pass",
-      processes: [],
-      storesSensitiveText: false,
-    });
-  });
-  await assert.rejects(
-    () => observer.close(),
-    /chrome_process_observer_close_failed/,
-  );
-});
-
-test("GATE-014-B1 persistent Windows process observer rejects stderr without retaining it", async () => {
-  const child = createSyntheticWindowsProcessObserverChild(
-    (request, observerChild) => {
-      writeSyntheticObserverResponse(
-        observerChild,
-        request.requestId as number,
-        [],
-      );
-    },
-  );
-  const observerPromise = createWindowsProcessTableObserver({
-    spawnImpl: () => child,
-    startupTimeoutMs: 100,
-    closeTimeoutMs: 100,
-  });
-  queueMicrotask(() => writeSyntheticObserverReady(child));
-  const observer = await observerPromise;
-  child.stderr.write("synthetic private observer detail");
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  await assert.rejects(
-    () => observer.read({ timeoutMs: 100 }),
-    /chrome_process_observer_unavailable/,
-  );
-  await assert.rejects(
-    () => observer.close(),
-    /chrome_process_observer_close_failed/,
-  );
-});
-
-test("GATE-014-B1 persistent Windows process observer reaps a failed ready handshake", async () => {
-  const child = createSyntheticWindowsProcessObserverChild(() => undefined);
-  let exitObserved = false;
+test("GATE-014-B1 Windows Job launcher handshake is strict and reaps failed controllers", async () => {
+  const child = new EventEmitter() as EventEmitter & {
+    exitCode: number | null;
+    killed: boolean;
+    pid: number;
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    stdio: Array<PassThrough>;
+    kill: () => boolean;
+  };
+  child.exitCode = null;
+  child.killed = false;
+  child.pid = 91_001;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdio = [
+    child.stdin,
+    child.stdout,
+    child.stderr,
+    new PassThrough(),
+    new PassThrough(),
+  ];
   child.kill = () => {
-    if (child.exitCode === null && !child.killed) {
-      child.killed = true;
-      setTimeout(() => {
-        child.exitCode = 1;
-        child.emit("exit", 1, null);
-        child.stdout.end();
-        child.stderr.end();
-        setImmediate(() => child.emit("close", 1, null));
-      }, 20).unref();
-    }
+    child.killed = true;
+    child.exitCode = 1;
+    queueMicrotask(() => child.emit("exit", 1, "SIGKILL"));
     return true;
   };
-  child.once("exit", () => {
-    exitObserved = true;
+  const pending = waitForB1WindowsJobLauncherReady(child, {
+    startupTimeoutMs: 100,
   });
-  await assert.rejects(() =>
-    createWindowsProcessTableObserver({
+  child.stderr.write("synthetic Chrome diagnostic\n");
+  child.stdout.write("gate-014-b1-windows-job-launcher-v1 wrong\n");
+  await assert.rejects(pending, /windows_job_launcher_control_invalid/);
+  assert.equal(child.killed, true);
+  assert.equal(child.listenerCount("exit"), 0);
+  assert.equal(child.listenerCount("error"), 0);
+  assert.equal(child.stdout.listenerCount("data"), 0);
+});
+
+test("GATE-014-B1 Windows Job control ignores Chrome stderr and accepts only the ready line", async () => {
+  const child = new EventEmitter() as EventEmitter & {
+    exitCode: number | null;
+    pid: number;
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    stdio: Array<PassThrough>;
+    kill: () => boolean;
+  };
+  child.exitCode = null;
+  child.pid = 91_002;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdio = [
+    child.stdin,
+    child.stdout,
+    child.stderr,
+    new PassThrough(),
+    new PassThrough(),
+  ];
+  child.kill = () => true;
+  const pending = waitForB1WindowsJobLauncherReady(child, {
+    startupTimeoutMs: 100,
+  });
+  child.stderr.write("synthetic Chrome diagnostic\n");
+  child.stdout.write("gate-014-b1-windows-job-launcher-v1 ready\n");
+  await pending;
+  assert.equal(child.stdout.listenerCount("data"), 1);
+});
+
+test("GATE-014-B1 Windows Job termination rejects unproven controllers", async () => {
+  const controller = new EventEmitter() as EventEmitter & {
+    exitCode: number | null;
+    killed: boolean;
+    stdin: PassThrough;
+    stdout: PassThrough;
+    kill: () => boolean;
+  };
+  controller.exitCode = null;
+  controller.killed = false;
+  controller.stdin = new PassThrough();
+  controller.stdout = new PassThrough();
+  controller.stdin.on("error", () => undefined);
+  controller.stdin.end = ((_chunk: string, callback: (error?: Error) => void) => {
+    queueMicrotask(() => callback(new Error("synthetic write failure")));
+    return controller.stdin;
+  }) as typeof controller.stdin.end;
+  controller.kill = () => {
+    controller.killed = true;
+    controller.exitCode = 1;
+    queueMicrotask(() => controller.emit("exit", 1, "SIGKILL"));
+    return true;
+  };
+  await assert.rejects(
+    () => terminateB1WindowsJob(controller, { timeoutMs: 100 }),
+    /windows_job_termination_state_invalid/,
+  );
+});
+
+test("GATE-014-B1 Windows Job rejects and reaps extra control output after ready", async () => {
+  const child = new EventEmitter() as EventEmitter & {
+    exitCode: number | null;
+    signalCode: string | null;
+    killed: boolean;
+    pid: number;
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+    stdio: Array<PassThrough>;
+    kill: () => boolean;
+  };
+  child.exitCode = null;
+  child.signalCode = null;
+  child.killed = false;
+  child.pid = 91_003;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdio = [
+    child.stdin,
+    child.stdout,
+    child.stderr,
+    new PassThrough(),
+    new PassThrough(),
+  ];
+  child.kill = () => {
+    child.killed = true;
+    child.signalCode = "SIGKILL";
+    queueMicrotask(() => child.emit("exit", null, "SIGKILL"));
+    return true;
+  };
+  const spawnPromise = spawnB1ChromeProcess(
+    path.resolve("synthetic-chrome.exe"),
+    [],
+    {
+      platform: "win32",
+      resolveLauncher: async () => path.resolve("synthetic-launcher.exe"),
       spawnImpl: () => child,
-      startupTimeoutMs: 5,
-      closeTimeoutMs: 100,
+      startupTimeoutMs: 100,
+    },
+  );
+  queueMicrotask(() => {
+    child.stdout.write("gate-014-b1-windows-job-launcher-v1 ready\n");
+  });
+  const controller = await spawnPromise;
+  child.stdout.write("unexpected-control-output\n");
+  await assert.rejects(
+    terminateChromeProcessTree(controller, {
+      platform: "win32",
+      timeoutMs: 100,
     }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_native_termination_failed",
   );
   assert.equal(child.killed, true);
-  assert.equal(exitObserved, true);
+  assert.equal(child.stdout.listenerCount("data"), 0);
 });
 
-test("GATE-014-B1 Windows termination reuses one persistent process observer", async () => {
-  const chrome = new EventEmitter() as EventEmitter & {
-    exitCode: number | null;
-    pid: number;
-  };
-  chrome.exitCode = null;
-  chrome.pid = 100;
-  const observerReads: Array<number> = [];
-  let observerCloseCount = 0;
-  let observerFactoryCount = 0;
-  const observer = {
-    async read(options: { timeoutMs?: number } = {}) {
-      observerReads.push(options.timeoutMs ?? -1);
-      if (observerReads.length === 1) {
-        return [
-          { processId: 100, parentProcessId: 1 },
-          { processId: 101, parentProcessId: 100 },
-          { processId: 90_001, parentProcessId: 42 },
-        ];
-      }
-      return [{ processId: 90_001, parentProcessId: 42 }];
-    },
-    async close() {
-      observerCloseCount += 1;
-    },
-  };
-  await terminateChromeProcessTree(chrome, {
-    platform: "win32",
-    createProcessTableObserver: async () => {
-      observerFactoryCount += 1;
-      return observer;
-    },
-    runNativeTermination: async () => {
-      chrome.exitCode = 0;
-      queueMicrotask(() => chrome.emit("exit", 0, null));
-      return "exit_zero";
-    },
-    now: (() => {
-      let value = 1_000;
-      return () => value++;
-    })(),
-    wait: async () => undefined,
-  });
-  assert.equal(observerFactoryCount, 1);
-  assert.ok(observerReads.length >= 2);
-  assert.equal(observerCloseCount, 1);
-});
-
-test("GATE-014-B1 Windows termination preserves primary failure over observer cleanup failure", async () => {
-  const chrome = new EventEmitter() as EventEmitter & {
-    exitCode: number | null;
-    pid: number;
-  };
-  chrome.exitCode = null;
-  chrome.pid = 100;
-  let observerCloseCount = 0;
-  await assert.rejects(
-    terminateChromeProcessTree(chrome, {
-      platform: "win32",
-      createProcessTableObserver: async () => ({
-        async read() {
-          return [{ processId: 200, parentProcessId: 1 }];
-        },
-        async close() {
-          observerCloseCount += 1;
-          throw new Error("synthetic observer close failure");
-        },
-      }),
-      runNativeTermination: async () => {
-        throw new Error("native termination must not run");
-      },
-    }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_pretermination_state_failed",
-  );
-  assert.equal(observerCloseCount, 1);
-});
-
-test("GATE-014-B1 Windows termination surfaces observer cleanup failure after success", async () => {
-  const chrome = new EventEmitter() as EventEmitter & {
-    exitCode: number | null;
-    pid: number;
-  };
-  chrome.exitCode = null;
-  chrome.pid = 100;
-  let readCount = 0;
-  await assert.rejects(
-    terminateChromeProcessTree(chrome, {
-      platform: "win32",
-      createProcessTableObserver: async () => ({
-        async read() {
-          readCount += 1;
-          return readCount === 1
-            ? [{ processId: 100, parentProcessId: 1 }]
-            : [];
-        },
-        async close() {
-          throw new Error("synthetic observer close failure");
-        },
-      }),
-      runNativeTermination: async () => {
-        chrome.exitCode = 0;
-        queueMicrotask(() => chrome.emit("exit", 0, null));
-        return "exit_zero";
-      },
-      now: (() => {
-        let value = 1_000;
-        return () => value++;
-      })(),
-      wait: async () => undefined,
-    }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_observer_cleanup_failed",
-  );
-});
-
-test("GATE-014-B1 Windows termination reuses one observer across both diagnostic windows", async () => {
-  const chrome = new EventEmitter() as EventEmitter & {
-    exitCode: number | null;
-    pid: number;
-  };
-  chrome.exitCode = null;
-  chrome.pid = 100;
-  let observerFactoryCount = 0;
-  let observerCloseCount = 0;
-  let observerReadCount = 0;
-  let nowMs = 0;
-  const unrelatedObserverProcess = {
-    processId: 90_001,
-    parentProcessId: 42,
-  };
-  await assert.rejects(
-    terminateChromeProcessTree(chrome, {
-      platform: "win32",
-      createProcessTableObserver: async () => {
-        observerFactoryCount += 1;
-        return {
-          async read() {
-            observerReadCount += 1;
-            if (observerReadCount === 1) {
-              return [
-                { processId: 100, parentProcessId: 1 },
-                { processId: 101, parentProcessId: 100 },
-                unrelatedObserverProcess,
-              ];
-            }
-            if (observerReadCount === 2) {
-              nowMs = 5_000;
-              return [
-                { processId: 101, parentProcessId: 100 },
-                unrelatedObserverProcess,
-              ];
-            }
-            if (observerReadCount === 3) {
-              nowMs = 10_000;
-              return [
-                { processId: 101, parentProcessId: 100 },
-                unrelatedObserverProcess,
-              ];
-            }
-            nowMs = 10_001;
-            return [unrelatedObserverProcess];
-          },
-          async close() {
-            observerCloseCount += 1;
-          },
-        };
-      },
-      runNativeTermination: async () => {
-        chrome.exitCode = 0;
-        return "exit_zero";
-      },
-      now: () => nowMs,
-      wait: async () => undefined,
-    }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_lineage_cleared_by_15s_failed",
-  );
-  assert.equal(observerFactoryCount, 1);
-  assert.equal(observerReadCount, 4);
-  assert.equal(observerCloseCount, 1);
-});
-
-test("GATE-014-B1 settles concurrent Windows parent and lineage observations with deterministic failure priority", async () => {
-  let releaseObservations: (() => void) | null = null;
-  const observationBarrier = new Promise<void>((resolve) => {
-    releaseObservations = resolve;
-  });
-  const starts: string[] = [];
-  const pending = settleWindowsChromeClosureObservations(
-    async () => {
-      starts.push("parent");
-      await observationBarrier;
-      return true;
-    },
-    async () => {
-      starts.push("lineage");
-      await observationBarrier;
-      return [];
-    },
-  );
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(starts, ["parent", "lineage"]);
-  releaseObservations?.();
-  assert.deepEqual(await pending, {
-    parentExited: true,
-    survivors: [],
-  });
-
-  const parentFailure = new Error("parent_failed");
-  const lineageFailure = new Error("lineage_failed");
-  let lineageSettled = false;
-  await assert.rejects(
-    settleWindowsChromeClosureObservations(
-      async () => {
-        throw parentFailure;
-      },
-      async () => {
-        await new Promise<void>((resolve) => setImmediate(resolve));
-        lineageSettled = true;
-        throw lineageFailure;
-      },
-    ),
-    (error: unknown) => error === parentFailure,
-  );
-  assert.equal(lineageSettled, true);
-  await assert.rejects(
-    settleWindowsChromeClosureObservations(
-      async () => true,
-      async () => {
-        throw lineageFailure;
-      },
-    ),
-    (error: unknown) => error === lineageFailure,
-  );
-  await assert.rejects(
-    settleWindowsChromeClosureObservations(
-      null as unknown as () => Promise<boolean>,
-      async () => [],
-    ),
-    /chrome_process_closure_observation_invalid/,
-  );
-});
-
-test("GATE-014-B1 observes Windows parent exit and lineage concurrently inside one immutable deadline", async () => {
-  const initialProcesses = [
-    { processId: 100, parentProcessId: 10 },
-    { processId: 101, parentProcessId: 100 },
-  ];
-  const child = { pid: 100 };
-  const now = () => 1_000;
-  const starts: string[] = [];
-  const parentTimeoutsMs: number[] = [];
-  const lineageDeadlinesMs: number[] = [];
-  let releaseObservations: (() => void) | null = null;
-  const observationBarrier = new Promise<void>((resolve) => {
-    releaseObservations = resolve;
-  });
-  const passing = observeWindowsChromeClosure({
-    child,
-    initialProcesses,
-    closureDeadlineEpochMs: 5_000,
-    now,
-    waitForParentExit: async (
-      observedChild: { pid: number },
-      timeoutMs: number,
-    ) => {
-      starts.push("parent");
-      assert.equal(observedChild, child);
-      parentTimeoutsMs.push(timeoutMs);
-      await observationBarrier;
-      return true;
-    },
-    waitForLineageExit: async (
-      observedInitialProcesses: Array<{
-        processId: number;
-        parentProcessId: number;
-      }>,
-      rootProcessId: number,
-      options: {
-        deadlineEpochMs: number;
-        now: () => number;
-        readProcessTable: () => Promise<unknown[]>;
-      },
-    ) => {
-      starts.push("lineage");
-      assert.equal(observedInitialProcesses, initialProcesses);
-      assert.equal(rootProcessId, child.pid);
-      assert.equal(options.now, now);
-      assert.equal(typeof options.readProcessTable, "function");
-      lineageDeadlinesMs.push(options.deadlineEpochMs);
-      await observationBarrier;
-      return [];
-    },
-    readProcessTable: async () => [],
-  });
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(starts, ["parent", "lineage"]);
-  releaseObservations?.();
-  assert.deepEqual(await passing, {
-    parentExited: true,
-    survivors: [],
-  });
-  assert.deepEqual(parentTimeoutsMs, [4_000]);
-  assert.deepEqual(lineageDeadlinesMs, [5_000]);
-
-  const lineageDeadlineFailure = await createControlledBrowserFailureForTest(
-    "browser_process_lineage_table_command_deadline_elapsed_failed",
-  );
-  const parentAndLineageStarts: string[] = [];
-  let parentFailureDiagnosisCallCount = 0;
-  await assert.rejects(
-    observeWindowsChromeClosure({
-      child,
-      initialProcesses,
-      closureDeadlineEpochMs: 5_000,
-      now,
-      waitForParentExit: async () => {
-        parentAndLineageStarts.push("parent");
-        return false;
-      },
-      waitForLineageExit: async () => {
-        parentAndLineageStarts.push("lineage");
-        throw lineageDeadlineFailure;
-      },
-      readProcessTable: async () => [],
-      diagnoseLineageAfterGate: async () => {
-        parentFailureDiagnosisCallCount += 1;
-        return "browser_process_lineage_observation_recovered_by_10s_failed";
-      },
-    }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_parent_exit_failed",
-  );
-  assert.deepEqual(parentAndLineageStarts, ["parent", "lineage"]);
-  assert.equal(parentFailureDiagnosisCallCount, 0);
-
-  let unavailableDiagnosisCallCount = 0;
-  await assert.rejects(
-    observeWindowsChromeClosure({
-      child,
-      initialProcesses,
-      closureDeadlineEpochMs: 5_000,
-      now,
-      waitForParentExit: async () => true,
-      waitForLineageExit: async () => {
-        throw lineageDeadlineFailure;
-      },
-      readProcessTable: async () => [],
-      diagnoseLineageAfterGate: async (
-        ...diagnosticArguments: unknown[]
-      ) => {
-        unavailableDiagnosisCallCount += 1;
-        assert.deepEqual(diagnosticArguments[2], []);
-        assert.equal(
-          (
-            diagnosticArguments[3] as {
-              diagnosticMode?: string;
-            }
-          ).diagnosticMode,
-          "observation_unavailable",
-        );
-        return "browser_process_lineage_observation_recovered_by_10s_failed";
-      },
-    }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_lineage_observation_recovered_by_10s_failed",
-  );
-  assert.equal(unavailableDiagnosisCallCount, 1);
-
-  const lineageJsonFailure = await createControlledBrowserFailureForTest(
-    "browser_process_lineage_table_json_failed",
-  );
-  let otherFailureDiagnosisCallCount = 0;
-  await assert.rejects(
-    observeWindowsChromeClosure({
-      child,
-      initialProcesses,
-      closureDeadlineEpochMs: 5_000,
-      now,
-      waitForParentExit: async () => true,
-      waitForLineageExit: async () => {
-        throw lineageJsonFailure;
-      },
-      readProcessTable: async () => [],
-      diagnoseLineageAfterGate: async () => {
-        otherFailureDiagnosisCallCount += 1;
-        return "browser_process_lineage_observation_recovered_by_10s_failed";
-      },
-    }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_lineage_table_json_failed",
-  );
-  assert.equal(otherFailureDiagnosisCallCount, 0);
-
-  const spoofedDeadlineFailure = new Error("private spoofed detail") as Error & {
-    gate014FailureCode?: string;
-  };
-  Object.defineProperty(spoofedDeadlineFailure, "gate014FailureCode", {
-    value: "browser_process_lineage_table_command_deadline_elapsed_failed",
-  });
-  let spoofedFailureDiagnosisCallCount = 0;
-  await assert.rejects(
-    observeWindowsChromeClosure({
-      child,
-      initialProcesses,
-      closureDeadlineEpochMs: 5_000,
-      now,
-      waitForParentExit: async () => true,
-      waitForLineageExit: async () => {
-        throw spoofedDeadlineFailure;
-      },
-      readProcessTable: async () => [],
-      diagnoseLineageAfterGate: async () => {
-        spoofedFailureDiagnosisCallCount += 1;
-        return "browser_process_lineage_observation_recovered_by_10s_failed";
-      },
-    }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_lineage_observation_failed",
-  );
-  assert.equal(spoofedFailureDiagnosisCallCount, 0);
-
-  await assert.rejects(
-    observeWindowsChromeClosure({
-      child,
-      initialProcesses,
-      closureDeadlineEpochMs: 5_000,
-      now,
-      waitForParentExit: async () => true,
-      waitForLineageExit: async () => [101],
-      readProcessTable: async () => [],
-      diagnoseLineageAfterGate: async () =>
-        "browser_process_lineage_cleared_by_10s_failed",
-    }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_lineage_cleared_by_10s_failed",
-  );
-
-  let diagnosisCallCount = 0;
-  await assert.rejects(
-    observeWindowsChromeClosure({
-      child,
-      initialProcesses,
-      closureDeadlineEpochMs: 5_000,
-      now,
-      waitForParentExit: async () => false,
-      waitForLineageExit: async () => [101],
-      readProcessTable: async () => [],
-      diagnoseLineageAfterGate: async () => {
-        diagnosisCallCount += 1;
-        return "browser_process_lineage_cleared_by_10s_failed";
-      },
-    }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_parent_exit_failed",
-  );
-  assert.equal(diagnosisCallCount, 0);
-});
-
-test("GATE-014-B1 process-tree verification catches surviving descendants after the root exits", () => {
-  const initial = [
-    { processId: 100, parentProcessId: 10 },
-    { processId: 101, parentProcessId: 100 },
-    { processId: 102, parentProcessId: 101 },
-    { processId: 900, parentProcessId: 10 },
-  ];
-  assert.deepEqual(
-    findSurvivingWindowsProcessTree(
-      initial,
-      [{ processId: 100, parentProcessId: 10 }],
-      100,
-    ),
-    [100],
-  );
-  assert.deepEqual(
-    findSurvivingWindowsProcessTree(
-      initial,
-      [
-        { processId: 101, parentProcessId: 100 },
-        { processId: 102, parentProcessId: 101 },
-        { processId: 103, parentProcessId: 102 },
-        { processId: 900, parentProcessId: 10 },
-      ],
-      100,
-    ),
-    [101, 102, 103],
-  );
-  assert.deepEqual(
-    findSurvivingWindowsProcessTree(
-      initial,
-      [{ processId: 103, parentProcessId: 102 }],
-      100,
-    ),
-    [103],
-  );
-  assert.deepEqual(
-    findSurvivingWindowsProcessTree(
-      initial,
-      [{ processId: 101, parentProcessId: 900 }],
-      100,
-    ),
-    [101],
-  );
-  assert.deepEqual(
-    findSurvivingWindowsProcessTree(
-      initial,
-      [{ processId: 104, parentProcessId: 103 }],
-      100,
-      [103],
-    ),
-    [104],
-  );
-  assert.deepEqual(findSurvivingWindowsProcessTree(initial, [], 100), []);
-  assert.throws(
-    () =>
-      findSurvivingWindowsProcessTree(
-        initial,
-        [
-          { processId: 101, parentProcessId: 100 },
-          { processId: 101, parentProcessId: 100 },
-        ],
-        100,
-      ),
-    /current_process_table_invalid/,
-  );
-});
-
-test("GATE-014-B1 waits within one deadline for the captured Windows lineage to disappear", async () => {
-  const initial = [
-    { processId: 100, parentProcessId: 1 },
-    { processId: 101, parentProcessId: 100 },
-  ];
-  let nowMs = 0;
-  let readCount = 0;
-  const readTimeoutsMs: number[] = [];
-  const transient = await waitForWindowsProcessTreeExit(initial, 100, {
-    deadlineEpochMs: 100,
-    now: () => nowMs,
-    wait: async (milliseconds: number) => {
-      nowMs += milliseconds;
-    },
-    readProcessTable: async (options: { timeoutMs?: number } = {}) => {
-      readTimeoutsMs.push(options.timeoutMs ?? -1);
-      readCount += 1;
-      if (readCount === 1) {
-        return [
-          { processId: 101, parentProcessId: 100 },
-          { processId: 102, parentProcessId: 101 },
-          { processId: 103, parentProcessId: 102 },
-        ];
-      }
-      if (readCount === 2) {
-        return [{ processId: 103, parentProcessId: 102 }];
-      }
-      return [];
-    },
-    pollIntervalMs: 40,
-  });
-  assert.deepEqual(transient, []);
-  assert.equal(readCount, 3);
-  assert.deepEqual(readTimeoutsMs, [100, 60, 20]);
-
-  nowMs = 100;
-  let deadlineReadCount = 0;
-  await assert.rejects(
-    () =>
-      waitForWindowsProcessTreeExit(initial, 100, {
-        deadlineEpochMs: 100,
-        now: () => nowMs,
-        wait: async () => {},
-        readProcessTable: async () => {
-          deadlineReadCount += 1;
-          return [];
-        },
-      }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_lineage_deadline_before_observation_failed",
-  );
-  assert.equal(deadlineReadCount, 0);
-
-  nowMs = 0;
-  const persistent = await waitForWindowsProcessTreeExit(initial, 100, {
-    deadlineEpochMs: 100,
-    now: () => nowMs,
-    wait: async (milliseconds: number) => {
-      nowMs += milliseconds;
-    },
-    readProcessTable: async () => [
-      { processId: 101, parentProcessId: 100 },
-    ],
-  });
-  assert.deepEqual(persistent, [101]);
-  assert.throws(
-    () =>
-      validateWindowsChromeTerminationEvidence({
-        nativeTerminationCompleted: true,
-        nativeTerminationOutcome: "exit_zero",
-        rootObservedBeforeTermination: true,
-        rootRunningBeforeTermination: true,
-        parentExited: true,
-        survivingProcessIds: persistent,
-      }),
-    /chrome_process_tree_termination_failed/,
-  );
-
-  await assert.rejects(
-    () =>
-      waitForWindowsProcessTreeExit(initial, 100, {
-        deadlineEpochMs: 100,
-        now: () => 0,
-        wait: async () => {},
-        readProcessTable: async () => {
-          throw new Error("process_table_unavailable");
-        },
-      }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_lineage_table_observation_failed",
-  );
-
-  nowMs = 90;
-  let finalReadTimeoutMs = null;
-  await assert.rejects(
-    () =>
-      waitForWindowsProcessTreeExit(initial, 100, {
-        deadlineEpochMs: 100,
-        now: () => nowMs,
-        wait: async (milliseconds: number) => {
-          nowMs += milliseconds;
-        },
-        readProcessTable: async (options: { timeoutMs?: number } = {}) => {
-          finalReadTimeoutMs = options.timeoutMs ?? null;
-          nowMs = 101;
-          return [];
-        },
-      }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_lineage_deadline_after_observation_failed",
-  );
-  assert.equal(finalReadTimeoutMs, 10);
-});
-
-test("GATE-014-B1 diagnoses late Windows lineage convergence without changing the five-second failure", async () => {
-  const initial = [
-    { processId: 100, parentProcessId: 1 },
-    { processId: 101, parentProcessId: 100 },
-  ];
-  const observedWindows: Array<{
-    deadlineEpochMs: number;
-    observedLineageProcessIds: number[];
-  }> = [];
-  const byTen = await diagnoseWindowsChromeLineageAfterGate(
-    initial,
-    100,
-    [101],
-    {
-      gateDeadlineEpochMs: 5_000,
-      now: () => 5_000,
-      readProcessTable: async () => [],
-      waitForLineageExit: async (
-        _initial: typeof initial,
-        _rootProcessId: number,
-        options: {
-          deadlineEpochMs: number;
-          observedLineageProcessIds: number[];
-        },
-      ) => {
-        observedWindows.push({
-          deadlineEpochMs: options.deadlineEpochMs,
-          observedLineageProcessIds: [
-            ...options.observedLineageProcessIds,
-          ],
-        });
-        return [];
-      },
-    },
-  );
-  assert.equal(
-    byTen,
-    "browser_process_lineage_cleared_by_10s_failed",
-  );
-  assert.deepEqual(observedWindows, [
-    { deadlineEpochMs: 10_000, observedLineageProcessIds: [101] },
-  ]);
-
-  const byFifteenWindows: typeof observedWindows = [];
-  const byFifteenStarts: number[] = [];
-  let byFifteenCallCount = 0;
-  let byFifteenNow = 5_000;
-  const byFifteen = await diagnoseWindowsChromeLineageAfterGate(
-    initial,
-    100,
-    [101],
-    {
-      gateDeadlineEpochMs: 5_000,
-      now: () => byFifteenNow,
-      wait: async (milliseconds: number) => {
-        byFifteenNow += milliseconds;
-      },
-      readProcessTable: async () => [],
-      waitForLineageExit: async (
-        _initial: typeof initial,
-        _rootProcessId: number,
-        options: {
-          deadlineEpochMs: number;
-          observedLineageProcessIds: number[];
-        },
-      ) => {
-        byFifteenStarts.push(byFifteenNow);
-        byFifteenWindows.push({
-          deadlineEpochMs: options.deadlineEpochMs,
-          observedLineageProcessIds: [
-            ...options.observedLineageProcessIds,
-          ],
-        });
-        byFifteenCallCount += 1;
-        return byFifteenCallCount === 1 ? [102] : [];
-      },
-    },
-  );
-  assert.equal(
-    byFifteen,
-    "browser_process_lineage_cleared_by_15s_failed",
-  );
-  assert.deepEqual(byFifteenWindows, [
-    { deadlineEpochMs: 10_000, observedLineageProcessIds: [101] },
-    { deadlineEpochMs: 15_000, observedLineageProcessIds: [102] },
-  ]);
-  assert.deepEqual(byFifteenStarts, [5_000, 10_000]);
-
-  let persistentCallCount = 0;
-  let persistentNow = 5_000;
-  const persistentStarts: number[] = [];
-  assert.equal(
-    await diagnoseWindowsChromeLineageAfterGate(initial, 100, [101], {
-      gateDeadlineEpochMs: 5_000,
-      now: () => persistentNow,
-      wait: async (milliseconds: number) => {
-        persistentNow += milliseconds;
-      },
-      readProcessTable: async () => [],
-      waitForLineageExit: async () => {
-        persistentStarts.push(persistentNow);
-        return [101 + ++persistentCallCount];
-      },
-    }),
-    "browser_process_lineage_persistent_at_15s_failed",
-  );
-  assert.equal(persistentCallCount, 2);
-  assert.deepEqual(persistentStarts, [5_000, 10_000]);
-
-  let failedSurvivorObservationCallCount = 0;
-  assert.equal(
-    await diagnoseWindowsChromeLineageAfterGate(initial, 100, [101], {
-      gateDeadlineEpochMs: 5_000,
-      now: () => 5_000,
-      readProcessTable: async () => [],
-      waitForLineageExit: async () => {
-        failedSurvivorObservationCallCount += 1;
-        throw new Error("private diagnostic detail");
-      },
-    }),
-    "browser_process_lineage_diagnostic_observation_failed",
-  );
-  assert.equal(failedSurvivorObservationCallCount, 1);
-
-  assert.equal(
-    await diagnoseWindowsChromeLineageAfterGate(initial, 100, [], {
-      diagnosticMode: "observation_unavailable",
-      gateDeadlineEpochMs: 5_000,
-      now: () => 5_000,
-      readProcessTable: async () => [],
-      waitForLineageExit: async () => [],
-    }),
-    "browser_process_lineage_observation_recovered_by_10s_failed",
-  );
-
-  let recoveredByFifteenCallCount = 0;
-  let recoveredByFifteenNow = 5_000;
-  const recoveredByFifteenStarts: number[] = [];
-  const recoveredByFifteenWaits: number[] = [];
-  assert.equal(
-    await diagnoseWindowsChromeLineageAfterGate(initial, 100, [], {
-      diagnosticMode: "observation_unavailable",
-      gateDeadlineEpochMs: 5_000,
-      now: () => recoveredByFifteenNow,
-      wait: async (milliseconds: number) => {
-        recoveredByFifteenWaits.push(milliseconds);
-        recoveredByFifteenNow += milliseconds;
-      },
-      readProcessTable: async () => [],
-      waitForLineageExit: async () => {
-        recoveredByFifteenStarts.push(recoveredByFifteenNow);
-        recoveredByFifteenCallCount += 1;
-        if (recoveredByFifteenCallCount === 1) {
-          throw new Error("private first-window detail");
-        }
-        return [];
-      },
-    }),
-    "browser_process_lineage_observation_recovered_by_15s_failed",
-  );
-  assert.equal(recoveredByFifteenCallCount, 2);
-  assert.deepEqual(recoveredByFifteenStarts, [5_000, 10_000]);
-  assert.deepEqual(recoveredByFifteenWaits, [5_000]);
-
-  let unavailableAtFifteenCallCount = 0;
-  let unavailableAtFifteenNow = 5_000;
-  const unavailableAtFifteenStarts: number[] = [];
-  assert.equal(
-    await diagnoseWindowsChromeLineageAfterGate(initial, 100, [], {
-      diagnosticMode: "observation_unavailable",
-      gateDeadlineEpochMs: 5_000,
-      now: () => unavailableAtFifteenNow,
-      wait: async (milliseconds: number) => {
-        unavailableAtFifteenNow += milliseconds;
-      },
-      readProcessTable: async () => [],
-      waitForLineageExit: async () => {
-        unavailableAtFifteenStarts.push(unavailableAtFifteenNow);
-        unavailableAtFifteenCallCount += 1;
-        throw new Error("private unavailable detail");
-      },
-    }),
-    "browser_process_lineage_observation_unavailable_in_second_window_failed",
-  );
-  assert.equal(unavailableAtFifteenCallCount, 2);
-  assert.deepEqual(unavailableAtFifteenStarts, [5_000, 10_000]);
-
-  let mixedUnavailableCallCount = 0;
-  let mixedUnavailableNow = 5_000;
-  assert.equal(
-    await diagnoseWindowsChromeLineageAfterGate(initial, 100, [], {
-      diagnosticMode: "observation_unavailable",
-      gateDeadlineEpochMs: 5_000,
-      now: () => mixedUnavailableNow,
-      wait: async (milliseconds: number) => {
-        mixedUnavailableNow += milliseconds;
-      },
-      readProcessTable: async () => [],
-      waitForLineageExit: async () => {
-        mixedUnavailableCallCount += 1;
-        if (mixedUnavailableCallCount === 1) {
-          return [101];
-        }
-        throw new Error("private second-window detail");
-      },
-    }),
-    "browser_process_lineage_observation_unavailable_in_second_window_failed",
-  );
-  assert.equal(mixedUnavailableCallCount, 2);
-
-  let recoveredButPersistentCallCount = 0;
-  let recoveredButPersistentNow = 5_000;
-  assert.equal(
-    await diagnoseWindowsChromeLineageAfterGate(initial, 100, [], {
-      diagnosticMode: "observation_unavailable",
-      gateDeadlineEpochMs: 5_000,
-      now: () => recoveredButPersistentNow,
-      wait: async (milliseconds: number) => {
-        recoveredButPersistentNow += milliseconds;
-      },
-      readProcessTable: async () => [],
-      waitForLineageExit: async () => [
-        100 + ++recoveredButPersistentCallCount,
-      ],
-    }),
-    "browser_process_lineage_persistent_at_15s_failed",
-  );
-  assert.equal(recoveredButPersistentCallCount, 2);
-});
-
-test("GATE-014-B1 classifies Windows lineage process-table failures without parsing error text", async () => {
-  const commandError = Object.assign(new Error("private command detail"), {
-    cause: new Error("private command cause"),
-  });
-  const observedTimeoutsMs: number[] = [];
-  let commandCallCount = 0;
-  await assert.rejects(
-    readWindowsProcessTable({
-      timeoutMs: 100,
-      deadlineEpochMs: 200,
-      now: () => 100,
-      classifyLineageFailures: true,
-      execFileImpl: async (
-        _file: string,
-        _args: string[],
-        options: { timeout?: number },
-      ) => {
-        commandCallCount += 1;
-        observedTimeoutsMs.push(options.timeout ?? -1);
-        throw commandError;
-      },
-    }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-        "browser_process_lineage_table_command_failed" &&
-      JSON.stringify(error).includes("private") === false,
-  );
-  assert.equal(commandCallCount, 1);
-  assert.deepEqual(observedTimeoutsMs, [100]);
-
-  await assert.rejects(
-    readWindowsProcessTable({
-      timeoutMs: 100,
-      deadlineEpochMs: 200,
-      now: () => 200,
-      classifyLineageFailures: true,
-      execFileImpl: async () => {
-        throw commandError;
-      },
-    }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_lineage_table_command_deadline_elapsed_failed",
-  );
-
-  await assert.rejects(
-    readWindowsProcessTable({
-      timeoutMs: 100,
-      deadlineEpochMs: 200,
-      now: () => 100,
-      classifyLineageFailures: true,
-      execFileImpl: async () => ({ stdout: "not-json" }),
-    }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_lineage_table_json_failed",
-  );
-
-  await assert.rejects(
-    readWindowsProcessTable({
-      timeoutMs: 100,
-      deadlineEpochMs: 200,
-      now: () => 100,
-      classifyLineageFailures: true,
-      execFileImpl: async () => ({
-        stdout: JSON.stringify([
-          { processId: 101, parentProcessId: 100 },
-          { processId: 101, parentProcessId: 100 },
-        ]),
-      }),
-    }),
-    (error: unknown) =>
-      readB1BrowserControlledFailureCode(error) ===
-      "browser_process_lineage_table_validation_failed",
-  );
-});
-
-test("GATE-014-B1 accepts a completed native tree termination only after the lineage is gone", () => {
-  assert.equal(
-    readCompletedWindowsTerminationOutcome({
-      code: 128,
-      killed: false,
-      signal: null,
-    }),
-    "exit_numeric_nonzero",
-  );
-  for (const error of [
-    { code: "ENOENT", killed: false, signal: null },
-    { code: null, killed: true, signal: "SIGTERM" },
-    { code: 128, killed: false, signal: "SIGTERM" },
-    { code: 128, killed: undefined, signal: null },
-    { code: 128, killed: false, signal: undefined },
-  ]) {
-    assert.throws(
-      () => readCompletedWindowsTerminationOutcome(error),
-      /chrome_process_tree_termination_failed/,
+test(
+  "GATE-014-B1 Windows Job contains a grandchild whose intermediate parent exits before observation",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const compiler = path.join(
+      process.env.WINDIR ?? "C:\\Windows",
+      "Microsoft.NET",
+      "Framework64",
+      "v4.0.30319",
+      "csc.exe",
     );
+    const directory = await mkdtemp(
+      path.join(tmpdir(), "gate-014-b1-job-descendant-"),
+    );
+    const probe = path.join(directory, "probe.exe");
+    const descendantMarker = path.join(directory, "descendant-ready.txt");
+    await new Promise<void>((resolve, reject) => {
+      const compilerChild = spawnChildProcess(
+        compiler,
+        [
+          "/nologo",
+          "/optimize+",
+          "/debug-",
+          "/target:exe",
+          `/out:${probe}`,
+          path.resolve(
+            "tests/fixtures/gate-014/b1-job-descendant-probe.cs",
+          ),
+        ],
+        { stdio: "ignore", windowsHide: true },
+      );
+      compilerChild.once("error", reject);
+      compilerChild.once("exit", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error("synthetic probe compilation failed"));
+        }
+      });
+    });
+    try {
+      const controller = await spawnB1ChromeProcess(
+        probe,
+        [
+          "intermediate",
+          Buffer.from(descendantMarker, "utf8").toString("base64"),
+        ],
+        { platform: "win32" },
+      );
+      const descendantProcessId = await waitForSyntheticDescendantMarker(
+        descendantMarker,
+      );
+      assert.doesNotThrow(() => process.kill(descendantProcessId, 0));
+      await terminateChromeProcessTree(controller, { platform: "win32" });
+      assert.equal(controller.exitCode, 0);
+      await waitForSyntheticProcessExit(descendantProcessId);
+    } finally {
+      await rm(directory, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
+    }
+  },
+);
+
+test(
+  "GATE-014-B1 Windows Job drains large Chrome stderr before readiness",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const compiler = path.join(
+      process.env.WINDIR ?? "C:\\Windows",
+      "Microsoft.NET",
+      "Framework64",
+      "v4.0.30319",
+      "csc.exe",
+    );
+    const directory = await mkdtemp(
+      path.join(tmpdir(), "gate-014-b1-job-stderr-"),
+    );
+    const probe = path.join(directory, "probe.exe");
+    const readyMarker = path.join(directory, "stderr-ready.txt");
+    await compileSyntheticCSharpProbe(compiler, probe, [
+      path.resolve("tests/fixtures/gate-014/b1-job-descendant-probe.cs"),
+    ]);
+    try {
+      const controller = await spawnB1ChromeProcess(
+        probe,
+        [
+          "stderr-flood",
+          Buffer.from(readyMarker, "utf8").toString("base64"),
+        ],
+        { platform: "win32" },
+      );
+      await waitForSyntheticMarker(readyMarker, "ready");
+      await terminateChromeProcessTree(controller, { platform: "win32" });
+      assert.equal(controller.exitCode, 0);
+      assert.equal(controller.stderr.listenerCount("data"), 0);
+    } finally {
+      await rm(directory, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
+    }
+  },
+);
+
+test(
+  "GATE-014-B1 Windows Job termination uses one absolute five-second deadline",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const compiler = path.join(
+      process.env.WINDIR ?? "C:\\Windows",
+      "Microsoft.NET",
+      "Framework64",
+      "v4.0.30319",
+      "csc.exe",
+    );
+    const directory = await mkdtemp(
+      path.join(tmpdir(), "gate-014-b1-job-deadline-"),
+    );
+    const probe = path.join(directory, "deadline-probe.exe");
+    try {
+      await compileSyntheticCSharpProbe(compiler, probe, [
+        path.resolve("scripts/gate-014-b1-windows-job-launcher.cs"),
+        path.resolve("tests/fixtures/gate-014/b1-job-deadline-probe.cs"),
+      ], "Gate014B1JobDeadlineProbe");
+      const child = spawnChildProcess(probe, [], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      assert.equal(await waitForProcessExit(child, 5_000), true);
+      assert.equal(child.exitCode, 0);
+    } finally {
+      await rm(directory, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
+    }
+  },
+);
+
+async function compileSyntheticCSharpProbe(
+  compiler: string,
+  output: string,
+  sources: string[],
+  mainType?: string,
+) {
+  await new Promise<void>((resolve, reject) => {
+    const compilerArguments = [
+      "/nologo",
+      "/noconfig",
+      "/nostdlib+",
+      "/warnaserror+",
+      "/optimize+",
+      "/debug-",
+      "/target:exe",
+      `/reference:${path.join(path.dirname(compiler), "mscorlib.dll")}`,
+      `/reference:${path.join(path.dirname(compiler), "System.dll")}`,
+      `/out:${output}`,
+      ...(mainType ? [`/main:${mainType}`] : []),
+      ...sources,
+    ];
+    const compilerChild = spawnChildProcess(compiler, compilerArguments, {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    compilerChild.once("error", reject);
+    compilerChild.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error("synthetic probe compilation failed"));
+      }
+    });
+  });
+}
+
+async function waitForSyntheticMarker(markerPath: string, expected: string) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      if ((await readFile(markerPath, "utf8")) === expected) {
+        return;
+      }
+    } catch {
+      // The synthetic process has not published readiness yet.
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
   }
-  assert.doesNotThrow(() =>
-    validateWindowsChromeTerminationEvidence({
-      nativeTerminationCompleted: true,
-      nativeTerminationOutcome: "exit_zero",
-      rootObservedBeforeTermination: true,
-      rootRunningBeforeTermination: true,
-      parentExited: true,
-      survivingProcessIds: [],
-    }),
-  );
-  assert.doesNotThrow(() =>
-    validateWindowsChromeTerminationEvidence({
-      nativeTerminationCompleted: true,
-      nativeTerminationOutcome: "exit_numeric_nonzero",
-      rootObservedBeforeTermination: true,
-      rootRunningBeforeTermination: true,
-      parentExited: true,
-      survivingProcessIds: [],
-    }),
-  );
-  assert.throws(
-    () =>
-      validateWindowsChromeTerminationEvidence({
-        nativeTerminationCompleted: false,
-        nativeTerminationOutcome: null,
-        rootObservedBeforeTermination: true,
-        rootRunningBeforeTermination: true,
-        parentExited: true,
-        survivingProcessIds: [],
-      }),
-    /chrome_process_tree_termination_failed/,
-  );
-  assert.throws(
-    () =>
-      validateWindowsChromeTerminationEvidence({
-        nativeTerminationCompleted: true,
-        nativeTerminationOutcome: "exit_zero",
-        rootObservedBeforeTermination: false,
-        rootRunningBeforeTermination: true,
-        parentExited: true,
-        survivingProcessIds: [],
-      }),
-    /chrome_process_tree_termination_failed/,
-  );
-  assert.throws(
-    () =>
-      validateWindowsChromeTerminationEvidence({
-        nativeTerminationCompleted: true,
-        nativeTerminationOutcome: "unexpected",
-        rootObservedBeforeTermination: true,
-        rootRunningBeforeTermination: true,
-        parentExited: true,
-        survivingProcessIds: [],
-      }),
-    /chrome_process_tree_termination_failed/,
-  );
-  assert.throws(
-    () =>
-      validateWindowsChromeTerminationEvidence({
-        nativeTerminationCompleted: true,
-        nativeTerminationOutcome: "exit_zero",
-        rootObservedBeforeTermination: true,
-        rootRunningBeforeTermination: false,
-        parentExited: true,
-        survivingProcessIds: [],
-      }),
-    /chrome_process_tree_termination_failed/,
-  );
-  assert.throws(
-    () =>
-      validateWindowsChromeTerminationEvidence({
-        nativeTerminationCompleted: true,
-        nativeTerminationOutcome: "exit_zero",
-        rootObservedBeforeTermination: true,
-        rootRunningBeforeTermination: true,
-        parentExited: false,
-        survivingProcessIds: [],
-      }),
-    /chrome_process_exit_timeout/,
-  );
-  assert.throws(
-    () =>
-      validateWindowsChromeTerminationEvidence({
-        nativeTerminationCompleted: true,
-        nativeTerminationOutcome: "exit_zero",
-        rootObservedBeforeTermination: true,
-        rootRunningBeforeTermination: true,
-        parentExited: true,
-        survivingProcessIds: [101],
-      }),
-    /chrome_process_tree_termination_failed/,
-  );
-});
+  throw new Error("synthetic marker timeout");
+}
+
+async function waitForSyntheticDescendantMarker(markerPath: string) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      const processId = Number.parseInt(await readFile(markerPath, "utf8"), 10);
+      if (Number.isSafeInteger(processId) && processId > 0) {
+        return processId;
+      }
+    } catch {
+      // The synthetic grandchild has not published readiness yet.
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("synthetic descendant readiness timeout");
+}
+
+async function waitForSyntheticProcessExit(processId: number) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(processId, 0);
+    } catch {
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("synthetic descendant exit timeout");
+}
 
 test("GATE-014-B1 accepts only an explicit structured harness failure code", () => {
   const failureEnvelope = {
@@ -2875,8 +1777,6 @@ test("GATE-014-B1 browser stages preserve proven codes and replace spoofed field
     "browser_production_stage_cleanup_failed",
     "browser_environment_validation_failed",
     "browser_process_spawn_failed",
-    "browser_process_observer_setup_failed",
-    "browser_process_observer_cleanup_failed",
     "browser_target_observer_setup_failed",
     "browser_harness_load_failed",
     "browser_production_load_failed",
@@ -2892,28 +1792,8 @@ test("GATE-014-B1 browser stages preserve proven codes and replace spoofed field
     "browser_process_termination_failed",
     "browser_cdp_close_failed",
     "browser_process_identity_failed",
-    "browser_process_table_observation_failed",
-    "browser_process_pretermination_state_failed",
     "browser_process_native_termination_failed",
     "browser_process_parent_exit_failed",
-    "browser_process_lineage_cleanup_failed",
-    "browser_process_lineage_observation_failed",
-    "browser_process_lineage_deadline_before_observation_failed",
-    "browser_process_lineage_table_observation_failed",
-    "browser_process_lineage_table_command_failed",
-    "browser_process_lineage_table_command_deadline_elapsed_failed",
-    "browser_process_lineage_table_json_failed",
-    "browser_process_lineage_table_validation_failed",
-    "browser_process_lineage_deadline_after_observation_failed",
-    "browser_process_lineage_survivors_failed",
-    "browser_process_lineage_cleared_by_10s_failed",
-    "browser_process_lineage_cleared_by_15s_failed",
-    "browser_process_lineage_persistent_at_15s_failed",
-    "browser_process_lineage_diagnostic_observation_failed",
-    "browser_process_lineage_observation_recovered_by_10s_failed",
-    "browser_process_lineage_observation_recovered_by_15s_failed",
-    "browser_process_lineage_observation_unavailable_in_second_window_failed",
-    "browser_process_termination_validation_failed",
   ];
   for (const stageCode of diagnosticStages) {
     await assert.rejects(
