@@ -64,6 +64,9 @@ const B1_BROWSER_STAGE_FAILURE_CODES = Object.freeze([
   "browser_process_lineage_cleared_by_15s_failed",
   "browser_process_lineage_persistent_at_15s_failed",
   "browser_process_lineage_diagnostic_observation_failed",
+  "browser_process_lineage_observation_recovered_by_10s_failed",
+  "browser_process_lineage_observation_recovered_by_15s_failed",
+  "browser_process_lineage_observation_unavailable_in_second_window_failed",
   "browser_process_termination_validation_failed",
 ]);
 const B1_BROWSER_FAILURE_CODES = new WeakMap();
@@ -82,6 +85,9 @@ const B1_WINDOWS_CHROME_DIAGNOSTIC_FAILURE_CODES = new Set([
   "browser_process_lineage_cleared_by_15s_failed",
   "browser_process_lineage_persistent_at_15s_failed",
   "browser_process_lineage_diagnostic_observation_failed",
+  "browser_process_lineage_observation_recovered_by_10s_failed",
+  "browser_process_lineage_observation_recovered_by_15s_failed",
+  "browser_process_lineage_observation_unavailable_in_second_window_failed",
 ]);
 const B1_MAX_QUEUED_SYNTHETIC_REQUESTS = 8;
 const B1_MAX_CDP_PIPE_MESSAGE_BYTES = 8 * 1024 * 1024;
@@ -2896,16 +2902,11 @@ export async function settleWindowsChromeClosureObservations(
   parentExitObservation,
   lineageObservation,
 ) {
-  if (
-    typeof parentExitObservation !== "function" ||
-    typeof lineageObservation !== "function"
-  ) {
-    throw new Error("chrome_process_closure_observation_invalid");
-  }
-  const [parentExitResult, lineageResult] = await Promise.allSettled([
-    Promise.resolve().then(parentExitObservation),
-    Promise.resolve().then(lineageObservation),
-  ]);
+  const [parentExitResult, lineageResult] =
+    await collectWindowsChromeClosureObservations(
+      parentExitObservation,
+      lineageObservation,
+    );
   if (parentExitResult.status === "rejected") {
     throw parentExitResult.reason;
   }
@@ -2916,6 +2917,23 @@ export async function settleWindowsChromeClosureObservations(
     parentExited: parentExitResult.value,
     survivors: lineageResult.value,
   });
+}
+
+export async function collectWindowsChromeClosureObservations(
+  parentExitObservation,
+  lineageObservation,
+) {
+  if (
+    typeof parentExitObservation !== "function" ||
+    typeof lineageObservation !== "function"
+  ) {
+    throw new Error("chrome_process_closure_observation_invalid");
+  }
+  const [parentExitResult, lineageResult] = await Promise.allSettled([
+    Promise.resolve().then(parentExitObservation),
+    Promise.resolve().then(lineageObservation),
+  ]);
+  return Object.freeze([parentExitResult, lineageResult]);
 }
 
 export async function observeWindowsChromeClosure(options = {}) {
@@ -2950,7 +2968,8 @@ export async function observeWindowsChromeClosure(options = {}) {
   ) {
     throw new Error("chrome_process_closure_observation_invalid");
   }
-  const closure = await settleWindowsChromeClosureObservations(
+  const [parentExitResult, lineageResult] =
+    await collectWindowsChromeClosureObservations(
     () =>
       executeB1BrowserStage(
         "browser_process_parent_exit_failed",
@@ -2988,7 +3007,37 @@ export async function observeWindowsChromeClosure(options = {}) {
           return remaining;
         },
       ),
-  );
+    );
+  if (parentExitResult.status === "rejected") {
+    throw parentExitResult.reason;
+  }
+  if (lineageResult.status === "rejected") {
+    if (
+      readB1BrowserControlledFailureCode(lineageResult.reason) !==
+      "browser_process_lineage_table_command_deadline_elapsed_failed"
+    ) {
+      throw lineageResult.reason;
+    }
+    const diagnosticFailureCode = await diagnoseLineageAfterGate(
+      initialProcesses,
+      child.pid,
+      [],
+      {
+        diagnosticMode: "observation_unavailable",
+        gateDeadlineEpochMs: closureDeadlineEpochMs,
+        now,
+        waitForLineageExit,
+        readProcessTable,
+      },
+    );
+    await throwWindowsChromeLineageDiagnosticFailure(
+      diagnosticFailureCode,
+    );
+  }
+  const closure = Object.freeze({
+    parentExited: parentExitResult.value,
+    survivors: lineageResult.value,
+  });
   if (closure.survivors.length === 0) {
     return closure;
   }
@@ -3003,10 +3052,16 @@ export async function observeWindowsChromeClosure(options = {}) {
       readProcessTable,
     },
   );
-  if (!B1_WINDOWS_CHROME_DIAGNOSTIC_FAILURE_CODES.has(diagnosticFailureCode)) {
+  await throwWindowsChromeLineageDiagnosticFailure(
+    diagnosticFailureCode,
+  );
+}
+
+async function throwWindowsChromeLineageDiagnosticFailure(failureCode) {
+  if (!B1_WINDOWS_CHROME_DIAGNOSTIC_FAILURE_CODES.has(failureCode)) {
     throw new Error("chrome_process_lineage_diagnostic_invalid");
   }
-  await executeB1BrowserStage(diagnosticFailureCode, () => {
+  await executeB1BrowserStage(failureCode, () => {
     throw new Error("chrome_process_tree_termination_failed");
   });
   throw new Error("chrome_process_lineage_diagnostic_invalid");
@@ -3152,15 +3207,21 @@ export async function diagnoseWindowsChromeLineageAfterGate(
   options = {},
 ) {
   const gateDeadlineEpochMs = options.gateDeadlineEpochMs;
+  const diagnosticMode = options.diagnosticMode ?? "survivors";
   const now = options.now ?? Date.now;
   const waitForLineageExit =
     options.waitForLineageExit ?? waitForWindowsProcessTreeExit;
   const readProcessTable =
     options.readProcessTable ??
     ((readOptions) => readWindowsProcessTable(readOptions));
+  const wait = options.wait ?? delay;
   if (
     !Number.isFinite(gateDeadlineEpochMs) ||
+    !["survivors", "observation_unavailable"].includes(
+      diagnosticMode,
+    ) ||
     typeof now !== "function" ||
+    typeof wait !== "function" ||
     typeof waitForLineageExit !== "function" ||
     typeof readProcessTable !== "function"
   ) {
@@ -3169,23 +3230,40 @@ export async function diagnoseWindowsChromeLineageAfterGate(
   let observedLineageProcessIds = [
     ...validateWindowsLineageProcessIds(survivingProcessIds),
   ];
+  const clearedFailureCodes =
+    diagnosticMode === "survivors"
+      ? [
+          "browser_process_lineage_cleared_by_10s_failed",
+          "browser_process_lineage_cleared_by_15s_failed",
+        ]
+      : [
+          "browser_process_lineage_observation_recovered_by_10s_failed",
+          "browser_process_lineage_observation_recovered_by_15s_failed",
+        ];
   const diagnosticWindows = [
     Object.freeze({
+      startEpochMs: gateDeadlineEpochMs,
       deadlineEpochMs:
         gateDeadlineEpochMs + B1_WINDOWS_CHROME_DIAGNOSTIC_WINDOW_MS,
-      clearedFailureCode:
-        "browser_process_lineage_cleared_by_10s_failed",
+      clearedFailureCode: clearedFailureCodes[0],
     }),
     Object.freeze({
+      startEpochMs:
+        gateDeadlineEpochMs + B1_WINDOWS_CHROME_DIAGNOSTIC_WINDOW_MS,
       deadlineEpochMs:
         gateDeadlineEpochMs + 2 * B1_WINDOWS_CHROME_DIAGNOSTIC_WINDOW_MS,
-      clearedFailureCode:
-        "browser_process_lineage_cleared_by_15s_failed",
+      clearedFailureCode: clearedFailureCodes[1],
     }),
   ];
-  for (const diagnosticWindow of diagnosticWindows) {
+  for (let index = 0; index < diagnosticWindows.length; index += 1) {
+    const diagnosticWindow = diagnosticWindows[index];
     let remaining;
     try {
+      await waitUntilWindowsChromeDiagnosticWindowStart(
+        diagnosticWindow.startEpochMs,
+        now,
+        wait,
+      );
       remaining = await waitForLineageExit(
         initialProcesses,
         rootProcessId,
@@ -3197,7 +3275,13 @@ export async function diagnoseWindowsChromeLineageAfterGate(
         },
       );
     } catch {
-      return "browser_process_lineage_diagnostic_observation_failed";
+      if (diagnosticMode === "survivors") {
+        return "browser_process_lineage_diagnostic_observation_failed";
+      }
+      if (index < diagnosticWindows.length - 1) {
+        continue;
+      }
+      return "browser_process_lineage_observation_unavailable_in_second_window_failed";
     }
     if (remaining.length === 0) {
       return diagnosticWindow.clearedFailureCode;
@@ -3207,6 +3291,28 @@ export async function diagnoseWindowsChromeLineageAfterGate(
     ]);
   }
   return "browser_process_lineage_persistent_at_15s_failed";
+}
+
+async function waitUntilWindowsChromeDiagnosticWindowStart(
+  startEpochMs,
+  now,
+  wait,
+) {
+  const beforeWaitEpochMs = now();
+  if (!Number.isFinite(beforeWaitEpochMs)) {
+    throw new Error("chrome_process_lineage_diagnostic_invalid");
+  }
+  const remainingMs = startEpochMs - beforeWaitEpochMs;
+  if (remainingMs > 0) {
+    await wait(remainingMs);
+  }
+  const afterWaitEpochMs = now();
+  if (
+    !Number.isFinite(afterWaitEpochMs) ||
+    afterWaitEpochMs < startEpochMs
+  ) {
+    throw new Error("chrome_process_lineage_diagnostic_invalid");
+  }
 }
 
 export function validateWindowsChromeTerminationEvidence({

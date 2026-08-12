@@ -1426,6 +1426,7 @@ test("GATE-014-B1 observes Windows parent exit and lineage concurrently inside o
     "browser_process_lineage_table_command_deadline_elapsed_failed",
   );
   const parentAndLineageStarts: string[] = [];
+  let parentFailureDiagnosisCallCount = 0;
   await assert.rejects(
     observeWindowsChromeClosure({
       child,
@@ -1441,13 +1442,19 @@ test("GATE-014-B1 observes Windows parent exit and lineage concurrently inside o
         throw lineageDeadlineFailure;
       },
       readProcessTable: async () => [],
+      diagnoseLineageAfterGate: async () => {
+        parentFailureDiagnosisCallCount += 1;
+        return "browser_process_lineage_observation_recovered_by_10s_failed";
+      },
     }),
     (error: unknown) =>
       readB1BrowserControlledFailureCode(error) ===
       "browser_process_parent_exit_failed",
   );
   assert.deepEqual(parentAndLineageStarts, ["parent", "lineage"]);
+  assert.equal(parentFailureDiagnosisCallCount, 0);
 
+  let unavailableDiagnosisCallCount = 0;
   await assert.rejects(
     observeWindowsChromeClosure({
       child,
@@ -1459,11 +1466,82 @@ test("GATE-014-B1 observes Windows parent exit and lineage concurrently inside o
         throw lineageDeadlineFailure;
       },
       readProcessTable: async () => [],
+      diagnoseLineageAfterGate: async (
+        ...diagnosticArguments: unknown[]
+      ) => {
+        unavailableDiagnosisCallCount += 1;
+        assert.deepEqual(diagnosticArguments[2], []);
+        assert.equal(
+          (
+            diagnosticArguments[3] as {
+              diagnosticMode?: string;
+            }
+          ).diagnosticMode,
+          "observation_unavailable",
+        );
+        return "browser_process_lineage_observation_recovered_by_10s_failed";
+      },
     }),
     (error: unknown) =>
       readB1BrowserControlledFailureCode(error) ===
-      "browser_process_lineage_table_command_deadline_elapsed_failed",
+      "browser_process_lineage_observation_recovered_by_10s_failed",
   );
+  assert.equal(unavailableDiagnosisCallCount, 1);
+
+  const lineageJsonFailure = await createControlledBrowserFailureForTest(
+    "browser_process_lineage_table_json_failed",
+  );
+  let otherFailureDiagnosisCallCount = 0;
+  await assert.rejects(
+    observeWindowsChromeClosure({
+      child,
+      initialProcesses,
+      closureDeadlineEpochMs: 5_000,
+      now,
+      waitForParentExit: async () => true,
+      waitForLineageExit: async () => {
+        throw lineageJsonFailure;
+      },
+      readProcessTable: async () => [],
+      diagnoseLineageAfterGate: async () => {
+        otherFailureDiagnosisCallCount += 1;
+        return "browser_process_lineage_observation_recovered_by_10s_failed";
+      },
+    }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_lineage_table_json_failed",
+  );
+  assert.equal(otherFailureDiagnosisCallCount, 0);
+
+  const spoofedDeadlineFailure = new Error("private spoofed detail") as Error & {
+    gate014FailureCode?: string;
+  };
+  Object.defineProperty(spoofedDeadlineFailure, "gate014FailureCode", {
+    value: "browser_process_lineage_table_command_deadline_elapsed_failed",
+  });
+  let spoofedFailureDiagnosisCallCount = 0;
+  await assert.rejects(
+    observeWindowsChromeClosure({
+      child,
+      initialProcesses,
+      closureDeadlineEpochMs: 5_000,
+      now,
+      waitForParentExit: async () => true,
+      waitForLineageExit: async () => {
+        throw spoofedDeadlineFailure;
+      },
+      readProcessTable: async () => [],
+      diagnoseLineageAfterGate: async () => {
+        spoofedFailureDiagnosisCallCount += 1;
+        return "browser_process_lineage_observation_recovered_by_10s_failed";
+      },
+    }),
+    (error: unknown) =>
+      readB1BrowserControlledFailureCode(error) ===
+      "browser_process_lineage_observation_failed",
+  );
+  assert.equal(spoofedFailureDiagnosisCallCount, 0);
 
   await assert.rejects(
     observeWindowsChromeClosure({
@@ -1733,14 +1811,19 @@ test("GATE-014-B1 diagnoses late Windows lineage convergence without changing th
   ]);
 
   const byFifteenWindows: typeof observedWindows = [];
+  const byFifteenStarts: number[] = [];
   let byFifteenCallCount = 0;
+  let byFifteenNow = 5_000;
   const byFifteen = await diagnoseWindowsChromeLineageAfterGate(
     initial,
     100,
     [101],
     {
       gateDeadlineEpochMs: 5_000,
-      now: () => 5_000,
+      now: () => byFifteenNow,
+      wait: async (milliseconds: number) => {
+        byFifteenNow += milliseconds;
+      },
       readProcessTable: async () => [],
       waitForLineageExit: async (
         _initial: typeof initial,
@@ -1750,6 +1833,7 @@ test("GATE-014-B1 diagnoses late Windows lineage convergence without changing th
           observedLineageProcessIds: number[];
         },
       ) => {
+        byFifteenStarts.push(byFifteenNow);
         byFifteenWindows.push({
           deadlineEpochMs: options.deadlineEpochMs,
           observedLineageProcessIds: [
@@ -1769,30 +1853,148 @@ test("GATE-014-B1 diagnoses late Windows lineage convergence without changing th
     { deadlineEpochMs: 10_000, observedLineageProcessIds: [101] },
     { deadlineEpochMs: 15_000, observedLineageProcessIds: [102] },
   ]);
+  assert.deepEqual(byFifteenStarts, [5_000, 10_000]);
 
   let persistentCallCount = 0;
+  let persistentNow = 5_000;
+  const persistentStarts: number[] = [];
   assert.equal(
     await diagnoseWindowsChromeLineageAfterGate(initial, 100, [101], {
       gateDeadlineEpochMs: 5_000,
-      now: () => 5_000,
+      now: () => persistentNow,
+      wait: async (milliseconds: number) => {
+        persistentNow += milliseconds;
+      },
       readProcessTable: async () => [],
-      waitForLineageExit: async () => [101 + ++persistentCallCount],
+      waitForLineageExit: async () => {
+        persistentStarts.push(persistentNow);
+        return [101 + ++persistentCallCount];
+      },
     }),
     "browser_process_lineage_persistent_at_15s_failed",
   );
   assert.equal(persistentCallCount, 2);
+  assert.deepEqual(persistentStarts, [5_000, 10_000]);
 
+  let failedSurvivorObservationCallCount = 0;
   assert.equal(
     await diagnoseWindowsChromeLineageAfterGate(initial, 100, [101], {
       gateDeadlineEpochMs: 5_000,
       now: () => 5_000,
       readProcessTable: async () => [],
       waitForLineageExit: async () => {
+        failedSurvivorObservationCallCount += 1;
         throw new Error("private diagnostic detail");
       },
     }),
     "browser_process_lineage_diagnostic_observation_failed",
   );
+  assert.equal(failedSurvivorObservationCallCount, 1);
+
+  assert.equal(
+    await diagnoseWindowsChromeLineageAfterGate(initial, 100, [], {
+      diagnosticMode: "observation_unavailable",
+      gateDeadlineEpochMs: 5_000,
+      now: () => 5_000,
+      readProcessTable: async () => [],
+      waitForLineageExit: async () => [],
+    }),
+    "browser_process_lineage_observation_recovered_by_10s_failed",
+  );
+
+  let recoveredByFifteenCallCount = 0;
+  let recoveredByFifteenNow = 5_000;
+  const recoveredByFifteenStarts: number[] = [];
+  const recoveredByFifteenWaits: number[] = [];
+  assert.equal(
+    await diagnoseWindowsChromeLineageAfterGate(initial, 100, [], {
+      diagnosticMode: "observation_unavailable",
+      gateDeadlineEpochMs: 5_000,
+      now: () => recoveredByFifteenNow,
+      wait: async (milliseconds: number) => {
+        recoveredByFifteenWaits.push(milliseconds);
+        recoveredByFifteenNow += milliseconds;
+      },
+      readProcessTable: async () => [],
+      waitForLineageExit: async () => {
+        recoveredByFifteenStarts.push(recoveredByFifteenNow);
+        recoveredByFifteenCallCount += 1;
+        if (recoveredByFifteenCallCount === 1) {
+          throw new Error("private first-window detail");
+        }
+        return [];
+      },
+    }),
+    "browser_process_lineage_observation_recovered_by_15s_failed",
+  );
+  assert.equal(recoveredByFifteenCallCount, 2);
+  assert.deepEqual(recoveredByFifteenStarts, [5_000, 10_000]);
+  assert.deepEqual(recoveredByFifteenWaits, [5_000]);
+
+  let unavailableAtFifteenCallCount = 0;
+  let unavailableAtFifteenNow = 5_000;
+  const unavailableAtFifteenStarts: number[] = [];
+  assert.equal(
+    await diagnoseWindowsChromeLineageAfterGate(initial, 100, [], {
+      diagnosticMode: "observation_unavailable",
+      gateDeadlineEpochMs: 5_000,
+      now: () => unavailableAtFifteenNow,
+      wait: async (milliseconds: number) => {
+        unavailableAtFifteenNow += milliseconds;
+      },
+      readProcessTable: async () => [],
+      waitForLineageExit: async () => {
+        unavailableAtFifteenStarts.push(unavailableAtFifteenNow);
+        unavailableAtFifteenCallCount += 1;
+        throw new Error("private unavailable detail");
+      },
+    }),
+    "browser_process_lineage_observation_unavailable_in_second_window_failed",
+  );
+  assert.equal(unavailableAtFifteenCallCount, 2);
+  assert.deepEqual(unavailableAtFifteenStarts, [5_000, 10_000]);
+
+  let mixedUnavailableCallCount = 0;
+  let mixedUnavailableNow = 5_000;
+  assert.equal(
+    await diagnoseWindowsChromeLineageAfterGate(initial, 100, [], {
+      diagnosticMode: "observation_unavailable",
+      gateDeadlineEpochMs: 5_000,
+      now: () => mixedUnavailableNow,
+      wait: async (milliseconds: number) => {
+        mixedUnavailableNow += milliseconds;
+      },
+      readProcessTable: async () => [],
+      waitForLineageExit: async () => {
+        mixedUnavailableCallCount += 1;
+        if (mixedUnavailableCallCount === 1) {
+          return [101];
+        }
+        throw new Error("private second-window detail");
+      },
+    }),
+    "browser_process_lineage_observation_unavailable_in_second_window_failed",
+  );
+  assert.equal(mixedUnavailableCallCount, 2);
+
+  let recoveredButPersistentCallCount = 0;
+  let recoveredButPersistentNow = 5_000;
+  assert.equal(
+    await diagnoseWindowsChromeLineageAfterGate(initial, 100, [], {
+      diagnosticMode: "observation_unavailable",
+      gateDeadlineEpochMs: 5_000,
+      now: () => recoveredButPersistentNow,
+      wait: async (milliseconds: number) => {
+        recoveredButPersistentNow += milliseconds;
+      },
+      readProcessTable: async () => [],
+      waitForLineageExit: async () => [
+        100 + ++recoveredButPersistentCallCount,
+      ],
+    }),
+    "browser_process_lineage_persistent_at_15s_failed",
+  );
+  assert.equal(recoveredButPersistentCallCount, 2);
 });
 
 test("GATE-014-B1 classifies Windows lineage process-table failures without parsing error text", async () => {
@@ -2105,6 +2307,9 @@ test("GATE-014-B1 browser stages preserve proven codes and replace spoofed field
     "browser_process_lineage_cleared_by_15s_failed",
     "browser_process_lineage_persistent_at_15s_failed",
     "browser_process_lineage_diagnostic_observation_failed",
+    "browser_process_lineage_observation_recovered_by_10s_failed",
+    "browser_process_lineage_observation_recovered_by_15s_failed",
+    "browser_process_lineage_observation_unavailable_in_second_window_failed",
     "browser_process_termination_validation_failed",
   ];
   for (const stageCode of diagnosticStages) {
