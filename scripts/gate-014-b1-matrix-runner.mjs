@@ -1498,7 +1498,10 @@ export async function verifyB1ReportArtifacts() {
     environmentReceiptSha256,
     fixtureReceipts: committedReport.fixtureReceipts,
     rawOperations,
-    restorePreflightValidation: committedReport.restorePreflightValidation,
+    restorePreflightValidation:
+      restorePreflightValidationInputFromCommittedReport(
+        committedReport.restorePreflightValidation,
+      ),
   });
   if (serializeB1Report(evaluated) !== reportText) {
     throw new Error("B1 report artifact verification mismatch");
@@ -1513,6 +1516,21 @@ export async function verifyB1ReportArtifacts() {
     environmentReceiptSha256,
     currentArtifactBindingsVerified: true,
   });
+}
+
+export function restorePreflightValidationInputFromCommittedReport(value) {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    Object.keys(value).length === 2 &&
+    value.status === "insufficient_evidence" &&
+    value.reasonCode === "browser_preflight_validation_missing"
+  ) {
+    return null;
+  }
+  return value;
 }
 
 async function verifyCurrentArtifactBindings(environment) {

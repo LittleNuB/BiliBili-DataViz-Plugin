@@ -643,7 +643,12 @@ export function createB1OperationReceipt(input) {
     { minimumLength: 0 },
   );
   assertStrictlyIncreasingOffsets(progressEventOffsetsMs, totalDurationMs);
-  const restart = validateRestart(input.restart, operation);
+  const restart = validateRestart(
+    input.restart,
+    operation,
+    totalDurationMs,
+    progressEventOffsetsMs,
+  );
   const cancellation = validateCancellation(input.cancellation, operation);
   const mainThread = validateMainThread(input.mainThread);
   const memory = validateMemory(input.memory);
@@ -1431,7 +1436,12 @@ function validateRestoreBoundaryProbe(input, label, options = {}) {
   return deepFreeze(result);
 }
 
-function validateRestart(input, operation) {
+function validateRestart(
+  input,
+  operation,
+  totalDurationMs,
+  progressEventOffsetsMs,
+) {
   assertPlainObject(input, "restart");
   const attempted = assertBoolean(input.attempted, "restart.attempted");
   if (!attempted) {
@@ -1470,6 +1480,21 @@ function validateRestart(input, operation) {
   };
   if (!remainingWork && result.nextProgressMs !== 0) {
     throw new Error("restart.nextProgressMs must be zero when no work remains");
+  }
+  if (result.stateVisibleMs > totalDurationMs) {
+    throw new Error("restart.stateVisibleMs must not exceed totalDurationMs");
+  }
+  if (!progressEventOffsetsMs.includes(result.stateVisibleMs)) {
+    throw new Error("restart.stateVisibleMs must match a progress event");
+  }
+  if (remainingWork) {
+    const nextProgressOffsetMs = result.stateVisibleMs + result.nextProgressMs;
+    if (nextProgressOffsetMs > totalDurationMs) {
+      throw new Error("restart next progress must not exceed totalDurationMs");
+    }
+    if (!progressEventOffsetsMs.includes(nextProgressOffsetMs)) {
+      throw new Error("restart.nextProgressMs must match a progress event");
+    }
   }
   return deepFreeze(result);
 }

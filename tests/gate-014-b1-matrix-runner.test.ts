@@ -21,6 +21,7 @@ import {
   executeB1LatchedPhase,
   mapB1LifecycleToRawOperations,
   readControlledHarnessFailureCode,
+  restorePreflightValidationInputFromCommittedReport,
   resolveNpmBuildInvocation,
   selectB1FailureAfterCleanup,
   validateB1CheckpointDirectoryEntries,
@@ -46,6 +47,36 @@ const PUBLIC_RUN_SPEC = {
   runMode: "warm",
   runOrdinal: 2,
 };
+
+test("GATE-014-B1 decodes only its exact missing-preflight report placeholder", () => {
+  const placeholder = {
+    status: "insufficient_evidence",
+    reasonCode: "browser_preflight_validation_missing",
+  };
+  assert.equal(
+    restorePreflightValidationInputFromCommittedReport(placeholder),
+    null,
+  );
+
+  for (const tampered of [
+    { ...placeholder, extra: true },
+    { ...placeholder, reasonCode: "passing_candidate_unavailable" },
+    { ...placeholder, status: "fail" },
+  ]) {
+    assert.equal(
+      restorePreflightValidationInputFromCommittedReport(tampered),
+      tampered,
+    );
+  }
+
+  const receipt = {
+    contract: "gate-014-b1-restore-preflight-validation-v1",
+  };
+  assert.equal(
+    restorePreflightValidationInputFromCommittedReport(receipt),
+    receipt,
+  );
+});
 
 test("GATE-014-B1 failure latch records only controlled public-safe fields", () => {
   const controlledError = controlledErrorForLatch();
@@ -722,7 +753,8 @@ function lifecycleResult() {
           ...readBatchDurationsMs,
           ...(requiresVisibilityTiming ? [] : [10]),
         ],
-        progressEventOffsetsMs: [],
+        progressEventOffsetsMs:
+          operation === "restart" ? [500, 750] : [],
         restart:
           operation === "restart"
             ? {

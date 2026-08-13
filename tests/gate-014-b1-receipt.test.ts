@@ -556,7 +556,7 @@ function reportOperation({
     runMode,
     runOrdinal,
     operation,
-    totalDurationMs: 1_000,
+    totalDurationMs: operation === "restart" ? 7_000 : 1_000,
     committedBatchCount,
     committedBatchDurationsMs,
     readBatchDurationsMs,
@@ -565,7 +565,8 @@ function reportOperation({
       committedBatchDurationsMs.length + readBatchDurationsMs.length === 0
         ? [100]
         : [...committedBatchDurationsMs, ...readBatchDurationsMs],
-    progressEventOffsetsMs: [],
+    progressEventOffsetsMs:
+      operation === "restart" ? [1_000, 3_000, 5_000, 7_000] : [],
     restart:
       operation === "restart"
         ? {
@@ -608,6 +609,54 @@ function reportOperation({
     },
   });
 }
+
+test("GATE-014-B1 rejects impossible restart timing relationships", () => {
+  const base = reportOperation({
+    fixtureId: "managed-full-text-500mib",
+    fixtureReceiptSha256: SHA_256,
+    recordCap: 1024,
+    byteCapBytes: 4 * 1024 * 1024,
+    runMode: "cold",
+    runOrdinal: 1,
+    operation: "restart",
+  });
+  const cases = [
+    {
+      input: {
+        ...base,
+        totalDurationMs: 4_999,
+        progressEventOffsetsMs: [1_000, 3_000, 4_999],
+      },
+      pattern: /stateVisibleMs must not exceed totalDurationMs/,
+    },
+    {
+      input: {
+        ...base,
+        totalDurationMs: 6_999,
+        progressEventOffsetsMs: [1_000, 3_000, 5_000, 6_999],
+      },
+      pattern: /next progress must not exceed totalDurationMs/,
+    },
+    {
+      input: {
+        ...base,
+        progressEventOffsetsMs: [1_000, 3_000, 4_999, 7_000],
+      },
+      pattern: /stateVisibleMs must match a progress event/,
+    },
+    {
+      input: {
+        ...base,
+        progressEventOffsetsMs: [1_000, 3_000, 5_000, 6_999],
+      },
+      pattern: /nextProgressMs must match a progress event/,
+    },
+  ];
+
+  for (const { input, pattern } of cases) {
+    assert.throws(() => createB1OperationReceipt(input), pattern);
+  }
+});
 
 test("GATE-014-B1 requires positive named readback timing for all operations", () => {
   for (const operation of B1_OPERATION_KINDS) {
