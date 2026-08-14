@@ -1,1 +1,5 @@
 /tests/fixtures/gate-014/receipts/*.json text eol=lf
+/docs/benchmarks/gate-014-b1-environment.json text eol=lf
+/docs/benchmarks/gate-014-b1-raw-operations.jsonl text eol=lf
+/docs/benchmarks/gate-014-b1-report.json text eol=lf
+/docs/benchmarks/gate-014-b1-summary.md text eol=lf

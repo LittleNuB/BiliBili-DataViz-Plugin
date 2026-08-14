@@ -78,6 +78,18 @@ test("GATE-014-B1 decodes only its exact missing-preflight report placeholder", 
   );
 });
 
+test("GATE-014-B1 committed artifacts keep canonical LF checkout on Windows", async () => {
+  const attributes = await readFile(".gitattributes", "utf8");
+  for (const artifactPath of [
+    "/docs/benchmarks/gate-014-b1-environment.json",
+    "/docs/benchmarks/gate-014-b1-raw-operations.jsonl",
+    "/docs/benchmarks/gate-014-b1-report.json",
+    "/docs/benchmarks/gate-014-b1-summary.md",
+  ]) {
+    assert.match(attributes, new RegExp(`^${artifactPath} text eol=lf$`, "m"));
+  }
+});
+
 test("GATE-014-B1 failure latch records only controlled public-safe fields", () => {
   const controlledError = controlledErrorForLatch();
   assert.equal(
