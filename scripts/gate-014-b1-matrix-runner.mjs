@@ -1817,7 +1817,10 @@ async function buildProductionDist() {
 export async function resolveNpmBuildInvocation() {
   const nodeExecutable = await realpath(process.execPath);
   const npmCliCandidate = path.join(
-    path.dirname(nodeExecutable),
+    process.platform === "win32"
+      ? path.dirname(nodeExecutable)
+      : path.dirname(path.dirname(nodeExecutable)),
+    ...(process.platform === "win32" ? [] : ["lib"]),
     "node_modules",
     "npm",
     "bin",

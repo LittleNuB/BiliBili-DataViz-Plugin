@@ -677,13 +677,16 @@ test("GATE-014-B1 rejects ignored files under production inputs", () => {
   );
 });
 
-test("GATE-014-B1 launches npm build through Node instead of a Windows command shim", async () => {
+test("GATE-014-B1 launches npm build through Node instead of a command shim", async () => {
   const originalNpmExecPath = process.env.npm_execpath;
   const originalNpmNodeExecPath = process.env.npm_node_execpath;
   const expectedNodeExecutable = await realpath(process.execPath);
   const expectedNpmCli = await realpath(
     path.join(
-      path.dirname(expectedNodeExecutable),
+      process.platform === "win32"
+        ? path.dirname(expectedNodeExecutable)
+        : path.dirname(path.dirname(expectedNodeExecutable)),
+      ...(process.platform === "win32" ? [] : ["lib"]),
       "node_modules",
       "npm",
       "bin",
