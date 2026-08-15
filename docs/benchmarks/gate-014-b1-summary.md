@@ -8,7 +8,7 @@
 - 暂定恢复空间倍率：不可用
 - 固定恢复预留：不可用 字节
 - 浏览器恢复边界实写：证据不足
-- Chrome for Testing：151.0.7922.77 stable，headless=new，沙箱开启
+- Chrome for Testing：152.0.7977.42 stable，headless=new，沙箱开启
 - A2 校准：`insufficient_evidence`
 - 真实 B 站字幕代表性：`insufficient_evidence`
 - 最大实测分片尾部：`insufficient_evidence`

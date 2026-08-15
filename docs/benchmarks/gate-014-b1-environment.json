@@ -1,19 +1,19 @@
 {
   "a2CalibrationStatus": "insufficient_evidence",
-  "benchmarkSourceSha256": "204e1afc1c5c99e6ad28c8f011ec2071bf67ac7595aca8cab0067baf4899e96f",
+  "benchmarkSourceSha256": "558c4cd4c83a9dac21a5d7b2b534abba3eb3e2eb75da62bbfd1e4a637c68bcd9",
   "browser": {
     "channel": "stable",
     "flavor": "chrome_for_testing_stable",
     "headlessMode": "new",
-    "officialMetadataSha256": "ec0b279fd058017e2d24eece82e1a24eaaa71675001b4f446b61637621d04d82",
-    "officialMetadataTimestamp": "2026-08-10T10:33:09.663Z",
-    "officialStableRevision": "1654411",
-    "officialStableVersion": "151.0.7922.77",
+    "officialMetadataSha256": "0345e52080c87605c4ced2e5ad6cea2e409eadcec5c45c1d515dbec43172f748",
+    "officialMetadataTimestamp": "2026-08-14T19:24:59.549Z",
+    "officialStableRevision": "1669021",
+    "officialStableVersion": "152.0.7977.42",
     "sandboxEnabled": true,
     "stableVersionSource": "official_last_known_good_versions_with_downloads_json",
-    "version": "151.0.7922.77"
+    "version": "152.0.7977.42"
   },
-  "completedAtEpochMs": 1786649689208,
+  "completedAtEpochMs": 1786825125101,
   "contract": "gate-014-b1-environment-v1",
   "execution": {
     "bilibiliLoginUsed": false,
@@ -25,12 +25,12 @@
       "extensionRequestCount": 5760,
       "externalRequestAttemptCount": 720,
       "externalResponseCount": 0,
-      "harnessExtensionTargetCount": 1521,
+      "harnessExtensionTargetCount": 1478,
       "loopbackRequestCount": 945,
       "networkMetricAvailable": true,
       "networkRequestCount": 7425,
       "observationScope": "extension_targets_after_devtools_attach_with_production_worker_barrier",
-      "observedTargetCount": 3123,
+      "observedTargetCount": 2994,
       "preAttachEventsObserved": false,
       "productionExtensionTargetCount": 720,
       "productionServiceWorkerStartupBarrierEnabled": true,
@@ -51,8 +51,8 @@
   "fixtureGeneratorVersion": "gate-014-fixture-generator-v5",
   "hardware": {
     "cpuModel": "Intel(R) Core(TM) i7-14650HX",
-    "freeDiskBytesAtEnd": 174203199488,
-    "freeDiskBytesAtStart": 174976012288,
+    "freeDiskBytesAtEnd": 165864407040,
+    "freeDiskBytesAtStart": 169273094144,
     "logicalCoreCount": 24,
     "totalMemoryBytes": 25534783488
   },
@@ -63,13 +63,13 @@
   },
   "packageLockSha256": "a69fa9d388aab7e845bf94a5a0d7b8b0a8fd415e54744415595766d431117688",
   "productionDistSha256": "444048f515c761752b2354ee8a7684b04e4171b6e7f8d5db9355cefa32f18aba",
-  "productionSourceSha256": "d15109d5b377eb23a1e89cbcd3232064d7332918389ee19dcd81257d1c64c77c",
-  "repositoryCommitSha": "2c1f0a32596114849a871bb92fd9b2d919372964",
+  "productionSourceSha256": "d391d5ca0c216608da58c9ca9adbf592179a8f66234d08c6426c9eff21c3d5c3",
+  "repositoryCommitSha": "bccad2aced32a8c44869d70548b52744ffd85371",
   "runtime": {
     "nodeVersion": "v24.14.1",
     "windowsJobLauncherCompilerSha256": "46809206887326d2d24db1eff1f3064de972c3451abe766b49111450a5e08e00",
     "windowsJobLauncherReferencesSha256": "5a60eed675017ae7c9c7987a239d00f4121e9e831fd693d0c685ee00508db967"
   },
-  "startedAtEpochMs": 1786609379018,
+  "startedAtEpochMs": 1786776784528,
   "storesSensitiveText": false
 }
