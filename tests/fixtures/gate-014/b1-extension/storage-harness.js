@@ -1,4 +1,8 @@
 import { restorePreflightAllows } from "./restore-preflight.js";
+import {
+  B1_RESTART_BROWSER_LIFECYCLE_DIAGNOSTIC_MAX_MS,
+  measureRestartOperationOffset,
+} from "./restart-measurement.js";
 
 const DATABASE_VERSION = 1;
 const MAX_MANAGED_BYTES = 500 * 1024 * 1024;
@@ -329,6 +333,10 @@ async function prepareWarmSeedGeneration(config) {
 }
 
 async function runRestartRecovery(config, operationId) {
+  const operationDispatchedMs = measureRestartOperationOffset(
+    config.restartOperationStartedEpochMs,
+    Date.now(),
+  );
   const storageBefore = await readStorageEstimate();
   const metrics = startBrowserMetrics();
   let database = null;
@@ -341,18 +349,14 @@ async function runRestartRecovery(config, operationId) {
         .objectStore("operations")
         .get(operationId),
     );
-    const harnessReadyMs = Math.max(
-      0,
-      config.restartHarnessReadyEpochMs - config.restartStartedEpochMs,
-    );
     const initialLedgerConsistency = await readLedgerConsistency(database);
     const stateReadDurationMs = performance.now() - stateReadStartedAt;
     if (stateReadDurationMs <= 0) {
       throw createFixtureHarnessError("fixture_read_timing_unavailable");
     }
-    const stateVisibleMs = Math.max(
-      0,
-      Date.now() - config.restartStartedEpochMs,
+    const stateVisibleMs = measureRestartOperationOffset(
+      config.restartOperationStartedEpochMs,
+      Date.now(),
     );
     const durableStateVerified =
       operationState?.state === "committed" &&
@@ -379,9 +383,9 @@ async function runRestartRecovery(config, operationId) {
       normalizationOperation.progressEventOffsetsMs.map(
         (offset) => stateVisibleMs + offset,
       );
-    const completedElapsedMs = Math.max(
-      0,
-      Date.now() - config.restartStartedEpochMs,
+    const completedElapsedMs = measureRestartOperationOffset(
+      config.restartOperationStartedEpochMs,
+      Date.now(),
     );
     const operationDurationMs = Math.max(
       stateVisibleMs,
@@ -392,7 +396,11 @@ async function runRestartRecovery(config, operationId) {
     const browserMetrics = metrics.stop();
     const storageAfter = await readStorageEstimate();
     const progressEventOffsetsMs = normalizeProgressEvents(
-      [harnessReadyMs, stateVisibleMs, ...normalizationProgressOffsetsMs],
+      [
+        operationDispatchedMs,
+        stateVisibleMs,
+        ...normalizationProgressOffsetsMs,
+      ],
       operationDurationMs,
     );
     const timingEvidence = createRestartTimingEvidence({
@@ -413,6 +421,8 @@ async function runRestartRecovery(config, operationId) {
         progressEventOffsetsMs,
         restart: {
           attempted: true,
+          browserLifecycleReadyMs:
+            config.restartBrowserLifecycleReadyMs,
           stateVisibleMs,
           remainingWork: true,
           nextProgressMs,
@@ -449,7 +459,7 @@ async function runRestartRecovery(config, operationId) {
           finalLedgerConsistency.matches,
         detail: {
           durableStateVerified,
-          harnessReadyMs,
+          operationDispatchedMs,
           normalizationReadbackVerified:
             normalizationOperation.readbackVerified,
           finalLedgerConsistencyVerified: finalLedgerConsistency.matches,
@@ -3268,10 +3278,12 @@ function validateConfig(config, options = {}) {
   }
   if (
     options.restarted &&
-    (!Number.isSafeInteger(config.restartStartedEpochMs) ||
-      config.restartStartedEpochMs < 1 ||
-      !Number.isSafeInteger(config.restartHarnessReadyEpochMs) ||
-      config.restartHarnessReadyEpochMs < config.restartStartedEpochMs)
+    (!Number.isSafeInteger(config.restartOperationStartedEpochMs) ||
+      config.restartOperationStartedEpochMs < 1 ||
+      !Number.isSafeInteger(config.restartBrowserLifecycleReadyMs) ||
+      config.restartBrowserLifecycleReadyMs < 0 ||
+      config.restartBrowserLifecycleReadyMs >
+        B1_RESTART_BROWSER_LIFECYCLE_DIAGNOSTIC_MAX_MS)
   ) {
     throw createFixtureHarnessError("fixture_config_restart_epoch_invalid");
   }

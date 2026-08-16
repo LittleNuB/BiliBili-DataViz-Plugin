@@ -87,6 +87,8 @@ git diff --check
 
 ## 判定说明
 
+restart 的存储 operation 计时从重启后的 harness 已完成严格环境验证、实际 dispatch 恢复操作时开始。dispatch 是该 operation 的首个 instrumented progress；`stateVisibleMs`、后续 progress 和 total duration 都使用同一计时起点。此前发生的生产副本 staging、Chrome 进程启动、harness/production 扩展加载、合成生产启动响应闭环和 production 卸载，另以 `browserLifecycleReadyMs` 诊断值保留，并按候选、夹具和冷暖模式汇总。该值受现有 45 分钟 lifecycle timeout 的完整性上限约束，但不参与存储 operation 的 2 秒 progress 或 5 秒 state-visible 判定，也不冒充用户可见 UI 反馈。
+
 任何必需指标缺失都返回 `insufficient_evidence`。500 MiB 写入/恢复不得超过 15 分钟；顺序读、账本修复和完整清理不得超过 10 分钟；已成功提交的纯写事务分批 p95 不得超过 2 秒、单批不得超过 5 秒。每项操作分别提交 `readBatchDurationsMs`、`committedBatchDurationsMs` 和包含两者的全量诊断数组，报告分别输出读取与已提交写事务的计数、median、p95 和 maximum。扫描读取与随后写入不得合并成一次写入计时；只读批次和主动回滚批次只进入独立诊断统计，不冒充已提交写事务。admission、commit visibility、marker normalization、ledger repair、capacity boundary、cancellation、full clear、restore staging 和 selected-version removal 必须具有非零的已提交写事务证据；全部 13 项操作都必须具有严格大于 0 的读取证据，并用命名字段记录该操作结束前的最终账本与可见版本 readback。admission/restore 还必须分别命名并记录提交前可见图、提交前账本与可见版本、提交后可见图三项严格大于 0 的计时。每个命名读取计时都必须按数值及重复次数包含在 `readBatchDurationsMs` 中，分类后的全部读取与提交时长又必须按数值及重复次数完整包含在全量诊断数组中，而不只是数量不超限。每项操作的提交计数仍必须与提交时长数组一一对应。报告还按 9 个候选、5 个夹具、13 项操作及冷/暖模式生成固定 1170 组重复运行中位数与 p95。进度、重启、取消、主线程、堆增长、原子提交和容量边界按门禁合同逐项判定，不以平均值掩盖失败。
 
 只读批次从 read-batch 调用前开始计时，只有其内部 readonly transaction 的 `oncomplete` 到达后才结束；cursor 的 `onsuccess` 只冻结这一批的结果，不能提前结算计时。transaction error、abort、结果缺失或重复均失败关闭；浏览器计时分辨率下仍为 0 ms 的读取继续视为证据不足，不通过等待、钳位、伪增量或重试挑选更好样本来修饰。

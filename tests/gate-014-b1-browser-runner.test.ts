@@ -65,6 +65,11 @@ import {
   writeFixture,
 } from "./fixtures/gate-014/b1-extension/storage-harness.js";
 import { restorePreflightAllows } from "./fixtures/gate-014/b1-extension/restore-preflight.js";
+import {
+  B1_RESTART_BROWSER_LIFECYCLE_DIAGNOSTIC_MAX_MS,
+  createRestartMeasurementBoundary,
+  measureRestartOperationOffset,
+} from "./fixtures/gate-014/b1-extension/restart-measurement.js";
 
 async function createControlledBrowserFailureForTest(stageCode: string) {
   try {
@@ -79,6 +84,28 @@ async function createControlledBrowserFailureForTest(stageCode: string) {
 
 test("GATE-014-B1 bounds a single browser lifecycle without masking gate thresholds", () => {
   assert.equal(B1_LIFECYCLE_EVALUATION_TIMEOUT_MS, 45 * 60 * 1_000);
+  assert.equal(
+    B1_LIFECYCLE_EVALUATION_TIMEOUT_MS,
+    B1_RESTART_BROWSER_LIFECYCLE_DIAGNOSTIC_MAX_MS,
+  );
+});
+
+test("GATE-014-B1 separates browser restart setup from storage operation timing", () => {
+  const measurement = createRestartMeasurementBoundary(1_000, 4_500);
+  assert.deepEqual(measurement, {
+    restartOperationStartedEpochMs: 4_500,
+    restartBrowserLifecycleReadyMs: 3_500,
+  });
+  assert.equal(measureRestartOperationOffset(4_500, 4_512), 12);
+  assert.equal(measureRestartOperationOffset(4_500, 4_499), 0);
+  assert.throws(
+    () =>
+      createRestartMeasurementBoundary(
+        1_000,
+        1_001 + B1_RESTART_BROWSER_LIFECYCLE_DIAGNOSTIC_MAX_MS,
+      ),
+    /restart_browser_lifecycle_diagnostic_out_of_bounds/,
+  );
 });
 
 test("GATE-014-B1 flushes before the next fixture record would cross either candidate cap", () => {

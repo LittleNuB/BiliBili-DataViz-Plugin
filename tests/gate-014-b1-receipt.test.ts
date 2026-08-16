@@ -571,6 +571,7 @@ function reportOperation({
       operation === "restart"
         ? {
             attempted: true,
+            browserLifecycleReadyMs: 30_000,
             stateVisibleMs: 5_000,
             remainingWork: true,
             nextProgressMs: 2_000,
@@ -624,6 +625,16 @@ test("GATE-014-B1 rejects impossible restart timing relationships", () => {
     {
       input: {
         ...base,
+        restart: {
+          ...base.restart,
+          browserLifecycleReadyMs: 45 * 60 * 1_000 + 1,
+        },
+      },
+      pattern: /diagnostic integrity bound/,
+    },
+    {
+      input: {
+        ...base,
         totalDurationMs: 4_999,
         progressEventOffsetsMs: [1_000, 3_000, 4_999],
       },
@@ -656,6 +667,24 @@ test("GATE-014-B1 rejects impossible restart timing relationships", () => {
   for (const { input, pattern } of cases) {
     assert.throws(() => createB1OperationReceipt(input), pattern);
   }
+});
+
+test("GATE-014-B1 keeps browser lifecycle diagnostics outside storage thresholds", () => {
+  const receipt = createB1OperationReceipt(
+    reportOperation({
+      fixtureId: "managed-full-text-500mib",
+      fixtureReceiptSha256: SHA_256,
+      recordCap: 1024,
+      byteCapBytes: 4 * 1024 * 1024,
+      runMode: "cold",
+      runOrdinal: 1,
+      operation: "restart",
+    }),
+  );
+  assert.equal(receipt.restart.browserLifecycleReadyMs, 30_000);
+  assert.equal(receipt.firstProgressEventLatencyMs, 1_000);
+  assert.equal(receipt.restart.stateVisibleMs, 5_000);
+  assert.equal(receipt.status, "pass");
 });
 
 test("GATE-014-B1 requires positive named readback timing for all operations", () => {
@@ -841,6 +870,32 @@ test("GATE-014-B1 report requires complete raw coverage and selects the largest 
       committedBatchMeasurementCount: 3,
       committedBatchDurationMedianMs: 100,
       committedBatchDurationP95Ms: 100,
+    },
+  );
+  const coldRestartSummary = report.runSummaries.find(
+    (summary) =>
+      summary.candidate.recordCap === 1024 &&
+      summary.candidate.byteCapBytes === 4 * 1024 * 1024 &&
+      summary.fixtureId === "managed-full-text-500mib" &&
+      summary.operation === "restart" &&
+      summary.runMode === "cold",
+  );
+  assert.deepEqual(
+    {
+      browserLifecycleMeasurementCount:
+        coldRestartSummary.browserLifecycleMeasurementCount,
+      browserLifecycleReadyMedianMs:
+        coldRestartSummary.browserLifecycleReadyMedianMs,
+      browserLifecycleReadyP95Ms:
+        coldRestartSummary.browserLifecycleReadyP95Ms,
+      browserLifecycleReadyMaximumMs:
+        coldRestartSummary.browserLifecycleReadyMaximumMs,
+    },
+    {
+      browserLifecycleMeasurementCount: 3,
+      browserLifecycleReadyMedianMs: 30_000,
+      browserLifecycleReadyP95Ms: 30_000,
+      browserLifecycleReadyMaximumMs: 30_000,
     },
   );
   assert.equal(

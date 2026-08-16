@@ -774,6 +774,7 @@ function lifecycleResult() {
           operation === "restart"
             ? {
                 attempted: true,
+                browserLifecycleReadyMs: 3_500,
                 stateVisibleMs: 500,
                 remainingWork: true,
                 nextProgressMs: 250,
@@ -835,6 +836,11 @@ test("GATE-014-B1 lifecycle mapping emits exactly one strict input per required 
     rawOperations.find((operation) => operation.operation === "ordered_read")
       .committedBatchCount,
     0,
+  );
+  assert.equal(
+    rawOperations.find((operation) => operation.operation === "restart")
+      .restart.browserLifecycleReadyMs,
+    3_500,
   );
   assert.equal(createB1OperationReceipt(rawOperations[0]).status, "pass");
 });

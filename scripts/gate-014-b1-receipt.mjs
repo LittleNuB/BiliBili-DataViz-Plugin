@@ -5,6 +5,9 @@ import {
   SENSITIVE_RECEIPT_TOKEN_PATTERN,
 } from "./gate-014-receipt-helpers.mjs";
 import { restorePreflightAllows } from "../tests/fixtures/gate-014/b1-extension/restore-preflight.js";
+import {
+  B1_RESTART_BROWSER_LIFECYCLE_DIAGNOSTIC_MAX_MS,
+} from "../tests/fixtures/gate-014/b1-extension/restart-measurement.js";
 
 export const B1_RECEIPT_CONTRACT = "gate-014-b1-operation-v1";
 export const B1_ENVIRONMENT_CONTRACT = "gate-014-b1-environment-v1";
@@ -1097,6 +1100,14 @@ function createB1RunSummaries(operations) {
             const readBatchDurationsMs = matching
               .flatMap((receipt) => receipt.readBatchDurationsMs)
               .sort((left, right) => left - right);
+            const restartBrowserLifecycleDurationsMs =
+              operation === "restart"
+                ? matching
+                    .map(
+                      (receipt) => receipt.restart.browserLifecycleReadyMs,
+                    )
+                    .sort((left, right) => left - right)
+                : [];
             summaries.push(
               deepFreeze({
                 candidate: deepFreeze({ recordCap, byteCapBytes }),
@@ -1135,6 +1146,28 @@ function createB1RunSummaries(operations) {
                     ? null
                     : percentile(readBatchDurationsMs, 0.95),
                 readBatchDurationMaximumMs: readBatchDurationsMs.at(-1) ?? null,
+                ...(operation === "restart"
+                  ? {
+                      browserLifecycleMeasurementCount:
+                        restartBrowserLifecycleDurationsMs.length,
+                      browserLifecycleReadyMedianMs:
+                        restartBrowserLifecycleDurationsMs.length === 0
+                          ? null
+                          : percentile(
+                              restartBrowserLifecycleDurationsMs,
+                              0.5,
+                            ),
+                      browserLifecycleReadyP95Ms:
+                        restartBrowserLifecycleDurationsMs.length === 0
+                          ? null
+                          : percentile(
+                              restartBrowserLifecycleDurationsMs,
+                              0.95,
+                            ),
+                      browserLifecycleReadyMaximumMs:
+                        restartBrowserLifecycleDurationsMs.at(-1) ?? null,
+                    }
+                  : {}),
               }),
             );
           }
@@ -1453,6 +1486,7 @@ function validateRestart(
   }
   assertAllowedFields(input, [
     "attempted",
+    "browserLifecycleReadyMs",
     "stateVisibleMs",
     "remainingWork",
     "nextProgressMs",
@@ -1464,6 +1498,10 @@ function validateRestart(
   );
   const result = {
     attempted: true,
+    browserLifecycleReadyMs: assertNonNegativeFiniteNumber(
+      input.browserLifecycleReadyMs,
+      "restart.browserLifecycleReadyMs",
+    ),
     stateVisibleMs: assertNonNegativeFiniteNumber(
       input.stateVisibleMs,
       "restart.stateVisibleMs",
@@ -1478,6 +1516,14 @@ function validateRestart(
       "restart.readbackVerified",
     ),
   };
+  if (
+    result.browserLifecycleReadyMs >
+    B1_RESTART_BROWSER_LIFECYCLE_DIAGNOSTIC_MAX_MS
+  ) {
+    throw new Error(
+      "restart.browserLifecycleReadyMs exceeds the diagnostic integrity bound",
+    );
+  }
   if (!remainingWork && result.nextProgressMs !== 0) {
     throw new Error("restart.nextProgressMs must be zero when no work remains");
   }

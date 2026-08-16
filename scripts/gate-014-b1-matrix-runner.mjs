@@ -122,6 +122,7 @@ const BENCHMARK_SOURCE_FILES = Object.freeze([
   "tests/fixtures/gate-014/b1-extension/runner.html",
   "tests/fixtures/gate-014/b1-extension/runner.js",
   "tests/fixtures/gate-014/b1-extension/restore-preflight.js",
+  "tests/fixtures/gate-014/b1-extension/restart-measurement.js",
   "tests/fixtures/gate-014/b1-extension/service-worker.js",
   "tests/fixtures/gate-014/b1-extension/storage-harness.js",
   "tests/fixtures/gate-014/b1-job-deadline-probe.cs",

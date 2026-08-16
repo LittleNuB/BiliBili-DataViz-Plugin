@@ -22,9 +22,14 @@ import {
   writeFixtureArtifact,
 } from "./gate-014-fixture-generator.mjs";
 import { B1_OPERATION_KINDS } from "./gate-014-b1-receipt.mjs";
+import {
+  B1_RESTART_BROWSER_LIFECYCLE_DIAGNOSTIC_MAX_MS,
+  createRestartMeasurementBoundary,
+} from "../tests/fixtures/gate-014/b1-extension/restart-measurement.js";
 
 export const B1_HARNESS_EXTENSION_ID = "aeangaiofkodlenmmejflbojmomlamoj";
-export const B1_LIFECYCLE_EVALUATION_TIMEOUT_MS = 45 * 60 * 1_000;
+export const B1_LIFECYCLE_EVALUATION_TIMEOUT_MS =
+  B1_RESTART_BROWSER_LIFECYCLE_DIAGNOSTIC_MAX_MS;
 const B1_BROWSER_STAGE_FAILURE_CODES = Object.freeze([
   "browser_lifecycle_execution_failed",
   "browser_before_restart_control_failed",
@@ -733,7 +738,7 @@ export async function runBrowserFixtureLifecycleWithPreparedFixture(
       () => validateLifecycleBeforeRestart(beforeRestart, config),
     );
 
-    const restartStartedEpochMs = Date.now();
+    const restartBrowserLifecycleStartedEpochMs = Date.now();
     const afterExecution = await executeB1BrowserStage(
       "browser_after_restart_control_failed",
       () =>
@@ -743,8 +748,10 @@ export async function runBrowserFixtureLifecycleWithPreparedFixture(
           ({ harnessReadyEpochMs }) => {
             const restartedConfig = {
               ...config,
-              restartStartedEpochMs,
-              restartHarnessReadyEpochMs: harnessReadyEpochMs,
+              ...createRestartMeasurementBoundary(
+                restartBrowserLifecycleStartedEpochMs,
+                harnessReadyEpochMs,
+              ),
             };
             return `globalThis.runGate014B1FixtureLifecycleAfterRestart(${JSON.stringify(
               restartedConfig,
