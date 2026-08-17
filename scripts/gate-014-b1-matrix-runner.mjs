@@ -964,6 +964,10 @@ export function createB1RestorePreflightValidationFromLifecycle(
   const refusalEvidence = quotaFailure?.detail;
   return createB1RestorePreflightValidationReceipt({
     ...options,
+    candidate: {
+      recordCap: options.candidate?.recordCap,
+      byteCapBytes: options.candidate?.byteCapBytes,
+    },
     physicalQuota: Number.isSafeInteger(
       exactEvidence?.measuredAvailableFreeQuotaBytes,
     )

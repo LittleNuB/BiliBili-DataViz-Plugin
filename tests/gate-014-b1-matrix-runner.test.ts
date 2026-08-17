@@ -906,7 +906,15 @@ test("GATE-014-B1 restore preflight validation is derived from a passing browser
     fixtureId: "managed-full-text-500mib",
     fixtureReceiptSha256: FIXTURE_SHA,
     environmentReceiptSha256: ENVIRONMENT_SHA,
-    candidate: { recordCap: 1024, byteCapBytes: 4 * 1024 * 1024 },
+    candidate: {
+      recordCap: 1024,
+      byteCapBytes: 4 * 1024 * 1024,
+      status: "pass",
+      measuredOperationCount: 520,
+      missingOperationCount: 0,
+      failedOperationCount: 0,
+      insufficientOperationCount: 0,
+    },
     startedAtEpochMs: 1,
     completedAtEpochMs: 2,
     requiredFreeQuotaBytes,
@@ -917,6 +925,10 @@ test("GATE-014-B1 restore preflight validation is derived from a passing browser
     options,
   );
   assert.equal(receipt.status, "pass");
+  assert.deepEqual(receipt.candidate, {
+    recordCap: 1024,
+    byteCapBytes: 4 * 1024 * 1024,
+  });
   assert.equal(receipt.insufficientProbe.allowed, false);
   assert.equal(receipt.exactProbe.writesObserved, 101);
 
