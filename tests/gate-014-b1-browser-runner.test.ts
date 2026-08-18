@@ -2296,50 +2296,60 @@ test("GATE-014-B1 requires the production startup response before workload execu
   );
 });
 
-test("GATE-014-B1 bounds a pending startup fulfillment by the shared deadline", async () => {
-  const productionExtensionId = "b".repeat(32);
-  let listener: ((message: Record<string, unknown>) => void) | null = null;
-  const observation = createCdpExecutionObservation({
-    onEvent(nextListener: (message: Record<string, unknown>) => void) {
-      listener = nextListener;
-      return () => {
-        listener = null;
-      };
-    },
-    async send(method: string) {
-      if (method === "Fetch.fulfillRequest") {
-        return new Promise(() => {});
-      }
-      return {};
-    },
+test("GATE-014-B1 bounds a pending startup fulfillment by the shared deadline", async (context) => {
+  context.mock.timers.enable({
+    apis: ["Date", "setTimeout"],
+    now: 1_000,
   });
-  observation.observeSession("production-session", productionExtensionId);
-  observation.setRequiredExtensionIds({
-    productionExtensionId,
-    harnessExtensionId: B1_HARNESS_EXTENSION_ID,
-  });
-  listener?.({
-    sessionId: "production-session",
-    method: "Fetch.requestPaused",
-    params: {
-      requestId: "pending-fetch-request",
-      networkId: "pending-network-request",
-      request: {
-        method: "GET",
-        url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=30",
+  try {
+    const productionExtensionId = "b".repeat(32);
+    let listener: ((message: Record<string, unknown>) => void) | null = null;
+    const observation = createCdpExecutionObservation({
+      onEvent(nextListener: (message: Record<string, unknown>) => void) {
+        listener = nextListener;
+        return () => {
+          listener = null;
+        };
       },
-    },
-  });
-  const deadlineEpochMs = Date.now() + 20;
-  await assert.rejects(
-    () =>
-      observation.waitForSyntheticUnauthenticatedResponse({
-        deadlineEpochMs,
-      }),
-    /cdp_command_timeout/,
-  );
-  const deadlineOverrunMs = Date.now() - deadlineEpochMs;
-  assert.equal(deadlineOverrunMs >= 0 && deadlineOverrunMs < 200, true);
+      async send(method: string) {
+        if (method === "Fetch.fulfillRequest") {
+          return new Promise(() => {});
+        }
+        return {};
+      },
+    });
+    observation.observeSession("production-session", productionExtensionId);
+    observation.setRequiredExtensionIds({
+      productionExtensionId,
+      harnessExtensionId: B1_HARNESS_EXTENSION_ID,
+    });
+    listener?.({
+      sessionId: "production-session",
+      method: "Fetch.requestPaused",
+      params: {
+        requestId: "pending-fetch-request",
+        networkId: "pending-network-request",
+        request: {
+          method: "GET",
+          url: "https://api.bilibili.com/x/web-interface/history/cursor?ps=30",
+        },
+      },
+    });
+    const deadlineEpochMs = Date.now() + 20;
+    const rejection = assert.rejects(
+      () =>
+        observation.waitForSyntheticUnauthenticatedResponse({
+          deadlineEpochMs,
+        }),
+      /cdp_command_timeout/,
+    );
+    await Promise.resolve();
+    context.mock.timers.tick(20);
+    await rejection;
+    assert.equal(Date.now(), deadlineEpochMs);
+  } finally {
+    context.mock.timers.reset();
+  }
 });
 
 test("GATE-014-B1 accepts exactly eight pre-identity startup requests", async () => {
