@@ -1,0 +1,1033 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  B1_BYTE_CAPS,
+  B1_OPERATION_KINDS,
+  B1_RECORD_CAPS,
+  B1_REQUIRED_FIXTURE_IDS,
+  B1_MAX_HEAP_GROWTH_BYTES,
+  createB1EnvironmentReceipt,
+  createB1OperationReceipt,
+  createB1RestorePreflightValidationReceipt,
+  evaluateB1Report,
+  hashB1EnvironmentReceipt,
+  serializeB1EnvironmentReceipt,
+  serializeB1Report,
+} from "../scripts/gate-014-b1-receipt.mjs";
+
+const SHA_256 = "0123456789abcdef".repeat(4);
+const ENVIRONMENT_INPUT = {
+  startedAtEpochMs: 1_000,
+  completedAtEpochMs: 2_000,
+  repositoryCommitSha: "a".repeat(40),
+  benchmarkSourceSha256: "b".repeat(64),
+  productionSourceSha256: "e".repeat(64),
+  packageLockSha256: "c".repeat(64),
+  productionDistSha256: "d".repeat(64),
+  fixtureGeneratorVersion: "gate-014-fixture-generator-v5",
+  operatingSystem: {
+    platform: "win32",
+    release: "10.0.26200",
+    architecture: "x64",
+  },
+  hardware: {
+    cpuModel: "Synthetic CPU",
+    logicalCoreCount: 24,
+    totalMemoryBytes: 24_000_000_000,
+    freeDiskBytesAtStart: 200_000_000_000,
+    freeDiskBytesAtEnd: 199_000_000_000,
+  },
+  runtime: {
+    nodeVersion: "v24.14.1",
+    windowsJobLauncherCompilerSha256: "9".repeat(64),
+    windowsJobLauncherReferencesSha256: "8".repeat(64),
+  },
+  browser: {
+    flavor: "chrome_for_testing_stable",
+    version: "151.0.7922.77",
+    channel: "stable",
+    officialStableVersion: "151.0.7922.77",
+    officialStableRevision: "1654411",
+    officialMetadataTimestamp: "2026-08-10T10:33:09.663Z",
+    officialMetadataSha256: "f".repeat(64),
+    stableVersionSource:
+      "official_last_known_good_versions_with_downloads_json",
+    headlessMode: "new",
+    sandboxEnabled: true,
+  },
+  execution: {
+    commandId: "gate014_b1_full_matrix",
+    productionBuildCommand: "npm_run_build",
+    productionExtensionMode: "unpacked",
+    networkPolicy: "loopback_only_external_dns_blocked",
+    coldProfilePolicy: "fresh_temporary_profile_per_run",
+    warmProfilePolicy:
+      "opened_complete_seed_generation_with_fresh_profile_per_run",
+    coldRunsPerCandidateFixture: 3,
+    warmRunsPerCandidateFixture: 5,
+    externalNetworkDependencyUsed: false,
+    realUserProfileRead: false,
+    bilibiliLoginUsed: false,
+    browserObservation: {
+      contract: "gate-014-b1-browser-observation-v4",
+      browserLaunchCount: 722,
+      observationScope:
+        "extension_targets_after_devtools_attach_with_production_worker_barrier",
+      preAttachEventsObserved: false,
+      productionServiceWorkerStartupBarrierEnabled: true,
+      observedTargetCount: 1_444,
+      productionExtensionTargetCount: 722,
+      harnessExtensionTargetCount: 722,
+      networkMetricAvailable: true,
+      networkRequestCount: 2_000,
+      loopbackRequestCount: 600,
+      extensionRequestCount: 400,
+      externalRequestAttemptCount: 722,
+      syntheticUnauthenticatedResponseCount: 722,
+      externalResponseCount: 0,
+      consoleMetricAvailable: true,
+      consoleErrorCount: 0,
+      unattributedLogErrorCount: 2,
+    },
+  },
+  a2CalibrationStatus: "insufficient_evidence",
+  storesSensitiveText: false,
+};
+const ENVIRONMENT_SHA_256 = hashB1EnvironmentReceipt(
+  createB1EnvironmentReceipt(ENVIRONMENT_INPUT),
+);
+
+test("GATE-014-B1 environment receipt is deterministic and rejects local paths", () => {
+  const receipt = createB1EnvironmentReceipt(ENVIRONMENT_INPUT);
+
+  assert.equal(receipt.contract, "gate-014-b1-environment-v1");
+  assert.equal(hashB1EnvironmentReceipt(receipt), ENVIRONMENT_SHA_256);
+  assert.throws(
+    () =>
+      createB1EnvironmentReceipt({
+        ...ENVIRONMENT_INPUT,
+        browser: {
+          ...ENVIRONMENT_INPUT.browser,
+          officialStableVersion: "151.0.7922.76",
+        },
+      }),
+    /must match official stable/,
+  );
+  assert.throws(
+    () =>
+      createB1EnvironmentReceipt({
+        ...ENVIRONMENT_INPUT,
+        execution: {
+          ...ENVIRONMENT_INPUT.execution,
+          browserObservation: {
+            ...ENVIRONMENT_INPUT.execution.browserObservation,
+            externalResponseCount: 1,
+          },
+        },
+      }),
+    /externalResponseCount/,
+  );
+  assert.throws(
+    () =>
+      createB1EnvironmentReceipt({
+        ...ENVIRONMENT_INPUT,
+        execution: {
+          ...ENVIRONMENT_INPUT.execution,
+          browserObservation: {
+            ...ENVIRONMENT_INPUT.execution.browserObservation,
+            browserLaunchCount: 1,
+            externalRequestAttemptCount: 1,
+            syntheticUnauthenticatedResponseCount: 2,
+          },
+        },
+      }),
+    /classified requests exceed total/,
+  );
+  assert.throws(
+    () =>
+      createB1EnvironmentReceipt({
+        ...ENVIRONMENT_INPUT,
+        execution: {
+          ...ENVIRONMENT_INPUT.execution,
+          browserObservation: {
+            ...ENVIRONMENT_INPUT.execution.browserObservation,
+            syntheticUnauthenticatedResponseCount: 721,
+          },
+        },
+      }),
+    /classified requests exceed total/,
+  );
+  assert.equal(serializeB1EnvironmentReceipt(receipt).endsWith("\n"), true);
+  assert.throws(
+    () =>
+      createB1EnvironmentReceipt({
+        ...structuredClone(ENVIRONMENT_INPUT),
+        hardware: {
+          ...ENVIRONMENT_INPUT.hardware,
+          cpuModel: "C:\\Users\\person\\cpu",
+        },
+      }),
+    /public-safe text/,
+  );
+});
+
+function passingOperation(overrides = {}) {
+  const readBatchDurationsMs = [1_000, 1_001, 1_002, 1_003];
+  return {
+    fixtureId: "managed-full-text-500mib",
+    fixtureReceiptSha256: SHA_256,
+    environmentReceiptSha256: ENVIRONMENT_SHA_256,
+    candidate: {
+      recordCap: 1024,
+      byteCapBytes: 4 * 1024 * 1024,
+    },
+    runMode: "cold",
+    runOrdinal: 1,
+    operation: "admission",
+    totalDurationMs: 900_000,
+    committedBatchCount: 20,
+    committedBatchDurationsMs: [
+      ...Array.from({ length: 19 }, () => 2_000),
+      5_000,
+    ],
+    readBatchDurationsMs,
+    readTimingEvidence: {
+      finalLedgerAndVisibleReadbackMs: 1_003,
+      preCommitVisibleGraphMs: 1_000,
+      preCommitLedgerAndVisibleReadbackMs: 1_001,
+      postCommitVisibleGraphMs: 1_002,
+    },
+    batchDurationsMs: [
+      ...Array.from({ length: 19 }, () => 2_000),
+      5_000,
+      ...readBatchDurationsMs,
+    ],
+    progressEventOffsetsMs: Array.from(
+      { length: 450 },
+      (_, index) => (index + 1) * 2_000,
+    ),
+    restart: {
+      attempted: false,
+    },
+    cancellation: {
+      attempted: false,
+    },
+    mainThread: {
+      metricAvailable: true,
+      maximumTaskMs: 200,
+    },
+    memory: {
+      metricAvailable: true,
+      peakHeapGrowthBytes: B1_MAX_HEAP_GROWTH_BYTES,
+    },
+    indexedDb: {
+      metricAvailable: true,
+      expectedDirection: "increase",
+      sourceCanonicalBytes: 524_288_000,
+      usageBeforeBytes: 1_000,
+      quotaBeforeBytes: 2_000_000_000,
+      usageAfterBytes: 524_289_000,
+      quotaAfterBytes: 2_000_000_000,
+      cleanupUsageBytes: 1_000,
+      cleanupQuotaBytes: 2_000_000_000,
+      readbackVerified: true,
+    },
+    assertions: {
+      atomicVersionCommitOrRollback: true,
+      ledgerMatchesVersionBytes: true,
+      exactCapacityBoundaryEnforced: true,
+      stagedRowsInvisible: true,
+      committedRowsVisibleTogether: true,
+      orphanRowsHiddenAndCleanable: true,
+      cleanupReadbackVerified: true,
+      restorePreflightBoundaryVerified: true,
+      warmStartCompleteGenerationVerified: true,
+    },
+    ...overrides,
+  };
+}
+
+test("GATE-014-B1 operation receipt passes at every inclusive numeric boundary", () => {
+  const receipt = createB1OperationReceipt(passingOperation());
+
+  assert.equal(receipt.status, "pass");
+  assert.equal(receipt.committedBatchCount, 20);
+  assert.equal(receipt.batchDurationMedianMs, 2_000);
+  assert.equal(receipt.batchDurationP95Ms, 2_000);
+  assert.equal(receipt.batchDurationMaximumMs, 5_000);
+  assert.equal(receipt.firstProgressEventLatencyMs, 2_000);
+  assert.equal(receipt.maximumProgressEventGapMs, 2_000);
+  assert.equal(receipt.storesSensitiveText, false);
+  assert.equal(Object.isFrozen(receipt), true);
+  assert.equal(Object.isFrozen(receipt.candidate), true);
+});
+
+test("GATE-014-B1 records delayed quota reclamation without overriding cleanup readback", () => {
+  const receipt = createB1OperationReceipt(
+    passingOperation({
+      indexedDb: {
+        metricAvailable: true,
+        expectedDirection: "increase",
+        sourceCanonicalBytes: 524_288_000,
+        usageBeforeBytes: 1_000,
+        quotaBeforeBytes: 2_000_000_000,
+        usageAfterBytes: 524_289_000,
+        quotaAfterBytes: 2_000_000_000,
+        cleanupUsageBytes: 524_300_000,
+        cleanupQuotaBytes: 2_000_000_000,
+        readbackVerified: true,
+      },
+    }),
+  );
+
+  assert.equal(receipt.status, "pass");
+  assert.equal(receipt.indexedDb.cleanupUsageBytes, 524_300_000);
+});
+
+test("GATE-014-B1 operation receipt fails when any measured threshold is exceeded", () => {
+  const cases = [
+    { totalDurationMs: 900_001 },
+    {
+      committedBatchDurationsMs: Array.from({ length: 20 }, () => 2_001),
+      batchDurationsMs: Array.from({ length: 20 }, () => 2_001),
+    },
+    {
+      committedBatchDurationsMs: [
+        ...Array.from({ length: 19 }, () => 1),
+        5_001,
+      ],
+      batchDurationsMs: [...Array.from({ length: 19 }, () => 1), 5_001],
+    },
+    {
+      progressEventOffsetsMs: [
+        2_001,
+        ...Array.from({ length: 449 }, (_, index) => 4_000 + index * 1_999),
+      ],
+    },
+    {
+      mainThread: {
+        metricAvailable: true,
+        maximumTaskMs: 201,
+      },
+    },
+    {
+      memory: {
+        metricAvailable: true,
+        peakHeapGrowthBytes: B1_MAX_HEAP_GROWTH_BYTES + 1,
+      },
+    },
+  ];
+
+  for (const overrides of cases) {
+    assert.equal(
+      createB1OperationReceipt(passingOperation(overrides)).status,
+      "fail",
+    );
+  }
+});
+
+test("GATE-014-B1 operation receipt fails closed when a required metric is unavailable", () => {
+  const receipt = createB1OperationReceipt(
+    passingOperation({
+      memory: {
+        metricAvailable: false,
+        reasonCode: "browser_metric_unavailable",
+      },
+    }),
+  );
+
+  assert.equal(receipt.status, "insufficient_evidence");
+  assert.deepEqual(receipt.insufficientEvidence, ["memory_metric_unavailable"]);
+});
+
+test("GATE-014-B1 operation receipt rejects an unavailable main-thread metric", () => {
+  const receipt = createB1OperationReceipt(
+    passingOperation({
+      mainThread: {
+        metricAvailable: false,
+        reasonCode: "browser_metric_unavailable",
+      },
+    }),
+  );
+
+  assert.equal(receipt.status, "insufficient_evidence");
+  assert.deepEqual(receipt.insufficientEvidence, [
+    "main_thread_metric_unavailable",
+  ]);
+});
+
+test("GATE-014-B1 receipt rejects unknown fields, unsafe identities, and non-plain input", () => {
+  assert.throws(
+    () => createB1OperationReceipt(passingOperation({ unexpected: true })),
+    /unsupported field: unexpected/,
+  );
+  assert.throws(
+    () =>
+      createB1OperationReceipt(
+        passingOperation({ fixtureId: "C:\\Users\\person\\fixture" }),
+      ),
+    /fixtureId/,
+  );
+  assert.throws(
+    () =>
+      createB1OperationReceipt(
+        Object.assign(Object.create({ polluted: true }), passingOperation()),
+      ),
+    /plain object/,
+  );
+});
+
+test("GATE-014-B1 records committed writes separately from instrumented batch timings", () => {
+  const receipt = createB1OperationReceipt(
+    passingOperation({
+      operation: "ordered_read",
+      totalDurationMs: 1_000,
+      committedBatchCount: 0,
+      committedBatchDurationsMs: [],
+      readBatchDurationsMs: [10, 20, 30],
+      readTimingEvidence: {
+        finalLedgerAndVisibleReadbackMs: 30,
+        preCommitVisibleGraphMs: null,
+        preCommitLedgerAndVisibleReadbackMs: null,
+        postCommitVisibleGraphMs: null,
+      },
+      batchDurationsMs: [10, 20, 30],
+      progressEventOffsetsMs: [],
+    }),
+  );
+
+  assert.equal(receipt.status, "pass");
+  assert.equal(receipt.committedBatchCount, 0);
+  assert.equal(receipt.batchDurationMaximumMs, null);
+  assert.equal(receipt.instrumentedBatchCount, 3);
+  assert.equal(receipt.instrumentedBatchDurationMaximumMs, 30);
+  assert.equal(receipt.readBatchCount, 3);
+  assert.equal(receipt.readBatchDurationMaximumMs, 30);
+  const missingWriteTiming = createB1OperationReceipt(
+    passingOperation({
+      operation: "commit_visibility",
+      committedBatchCount: 0,
+      committedBatchDurationsMs: [],
+      readBatchDurationsMs: [10],
+      readTimingEvidence: {
+        finalLedgerAndVisibleReadbackMs: 10,
+        preCommitVisibleGraphMs: null,
+        preCommitLedgerAndVisibleReadbackMs: null,
+        postCommitVisibleGraphMs: null,
+      },
+      batchDurationsMs: [10],
+    }),
+  );
+  assert.equal(missingWriteTiming.status, "insufficient_evidence");
+  assert.deepEqual(missingWriteTiming.insufficientEvidence, [
+    "committed_write_timing_unavailable",
+  ]);
+  const missingReadTiming = createB1OperationReceipt(
+    passingOperation({
+      operation: "ordered_read",
+      totalDurationMs: 1_000,
+      committedBatchCount: 0,
+      committedBatchDurationsMs: [],
+      readBatchDurationsMs: [],
+      readTimingEvidence: {
+        finalLedgerAndVisibleReadbackMs: null,
+        preCommitVisibleGraphMs: null,
+        preCommitLedgerAndVisibleReadbackMs: null,
+        postCommitVisibleGraphMs: null,
+      },
+      batchDurationsMs: [10],
+      progressEventOffsetsMs: [],
+    }),
+  );
+  assert.equal(missingReadTiming.status, "insufficient_evidence");
+  assert.deepEqual(missingReadTiming.insufficientEvidence, [
+    "read_batch_timing_unavailable",
+    "final_ledger_visible_readback_timing_unavailable",
+  ]);
+  assert.throws(
+    () =>
+      createB1OperationReceipt(
+        passingOperation({ committedBatchCount: undefined }),
+      ),
+    /committedBatchCount/,
+  );
+  assert.throws(
+    () =>
+      createB1OperationReceipt(
+        passingOperation({
+          committedBatchCount: 1,
+          committedBatchDurationsMs: [],
+        }),
+      ),
+    /must match/,
+  );
+  const separateWriteTiming = createB1OperationReceipt(
+    passingOperation({
+      operation: "commit_visibility",
+      committedBatchCount: 1,
+      committedBatchDurationsMs: [1_500],
+      readBatchDurationsMs: [800],
+      readTimingEvidence: {
+        finalLedgerAndVisibleReadbackMs: 800,
+        preCommitVisibleGraphMs: null,
+        preCommitLedgerAndVisibleReadbackMs: null,
+        postCommitVisibleGraphMs: null,
+      },
+      batchDurationsMs: [800, 900, 1_500],
+    }),
+  );
+  assert.equal(separateWriteTiming.status, "pass");
+  assert.equal(separateWriteTiming.batchDurationMaximumMs, 1_500);
+  assert.equal(separateWriteTiming.instrumentedBatchDurationMaximumMs, 1_500);
+  const mismatchedClassifiedTiming = createB1OperationReceipt(
+    passingOperation({
+      operation: "commit_visibility",
+      committedBatchCount: 1,
+      committedBatchDurationsMs: [1_500],
+      readBatchDurationsMs: [800],
+      readTimingEvidence: {
+        finalLedgerAndVisibleReadbackMs: 800,
+        preCommitVisibleGraphMs: null,
+        preCommitLedgerAndVisibleReadbackMs: null,
+        postCommitVisibleGraphMs: null,
+      },
+      batchDurationsMs: [800, 900],
+    }),
+  );
+  assert.equal(mismatchedClassifiedTiming.status, "fail");
+  assert.deepEqual(mismatchedClassifiedTiming.failures, [
+    "classified_batch_timing_missing_from_instrumented",
+  ]);
+  assert.equal(
+    createB1OperationReceipt(
+      passingOperation({
+        operation: "atomic_version",
+        committedBatchCount: 0,
+        committedBatchDurationsMs: [],
+        readBatchDurationsMs: [6_000],
+        readTimingEvidence: {
+          finalLedgerAndVisibleReadbackMs: 6_000,
+          preCommitVisibleGraphMs: null,
+          preCommitLedgerAndVisibleReadbackMs: null,
+          postCommitVisibleGraphMs: null,
+        },
+        batchDurationsMs: [6_000],
+      }),
+    ).status,
+    "pass",
+  );
+});
+
+function reportOperation({
+  fixtureId,
+  fixtureReceiptSha256,
+  recordCap,
+  byteCapBytes,
+  runMode,
+  runOrdinal,
+  operation,
+}) {
+  const committedBatchCount = [
+    "ordered_read",
+    "restart",
+    "atomic_version",
+    "quota_failure",
+  ].includes(operation)
+    ? 0
+    : 1;
+  const requiresVisibilityTiming = ["admission", "restore_staging"].includes(
+    operation,
+  );
+  const readBatchDurationsMs = requiresVisibilityTiming
+    ? [81, 82, 83, 80]
+    : [80];
+  const readTimingEvidence = {
+    finalLedgerAndVisibleReadbackMs: 80,
+    preCommitVisibleGraphMs: requiresVisibilityTiming ? 81 : null,
+    preCommitLedgerAndVisibleReadbackMs: requiresVisibilityTiming ? 82 : null,
+    postCommitVisibleGraphMs: requiresVisibilityTiming ? 83 : null,
+  };
+  const committedBatchDurationsMs = committedBatchCount === 0 ? [] : [100];
+  return passingOperation({
+    fixtureId,
+    fixtureReceiptSha256,
+    candidate: { recordCap, byteCapBytes },
+    runMode,
+    runOrdinal,
+    operation,
+    totalDurationMs: operation === "restart" ? 7_000 : 1_000,
+    committedBatchCount,
+    committedBatchDurationsMs,
+    readBatchDurationsMs,
+    readTimingEvidence,
+    batchDurationsMs:
+      committedBatchDurationsMs.length + readBatchDurationsMs.length === 0
+        ? [100]
+        : [...committedBatchDurationsMs, ...readBatchDurationsMs],
+    progressEventOffsetsMs:
+      operation === "restart" ? [1_000, 3_000, 5_000, 7_000] : [],
+    restart:
+      operation === "restart"
+        ? {
+            attempted: true,
+            browserLifecycleReadyMs: 30_000,
+            stateVisibleMs: 5_000,
+            remainingWork: true,
+            nextProgressMs: 2_000,
+            readbackVerified: true,
+          }
+        : { attempted: false },
+    cancellation:
+      operation === "cancellation"
+        ? {
+            attempted: true,
+            acknowledgementMs: 1_000,
+            writesAfterTwoSeconds: 0,
+          }
+        : { attempted: false },
+    indexedDb: {
+      metricAvailable: true,
+      expectedDirection: ["admission", "restore_staging"].includes(operation)
+        ? "increase"
+        : ["selected_version_removal", "full_clear"].includes(operation)
+          ? "decrease"
+          : "stable",
+      sourceCanonicalBytes: 1_000,
+      usageBeforeBytes: 1_000,
+      quotaBeforeBytes: 100_000_000,
+      usageAfterBytes: ["admission", "restore_staging"].includes(operation)
+        ? 2_000
+        : ["selected_version_removal", "full_clear"].includes(operation)
+          ? 500
+          : 1_000,
+      quotaAfterBytes: 100_000_000,
+      cleanupUsageBytes: ["admission", "restore_staging"].includes(operation)
+        ? 1_000
+        : 500,
+      cleanupQuotaBytes: 100_000_000,
+      readbackVerified: true,
+    },
+  });
+}
+
+test("GATE-014-B1 rejects impossible restart timing relationships", () => {
+  const base = reportOperation({
+    fixtureId: "managed-full-text-500mib",
+    fixtureReceiptSha256: SHA_256,
+    recordCap: 1024,
+    byteCapBytes: 4 * 1024 * 1024,
+    runMode: "cold",
+    runOrdinal: 1,
+    operation: "restart",
+  });
+  const cases = [
+    {
+      input: {
+        ...base,
+        restart: {
+          ...base.restart,
+          browserLifecycleReadyMs: 45 * 60 * 1_000 + 1,
+        },
+      },
+      pattern: /diagnostic integrity bound/,
+    },
+    {
+      input: {
+        ...base,
+        totalDurationMs: 4_999,
+        progressEventOffsetsMs: [1_000, 3_000, 4_999],
+      },
+      pattern: /stateVisibleMs must not exceed totalDurationMs/,
+    },
+    {
+      input: {
+        ...base,
+        totalDurationMs: 6_999,
+        progressEventOffsetsMs: [1_000, 3_000, 5_000, 6_999],
+      },
+      pattern: /next progress must not exceed totalDurationMs/,
+    },
+    {
+      input: {
+        ...base,
+        progressEventOffsetsMs: [1_000, 3_000, 4_999, 7_000],
+      },
+      pattern: /stateVisibleMs must match a progress event/,
+    },
+    {
+      input: {
+        ...base,
+        progressEventOffsetsMs: [1_000, 3_000, 5_000, 6_999],
+      },
+      pattern: /nextProgressMs must match a progress event/,
+    },
+  ];
+
+  for (const { input, pattern } of cases) {
+    assert.throws(() => createB1OperationReceipt(input), pattern);
+  }
+});
+
+test("GATE-014-B1 keeps browser lifecycle diagnostics outside storage thresholds", () => {
+  const receipt = createB1OperationReceipt(
+    reportOperation({
+      fixtureId: "managed-full-text-500mib",
+      fixtureReceiptSha256: SHA_256,
+      recordCap: 1024,
+      byteCapBytes: 4 * 1024 * 1024,
+      runMode: "cold",
+      runOrdinal: 1,
+      operation: "restart",
+    }),
+  );
+  assert.equal(receipt.restart.browserLifecycleReadyMs, 30_000);
+  assert.equal(receipt.firstProgressEventLatencyMs, 1_000);
+  assert.equal(receipt.restart.stateVisibleMs, 5_000);
+  assert.equal(receipt.status, "pass");
+});
+
+test("GATE-014-B1 requires positive named readback timing for all operations", () => {
+  for (const operation of B1_OPERATION_KINDS) {
+    const input = reportOperation({
+      fixtureId: "managed-full-text-500mib",
+      fixtureReceiptSha256: SHA_256,
+      recordCap: 1024,
+      byteCapBytes: 4 * 1024 * 1024,
+      runMode: "cold",
+      runOrdinal: 1,
+      operation,
+    });
+    input.readBatchDurationsMs = input.readBatchDurationsMs.map((duration) =>
+      duration === 80 ? 0 : duration,
+    );
+    input.batchDurationsMs = input.batchDurationsMs.map((duration) =>
+      duration === 80 ? 0 : duration,
+    );
+    input.readTimingEvidence.finalLedgerAndVisibleReadbackMs = 0;
+    const receipt = createB1OperationReceipt(input);
+    assert.equal(receipt.status, "insufficient_evidence", operation);
+    assert.equal(
+      receipt.insufficientEvidence.includes("read_batch_timing_not_positive"),
+      true,
+      operation,
+    );
+    assert.equal(
+      receipt.insufficientEvidence.includes("named_read_timing_not_positive"),
+      true,
+      operation,
+    );
+  }
+});
+
+test("GATE-014-B1 admission visibility evidence requires distinct measured samples", () => {
+  const input = passingOperation({
+    committedBatchCount: 1,
+    committedBatchDurationsMs: [100],
+    readBatchDurationsMs: [80],
+    readTimingEvidence: {
+      finalLedgerAndVisibleReadbackMs: 80,
+      preCommitVisibleGraphMs: 80,
+      preCommitLedgerAndVisibleReadbackMs: 80,
+      postCommitVisibleGraphMs: 80,
+    },
+    batchDurationsMs: [100, 80],
+  });
+  const receipt = createB1OperationReceipt(input);
+  assert.equal(receipt.status, "fail");
+  assert.equal(
+    receipt.failures.includes("named_read_timing_missing_from_read_batch"),
+    true,
+  );
+});
+
+function completeReportInput() {
+  const fixtureReceipts = Object.fromEntries(
+    B1_REQUIRED_FIXTURE_IDS.map((fixtureId, index) => [
+      fixtureId,
+      `${index}`.repeat(64),
+    ]),
+  );
+  const rawOperations = [];
+  for (const recordCap of B1_RECORD_CAPS) {
+    for (const byteCapBytes of B1_BYTE_CAPS) {
+      for (const fixtureId of B1_REQUIRED_FIXTURE_IDS) {
+        for (const [runMode, count] of [
+          ["cold", 3],
+          ["warm", 5],
+        ]) {
+          for (let runOrdinal = 1; runOrdinal <= count; runOrdinal += 1) {
+            for (const operation of B1_OPERATION_KINDS) {
+              rawOperations.push(
+                reportOperation({
+                  fixtureId,
+                  fixtureReceiptSha256: fixtureReceipts[fixtureId],
+                  recordCap,
+                  byteCapBytes,
+                  runMode,
+                  runOrdinal,
+                  operation,
+                }),
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+  const input = {
+    environment: structuredClone(ENVIRONMENT_INPUT),
+    environmentReceiptSha256: ENVIRONMENT_SHA_256,
+    fixtureReceipts,
+    rawOperations,
+  };
+  setPassingRestorePreflightValidation(input, {
+    recordCap: 1024,
+    byteCapBytes: 4 * 1024 * 1024,
+  });
+  return input;
+}
+
+function setPassingRestorePreflightValidation(
+  input,
+  candidate,
+  receiptOverrides = {},
+) {
+  const requiredFreeQuotaBytes = 64 * 1024 * 1024 + 1_250;
+  input.restorePreflightValidation = createB1RestorePreflightValidationReceipt({
+    fixtureId: "managed-full-text-500mib",
+    fixtureReceiptSha256: input.fixtureReceipts["managed-full-text-500mib"],
+    environmentReceiptSha256: ENVIRONMENT_SHA_256,
+    candidate,
+    startedAtEpochMs: 1_200,
+    completedAtEpochMs: 1_800,
+    requiredFreeQuotaBytes,
+    physicalQuota: {
+      metricAvailable: true,
+      availableFreeQuotaBytes: 100_000_000,
+    },
+    insufficientProbe: {
+      availableFreeQuotaBytes: requiredFreeQuotaBytes - 1,
+      requiredFreeQuotaBytes,
+      allowed: false,
+      artifactFetchAttempted: false,
+      writesObserved: 0,
+    },
+    exactProbe: {
+      availableFreeQuotaBytes: requiredFreeQuotaBytes,
+      requiredFreeQuotaBytes,
+      allowed: true,
+      artifactFetchAttempted: true,
+      writesObserved: 500,
+      writeReadbackVerified: true,
+    },
+    cleanupReadbackVerified: true,
+    ...receiptOverrides,
+  });
+}
+
+test("GATE-014-B1 report requires complete raw coverage and selects the largest passing candidate", () => {
+  const input = completeReportInput();
+  const report = evaluateB1Report(input);
+
+  assert.equal(report.status, "pass");
+  assert.deepEqual(report.selectedCandidate, {
+    recordCap: 1024,
+    byteCapBytes: 4 * 1024 * 1024,
+  });
+  assert.equal(
+    report.coverage.expectedOperationCount,
+    input.rawOperations.length,
+  );
+  assert.equal(report.coverage.missingOperationCount, 0);
+  assert.equal(report.coverage.runSummaryCount, 1_170);
+  const coldAdmissionSummary = report.runSummaries.find(
+    (summary) =>
+      summary.candidate.recordCap === 1024 &&
+      summary.candidate.byteCapBytes === 4 * 1024 * 1024 &&
+      summary.fixtureId === "managed-full-text-500mib" &&
+      summary.operation === "admission" &&
+      summary.runMode === "cold",
+  );
+  assert.deepEqual(
+    {
+      expectedRunCount: coldAdmissionSummary.expectedRunCount,
+      measuredRunCount: coldAdmissionSummary.measuredRunCount,
+      totalDurationMedianMs: coldAdmissionSummary.totalDurationMedianMs,
+      totalDurationP95Ms: coldAdmissionSummary.totalDurationP95Ms,
+      committedBatchMeasurementCount:
+        coldAdmissionSummary.committedBatchMeasurementCount,
+      committedBatchDurationMedianMs:
+        coldAdmissionSummary.committedBatchDurationMedianMs,
+      committedBatchDurationP95Ms:
+        coldAdmissionSummary.committedBatchDurationP95Ms,
+    },
+    {
+      expectedRunCount: 3,
+      measuredRunCount: 3,
+      totalDurationMedianMs: 1_000,
+      totalDurationP95Ms: 1_000,
+      committedBatchMeasurementCount: 3,
+      committedBatchDurationMedianMs: 100,
+      committedBatchDurationP95Ms: 100,
+    },
+  );
+  const coldRestartSummary = report.runSummaries.find(
+    (summary) =>
+      summary.candidate.recordCap === 1024 &&
+      summary.candidate.byteCapBytes === 4 * 1024 * 1024 &&
+      summary.fixtureId === "managed-full-text-500mib" &&
+      summary.operation === "restart" &&
+      summary.runMode === "cold",
+  );
+  assert.deepEqual(
+    {
+      browserLifecycleMeasurementCount:
+        coldRestartSummary.browserLifecycleMeasurementCount,
+      browserLifecycleReadyMedianMs:
+        coldRestartSummary.browserLifecycleReadyMedianMs,
+      browserLifecycleReadyP95Ms:
+        coldRestartSummary.browserLifecycleReadyP95Ms,
+      browserLifecycleReadyMaximumMs:
+        coldRestartSummary.browserLifecycleReadyMaximumMs,
+    },
+    {
+      browserLifecycleMeasurementCount: 3,
+      browserLifecycleReadyMedianMs: 30_000,
+      browserLifecycleReadyP95Ms: 30_000,
+      browserLifecycleReadyMaximumMs: 30_000,
+    },
+  );
+  assert.equal(
+    report.realBilibiliSubtitleRepresentativeness,
+    "insufficient_evidence",
+  );
+  assert.equal(report.maximumMeasuredSegmentCountTail, "insufficient_evidence");
+  assert.equal(report.provisionalRestoreHeadroom.status, "pass");
+  assert.equal(report.provisionalRestoreHeadroom.roundedAmplificationRatio, 1);
+  assert.equal(report.provisionalRestoreHeadroom.provisionalMultiplier, 1.25);
+  assert.equal(
+    report.provisionalRestoreHeadroom.fixedReserveBytes,
+    64 * 1024 * 1024,
+  );
+  assert.equal(
+    report.provisionalRestoreHeadroom.deliberatelyInsufficientProbe.allowed,
+    false,
+  );
+  assert.equal(report.provisionalRestoreHeadroom.nearLimitProbe.allowed, true);
+  assert.equal(
+    report.provisionalRestoreHeadroom.browserValidationVerified,
+    true,
+  );
+  assert.match(serializeB1Report(report), /"selectedCandidate"/);
+  assert.equal(serializeB1Report(report).endsWith("\n"), true);
+  assert.equal(Object.isFrozen(report), true);
+});
+
+test("GATE-014-B1 report stays insufficient when any required raw operation is absent", () => {
+  const input = completeReportInput();
+  input.rawOperations.pop();
+  const report = evaluateB1Report(input);
+
+  assert.equal(report.status, "insufficient_evidence");
+  assert.equal(report.selectedCandidate, null);
+  assert.equal(report.coverage.missingOperationCount, 1);
+});
+
+test("GATE-014-B1 report stays insufficient until the derived restore rule passes a browser write", () => {
+  const input = completeReportInput();
+  input.restorePreflightValidation = null;
+  const report = evaluateB1Report(input);
+
+  assert.equal(report.status, "insufficient_evidence");
+  assert.equal(report.selectedCandidate, null);
+  assert.equal(
+    report.provisionalRestoreHeadroom.browserValidationVerified,
+    false,
+  );
+  assert.equal(
+    report.restorePreflightValidation.reasonCode,
+    "browser_preflight_validation_missing",
+  );
+});
+
+test("GATE-014-B1 report stays insufficient when provisional restore headroom rejects a measured run", () => {
+  const input = completeReportInput();
+  const restore = input.rawOperations.find(
+    (operation) =>
+      operation.candidate.recordCap === 1024 &&
+      operation.candidate.byteCapBytes === 4 * 1024 * 1024 &&
+      operation.operation === "restore_staging",
+  );
+  restore.indexedDb.quotaBeforeBytes = 60_000_000;
+  const report = evaluateB1Report(input);
+
+  assert.equal(report.status, "insufficient_evidence");
+  assert.equal(report.selectedCandidate, null);
+  assert.equal(
+    report.provisionalRestoreHeadroom.status,
+    "insufficient_evidence",
+  );
+  assert.equal(report.provisionalRestoreHeadroom.allMeasuredRunsAllowed, false);
+});
+
+test("GATE-014-B1 candidate tie-break records rejected combinations instead of averaging failures", () => {
+  const input = completeReportInput();
+  const target = input.rawOperations.find(
+    (operation) =>
+      operation.candidate.recordCap === 1024 &&
+      operation.candidate.byteCapBytes === 4 * 1024 * 1024 &&
+      operation.operation === "admission",
+  );
+  target.mainThread.maximumTaskMs = 201;
+  setPassingRestorePreflightValidation(input, {
+    recordCap: 1024,
+    byteCapBytes: 2 * 1024 * 1024,
+  });
+  const report = evaluateB1Report(input);
+
+  assert.equal(report.status, "pass");
+  assert.deepEqual(report.selectedCandidate, {
+    recordCap: 1024,
+    byteCapBytes: 2 * 1024 * 1024,
+  });
+  assert.equal(
+    report.candidates.find(
+      (candidate) =>
+        candidate.recordCap === 1024 &&
+        candidate.byteCapBytes === 4 * 1024 * 1024,
+    ).status,
+    "fail",
+  );
+});
+
+test("GATE-014-B1 report rejects duplicate run identities and fixture hash drift", () => {
+  const duplicate = completeReportInput();
+  duplicate.rawOperations.push(duplicate.rawOperations[0]);
+  assert.throws(
+    () => evaluateB1Report(duplicate),
+    /duplicate B1 operation identity/,
+  );
+
+  const drift = completeReportInput();
+  drift.rawOperations[0].fixtureReceiptSha256 = "f".repeat(64);
+  assert.throws(
+    () => evaluateB1Report(drift),
+    /fixture receipt SHA-256 mismatch/,
+  );
+
+  const environmentDrift = completeReportInput();
+  environmentDrift.rawOperations[0].environmentReceiptSha256 = "e".repeat(64);
+  assert.throws(
+    () => evaluateB1Report(environmentDrift),
+    /operation environment receipt SHA-256 mismatch/,
+  );
+
+  const outsideRunWindow = completeReportInput();
+  setPassingRestorePreflightValidation(
+    outsideRunWindow,
+    { recordCap: 1024, byteCapBytes: 4 * 1024 * 1024 },
+    { startedAtEpochMs: 1_900, completedAtEpochMs: 2_100 },
+  );
+  assert.throws(() => evaluateB1Report(outsideRunWindow), /outside run window/);
+});
