@@ -3000,7 +3000,11 @@ test("GATE-014-B1 keeps a cached production attachment inside the shared setup d
   await observer.stop();
 });
 
-test("GATE-014-B1 rejects a worker not configured before the setup deadline", async () => {
+test("GATE-014-B1 rejects a worker not configured before the setup deadline", async (context) => {
+  context.mock.timers.enable({
+    apis: ["Date", "setTimeout"],
+    now: 1_000,
+  });
   const extensionId = "b".repeat(32);
   const workerTarget = {
     targetId: "slow-production-worker",
@@ -3008,6 +3012,14 @@ test("GATE-014-B1 rejects a worker not configured before the setup deadline", as
     url: `chrome-extension://${extensionId}/background.js`,
   };
   let attachmentCompleted = false;
+  let releaseAttachment!: () => void;
+  const attachmentRelease = new Promise<void>((resolve) => {
+    releaseAttachment = resolve;
+  });
+  let markAttachmentStarted!: () => void;
+  const attachmentStarted = new Promise<void>((resolve) => {
+    markAttachmentStarted = resolve;
+  });
   let eventListener: ((message: Record<string, unknown>) => void) | null = null;
   const client = {
     onEvent(listener: (message: Record<string, unknown>) => void) {
@@ -3022,15 +3034,13 @@ test("GATE-014-B1 rejects a worker not configured before the setup deadline", as
       }
       if (method === "Target.setDiscoverTargets") {
         if (params.discover === true) {
-          setImmediate(() => {
-            eventListener?.({
-              method: "Target.attachedToTarget",
-              params: {
-                sessionId: "late-initial-session",
-                targetInfo: workerTarget,
-                waitingForDebugger: true,
-              },
-            });
+          eventListener?.({
+            method: "Target.attachedToTarget",
+            params: {
+              sessionId: "late-initial-session",
+              targetInfo: workerTarget,
+              waitingForDebugger: true,
+            },
           });
         }
         return {};
@@ -3047,7 +3057,8 @@ test("GATE-014-B1 rejects a worker not configured before the setup deadline", as
         )
       ) {
         if (method === "Runtime.enable") {
-          await new Promise((resolve) => setTimeout(resolve, 30));
+          markAttachmentStarted();
+          await attachmentRelease;
           attachmentCompleted = true;
         }
         return {};
@@ -3061,18 +3072,27 @@ test("GATE-014-B1 rejects a worker not configured before the setup deadline", as
   const observer = createExtensionTargetObserver(client, {
     observeSession() {},
   });
-  await assert.rejects(
-    () => observer.start({ deadlineEpochMs: Date.now() + 5 }),
-    /cdp_command_timeout|browser_extension_startup_barrier_missing/,
-  );
-  assert.equal(attachmentCompleted, false);
-  await new Promise((resolve) => setTimeout(resolve, 35));
-  assert.equal(attachmentCompleted, true);
-  observer.completeSetup();
-  await assert.rejects(
-    () => observer.stop(),
-    /browser_extension_startup_barrier_missing/,
-  );
+  try {
+    const deadlineEpochMs = Date.now() + 5;
+    const startRejection = assert.rejects(
+      () => observer.start({ deadlineEpochMs }),
+      /cdp_command_timeout/,
+    );
+    await attachmentStarted;
+    context.mock.timers.tick(5);
+    await startRejection;
+    assert.equal(Date.now(), deadlineEpochMs);
+    assert.equal(attachmentCompleted, false);
+
+    context.mock.timers.reset();
+    releaseAttachment();
+    observer.completeSetup();
+    await observer.stop();
+    assert.equal(attachmentCompleted, true);
+  } finally {
+    context.mock.timers.reset();
+    releaseAttachment();
+  }
 });
 
 test("GATE-014-B1 browser smoke accepts only the fixed public-safe harness identity", () => {
