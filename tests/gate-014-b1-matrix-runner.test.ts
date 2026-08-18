@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFile as execFileCallback } from "node:child_process";
 import {
   mkdir,
   mkdtemp,
@@ -10,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import {
   assertB1CheckpointDirectoryReady,
@@ -19,6 +21,7 @@ import {
   createB1RestorePreflightValidationFromLifecycle,
   createB1RunFailureMarker,
   executeB1LatchedPhase,
+  hashB1TrackedFiles,
   mapB1LifecycleToRawOperations,
   readControlledHarnessFailureCode,
   restorePreflightValidationInputFromCommittedReport,
@@ -37,6 +40,8 @@ import {
   executeB1BrowserStage,
   unwrapControlledHarnessEvaluation,
 } from "../scripts/gate-014-b1-browser-runner.mjs";
+
+const execFile = promisify(execFileCallback);
 
 const FIXTURE_SHA = "a".repeat(64);
 const ENVIRONMENT_SHA = "b".repeat(64);
@@ -87,6 +92,51 @@ test("GATE-014-B1 committed artifacts keep canonical LF checkout on Windows", as
     "/docs/benchmarks/gate-014-b1-summary.md",
   ]) {
     assert.match(attributes, new RegExp(`^${artifactPath} text eol=lf$`, "m"));
+  }
+});
+
+test("GATE-014-B1 tracked source binding ignores checkout EOL but detects content changes", async () => {
+  const repositoryRoot = await mkdtemp(
+    path.join(tmpdir(), "gate-014-b1-source-binding-"),
+  );
+  const sourcePath = path.join(repositoryRoot, "source.txt");
+  try {
+    await execFile("git", ["init"], { cwd: repositoryRoot });
+    await execFile("git", ["config", "user.name", "B1 Test"], {
+      cwd: repositoryRoot,
+    });
+    await execFile("git", ["config", "user.email", "b1@example.invalid"], {
+      cwd: repositoryRoot,
+    });
+    await writeFile(
+      path.join(repositoryRoot, ".gitattributes"),
+      "*.txt text eol=lf\n",
+      "utf8",
+    );
+    await writeFile(sourcePath, "first\nsecond\n", "utf8");
+    await execFile("git", ["add", ".gitattributes", "source.txt"], {
+      cwd: repositoryRoot,
+    });
+    await execFile("git", ["commit", "-m", "fixture"], {
+      cwd: repositoryRoot,
+    });
+
+    const lfBinding = await hashB1TrackedFiles(["source.txt"], {
+      repositoryRoot,
+    });
+    await writeFile(sourcePath, "first\r\nsecond\r\n", "utf8");
+    const crlfBinding = await hashB1TrackedFiles(["source.txt"], {
+      repositoryRoot,
+    });
+    assert.equal(crlfBinding, lfBinding);
+
+    await writeFile(sourcePath, "first\r\nchanged\r\n", "utf8");
+    assert.notEqual(
+      await hashB1TrackedFiles(["source.txt"], { repositoryRoot }),
+      lfBinding,
+    );
+  } finally {
+    await rm(repositoryRoot, { recursive: true, force: true });
   }
 });
 
