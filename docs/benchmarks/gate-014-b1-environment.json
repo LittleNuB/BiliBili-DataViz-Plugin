@@ -1,6 +1,6 @@
 {
   "a2CalibrationStatus": "insufficient_evidence",
-  "benchmarkSourceSha256": "7f36fe1e272393c456cd487934e90b037565562fe7a038d4108703dd196406ff",
+  "benchmarkSourceSha256": "ca8b8c5724200b40ca82c6d4e9ae47d2c49df4da35b72a5d7ec8ad706111c550",
   "browser": {
     "channel": "stable",
     "flavor": "chrome_for_testing_stable",
@@ -13,7 +13,7 @@
     "stableVersionSource": "official_last_known_good_versions_with_downloads_json",
     "version": "152.0.7977.42"
   },
-  "completedAtEpochMs": 1787108741618,
+  "completedAtEpochMs": 1787157224799,
   "contract": "gate-014-b1-environment-v1",
   "execution": {
     "bilibiliLoginUsed": false,
@@ -28,7 +28,7 @@
       "harnessExtensionTargetCount": 1525,
       "loopbackRequestCount": 947,
       "networkMetricAvailable": true,
-      "networkRequestCount": 8169,
+      "networkRequestCount": 8170,
       "observationScope": "extension_targets_after_devtools_attach_with_production_worker_barrier",
       "observedTargetCount": 3131,
       "preAttachEventsObserved": false,
@@ -51,8 +51,8 @@
   "fixtureGeneratorVersion": "gate-014-fixture-generator-v5",
   "hardware": {
     "cpuModel": "Intel(R) Core(TM) i7-14650HX",
-    "freeDiskBytesAtEnd": 149410586624,
-    "freeDiskBytesAtStart": 155410755584,
+    "freeDiskBytesAtEnd": 118023352320,
+    "freeDiskBytesAtStart": 147663360000,
     "logicalCoreCount": 24,
     "totalMemoryBytes": 25534783488
   },
@@ -61,15 +61,15 @@
     "platform": "win32",
     "release": "10.0.26200"
   },
-  "packageLockSha256": "68e69bb73e67dbf141ce6e91b23c430f9f7450619fa86682bc41d92154d3c4f0",
-  "productionDistSha256": "444048f515c761752b2354ee8a7684b04e4171b6e7f8d5db9355cefa32f18aba",
-  "productionSourceSha256": "32599ad892bb57cbfb2ba461573e41d2c82adace88cd03fbc95cc42cd03ed3e6",
-  "repositoryCommitSha": "b1c51b1fd92396628ebeb7cee6cb6e3c8c68d876",
+  "packageLockSha256": "041fd8b0fd2f802fddf139f9c9e2c360a78ceaab41da6c35c3b2be2aca1d290e",
+  "productionDistSha256": "4a5d3c3bed376d3b2762887880991c0cf03216d6d3db562b104b1bcd243457bc",
+  "productionSourceSha256": "c597bf6b1ff85338a38bbc3f07c2dbe0a9c5cbf98806d2b759474e6d552da5ef",
+  "repositoryCommitSha": "4ea9711cb0a6fcd6f5d0da0f02ebe72a5806d33c",
   "runtime": {
     "nodeVersion": "v24.14.1",
     "windowsJobLauncherCompilerSha256": "46809206887326d2d24db1eff1f3064de972c3451abe766b49111450a5e08e00",
     "windowsJobLauncherReferencesSha256": "5a60eed675017ae7c9c7987a239d00f4121e9e831fd693d0c685ee00508db967"
   },
-  "startedAtEpochMs": 1787071779894,
+  "startedAtEpochMs": 1787114728353,
   "storesSensitiveText": false
 }
