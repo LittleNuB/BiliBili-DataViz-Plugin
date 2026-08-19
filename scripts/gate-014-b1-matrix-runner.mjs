@@ -1730,19 +1730,39 @@ export async function hashB1TrackedFiles(relativePaths, options = {}) {
   if (new Set(normalizedPaths).size !== normalizedPaths.length) {
     throw new Error("B1 tracked source paths contain duplicates");
   }
+  await assertB1TrackedFilesMatchHead(normalizedPaths, repositoryRoot);
   for (const relativePath of normalizedPaths.sort()) {
     const { stdout } = await execFile(
       "git",
-      ["hash-object", `--path=${relativePath}`, "--", relativePath],
+      ["rev-parse", "--verify", "--end-of-options", `HEAD:${relativePath}`],
       { cwd: repositoryRoot, windowsHide: true },
     );
     const gitBlobOid = stdout.trim();
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(gitBlobOid)) {
       throw new Error("B1 tracked source Git binding unavailable");
     }
-    hash.update(`${relativePath}\0git-clean-blob-v1\0${gitBlobOid}\0`, "utf8");
+    hash.update(`${relativePath}\0git-head-blob-v1\0${gitBlobOid}\0`, "utf8");
   }
   return hash.digest("hex");
+}
+
+async function assertB1TrackedFilesMatchHead(relativePaths, repositoryRoot) {
+  for (const arguments_ of [
+    ["diff", "--quiet", "--", ...relativePaths],
+    ["diff", "--cached", "--quiet", "--", ...relativePaths],
+  ]) {
+    try {
+      await execFile("git", arguments_, {
+        cwd: repositoryRoot,
+        windowsHide: true,
+      });
+    } catch (error) {
+      if (error?.code === 1) {
+        throw new Error("B1 tracked source inputs must match HEAD");
+      }
+      throw new Error("B1 tracked source Git status unavailable");
+    }
+  }
 }
 
 async function hashProductionSourceInputs() {

@@ -50,7 +50,7 @@ npm run gate014:b1:matrix
 
 官方元数据下载发生在基准启动前，仅用于固定离线执行输入；矩阵与 smoke 运行期间不依赖外部网络。只有 `--max-new-runs` 在某一轮 checkpoint、profile 清理和 active lease 删除全部完成后产生的受控暂停才能续跑；续跑时 Chrome 路径、元数据路径及该文件内容都必须保持不变。浏览器轮次失败、进程崩溃、signal 中断或清理/报告安装失败不属于可续跑中断。
 
-矩阵命令要求 worktree 中没有已修改、已暂存或未跟踪的非忽略文件；只有 `.gitignore` 明确排除且位于生产输入之外的本门禁生成物和检查点可以存在。runner 还会把实际生产输入文件清单与 Git 跟踪清单逐项比对，因此 `public/*.local` 之类被忽略但会进入构建的文件也会在读取和构建前失败关闭。随后 runner 在采集环境指纹前自行执行一次 `npm run build`。基准源码、完整生产源码输入和 `package-lock.json` 的绑定先按各路径的 Git clean filter 计算 blob identity，再由 SHA-256 汇总；因此 LF/CRLF checkout 不改变绑定，二进制或语义内容变化仍会改变绑定。新生成的 `dist` 继续逐路径、逐字节计算 SHA-256。受控暂停后可原样重跑；它只接受环境指纹、夹具收据和运行身份完全一致的检查点，生产源码、基准源码、构建、浏览器、官方元数据、运行文档或黄金收据发生变化时会拒绝续跑，必须先清理旧检查点：
+矩阵命令要求 worktree 中没有已修改、已暂存或未跟踪的非忽略文件；只有 `.gitignore` 明确排除且位于生产输入之外的本门禁生成物和检查点可以存在。runner 还会把实际生产输入文件清单与 Git 跟踪清单逐项比对，因此 `public/*.local` 之类被忽略但会进入构建的文件也会在读取和构建前失败关闭。随后 runner 在采集环境指纹前自行执行一次 `npm run build`。基准源码、完整生产源码输入和 `package-lock.json` 的绑定先要求 staged 与 unstaged Git diff 均为空，再按各路径在当前 HEAD 中的 blob identity 由 SHA-256 汇总；因此 checkout 的 LF/CRLF 形态或 `core.autocrlf` 配置不改变绑定，二进制或语义内容变化仍会被拒绝。仓库自有的 release license/notice 文本统一输出规范 LF，`dist` 继续逐路径、逐字节计算 SHA-256。受控暂停后可原样重跑；它只接受环境指纹、夹具收据和运行身份完全一致的检查点，生产源码、基准源码、构建、浏览器、官方元数据、运行文档或黄金收据发生变化时会拒绝续跑，必须先清理旧检查点：
 
 ```powershell
 npm run gate014:b1:cleanup

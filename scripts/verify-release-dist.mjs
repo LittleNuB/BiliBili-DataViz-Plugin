@@ -40,6 +40,11 @@ let productionAttributionFileCount = 0;
 for (const [relativePath, expected] of requiredFiles) {
   const source = await readFile(path.join(distRoot, relativePath), 'utf8');
   assert.match(source, expected, `Release distribution notice is invalid: ${relativePath}`);
+  assert.equal(
+    source.includes('\r'),
+    false,
+    `Release distribution notice must use canonical LF: ${relativePath}`,
+  );
 }
 
 for (const packageRecord of collectProductionPackages(packageLock)) {

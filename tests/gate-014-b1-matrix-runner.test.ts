@@ -95,7 +95,7 @@ test("GATE-014-B1 committed artifacts keep canonical LF checkout on Windows", as
   }
 });
 
-test("GATE-014-B1 tracked source binding ignores checkout EOL but detects content changes", async () => {
+test("GATE-014-B1 tracked source binding ignores Git EOL config but rejects content changes", async () => {
   const repositoryRoot = await mkdtemp(
     path.join(tmpdir(), "gate-014-b1-source-binding-"),
   );
@@ -108,32 +108,32 @@ test("GATE-014-B1 tracked source binding ignores checkout EOL but detects conten
     await execFile("git", ["config", "user.email", "b1@example.invalid"], {
       cwd: repositoryRoot,
     });
-    await writeFile(
-      path.join(repositoryRoot, ".gitattributes"),
-      "*.txt text eol=lf\n",
-      "utf8",
-    );
-    await writeFile(sourcePath, "first\nsecond\n", "utf8");
-    await execFile("git", ["add", ".gitattributes", "source.txt"], {
+    await execFile("git", ["config", "core.autocrlf", "false"], {
+      cwd: repositoryRoot,
+    });
+    await writeFile(sourcePath, "first\r\nsecond\r\n", "utf8");
+    await execFile("git", ["add", "source.txt"], {
       cwd: repositoryRoot,
     });
     await execFile("git", ["commit", "-m", "fixture"], {
       cwd: repositoryRoot,
     });
 
-    const lfBinding = await hashB1TrackedFiles(["source.txt"], {
+    const disabledBinding = await hashB1TrackedFiles(["source.txt"], {
       repositoryRoot,
     });
-    await writeFile(sourcePath, "first\r\nsecond\r\n", "utf8");
-    const crlfBinding = await hashB1TrackedFiles(["source.txt"], {
+    await execFile("git", ["config", "core.autocrlf", "true"], {
+      cwd: repositoryRoot,
+    });
+    const enabledBinding = await hashB1TrackedFiles(["source.txt"], {
       repositoryRoot,
     });
-    assert.equal(crlfBinding, lfBinding);
+    assert.equal(enabledBinding, disabledBinding);
 
     await writeFile(sourcePath, "first\r\nchanged\r\n", "utf8");
-    assert.notEqual(
-      await hashB1TrackedFiles(["source.txt"], { repositoryRoot }),
-      lfBinding,
+    await assert.rejects(
+      hashB1TrackedFiles(["source.txt"], { repositoryRoot }),
+      /must match HEAD/,
     );
   } finally {
     await rm(repositoryRoot, { recursive: true, force: true });
