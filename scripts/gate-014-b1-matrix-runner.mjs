@@ -146,6 +146,7 @@ const PRODUCTION_SOURCE_DIRECTORIES = Object.freeze([
   "third_party",
 ]);
 const PRODUCTION_SOURCE_FILES = Object.freeze([
+  ".gitattributes",
   "vite.config.ts",
   "vite.sidebar-card.config.ts",
   "vite.player-monitor.config.ts",

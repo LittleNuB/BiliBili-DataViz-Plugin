@@ -90,6 +90,7 @@ test("GATE-014-B1 committed artifacts keep canonical LF checkout on Windows", as
     "/docs/benchmarks/gate-014-b1-raw-operations.jsonl",
     "/docs/benchmarks/gate-014-b1-report.json",
     "/docs/benchmarks/gate-014-b1-summary.md",
+    "/public/content/page-runtime-bridge.js",
   ]) {
     assert.match(attributes, new RegExp(`^${artifactPath} text eol=lf$`, "m"));
   }
