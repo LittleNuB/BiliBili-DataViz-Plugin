@@ -1,4 +1,4 @@
-import { cp, copyFile, mkdir, readFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -13,15 +13,17 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const distRoot = path.join(repositoryRoot, 'dist');
 
 await mkdir(distRoot, { recursive: true });
-await copyFile(path.join(repositoryRoot, 'LICENSE'), path.join(distRoot, 'LICENSE.txt'));
-await copyFile(
+await copyCanonicalTextFile(
+  path.join(repositoryRoot, 'LICENSE'),
+  path.join(distRoot, 'LICENSE.txt'),
+);
+await copyCanonicalTextFile(
   path.join(repositoryRoot, 'THIRD_PARTY_NOTICES.txt'),
   path.join(distRoot, 'THIRD_PARTY_NOTICES.txt'),
 );
-await cp(
+await copyCanonicalTextDirectory(
   path.join(repositoryRoot, 'third_party', 'licenses'),
   path.join(distRoot, 'third_party_licenses'),
-  { recursive: true },
 );
 
 const packageLock = JSON.parse(
@@ -59,4 +61,25 @@ for (const packageRecord of collectProductionPackages(packageLock)) {
     await mkdir(path.dirname(target), { recursive: true });
     await copyFile(path.join(packageRoot, ...relativePath.split('/')), target);
   }));
+}
+
+async function copyCanonicalTextDirectory(sourceDirectory, targetDirectory) {
+  await mkdir(targetDirectory, { recursive: true });
+  for (const entry of await readdir(sourceDirectory, { withFileTypes: true })) {
+    const source = path.join(sourceDirectory, entry.name);
+    const target = path.join(targetDirectory, entry.name);
+    if (entry.isDirectory()) {
+      await copyCanonicalTextDirectory(source, target);
+    } else if (entry.isFile()) {
+      await copyCanonicalTextFile(source, target);
+    } else {
+      throw new Error(`Unsupported repository attribution entry: ${entry.name}`);
+    }
+  }
+}
+
+async function copyCanonicalTextFile(source, target) {
+  const contents = await readFile(source, 'utf8');
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, contents.replace(/\r\n?/g, '\n'), 'utf8');
 }

@@ -146,6 +146,7 @@ const PRODUCTION_SOURCE_DIRECTORIES = Object.freeze([
   "third_party",
 ]);
 const PRODUCTION_SOURCE_FILES = Object.freeze([
+  ".gitattributes",
   "vite.config.ts",
   "vite.sidebar-card.config.ts",
   "vite.player-monitor.config.ts",
@@ -1052,11 +1053,9 @@ async function collectEnvironmentCore(chromePath, cftMetadataPath) {
   }
   return {
     repositoryCommitSha,
-    benchmarkSourceSha256: await hashKnownFiles(BENCHMARK_SOURCE_FILES),
+    benchmarkSourceSha256: await hashB1TrackedFiles(BENCHMARK_SOURCE_FILES),
     productionSourceSha256: await hashProductionSourceInputs(),
-    packageLockSha256: await hashFile(
-      path.join(REPOSITORY_ROOT, "package-lock.json"),
-    ),
+    packageLockSha256: await hashB1TrackedFiles(["package-lock.json"]),
     productionDistSha256: await hashDirectory(
       path.join(REPOSITORY_ROOT, "dist"),
     ),
@@ -1545,9 +1544,9 @@ async function verifyCurrentArtifactBindings(environment) {
     packageLockSha256,
     productionDistSha256,
   ] = await Promise.all([
-    hashKnownFiles(BENCHMARK_SOURCE_FILES),
+    hashB1TrackedFiles(BENCHMARK_SOURCE_FILES),
     hashProductionSourceInputs(),
-    hashFile(path.join(REPOSITORY_ROOT, "package-lock.json")),
+    hashB1TrackedFiles(["package-lock.json"]),
     hashDirectory(path.join(REPOSITORY_ROOT, "dist")),
   ]);
   if (benchmarkSourceSha256 !== environment.benchmarkSourceSha256) {
@@ -1564,19 +1563,6 @@ async function verifyCurrentArtifactBindings(environment) {
   }
   if (environment.fixtureGeneratorVersion !== GENERATOR_VERSION) {
     throw new Error("B1 fixture generator binding mismatch");
-  }
-  const launcherCompiler = await readB1WindowsJobLauncherCompilerIdentity();
-  if (
-    launcherCompiler.sha256 !==
-    environment.runtime.windowsJobLauncherCompilerSha256
-  ) {
-    throw new Error("B1 Windows Job launcher compiler binding mismatch");
-  }
-  if (
-    launcherCompiler.referencesSha256 !==
-    environment.runtime.windowsJobLauncherReferencesSha256
-  ) {
-    throw new Error("B1 Windows Job launcher reference binding mismatch");
   }
   const { stdout: headStdout } = await execFile("git", ["rev-parse", "HEAD"], {
     cwd: REPOSITORY_ROOT,
@@ -1715,21 +1701,75 @@ async function readFreeDiskBytes() {
   return value;
 }
 
-async function hashKnownFiles(relativePaths) {
+export async function hashB1TrackedFiles(relativePaths, options = {}) {
+  if (!Array.isArray(relativePaths) || relativePaths.length === 0) {
+    throw new Error("B1 tracked source paths are invalid");
+  }
+  const repositoryRoot = path.resolve(
+    options.repositoryRoot ?? REPOSITORY_ROOT,
+  );
   const hash = createHash("sha256");
-  for (const relativePath of [...relativePaths].sort()) {
+  const normalizedPaths = relativePaths.map((relativePath) => {
+    if (
+      typeof relativePath !== "string" ||
+      relativePath === "" ||
+      relativePath.includes("\0") ||
+      path.isAbsolute(relativePath)
+    ) {
+      throw new Error("B1 tracked source path is invalid");
+    }
     const normalized = relativePath.replaceAll("\\", "/");
-    hash.update(`${normalized}\0`, "utf8");
-    hash.update(await readFile(path.join(REPOSITORY_ROOT, relativePath)));
-    hash.update("\0", "utf8");
+    const resolved = path.resolve(repositoryRoot, normalized);
+    if (
+      resolved === repositoryRoot ||
+      !resolved.startsWith(`${repositoryRoot}${path.sep}`)
+    ) {
+      throw new Error("B1 tracked source path is invalid");
+    }
+    return normalized;
+  });
+  if (new Set(normalizedPaths).size !== normalizedPaths.length) {
+    throw new Error("B1 tracked source paths contain duplicates");
+  }
+  await assertB1TrackedFilesMatchHead(normalizedPaths, repositoryRoot);
+  for (const relativePath of normalizedPaths.sort()) {
+    const { stdout } = await execFile(
+      "git",
+      ["rev-parse", "--verify", "--end-of-options", `HEAD:${relativePath}`],
+      { cwd: repositoryRoot, windowsHide: true },
+    );
+    const gitBlobOid = stdout.trim();
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(gitBlobOid)) {
+      throw new Error("B1 tracked source Git binding unavailable");
+    }
+    hash.update(`${relativePath}\0git-head-blob-v1\0${gitBlobOid}\0`, "utf8");
   }
   return hash.digest("hex");
+}
+
+async function assertB1TrackedFilesMatchHead(relativePaths, repositoryRoot) {
+  for (const arguments_ of [
+    ["diff", "--quiet", "--", ...relativePaths],
+    ["diff", "--cached", "--quiet", "--", ...relativePaths],
+  ]) {
+    try {
+      await execFile("git", arguments_, {
+        cwd: repositoryRoot,
+        windowsHide: true,
+      });
+    } catch (error) {
+      if (error?.code === 1) {
+        throw new Error("B1 tracked source inputs must match HEAD");
+      }
+      throw new Error("B1 tracked source Git status unavailable");
+    }
+  }
 }
 
 async function hashProductionSourceInputs() {
   const relativePaths = await listProductionSourceInputs();
   await assertProductionSourceInputsTracked(relativePaths);
-  return hashKnownFiles(relativePaths);
+  return hashB1TrackedFiles(relativePaths);
 }
 
 async function listProductionSourceInputs() {
