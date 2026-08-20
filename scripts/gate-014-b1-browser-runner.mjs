@@ -54,6 +54,10 @@ const B1_BROWSER_STAGE_FAILURE_CODES = Object.freeze([
   "browser_production_uninstall_failed",
   "browser_harness_evaluation_failed",
   "browser_observation_settle_failed",
+  "browser_target_observation_settle_failed",
+  "browser_network_observation_settle_failed",
+  "browser_target_observation_stop_failed",
+  "browser_observation_receipt_failed",
   "browser_process_cleanup_failed",
   "browser_process_termination_failed",
   "browser_cdp_close_failed",
@@ -1342,11 +1346,26 @@ async function evaluateInStagedHarnessProfile(
         const observationReceipt = await executeB1BrowserStage(
           "browser_observation_settle_failed",
           async () => {
-            await targetObserver.settle();
-            await observation.settle();
-            await targetObserver.stop();
-            await observation.settle();
-            return observation.finish();
+            await executeB1BrowserStage(
+              "browser_target_observation_settle_failed",
+              () => targetObserver.settle(),
+            );
+            await executeB1BrowserStage(
+              "browser_network_observation_settle_failed",
+              () => observation.settle(),
+            );
+            await executeB1BrowserStage(
+              "browser_target_observation_stop_failed",
+              () => targetObserver.stop(),
+            );
+            await executeB1BrowserStage(
+              "browser_network_observation_settle_failed",
+              () => observation.settle(),
+            );
+            return executeB1BrowserStage(
+              "browser_observation_receipt_failed",
+              () => observation.finish(),
+            );
           },
         );
         if (process.env.GATE_014_B1_DEBUG === "1") {

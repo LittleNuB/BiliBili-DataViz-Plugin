@@ -26,6 +26,7 @@ const requiredFiles = [
   ['third_party_licenses/BSD-3-Clause-d3.txt', /Copyright 2010-2016 Mike Bostock/],
   ['third_party_licenses/MIT-wordcloud2.txt', /Copyright \(c\) 2011- Timothy Guan-tin Chien/],
 ];
+const canonicalLfFiles = ['content/page-runtime-bridge.js'];
 const MAX_MINIFIED_CHUNK_BYTES = 500_000;
 
 const manifest = JSON.parse(await readFile(path.join(distRoot, 'manifest.json'), 'utf8'));
@@ -40,6 +41,20 @@ let productionAttributionFileCount = 0;
 for (const [relativePath, expected] of requiredFiles) {
   const source = await readFile(path.join(distRoot, relativePath), 'utf8');
   assert.match(source, expected, `Release distribution notice is invalid: ${relativePath}`);
+  assert.equal(
+    source.includes('\r'),
+    false,
+    `Release distribution notice must use canonical LF: ${relativePath}`,
+  );
+}
+
+for (const relativePath of canonicalLfFiles) {
+  const source = await readFile(path.join(distRoot, relativePath), 'utf8');
+  assert.equal(
+    source.includes('\r'),
+    false,
+    `Release distribution runtime text must use canonical LF: ${relativePath}`,
+  );
 }
 
 for (const packageRecord of collectProductionPackages(packageLock)) {
