@@ -1,5 +1,9 @@
 # Bili-Bill
 
+## Release Scope Notice
+
+The user has accepted a bounded first learning loop. See [0.14.0 bounded scope](docs/scope-0.14-bounded-learning-loop.md) for the proposed release boundary, precedence, and activation on scope-PR merge. Full-library glossary terms below remain domain vocabulary, not evidence of shipped capability. In the bounded release, saving knowledge does not promote complete subtitles, source-account migration is deferred, and saved-content search is not full-video-text search. Existing 0.13 runtime behavior is unchanged by this docs-only proposal.
+
 Bili-Bill is the product context for a user-owned Bilibili content ledger. It gives the project one shared language for content consumption, saved content, and upcoming content decisions.
 
 ## Language

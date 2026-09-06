@@ -1,6 +1,6 @@
 # 0.14 Personal Video Knowledge-Base Backup Contract
 
-**Status:** DRAFT DURING DEVELOPMENT-READINESS GRILL. This freezes backup format v1 for implementation and fixture review; it is not release approval.
+**Status:** DEFERRED FULL-LIBRARY ZIP FORMAT. [The bounded learning-loop scope](../scope-0.14-bounded-learning-loop.md) takes precedence for 0.14.0 on scope-PR review and merge. LG-0 must freeze a separately identified small knowledge-backup format; it must not claim compatibility with the ZIP backup v1 below. Atomic, non-destructive restore remains required. This document does not authorize runtime implementation or release.
 
 ## Package Envelope
 

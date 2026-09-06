@@ -1,6 +1,6 @@
 # 0.14 Personal Video Knowledge-Base Storage Contract
 
-**Status:** DRAFT DURING DEVELOPMENT-READINESS GRILL. This document records accepted storage decisions only and is not runtime implementation approval.
+**Status:** DEFERRED FULL-LIBRARY TOPOLOGY. [The bounded learning-loop scope](../scope-0.14-bounded-learning-loop.md) takes precedence for 0.14.0 on scope-PR review and merge. LG-0 must freeze a minimal bounded schema before production implementation; do not copy every table below or migrate source relationships by default. The full-library topology remains future work, not a shipped schema or runtime approval.
 
 ## Scope And Baseline
 
