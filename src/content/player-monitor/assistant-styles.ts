@@ -838,7 +838,7 @@ export function assistantStyles(CARD_ID: string): string {
   padding-block: 4px;
 }
 #${CARD_ID} details[open] > summary > svg { transform: rotate(180deg); }
-#${CARD_ID} .bdc-assistant-body:has(.bdc-assistant-subtitle-reader) { overflow: hidden; display: flex; }
+#${CARD_ID} .bdc-assistant-body:has(.bdc-assistant-subtitle-reader) { overflow: auto; display: flex; }
 #${CARD_ID} .bdc-assistant-tab-panel:has(.bdc-assistant-subtitle-reader) { display: flex; flex-direction: column; min-height: 0; width: 100%; }
 #${CARD_ID} .bdc-assistant-subtitle-reader { flex: 1; min-height: 70px; max-height: none; border: 0; border-radius: 0; background: transparent; }
 @media (max-width: 560px) {

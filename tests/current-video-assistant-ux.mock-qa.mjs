@@ -14,6 +14,10 @@ const bundle = await readFile(path.join(root, 'dist/content/player-monitor.js'))
 const browser = await chromium.launch({ executablePath: process.env.UX014_CHROME_EXECUTABLE, headless: true });
 const report = { syntheticOnly: true, bundleSha256: createHash('sha256').update(bundle).digest('hex'), cases: [] };
 const errors = [];
+const shortViewports = [[844, 390, 'light'], [390, 480, 'dark']];
+const viewports = process.env.UX014_SHORT_VIEWPORTS_ONLY === '1'
+  ? shortViewports
+  : [[1440, 900, 'light'], [1280, 720, 'dark'], [390, 844, 'light'], ...shortViewports];
 const base = 'https://www.bilibili.com/video/BV1ShellMock9';
 async function load(page, query = '') {
   await page.goto(base + query);
@@ -47,6 +51,31 @@ async function geometry(page) {
   assert.notEqual(surface.shadow, 'none');
   return box;
 }
+async function reachable(page, locator) {
+  const hiddenScroller = await locator.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (parent.scrollHeight <= parent.clientHeight + 1) continue;
+      if (['auto', 'scroll'].includes(style.overflowY)) return null;
+      const bounds = parent.getBoundingClientRect();
+      if (['hidden', 'clip'].includes(style.overflowY)
+        && (box.top < bounds.top || box.bottom > bounds.bottom + 1)) return parent.className;
+    }
+    return null;
+  });
+  assert.equal(hiddenScroller, null, 'control must be reachable without scrolling a hidden overflow region');
+  await locator.scrollIntoViewIfNeeded();
+  const box = await locator.boundingBox();
+  const card = await page.locator('#bdc-current-video-assistant').boundingBox();
+  assert.ok(box && box.width > 0 && box.height > 0, 'control must have a visible box');
+  assert.ok(box.x >= card.x && box.y >= card.y && box.x + box.width <= card.x + card.width + 1
+    && box.y + box.height <= card.y + card.height + 1, 'control must remain inside the assistant');
+  assert.equal(await locator.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+  }), true, 'control must not be clipped or covered');
+}
 try {
   const page = await browser.newPage();
   page.on('pageerror', (error) => errors.push(error.message));
@@ -57,14 +86,15 @@ try {
     if (url.pathname === '/dist/content/player-monitor.js') return route.fulfill({ contentType: 'application/javascript', body: bundle });
     return route.abort();
   });
-  for (const [width, height, mode] of [[1440, 900, 'light'], [1280, 720, 'dark'], [390, 844, 'light']]) {
+  for (const [width, height, mode] of viewports) {
+    const prefix = height <= 520 ? `${width}x${height}-${mode}` : `${width}-${mode}`;
     await page.setViewportSize({ width, height });
     await load(page);
     await theme(page, mode);
     const card = page.locator('#bdc-current-video-assistant');
     assert.equal(await card.locator('.bdc-assistant-compact-summary').count(), 0);
     assert.equal(await card.getByText(/尚无摘要|生成|正在|先确认/).count(), 0);
-    await page.screenshot({ path: path.join(out, `${width}-${mode}-empty.png`) });
+    await page.screenshot({ path: path.join(out, `${prefix}-empty.png`) });
     const empty = await geometry(page);
     await load(page, '?subtitleCached=1&cachedSummary=1&savedSource=current');
     await theme(page, mode);
@@ -73,13 +103,14 @@ try {
     await expand(page);
     assert.equal(await card.locator('.bdc-assistant-source-details').evaluate((element) => element.open), false, 'source details closed on first expansion');
     await card.locator('.bdc-assistant-source-details > summary').click();
+    await reachable(page, page.getByRole('button', { name: '重新检测字幕', exact: true }));
     await page.getByRole('button', { name: '重新检测字幕', exact: true }).click();
     await card.locator('.bdc-assistant-summary-text').first().waitFor();
     assert.equal(await card.locator('.bdc-assistant-source-details').evaluate((element) => element.open), true, 'refresh must preserve explicitly opened source details');
     await page.getByRole('button', { name: '收起', exact: true }).click();
     await card.locator('.bdc-assistant-compact-summary').waitFor();
     assert.equal(await card.locator('.bdc-assistant-compact-summary').evaluate((element) => getComputedStyle(element).webkitLineClamp), '3');
-    await page.screenshot({ path: path.join(out, `${width}-${mode}-compact.png`) });
+    await page.screenshot({ path: path.join(out, `${prefix}-compact.png`) });
     const compact = await geometry(page);
     await expand(page);
     const source = card.locator('.bdc-assistant-source-details');
@@ -89,7 +120,7 @@ try {
     const expanded = await geometry(page);
     const tabs = await page.getByRole('tablist').boundingBox();
     assert.ok(tabs.y - expanded.y < 150, 'primary tabs delayed by auxiliary content');
-    await page.screenshot({ path: path.join(out, `${width}-${mode}-expanded.png`) });
+    await page.screenshot({ path: path.join(out, `${prefix}-expanded.png`) });
     const generationInfo = card.locator('.bdc-assistant-generation-details');
     assert.equal(await generationInfo.evaluate((element) => element.open), false);
     await generationInfo.locator('summary').click();
@@ -105,16 +136,33 @@ try {
     await page.getByRole('button', { name: '展开助手', exact: true }).click();
     await expect(page.getByRole('tab', { name: '问答', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('textbox', { name: '向当前视频提问', exact: true })).toHaveValue('保留这段未提交的草稿');
-    await page.screenshot({ path: path.join(out, `${width}-${mode}-qa.png`) });
+    await reachable(page, page.getByRole('textbox', { name: '向当前视频提问', exact: true }));
+    await page.screenshot({ path: path.join(out, `${prefix}-qa.png`) });
     await expect(card.getByText('提问会发送当前分 P 的完整正文。', { exact: true })).toBeVisible();
     await source.locator('summary').click();
     await expect(page.getByRole('button', { name: '重新检测字幕', exact: true })).toBeVisible();
+    await reachable(page, page.getByRole('button', { name: '重新检测字幕', exact: true }));
     await source.locator('summary').click();
     await page.getByRole('tab', { name: '字幕', exact: true }).click();
     await expect(page.getByLabel('搜索当前字幕来源')).toBeVisible();
-    await page.screenshot({ path: path.join(out, `${width}-${mode}-subtitles.png`) });
+    await reachable(page, page.getByLabel('搜索当前字幕来源'));
+    await page.screenshot({ path: path.join(out, `${prefix}-subtitles.png`) });
+    const playbackPosition = await page.evaluate(() => window.__assistantMockPlaybackPosition());
+    const lastSubtitle = card.locator('.bdc-assistant-subtitle-row').last();
+    await reachable(page, lastSubtitle);
+    await lastSubtitle.click();
+    assert.equal(await page.evaluate(() => window.__assistantMockPlaybackPosition()), playbackPosition, 'preview must not seek');
+    const confirmJump = card.getByRole('button', { name: '确认跳转', exact: true });
+    await reachable(page, confirmJump);
+    if (height <= 520) await page.screenshot({ path: path.join(out, `${prefix}-jump-preview.png`) });
+    await confirmJump.click();
+    const returnPosition = card.getByRole('button', { name: '返回原位置', exact: true });
+    await reachable(page, returnPosition);
+    await returnPosition.click();
+    assert.equal(await page.evaluate(() => window.__assistantMockPlaybackPosition()), playbackPosition);
+    await reachable(page, card.getByRole('button', { name: '导出 TXT', exact: true }));
     await page.getByRole('tab', { name: '亮点', exact: true }).click();
-    await page.screenshot({ path: path.join(out, `${width}-${mode}-highlights.png`) });
+    await page.screenshot({ path: path.join(out, `${prefix}-highlights.png`) });
     await page.getByRole('tab', { name: '摘要', exact: true }).click();
     await page.getByRole('button', { name: '收起', exact: true }).click();
     await page.evaluate(() => window.__assistantMockSwitchToPart(2));
@@ -122,7 +170,7 @@ try {
     await expect(card.locator('.bdc-assistant-compact-summary')).toHaveCount(0);
     const aiActions = await page.evaluate(() => window.__assistantMockMessages.filter((message) => ['GENERATE_CURRENT_VIDEO_SUMMARY_HIGHLIGHTS', 'ASK_CURRENT_VIDEO_FULL_TEXT'].includes(message.action)));
     assert.equal(aiActions.length, 0, 'layout interaction must not trigger AI');
-    report.cases.push({ width, height, mode, empty, compact, expanded, tabsOffset: tabs.y - expanded.y, noImplicitAI: true, draftPreserved: true, staleSummaryHidden: true });
+    report.cases.push({ width, height, mode, empty, compact, expanded, tabsOffset: tabs.y - expanded.y, noImplicitAI: true, draftPreserved: true, staleSummaryHidden: true, subtitleJumpReturnReachable: true });
   }
   assert.deepEqual(errors, []);
   report.status = 'pass';
