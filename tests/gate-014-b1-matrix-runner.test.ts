@@ -97,7 +97,10 @@ test("GATE-014-B1 committed artifacts keep canonical LF checkout on Windows", as
 });
 
 test("GATE-014-B1 artifact CI fetches the commit ancestry required by verification", async () => {
-  const ciSource = await readFile(".github/workflows/ci.yml", "utf8");
+  const ciSource = (await readFile(".github/workflows/ci.yml", "utf8")).replace(
+    /\r\n/g,
+    "\n",
+  );
   const artifactJob = ciSource.match(
     /\n  gate014-b1-artifacts:\n([\s\S]*?)(?=\n  [a-zA-Z0-9_-]+:\n|$)/,
   );
@@ -106,7 +109,14 @@ test("GATE-014-B1 artifact CI fetches the commit ancestry required by verificati
     artifactJob[1],
     /- uses: actions\/checkout@[^\n]+\n\s+with:\n\s+fetch-depth: 0/,
   );
-  assert.match(artifactJob[1], /- run: npm run gate014:b1:verify/);
+  assert.match(
+    artifactJob[1],
+    /run: node scripts\/verify-gate-014-b1-history\.mjs/,
+  );
+  assert.match(
+    ciSource,
+    /\n  validate:[\s\S]*- run: npm test[\s\S]*- run: npm run build/,
+  );
 });
 
 test("GATE-014-B1 tracked source binding ignores Git EOL config but rejects content changes", async () => {

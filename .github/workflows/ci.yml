@@ -37,8 +37,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run build
-      - run: npm run gate014:b1:verify
+      - name: Verify historical B1 snapshot (not current performance)
+        run: node scripts/verify-gate-014-b1-history.mjs
 
   validate:
     runs-on: ubuntu-latest
