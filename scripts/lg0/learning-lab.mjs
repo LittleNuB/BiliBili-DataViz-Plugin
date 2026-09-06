@@ -48,24 +48,36 @@ function part(value) {
 // Canonical JSON: lexicographic object keys, caller-ordered arrays, no whitespace.
 // Only call on the fixed-depth, whitelisted schema after validation at ingress.
 export function canonical(value) {
-  if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
-  if (value !== null && typeof value === "object") {
-    return (
-      "{" +
-      Object.keys(value)
-        .sort()
-        .map((key) => JSON.stringify(key) + ":" + canonical(value[key]))
-        .join(",") +
-      "}"
-    );
-  }
-  return JSON.stringify(value);
+  return JSON.stringify(value, (_key, item) =>
+    item !== null && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(
+          Object.keys(item)
+            .sort()
+            .map((key) => [key, item[key]]),
+        )
+      : item,
+  );
 }
 function ordered(rows) {
   return [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 export function logicalBytes(rows) {
-  return encoder.encode(canonical(ordered(rows))).length;
+  // Array order does not affect byte size. Count per record without allocating
+  // a second, whole-backup UTF-8 buffer (including the single-large-record case).
+  let bytes = 2 + Math.max(0, rows.length - 1);
+  for (const row of rows) {
+    const text = canonical(row);
+    for (let index = 0; index < text.length; index++) {
+      const code = text.charCodeAt(index);
+      if (code < 0x80) bytes++;
+      else if (code < 0x800) bytes += 2;
+      else if (code >= 0xd800 && code <= 0xdbff) {
+        bytes += 4;
+        index++;
+      } else bytes += 3;
+    }
+  }
+  return bytes;
 }
 
 export function validateAsset(row) {
@@ -242,7 +254,6 @@ export async function decodeBackup(file, { signal } = {}) {
   const data = JSON.parse(text);
   keys(data, ["format", "version", "assets"]);
   requireValue(data.format === FORMAT && data.version === 1, "format");
-  validateAssets(data.assets);
   // Exact encoding also rejects duplicate JSON keys, reordered assets and padded files.
   requireValue(
     (await encodeBackup(data.assets)) === text,
@@ -262,14 +273,20 @@ async function sha256(text) {
     .join("");
 }
 export async function mergeAssets(local, incoming) {
+  return mergeOwnedAssets(structuredClone(local), structuredClone(incoming));
+}
+
+// Both inputs are owned by this operation; sharing unchanged row references
+// avoids cloning the same backup at every merge/CAS layer.
+async function mergeOwnedAssets(local, incoming) {
   validateAssets(local);
   validateAssets(incoming);
   for (const row of [...local, ...incoming]) await validateImportIdentity(row);
-  const result = new Map(local.map((row) => [row.id, structuredClone(row)]));
+  const result = new Map(local.map((row) => [row.id, row]));
   for (const row of ordered(incoming)) {
     const current = result.get(row.id);
     if (!current) {
-      result.set(row.id, structuredClone(row));
+      result.set(row.id, row);
       continue;
     }
     if (canonical(current) === canonical(row)) continue;
@@ -285,7 +302,7 @@ export async function mergeAssets(local, incoming) {
       );
       continue;
     }
-    result.set(id, { ...structuredClone(row), id, importedFrom });
+    result.set(id, { ...row, id, importedFrom });
   }
   const rows = ordered([...result.values()]);
   validateAssets(rows);
@@ -321,7 +338,7 @@ async function validateImportIdentity(row) {
 
 export async function restore(db, epoch, incoming, options = {}) {
   const captured = structuredClone(incoming);
-  return change(db, epoch, (rows) => mergeAssets(rows, captured), options);
+  return change(db, epoch, (rows) => mergeOwnedAssets(rows, captured), options);
 }
 
 export async function saveCapture(db, epoch, row, evidence, options = {}) {
@@ -421,6 +438,16 @@ export async function change(db, epoch, transform, options = {}) {
     const rows = ordered(await transform(structuredClone(before.assets)));
     validateAssets(rows);
     for (const row of rows) await validateImportIdentity(row);
+    const previous = new Map(before.assets.map((row) => [row.id, row]));
+    const put = rows.filter((row) => {
+      const old = previous.get(row.id);
+      previous.delete(row.id);
+      return !old || canonical(old) !== canonical(row);
+    });
+    const remove = [...previous.keys()];
+    // Worker callers yield here so cancellation queued during synchronous
+    // parsing/validation is observed before the atomic commit begins.
+    await options.beforeCommit?.();
     cancelled(options.signal);
     options.onPhase?.("committing");
     cancelled(options.signal);
@@ -437,13 +464,15 @@ export async function change(db, epoch, transform, options = {}) {
         requireValue(current.epoch === epoch, "stale_epoch");
         if (current.revision !== before.meta.revision) return false;
         options.beforeWrite?.();
-        integer(current.revision + 1);
-        await db.lgAssets.clear();
-        await db.lgAssets.bulkPut(rows);
+        const changed = remove.length > 0 || put.length > 0;
+        if (changed) integer(current.revision + 1);
+        if (remove.length) await db.lgAssets.bulkDelete(remove);
+        if (put.length) await db.lgAssets.bulkPut(put);
         if (options.fault === "abort") throw new Error("injected_abort");
         if (options.fault === "quota")
           throw new DOMException("injected_quota", "QuotaExceededError");
-        await db.lgMeta.put({ ...current, revision: current.revision + 1 });
+        if (changed)
+          await db.lgMeta.put({ ...current, revision: current.revision + 1 });
         return true;
       },
     );

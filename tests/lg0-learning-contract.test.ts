@@ -25,6 +25,91 @@ import { asset, fixture } from "../scripts/lg0/fixtures.mjs";
 import { seedLegacy, legacySnapshot } from "../scripts/lg0/legacy-fixture.mjs";
 import Dexie from "dexie";
 
+test("LG-0 canonical bytes match the original fixed-schema encoding", () => {
+  const previous = (value) => {
+    if (Array.isArray(value)) return "[" + value.map(previous).join(",") + "]";
+    if (value !== null && typeof value === "object")
+      return (
+        "{" +
+        Object.keys(value)
+          .sort()
+          .map((key) => JSON.stringify(key) + ":" + previous(value[key]))
+          .join(",") +
+        "}"
+      );
+    return JSON.stringify(value);
+  };
+  for (const scenario of [
+    "empty",
+    "typical",
+    "count-limit",
+    "byte-limit",
+    "single-large",
+    "references",
+  ]) {
+    const rows = fixture(scenario);
+    assert.equal(canonical(rows), previous(rows));
+    assert.equal(logicalBytes(rows), Buffer.byteLength(previous(rows)));
+  }
+  assert.equal(logicalBytes([]), 2);
+});
+
+test("LG-0 differential writes and no-op restore preserve revision and input isolation", async () => {
+  const db = await openLab("lg0-test-delta");
+  try {
+    const incoming = [asset(1), asset(2)];
+    await restore(db, 0, incoming);
+    const before = await readState(db);
+    const writes = [];
+    db.lgAssets.hook("creating", (_key, row) => {
+      writes.push(["create", row.id]);
+    });
+    db.lgAssets.hook("updating", (_changes, key) => {
+      writes.push(["update", key]);
+    });
+    db.lgAssets.hook("deleting", (key) => {
+      writes.push(["delete", key]);
+    });
+    await restore(db, 0, incoming);
+    assert.deepEqual(await readState(db), before);
+    assert.deepEqual(writes, []);
+    await editPersonal(
+      db,
+      0,
+      asset(1).id,
+      { ...asset(1).personal, note: "edited" },
+      2,
+    );
+    assert.deepEqual(writes, [["update", asset(1).id]]);
+    assert.deepEqual(incoming, [asset(1), asset(2)]);
+    const merged = await mergeAssets([], incoming);
+    merged[0].personal.note = "owned output";
+    assert.deepEqual(incoming, [asset(1), asset(2)]);
+  } finally {
+    await db.delete();
+  }
+});
+
+test("LG-0 cancellation at the prepared checkpoint writes nothing", async () => {
+  const db = await openLab("lg0-test-prepared-cancel");
+  try {
+    const before = await readState(db);
+    const controller = new AbortController();
+    await assert.rejects(
+      restore(db, 0, [asset(1)], {
+        signal: controller.signal,
+        beforeCommit: async () => {
+          controller.abort();
+        },
+      }),
+      /cancelled/,
+    );
+    assert.deepEqual(await readState(db), before);
+  } finally {
+    await db.delete();
+  }
+});
+
 test("LG-0 exact byte and count boundaries include inline sources and metadata", () => {
   const rows = fixture("byte-limit");
   assert.equal(logicalBytes(rows), MAX_BYTES);
