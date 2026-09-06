@@ -17,7 +17,7 @@ let active;
 async function execute(command, payload, job) {
   if (command === "init") {
     if (db) throw new Error("already_initialized");
-    db = await openLab(payload.name);
+    db = await openLab(payload.name, payload.legacyStores ?? {});
     return { ready: true };
   }
   if (!db) throw new Error("not_initialized");
@@ -38,12 +38,20 @@ async function execute(command, payload, job) {
           postMessage({ id: job.id, phase: "prepared" });
         }),
       onPhase: (phase) => postMessage({ id: job.id, phase }),
+      // Isolated fault harness only: hold a real IDB transaction after writes.
+      afterWrite: payload.holdAfterWrite
+        ? () => new Promise(() => postMessage({ id: job.id, phase: "written" }))
+        : undefined,
     });
     return { count: rows.length };
   }
   if (command === "export") {
+    postMessage({ id: job.id, phase: "reading" });
     const { assets } = await readState(db);
-    return new Blob([await encodeBackup(assets)]);
+    return new Blob([await encodeBackup(assets, {
+      signal: job.controller.signal,
+      onPhase: (phase) => postMessage({ id: job.id, phase }),
+    })]);
   }
   if (command === "state") {
     const { assets, meta } = await readState(db);
@@ -90,7 +98,7 @@ self.onmessage = async ({ data }) => {
     const result = await execute(command, payload ?? {}, job);
     postMessage({ id, result });
   } catch (error) {
-    postMessage({ id, error: error.message });
+    postMessage({ id, error: error.message, errorName: error.name });
   } finally {
     active = null;
   }

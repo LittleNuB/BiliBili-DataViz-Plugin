@@ -25,6 +25,21 @@ import { asset, fixture } from "../scripts/lg0/fixtures.mjs";
 import { seedLegacy, legacySnapshot } from "../scripts/lg0/legacy-fixture.mjs";
 import Dexie from "dexie";
 
+test("LG-0 export observes queued cancellation and keeps canonical output", async () => {
+  const rows = [asset(1)];
+  const controller = new AbortController();
+  const phases = [];
+  await assert.rejects(encodeBackup(rows, {
+    signal: controller.signal,
+    onPhase: (phase) => {
+      phases.push(phase);
+      setTimeout(() => controller.abort(), 0);
+    },
+  }), /cancelled/);
+  assert.deepEqual(phases, ["encoding"]);
+  assert.deepEqual(await decodeBackup(new Blob([await encodeBackup(rows)])), rows);
+});
+
 test("LG-0 canonical bytes match the original fixed-schema encoding", () => {
   const previous = (value) => {
     if (Array.isArray(value)) return "[" + value.map(previous).join(",") + "]";

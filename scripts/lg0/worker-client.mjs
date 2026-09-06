@@ -1,5 +1,5 @@
 export class LearningWorkerClient {
-  constructor(url, name) {
+  constructor(url, name, legacyStores = {}) {
     this.worker = new Worker(url, { type: "module" });
     this.pending = new Map();
     this.sequence = 0;
@@ -19,13 +19,17 @@ export class LearningWorkerClient {
       }
       this.pending.delete(data.id);
       entry.cleanup();
-      if (data.error) entry.reject(new Error(data.error));
+      if (data.error) {
+        const error = new Error(data.error);
+        error.name = data.errorName ?? "Error";
+        entry.reject(error);
+      }
       else entry.resolve(data.result);
     };
     this.worker.onerror = () => this.dispose("worker_failed_outcome_unknown");
     this.worker.onmessageerror = () =>
       this.dispose("worker_message_failed_outcome_unknown");
-    this.ready = this.request("init", { name });
+    this.ready = this.request("init", { name, legacyStores });
   }
 
   request(command, payload = {}, { signal, onPhase } = {}) {

@@ -47,6 +47,18 @@ Dexie v14 原型只新增 lgAssets（主键 id）和 lgMeta（主键 key）。v1
 
 ## 运行与缺口
 
+### 2026-09-07 新增验收工具（不自动放行）
+
+`run-worker-formal.mjs` 使用六个既有场景、每场景三次独立浏览器冷重开与五次连续暖运行，共 48 次。冷搜索包含 Worker 和数据库打开，直到结果写入界面并经过两帧；导出、清空后的首次恢复、幂等恢复分别记录实际请求到回复的时间及进度。每次均核对完整内容摘要与规范导出字节，幂等恢复还核对 revision/epoch。播种前后的真实 v13 合成旧表保持一致，播种不纳入 UI 操作计时。
+
+主线程 longtask 和主线程加 Worker 的 CDP 堆采样覆盖完整运行，包括额外完整性回读；请求采样间隔 25ms，保留每个样本及实际最大间隙，不强制 GC。候选仍为 cold 2000ms、warm 500ms、主线程 200ms、可取消阶段进度 2000ms、合计堆采样增长 256 MiB。该计数不是绝对峰值或 RSS，不将 Worker 内存排除。`verify-worker-report.mjs` 独立核验 48 次、每阶段和内存汇总、干净提交、源码与实际 bundle，输出候选性能结果；它不修改历史 verifier，也不单凭性能自动解锁 LG-1。
+
+`run-worker-safety.mjs` 在单个新合成 profile 中验证运行中导入/导出取消及至少 2s 后完整状态不变；在真实 IDB bulkPut 后、元数据写入及事务提交前保持事务活动，再通过 [CDP Page.crash](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-crash) 使测试 renderer 崩溃，重开核对完整状态摘要。配额通过 [CDP Storage.overrideQuotaForOrigin](https://chromedevtools.github.io/devtools-protocol/tot/Storage/#method-overrideQuotaForOrigin) 限制本次 loopback origin，等待 [Chromium IDB 的 30 秒额度缓存](https://chromium.googlesource.com/chromium/src/+/22f9c264d938496dae83f09fe0b5bae594a90848/content/browser/indexed_db/indexed_db_bucket_context.h) 过期后进行实际写入拒绝检查，不用代码抛错代替。恢复额度后继续验证非破坏恢复、幂等与重开。
+
+导出现在将取消信号交给编码过程，编码前后让出 Worker 消息循环，在返回 Blob 前确认取消；编码规范不变。测试专用 afterWrite 挂点只在隔离脚本显式传入时保持事务活动，不能进入生产入口。上述实验不是物理磁盘写满、整个浏览器进程崩溃或真实扩展 service worker 生命周期验收。
+
+LG-0 与生产保护的门禁职责及内存表述正在进行 PM 裁决；裁决完成前 LG-1 仍不解锁，旧缺口与失败不得被删除或改判。工具可独立完成当前合成候选的证据补齐。
+
 ### 定向优化节奏（用户已确认）
 
 迭代只运行相关合同回归和失败场景，方案稳定后再执行一次完整验收矩阵，不以反复跑满 48 次作为日常推进条件。数量、容量和性能候选阈值保持原值。原三轮报告作为历史证据保留，不绑定优化后的当前源码，也不改判历史失败。

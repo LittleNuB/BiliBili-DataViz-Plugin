@@ -228,10 +228,18 @@ export function assertCapture(row, evidence) {
   }
 }
 
-export async function encodeBackup(rows) {
+export async function encodeBackup(rows, { signal, onPhase } = {}) {
+  cancelled(signal);
+  onPhase?.("encoding");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  cancelled(signal);
   validateAssets(rows);
   for (const row of rows) await validateImportIdentity(row);
-  return PREFIX + canonical(ordered(rows)) + SUFFIX;
+  const encoded = PREFIX + canonical(ordered(rows)) + SUFFIX;
+  // Let a queued Worker cancellation run before publishing the export.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  cancelled(signal);
+  return encoded;
 }
 function cancelled(signal) {
   requireValue(!signal?.aborted, "cancelled");
@@ -486,6 +494,7 @@ export async function readState(db) {
 // lost updates and capacity races, while the caller's epoch fences cleared drafts.
 export async function change(db, epoch, transform, options = {}) {
   for (let attempt = 0; attempt < 4; attempt++) {
+    options.onPhase?.("preparing");
     cancelled(options.signal);
     const before = await readState(db);
     requireValue(before.meta.epoch === epoch, "stale_epoch");
@@ -522,6 +531,7 @@ export async function change(db, epoch, transform, options = {}) {
         if (changed) integer(current.revision + 1);
         if (remove.length) await db.lgAssets.bulkDelete(remove);
         if (put.length) await db.lgAssets.bulkPut(put);
+        if (options.afterWrite) await Dexie.waitFor(options.afterWrite());
         if (options.fault === "abort") throw new Error("injected_abort");
         if (options.fault === "quota")
           throw new DOMException("injected_quota", "QuotaExceededError");
