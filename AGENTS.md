@@ -8,6 +8,13 @@ This repository is worked on by multiple Codex development threads. Follow this 
 - Dynamic Bill is for interest rebalancing. Do not describe it as "猜你喜欢", click prediction, or engagement-ranking.
 - The AI assistant is a local ledger and knowledge helper. It must explain what evidence it used. Smart Favorites and Dynamic Bill remain usable from local evidence when AI is unavailable; current-video full-text generation must fail honestly instead of reviving a partial-evidence answer path.
 
+## 0.14 Release Scope
+
+- Before planning or dispatching any 0.14 work, read [the bounded learning-loop scope](docs/scope-0.14-bounded-learning-loop.md). The user accepted its direction; its implementation proposal takes effect only after the docs-only scope PR is reviewed and merged. It narrows the first release, not the safety rules below or existing 0.13 runtime behavior.
+- For that bounded release, its scope, LG-0 to LG-5 sequence, and completion definition override conflicting full-library obligations in the older 0.14 PRD, acceptance, architecture, glossary, development plan and ADRs. LG-0 must still freeze and validate finite contracts before production implementation.
+- `docs/development-plan-0.14.md`, `docs/architecture/gate-contract-0.14-storage-search-and-backup.md`, and `docs/qa-0.14-integration-matrix.md` remain byte-preserved because B1 receipts bind them. Their full-library Gate-first language continues to govern old A2/C/D/E and old implementation tasks, not the new bounded route. Do not refresh receipts or relax the verifier merely to edit those documents.
+- Old issues do not close or become dispatchable automatically. Scope adoption is not authorization to mark Ready, merge, close, publish, change package version, or collect data. B1 remains synthetic evidence; A2 remains unpassed until supported independently.
+
 ## Safety Boundaries
 
 - Do not read, copy, log, or submit local key files, including `C:\Users\LittleNub\Desktop\Key.txt`.

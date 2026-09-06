@@ -1,6 +1,6 @@
 # 0.14 个人视频知识库产品 Grill
 
-Status: DRAFT DURING GRILL. This document records accepted product principles and unresolved decisions. It is not implementation approval, an issue breakdown, or a release commitment.
+Status: DEFERRED FULL-LIBRARY CONTRACT. The user accepted a bounded first release; [the bounded learning-loop scope](./scope-0.14-bounded-learning-loop.md) takes precedence for 0.14.0 on scope-PR review and merge. The full-library release obligations below are retained for future work, not the bounded-release completion checklist. Unaffected privacy/evidence rules remain. This document is not runtime or release approval.
 
 ## 1. North Star
 

@@ -1,6 +1,6 @@
 # 0.14 Personal Video Knowledge-Base Migration Contract
 
-**Status:** DRAFT DURING DEVELOPMENT-READINESS GRILL. This freezes the deterministic v13-to-v14 core migration except for the gated `knowledgeSearchIndex` store declaration.
+**Status:** DEFERRED FULL-LIBRARY MIGRATION. [The bounded learning-loop scope](../scope-0.14-bounded-learning-loop.md) takes precedence for 0.14.0 on scope-PR review and merge. Its migration adds only the bounded schema frozen by LG-0 and preserves existing v13 records; the favorite projections and full-library stores below are not bounded-release obligations. No runtime migration is implemented or authorized by this document.
 
 ## Verified Version-13 Baseline
 
