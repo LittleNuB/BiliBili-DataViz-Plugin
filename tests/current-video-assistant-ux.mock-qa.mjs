@@ -76,6 +76,78 @@ async function reachable(page, locator) {
     return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
   }), true, 'control must not be clipped or covered');
 }
+async function hostCompatibility(page) {
+  const card = page.locator('#bdc-current-video-assistant');
+  const draft = page.getByRole('textbox', { name: '向当前视频提问', exact: true });
+  const originalPosition = await page.evaluate(() => window.__assistantMockPlaybackPosition());
+  await page.evaluate(() => {
+    const player = document.querySelector('.player');
+    const button = document.createElement('button');
+    button.id = 'host-fullscreen-toggle';
+    button.textContent = '全屏切换测试';
+    button.addEventListener('click', () => {
+      if (document.fullscreenElement) void document.exitFullscreen();
+      else void player.requestFullscreen();
+    });
+    player.prepend(button);
+  });
+  await page.locator('#host-fullscreen-toggle').click();
+  await page.waitForFunction(() => document.fullscreenElement === document.querySelector('.player'));
+  assert.equal(await page.evaluate(() => {
+    const card = document.querySelector('#bdc-current-video-assistant');
+    const box = card.getBoundingClientRect();
+    return document.fullscreenElement.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+  }), true, 'assistant must not paint over native player fullscreen');
+  await page.screenshot({ path: path.join(out, '1440-native-fullscreen.png') });
+  await page.locator('#host-fullscreen-toggle').click();
+  await page.waitForFunction(() => document.fullscreenElement === null);
+  await expect(page.getByRole('tab', { name: '问答', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(draft).toHaveValue('保留这段未提交的草稿');
+  await reachable(page, draft);
+  assert.equal(await page.evaluate(() => window.__assistantMockPlaybackPosition()), originalPosition);
+  await geometry(page);
+  for (const [token, expected] of [['#18191c', 'dark'], ['#ffffff', 'light']]) {
+    await page.evaluate((value) => {
+      delete document.documentElement.dataset.theme;
+      document.documentElement.style.setProperty('--bg1', value);
+    }, token);
+    await expect(card).toHaveAttribute('data-theme', expected);
+  }
+  await page.evaluate(() => {
+    document.documentElement.style.removeProperty('--bg1');
+    document.querySelector('#host-fullscreen-toggle').remove();
+  });
+  await theme(page, 'light');
+  await page.screenshot({ path: path.join(out, '1440-fullscreen-restored.png') });
+  return { syntheticHost: true, nativeFullscreenOcclusion: true, draftAndTabRestored: true, noSeek: true, hostTokenTheme: true };
+}
+async function pendingPanelRegression(page) {
+  await load(page);
+  await expand(page);
+  await page.evaluate(() => {
+    const send = chrome.runtime.sendMessage.bind(chrome.runtime);
+    window.__ux014PendingReads = [];
+    chrome.runtime.sendMessage = (message) => {
+      if (['GET_CURRENT_VIDEO_QA_SESSIONS', 'GET_CURRENT_VIDEO_SUBTITLE_VIEW_SOURCES'].includes(message.action)) {
+        return new Promise(resolve => window.__ux014PendingReads.push(() => resolve(send(message))));
+      }
+      return send(message);
+    };
+    window.__ux014ReleaseReads = () => {
+      chrome.runtime.sendMessage = send;
+      window.__ux014PendingReads.splice(0).forEach(release => release());
+    };
+  });
+  for (const name of ['问答', '字幕']) {
+    await page.getByRole('tab', { name, exact: true }).click();
+    assert.equal(await page.locator('#bdc-current-video-assistant > .bdc-assistant-panel').count(), 1,
+      `${name}: a pending read must not append a second panel`);
+    await geometry(page);
+  }
+  await page.evaluate(() => window.__ux014ReleaseReads());
+  await expect(page.locator('#bdc-current-video-assistant > .bdc-assistant-panel')).toHaveCount(1);
+  return { delayedQaAndSubtitleReads: true, singlePanelWhilePending: true };
+}
 try {
   const page = await browser.newPage();
   page.on('pageerror', (error) => errors.push(error.message));
@@ -86,6 +158,7 @@ try {
     if (url.pathname === '/dist/content/player-monitor.js') return route.fulfill({ contentType: 'application/javascript', body: bundle });
     return route.abort();
   });
+  report.pendingPanelRegression = await pendingPanelRegression(page);
   for (const [width, height, mode] of viewports) {
     const prefix = height <= 520 ? `${width}x${height}-${mode}` : `${width}-${mode}`;
     await page.setViewportSize({ width, height });
@@ -136,6 +209,7 @@ try {
     await page.getByRole('button', { name: '展开助手', exact: true }).click();
     await expect(page.getByRole('tab', { name: '问答', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('textbox', { name: '向当前视频提问', exact: true })).toHaveValue('保留这段未提交的草稿');
+    if (width === 1440) report.hostCompatibility = await hostCompatibility(page);
     await reachable(page, page.getByRole('textbox', { name: '向当前视频提问', exact: true }));
     await page.screenshot({ path: path.join(out, `${prefix}-qa.png`) });
     await expect(card.getByText('提问会发送当前分 P 的完整正文。', { exact: true })).toBeVisible();

@@ -903,7 +903,7 @@ function appendSubtitleView(parent: HTMLElement, context: CurrentVideoContext): 
   markAssistantTabPanel(block, 'subtitles');
 
   if (!currentSubtitleViewIsFresh() && !assistantState.subtitleViewLoading) {
-    void ensureSubtitleViewLoaded(false);
+    void ensureSubtitleViewLoaded(false, { renderLoadingState: false });
   }
 
   if (assistantState.subtitleStatus) {
@@ -1242,7 +1242,7 @@ function appendSegmentSearch(parent: HTMLElement, context: CurrentVideoContext):
   const block = section('问这个视频', 'bdc-assistant-section-primary');
   markAssistantTabPanel(block, 'qa');
   if (!assistantState.fullTextQaSessions && !assistantState.fullTextQaSessionsLoading) {
-    void loadCurrentVideoQaSessionsFromPage();
+    void loadCurrentVideoQaSessionsFromPage(undefined, { renderLoadingState: false });
   }
   const activeSessionId = currentVideoQaActiveSessionId();
   const activeSession = currentVideoQaActiveSession();
@@ -1895,13 +1895,14 @@ function fullTextQaSessionStateKey(sessionId: string | null): string {
 
 async function loadCurrentVideoQaSessionsFromPage(
   sessionId?: string | null,
-  options: { activate?: boolean } = {},
+  options: { activate?: boolean; renderLoadingState?: boolean } = {},
 ): Promise<void> {
   const requestId = assistantState.fullTextQaSessionsRequestId + 1;
   assistantState.fullTextQaSessionsRequestId = requestId;
   assistantState.fullTextQaSessionsLoading = true;
   assistantState.fullTextQaSessionsError = null;
-  renderAssistantShell();
+  // When called during panel construction, the caller paints this loading state.
+  if (options.renderLoadingState !== false) renderAssistantShell();
   try {
     const targetSessionId = sessionId ?? currentVideoQaActiveSessionId();
     const view = await sendRuntimeRequest<CurrentVideoQaSessionsView>('GET_CURRENT_VIDEO_QA_SESSIONS', {
@@ -2635,7 +2636,10 @@ function appendVideoKnowledgeLimitations(parent: HTMLElement, knowledge: VideoKn
   }
 }
 
-async function ensureSubtitleViewLoaded(force: boolean): Promise<void> {
+async function ensureSubtitleViewLoaded(
+  force: boolean,
+  options: { renderLoadingState?: boolean } = {},
+): Promise<void> {
   if (assistantState.context?.kind !== 'video') return;
   if (assistantState.subtitleViewLoading) return;
   const contextKey = currentVideoSubtitleContextKey(assistantState.context);
@@ -2646,7 +2650,7 @@ async function ensureSubtitleViewLoaded(force: boolean): Promise<void> {
   assistantState.subtitleViewLoading = true;
   assistantState.subtitleViewError = null;
   if (force) assistantState.subtitleExportStatus = null;
-  renderAssistantShell();
+  if (options.renderLoadingState !== false) renderAssistantShell();
 
   try {
     const result = await sendRuntimeRequest<CurrentVideoSubtitleViewSourcesResult>(
