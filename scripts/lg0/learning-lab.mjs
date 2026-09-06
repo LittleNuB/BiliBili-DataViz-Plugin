@@ -236,6 +236,60 @@ export async function encodeBackup(rows) {
 function cancelled(signal) {
   requireValue(!signal?.aborted, "cancelled");
 }
+
+export function parseBoundedBackupJson(text) {
+  requireValue(
+    typeof text === "string" && text.length <= MAX_FILE_BYTES,
+    "file_size",
+  );
+  // This is a resource guard, not a JSON parser. Native JSON.parse and the
+  // existing schema/canonical checks remain authoritative for valid syntax.
+  // Legal backup depth is envelope/assets/asset/snapshot/citations/span (6).
+  // Each asset has at most 9 non-span containers; every span costs >=30 bytes.
+  const containerLimit = 2 + MAX_ASSETS * 9 + Math.floor(MAX_BYTES / 30);
+  const stack = [];
+  let containers = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      // No legal schema array contains another array directly.
+      requireValue(
+        !(char === "[" && stack.at(-1)?.kind === "["),
+        "json_resource_limit",
+      );
+      containers++;
+      requireValue(
+        stack.length < 6 && containers <= containerLimit,
+        "json_resource_limit",
+      );
+      stack.push({ kind: char, entries: 1 });
+    } else if (char === "}" || char === "]") {
+      const frame = stack.pop();
+      requireValue(frame?.kind === (char === "}" ? "{" : "["), "invalid_json");
+    } else if (char === "," && stack.length) {
+      const frame = stack.at(-1);
+      frame.entries++;
+      requireValue(
+        frame.entries <= (frame.kind === "[" ? 4096 : 11),
+        "json_resource_limit",
+      );
+    }
+  }
+  return JSON.parse(text);
+}
+
 export async function decodeBackup(file, { signal } = {}) {
   cancelled(signal);
   requireValue(
@@ -251,7 +305,7 @@ export async function decodeBackup(file, { signal } = {}) {
     fatal: true,
     ignoreBOM: true,
   }).decode(bytes);
-  const data = JSON.parse(text);
+  const data = parseBoundedBackupJson(text);
   keys(data, ["format", "version", "assets"]);
   requireValue(data.format === FORMAT && data.version === 1, "format");
   // Exact encoding also rejects duplicate JSON keys, reordered assets and padded files.
@@ -312,7 +366,7 @@ async function mergeOwnedAssets(local, incoming) {
 async function validateImportIdentity(row) {
   if (!row.importedFrom) return;
   const receipt = row.importedFrom;
-  const original = JSON.parse(receipt.original);
+  const original = parseBoundedBackupJson(receipt.original);
   validateAsset(original);
   requireValue(
     canonical(original) === receipt.original && original.id === receipt.id,

@@ -167,6 +167,47 @@ globalThis.workerProbe = {
       lateCancelReportsCommit: true,
     };
   },
+  async rejectMalformedInputs() {
+    const before = await client.request("state");
+    const cases = [
+      ["deep-arrays", "[".repeat(100000) + "]".repeat(100000)],
+      ["wide-array", "[" + Array(4097).fill("0").join(",") + "]"],
+      [
+        "dense-containers",
+        "[" +
+          Array(100)
+            .fill('{"x":[' + Array(4096).fill("{}").join(",") + "]}")
+            .join(",") +
+          "]",
+      ],
+    ];
+    const results = [];
+    for (const [label, text] of cases) {
+      const hostile = new Blob([text]);
+      const start = performance.now();
+      let error;
+      try {
+        await client.request("restore", { file: hostile, epoch: before.epoch });
+      } catch (failure) {
+        error = failure.message;
+      }
+      const elapsedMs = performance.now() - start;
+      check(error === "json_resource_limit", "malformed_input_not_rejected");
+      check(
+        JSON.stringify(await client.request("state")) ===
+          JSON.stringify(before),
+        "malformed_input_changed_state",
+      );
+      results.push({
+        label,
+        fileBytes: hostile.size,
+        elapsedMs,
+        error,
+        stateUnchanged: true,
+      });
+    }
+    return results;
+  },
   dispose() {
     client?.dispose();
     file = null;

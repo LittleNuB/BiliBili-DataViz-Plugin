@@ -238,8 +238,12 @@ try {
         }),
       );
     }
-    if (scenario === "references")
+    if (scenario === "references") {
       report.safety = await page.evaluate(() => workerProbe.safety());
+      report.inputSafety = await page.evaluate(() =>
+        workerProbe.rejectMalformedInputs(),
+      );
+    }
     await page.evaluate(() => workerProbe.dispose());
   }
   assert.deepEqual(errors, []);
