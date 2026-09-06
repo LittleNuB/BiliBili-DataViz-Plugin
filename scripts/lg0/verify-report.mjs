@@ -241,6 +241,16 @@ if (
   assert.deepEqual(preflight.sources, report.sources);
   assert.deepEqual(preflight.browser, report.browser);
   const result = evaluateReport(report);
+  if (report.sourceRevisionState === "clean") {
+    assert.match(report.commit, /^[a-f0-9]{40}$/);
+    await verifyBindings(report, async (input) =>
+      execFileSync("git", ["show", `${report.commit}:${input}`], {
+        cwd: root,
+        maxBuffer: 4 * 1024 * 1024,
+      }),
+    );
+    result.sourceCommitBindingsVerified = true;
+  }
   if (revision) {
     assert.equal(mode, "--verify");
     assert.match(revision, /^[a-f0-9]{40}$/);

@@ -24,7 +24,7 @@ test("LG-0 complete artifact is not a passing performance gate", () => {
   assert.equal(result.failures.length, 5);
 });
 
-test("LG-0 reviewed-fix rerun retains failure and binds the current source", async () => {
+test("LG-0 reviewed-fix diagnostic rerun retains its measured failure", async () => {
   const report = JSON.parse(
     await readFile(
       new URL(
@@ -36,7 +36,6 @@ test("LG-0 reviewed-fix rerun retains failure and binds the current source", asy
   );
   assert.equal(evaluateReport(report).candidateGateStatus, "fail");
   assert.equal(report.lg0GateStatus, "fail");
-  assert.equal(await verifyBindings(report), true);
 });
 
 test("LG-0 verifier rejects missing or duplicated runs and bad timing/size/count receipts", () => {

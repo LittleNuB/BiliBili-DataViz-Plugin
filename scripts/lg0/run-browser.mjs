@@ -15,6 +15,16 @@ const root = path.resolve(
   "../..",
 );
 const hash = (data) => createHash("sha256").update(data).digest("hex");
+if (
+  execFileSync("git", ["status", "--porcelain"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim()
+) {
+  throw new Error(
+    "Commit the complete lab source before measuring; dirty worktree refused",
+  );
+}
 const playwrightPath = process.env.LG0_PLAYWRIGHT_MODULE;
 const chromePath = process.env.LG0_CHROME_EXECUTABLE;
 if (!playwrightPath || !chromePath)
@@ -55,6 +65,7 @@ for (const input of inputs)
 const preflight = {
   runId,
   sourceEncoding: "utf8-lf",
+  sourceRevisionState: "clean",
   seed: SEED,
   startedAt: new Date().toISOString(),
   commit: execFileSync("git", ["rev-parse", "HEAD"], {
@@ -177,6 +188,19 @@ async function launch(profile) {
     );
   } else if (preflight.browser.product !== report.browser.product) {
     throw new Error("browser_version_changed");
+  }
+  if (report.runs.length === 0) {
+    for (const input of inputs) {
+      const committed = execFileSync(
+        "git",
+        ["show", `${preflight.commit}:${input}`],
+        { cwd: root, maxBuffer: 4 * 1024 * 1024 },
+      )
+        .toString("utf8")
+        .replace(/\r\n/g, "\n");
+      if (hash(committed) !== sources[input])
+        throw new Error("source_commit_mismatch");
+    }
   }
   return page;
 }

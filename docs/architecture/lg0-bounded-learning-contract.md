@@ -29,13 +29,13 @@ Dexie v14 原型只新增 lgAssets（主键 id）和 lgMeta（主键 key）。v1
 
 搜索是有界线性扫描：个人标题/备注/标签、视频标题、保存正文和引用原句。查询最多 256 code units，以 NFKC + 小写标准化、空白分词、词间 AND、单词子串匹配；类型/视频精确筛选；结果仅返回稳定 ID，按 ID 排序，不承诺相关性排名。每次从当前提交状态读取，因此不维护可能失效的持久搜索索引。正文不包含全部视频字幕。
 
-备份唯一格式是规范 UTF-8 JSON：`{"assets":[],"format":"bili-bill-learning","version":1}`。未加密，与旧 ZIP v1 无关系。文件上限为 10,485,760 + 规范空封套字节（由 MAX_FILE_BYTES 同一常量计算）；读入前检查 Blob.size。严格 UTF-8 解码、完整白名单、资产验证及规范编码相等检查，拒绝未知字段/版本、重复 JSON 键、重复 ID、额外空白和损坏文件。只接受本工具规范导出，不承诺接受手工改格式的 JSON。
+备份唯一格式是规范 UTF-8 JSON：`{"assets":[],"format":"bili-bill-learning","version":1}`。未加密，与旧 ZIP v1 无关系。文件上限为 10,485,760 + 规范空封套字节（由 MAX_FILE_BYTES 同一常量计算）；读入前检查 Blob.size。严格 UTF-8 解码、完整白名单、资产验证及规范编码相等检查，拒绝未知字段/版本、重复 JSON 键、重复 ID、额外空白和损坏文件。只接受与本工具导出相同的规范编码，不承诺接受手工改格式的 JSON；这是格式与内容一致性校验，不是外部文件来源认证或签名。写入、异步导出、解码、合并统一验证导入副本身份，不能写入或导出自己无法恢复的伪造副本。
 
 恢复保留本地：ID 不存在则新增、完整内容一致则跳过。ID 冲突时以 `SHA256('lg0-import:' + incoming.id + ':' + SHA256(canonical(incoming)))` 生成副本 ID，并记录 importedFrom={id,digest,original}；original 是完整规范原始记录字符串，包含导入时的个人内容，防止伪造身份导致原始内容静默丢失。解码与合并时验证 original 的字段/规范表示、完整哈希、副本 ID 和不可变字段一致。original 内的更早导入记录只是历史快照字符串，不递归提升为新当前证据。重复导入通过副本身份识别；副本个人层后来修改也保留，原始个人内容仍在 original 中可恢复，不再制造相同副本。保留 ID 已被其他来源占用则整体拒绝，不能覆盖本地。所有副本和 original 的额外字节仍参与最终容量检查，冲突可能使原本接近上限的备份整体超限，必须明确拒绝而不是丢弃副本。生产 UI 对导入时内容的展示仍待后续切片。
 
 ## 本次固定测量设计
 
-首次正式测量前，runner 写 preflight.json：OS/CPU/内存、Node、源码文件 SHA-256、实际浏览器 bundle SHA-256、seed、容量、运行次数、度量边界。浏览器执行时记录 Browser.getVersion 精确版本；安装位置由显式参数指定，禁止使用任何既有用户配置目录。每个 profile 都在工作区 release-artifacts/lg0 下新建，仅包含合成 fixture，不遍历或读取 profile 文件。
+首次正式测量前，runner 拒绝脏工作树，并写 preflight.json：干净提交身份（sourceRevisionState=clean）、OS/CPU/内存、Node、源码文件 SHA-256、实际浏览器 bundle SHA-256、seed、容量、运行次数、度量边界。测量开始前逐项核对 Git commit blob 与绑定，CLI verifier 也核对提交与源码一致性；前两轮脏树诊断有逐文件绑定但不等同于干净提交正式证据。浏览器执行时记录 Browser.getVersion 精确版本；安装位置由显式参数指定，禁止使用任何既有用户配置目录。每个 profile 都在工作区 release-artifacts/lg0 下新建，仅包含合成 fixture，不遍历或读取 profile 文件。
 
 6 场景：空库、30 条典型、1000 条数量边界、1000 条合计恰好 10 MiB、单条恰好 10 MiB、1000 条每条 16 个引用的中英文资产。每场景 3 个独立新 profile，播种后关闭浏览器，再重开测一次 cold；第三个 profile 接着 5 次 warm。共 48 次，失败和重跑分别保留。cold 指浏览器/连接冷重开，不宣称操作系统磁盘缓存也冷。
 

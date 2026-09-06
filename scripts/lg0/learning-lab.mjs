@@ -216,8 +216,9 @@ export function assertCapture(row, evidence) {
   }
 }
 
-export function encodeBackup(rows) {
+export async function encodeBackup(rows) {
   validateAssets(rows);
+  for (const row of rows) await validateImportIdentity(row);
   return PREFIX + canonical(ordered(rows)) + SUFFIX;
 }
 function cancelled(signal) {
@@ -243,8 +244,10 @@ export async function decodeBackup(file, { signal } = {}) {
   requireValue(data.format === FORMAT && data.version === 1, "format");
   validateAssets(data.assets);
   // Exact encoding also rejects duplicate JSON keys, reordered assets and padded files.
-  requireValue(encodeBackup(data.assets) === text, "noncanonical_backup");
-  for (const row of data.assets) await validateImportIdentity(row);
+  requireValue(
+    (await encodeBackup(data.assets)) === text,
+    "noncanonical_backup",
+  );
   cancelled(signal);
   return data.assets;
 }
@@ -417,6 +420,7 @@ export async function change(db, epoch, transform, options = {}) {
     requireValue(before.meta.epoch === epoch, "stale_epoch");
     const rows = ordered(await transform(structuredClone(before.assets)));
     validateAssets(rows);
+    for (const row of rows) await validateImportIdentity(row);
     cancelled(options.signal);
     options.onPhase?.("committing");
     cancelled(options.signal);

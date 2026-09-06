@@ -54,12 +54,31 @@ test("LG-0 rejects forged conflict-copy identity without dropping the original i
     /import_identity/,
   );
   await assert.rejects(
-    decodeBackup(new Blob([encodeBackup([forged])])),
+    decodeBackup(
+      new Blob([
+        canonical({
+          assets: [forged],
+          format: "bili-bill-learning",
+          version: 1,
+        }),
+      ]),
+    ),
     /import_identity/,
   );
   const forgedDigest = structuredClone(copy);
   forgedDigest.importedFrom.digest = "f".repeat(64);
   await assert.rejects(mergeAssets([], [forgedDigest]), /import_identity/);
+  await assert.rejects(encodeBackup([forged]), /import_identity/);
+  const db = await openLab("lg0-test-forged-write");
+  try {
+    await assert.rejects(
+      change(db, 0, () => [forged]),
+      /import_identity/,
+    );
+    assert.equal((await readState(db)).assets.length, 0);
+  } finally {
+    await db.delete();
+  }
 });
 
 test("LG-0 restore retries recompute from current state, preserving concurrent save/edit/delete", async () => {
@@ -131,7 +150,7 @@ test("LG-0 UTF-8 counts CJK, astral characters, escapes and source snapshots", (
 
 test("LG-0 backup round trip is canonical, bounded and format-separated", async () => {
   const rows = fixture("byte-limit");
-  const text = encodeBackup(rows);
+  const text = await encodeBackup(rows);
   assert.equal(Buffer.byteLength(text), MAX_FILE_BYTES);
   assert.deepEqual(await decodeBackup(new Blob([text])), rows);
   let touched = false;
@@ -149,8 +168,8 @@ test("LG-0 backup round trip is canonical, bounded and format-separated", async 
     "{}",
     "PK zip",
     '{"format":"other"}',
-    encodeBackup([]) + " ",
-    encodeBackup([]).replace('"version":1', '"version":2'),
+    (await encodeBackup([])) + " ",
+    (await encodeBackup([])).replace('"version":1', '"version":2'),
   ]) {
     await assert.rejects(decodeBackup(new Blob([text])));
   }
@@ -191,7 +210,10 @@ test("LG-0 conflict copies preserve local edits and repeated import is idempoten
   const second = await mergeAssets(first, [incoming]);
   assert.deepEqual(second, first);
   assert.equal((await mergeAssets([local], [local])).length, 1);
-  assert.deepEqual(await decodeBackup(new Blob([encodeBackup(first)])), first);
+  assert.deepEqual(
+    await decodeBackup(new Blob([await encodeBackup(first)])),
+    first,
+  );
 });
 
 test("LG-0 capture requires exact current part, source and validated answer body", () => {
@@ -272,7 +294,7 @@ test("LG-0 cancellation and injected abort/quota errors have zero partial writes
       /cancelled/,
     );
     await assert.rejects(
-      decodeBackup(new Blob([encodeBackup([asset(2)])]), {
+      decodeBackup(new Blob([await encodeBackup([asset(2)])]), {
         signal: controller.signal,
       }),
       /cancelled/,
