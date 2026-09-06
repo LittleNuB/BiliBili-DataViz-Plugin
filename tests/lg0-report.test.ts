@@ -38,6 +38,22 @@ test("LG-0 reviewed-fix diagnostic rerun retains its measured failure", async ()
   assert.equal(report.lg0GateStatus, "fail");
 });
 
+test("LG-0 clean-commit matrix binds current source without turning failure into a pass", async () => {
+  const report = JSON.parse(
+    await readFile(
+      new URL(
+        "../docs/benchmarks/lg0/2026-09-06T08-40-01-622Z-324b51e8/report.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  assert.equal(report.sourceRevisionState, "clean");
+  assert.equal(report.commit, "3040206b980477f3a9cc989b9f2117901226b513");
+  assert.equal(await verifyBindings(report), true);
+  assert.equal(evaluateReport(report).candidateGateStatus, "fail");
+});
+
 test("LG-0 verifier rejects missing or duplicated runs and bad timing/size/count receipts", () => {
   for (const mutate of [
     (report) => report.runs.pop(),
