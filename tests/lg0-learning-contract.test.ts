@@ -19,6 +19,7 @@ import {
   search,
   saveCapture,
   editPersonal,
+  restore,
 } from "../scripts/lg0/learning-lab.mjs";
 import { asset, fixture } from "../scripts/lg0/fixtures.mjs";
 import { seedLegacy, legacySnapshot } from "../scripts/lg0/legacy-fixture.mjs";
@@ -35,6 +36,90 @@ test("LG-0 exact byte and count boundaries include inline sources and metadata",
   validateAssets(count);
   count.push(asset(1001));
   assert.throws(() => validateAssets(count), /capacity_count/);
+});
+
+test("LG-0 rejects forged conflict-copy identity without dropping the original incoming content", async () => {
+  const local = asset(1, { note: "local" });
+  const incoming = asset(1, { note: "incoming" });
+  const merged = await mergeAssets([local], [incoming]);
+  const copy = merged.find((row) => row.id !== local.id);
+  assert.equal(
+    JSON.parse(copy.importedFrom.original).personal.note,
+    "incoming",
+  );
+  const forged = structuredClone(copy);
+  forged.video.title = "forged immutable source";
+  await assert.rejects(
+    mergeAssets([local, forged], [incoming]),
+    /import_identity/,
+  );
+  await assert.rejects(
+    decodeBackup(new Blob([encodeBackup([forged])])),
+    /import_identity/,
+  );
+  const forgedDigest = structuredClone(copy);
+  forgedDigest.importedFrom.digest = "f".repeat(64);
+  await assert.rejects(mergeAssets([], [forgedDigest]), /import_identity/);
+});
+
+test("LG-0 restore retries recompute from current state, preserving concurrent save/edit/delete", async () => {
+  const db = await openLab("lg0-test-restore-cas");
+  try {
+    await change(db, 0, () => [asset(1), asset(2)]);
+    const incoming = [asset(3)];
+    let writes;
+    let once = false;
+    await restore(db, 0, incoming, {
+      onPhase(phase) {
+        if (phase !== "committing" || once) return;
+        once = true;
+        // Enqueue this transaction before restore's CAS write; it invalidates
+        // the preflight revision deterministically without timing sleeps.
+        writes = db.transaction("rw", db.lgAssets, db.lgMeta, async () => {
+          await db.lgAssets.put(asset(4));
+          await db.lgAssets.put(asset(1, { note: "concurrent edit" }));
+          await db.lgAssets.delete(asset(2).id);
+          const meta = await db.lgMeta.get("state");
+          await db.lgMeta.put({ ...meta, revision: meta.revision + 1 });
+        });
+      },
+    });
+    await writes;
+    const rows = (await readState(db)).assets;
+    assert.deepEqual(
+      rows.map((row) => row.id),
+      [asset(1).id, asset(3).id, asset(4).id],
+    );
+    assert.equal(rows[0].personal.note, "concurrent edit");
+  } finally {
+    await db.delete();
+  }
+});
+
+test("LG-0 successful save acknowledgement is idempotent after source changes, without a new write", async () => {
+  const db = await openLab("lg0-test-save-retry");
+  try {
+    const row = fixture("references")[0];
+    const proof = {
+      bvid: row.video.bvid,
+      part: row.part,
+      source: row.snapshot.source,
+      spans: row.snapshot.citations,
+    };
+    await saveCapture(db, 0, row, () => proof);
+    const before = await readState(db);
+    await saveCapture(db, 0, row, () => {
+      throw new Error("source changed");
+    });
+    assert.deepEqual(await readState(db), before);
+    await clearKnowledge(db);
+    await assert.rejects(
+      saveCapture(db, 0, row, () => proof),
+      /stale_epoch/,
+    );
+  } finally {
+    await db.delete();
+  }
 });
 
 test("LG-0 UTF-8 counts CJK, astral characters, escapes and source snapshots", () => {

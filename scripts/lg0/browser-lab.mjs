@@ -58,11 +58,11 @@ export async function run(scenario, mode) {
   const decoded = await measure("import-validation", () =>
     lab.decodeBackup(new Blob([encoded])),
   );
-  const merged = await measure("merge-preflight", () =>
+  await measure("merge-preflight", () =>
     lab.mergeAssets(current.assets, decoded),
   );
   await measure("atomic-commit", () =>
-    lab.change(db, current.meta.epoch, () => merged),
+    lab.restore(db, current.meta.epoch, decoded),
   );
   const after = await lab.readState(db);
   const consistent =

@@ -21,9 +21,9 @@
 
 Dexie v14 原型只新增 lgAssets（主键 id）和 lgMeta（主键 key）。v13 fixture 由真实生产数据库类在 `lg0-` 专用名称下创建，并填入公开合成标记；从不打开默认 BiliAnalyticsDB 名称。每个旧表升级前后比对。固定大小的 epoch/revision 是协调信息，不是个人知识；物理 IDB/索引/缓存开销不归入 10 MiB 宣称。
 
-预检读取一致快照，在事务外做容量/解析/哈希，写事务内比较 revision 并检查调用方 epoch。CAS 冲突最多 4 次尝试，仍冲突明确 busy，不覆盖并发结果。每次写入替换的是有界 lgAssets 表，绝不覆盖旧表。清空在同一事务清表并推进 epoch，旧编辑稿不能迟到复活。普通设置重置和缓存清理未接入原型，生产保护尚待验证。
+预检读取一致快照，在事务外做容量/解析/哈希，写事务内比较 revision 并检查调用方 epoch。CAS 冲突最多 4 次尝试，仍冲突明确 busy，不覆盖并发结果。恢复专用接口在每次重试中重新从最新资产计算冲突合并，禁止把旧快照合并结果作为常量提交。每次写入替换的是有界 lgAssets 表，绝不覆盖旧表。清空在同一事务清表并推进 epoch，旧编辑稿不能迟到复活。普通设置重置和缓存清理未接入原型，生产保护尚待验证。
 
-提交状态明确为短暂不可取消；AbortSignal 只覆盖提交前。模拟 abort/quota 在写入后故意抛错以检验事务回滚，**不等于真实磁盘配额或进程崩溃证据**。保存失败不修改调用方原始编辑稿。重复保存同 ID 同内容幂等；同 ID 不同内容拒绝。只有个人层编辑接口可更新个人字段与更新时间。
+提交状态明确为短暂不可取消；AbortSignal 只覆盖提交前。模拟 abort/quota 在写入后故意抛错以检验事务回滚，**不等于真实磁盘配额或进程崩溃证据**。保存失败不修改调用方原始编辑稿。重复保存同 ID 同内容幂等：已有成功结果的确认重试是历史读取，不要求来源仍可访问，也不产生新写入；任何新资产仍必须再次核验当前来源。同 ID 不同内容拒绝。只有个人层编辑接口可更新个人字段与更新时间。
 
 ## 搜索与备份
 
@@ -31,7 +31,7 @@ Dexie v14 原型只新增 lgAssets（主键 id）和 lgMeta（主键 key）。v1
 
 备份唯一格式是规范 UTF-8 JSON：`{"assets":[],"format":"bili-bill-learning","version":1}`。未加密，与旧 ZIP v1 无关系。文件上限为 10,485,760 + 规范空封套字节（由 MAX_FILE_BYTES 同一常量计算）；读入前检查 Blob.size。严格 UTF-8 解码、完整白名单、资产验证及规范编码相等检查，拒绝未知字段/版本、重复 JSON 键、重复 ID、额外空白和损坏文件。只接受本工具规范导出，不承诺接受手工改格式的 JSON。
 
-恢复保留本地：ID 不存在则新增、完整内容一致则跳过。ID 冲突时以 `SHA256('lg0-import:' + incoming.id + ':' + SHA256(canonical(incoming)))` 生成副本 ID，并记录 importedFrom={id,digest}。重复导入通过副本身份识别；副本个人层后来修改也保留，不再制造相同副本。保留 ID 已被其他来源占用则整体拒绝，不能覆盖本地。所有副本的额外字节仍参与最终容量检查。导入身份真实性/恶意保留 ID 验证还需补齐后才冻结生产合同。
+恢复保留本地：ID 不存在则新增、完整内容一致则跳过。ID 冲突时以 `SHA256('lg0-import:' + incoming.id + ':' + SHA256(canonical(incoming)))` 生成副本 ID，并记录 importedFrom={id,digest,original}；original 是完整规范原始记录字符串，包含导入时的个人内容，防止伪造身份导致原始内容静默丢失。解码与合并时验证 original 的字段/规范表示、完整哈希、副本 ID 和不可变字段一致。original 内的更早导入记录只是历史快照字符串，不递归提升为新当前证据。重复导入通过副本身份识别；副本个人层后来修改也保留，原始个人内容仍在 original 中可恢复，不再制造相同副本。保留 ID 已被其他来源占用则整体拒绝，不能覆盖本地。所有副本和 original 的额外字节仍参与最终容量检查，冲突可能使原本接近上限的备份整体超限，必须明确拒绝而不是丢弃副本。生产 UI 对导入时内容的展示仍待后续切片。
 
 ## 本次固定测量设计
 
@@ -39,7 +39,7 @@ Dexie v14 原型只新增 lgAssets（主键 id）和 lgMeta（主键 key）。v1
 
 6 场景：空库、30 条典型、1000 条数量边界、1000 条合计恰好 10 MiB、单条恰好 10 MiB、1000 条每条 16 个引用的中英文资产。每场景 3 个独立新 profile，播种后关闭浏览器，再重开测一次 cold；第三个 profile 接着 5 次 warm。共 48 次，失败和重跑分别保留。cold 指浏览器/连接冷重开，不宣称操作系统磁盘缓存也冷。
 
-搜索从提交调用开始，到结果数量写入 output 后第二个 animation frame；cold 含打开库，warm 复用连接。导出、导入校验、冲突预检、原子提交分别计时。主线程 PerformanceObserver longtask 记录 >=50ms 任务，候选最大 <=200ms；搜索候选 cold p95 <=2000ms / warm p95 <=500ms。六个场景分别判定，不用全局平均掩盖失败。
+搜索从提交调用开始，到结果数量写入 output 后第二个 animation frame；cold 含打开库，warm 复用连接。导出、导入校验、冲突预检、原子提交分别计时。名为 atomic-commit 的阶段是完整 CAS 恢复调用（含重读、重新合并和验证），不是纯 IDB commit 时间；单独的 merge-preflight 是预检演练，不能把二者累加成本隐藏。主线程 PerformanceObserver longtask 记录 >=50ms 任务，候选最大 <=200ms；搜索候选 cold p95 <=2000ms / warm p95 <=500ms。六个场景分别判定，不用全局平均掩盖失败。
 
 运行阶段边界采样 performance.memory.usedJSHeapSize，候选增长预算 256 MiB，**这是阶段采样高水位，不是绝对峰值或 renderer RSS，也未覆盖恶意输入峰值**。此限制意味着本轮内存证据不能直接放行 LG-0。后续需完善可取消预检/进度、实际峰值内存及故障中断测量，必要时转 Worker，不静默放宽候选。
 
@@ -47,6 +47,6 @@ Dexie v14 原型只新增 lgAssets（主键 id）和 lgMeta（主键 key）。v1
 
 `node --test tests/lg0-learning-contract.test.ts`
 
-设置 LG0_PLAYWRIGHT_MODULE 为已有 Playwright index.mjs、LG0_CHROME_EXECUTABLE 为 Chrome stable 可执行文件，再运行 `node scripts/lg0/run-browser.mjs`。使用现有外部测试工具，不修改 package/lock。runner 仅服务固定 loopback 页面和 bundle，外部解析被阻断，所有浏览器与服务器在结束后关闭。原始报告保存在工作区 release-artifacts/lg0，提交仅选公开 JSON 报告，绝不提交 profile 内容。
+设置 LG0_PLAYWRIGHT_MODULE 为已有 Playwright index.mjs、LG0_CHROME_EXECUTABLE 为 Chrome stable 可执行文件，再运行 `node scripts/lg0/run-browser.mjs`。使用现有外部测试工具，不修改 package/lock。runner 仅服务固定 loopback 页面和 bundle，外部解析被阻断，所有浏览器与服务器在结束后关闭，确认实际路径位于本次运行目录后删除自建 profile。原始报告保存在工作区 release-artifacts/lg0，提交仅选公开 JSON 报告，绝不提交 profile 内容。新版源码绑定采用 UTF-8/LF 规范字节并包含报告验证器；每次正式测量保留独立 runId，不覆盖旧失败。
 
-未覆盖的放行项：正式 Worker/UI 进度与取消（不把预先取消测试当成运行中取消）、真实进程/扩展中断与恢复、实际 quota 故障、恶意输入内存峰值、导入身份安全加固、生产重置保护。LG-0 保持未完成，不开始 LG-1，不宣布 0.14.0 完成。
+未覆盖的放行项：正式 Worker/UI 进度与取消（不把预先取消测试当成运行中取消）、真实进程/扩展中断与恢复、实际 quota 故障、恶意输入内存峰值、生产重置保护。LG-0 保持未完成，不开始 LG-1，不宣布 0.14.0 完成。

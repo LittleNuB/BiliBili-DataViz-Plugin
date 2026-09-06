@@ -106,9 +106,10 @@ export function validateAsset(row) {
     "tags",
   );
   if (row.importedFrom !== null) {
-    keys(row.importedFrom, ["id", "digest"]);
+    keys(row.importedFrom, ["id", "digest", "original"]);
     hash(row.importedFrom.id);
     hash(row.importedFrom.digest);
+    string(row.importedFrom.original);
   }
   if (row.kind === "bookmark") {
     requireValue(row.part !== null, "bookmark_part");
@@ -243,6 +244,7 @@ export async function decodeBackup(file, { signal } = {}) {
   validateAssets(data.assets);
   // Exact encoding also rejects duplicate JSON keys, reordered assets and padded files.
   requireValue(encodeBackup(data.assets) === text, "noncanonical_backup");
+  for (const row of data.assets) await validateImportIdentity(row);
   cancelled(signal);
   return data.assets;
 }
@@ -259,6 +261,7 @@ async function sha256(text) {
 export async function mergeAssets(local, incoming) {
   validateAssets(local);
   validateAssets(incoming);
+  for (const row of [...local, ...incoming]) await validateImportIdentity(row);
   const result = new Map(local.map((row) => [row.id, structuredClone(row)]));
   for (const row of ordered(incoming)) {
     const current = result.get(row.id);
@@ -267,9 +270,10 @@ export async function mergeAssets(local, incoming) {
       continue;
     }
     if (canonical(current) === canonical(row)) continue;
-    const digest = await sha256(canonical(row));
+    const original = canonical(row);
+    const digest = await sha256(original);
     const id = await sha256("lg0-import:" + row.id + ":" + digest);
-    const importedFrom = { id: row.id, digest };
+    const importedFrom = { id: row.id, digest, original };
     const existing = result.get(id);
     if (existing) {
       requireValue(
@@ -285,17 +289,62 @@ export async function mergeAssets(local, incoming) {
   return rows;
 }
 
+async function validateImportIdentity(row) {
+  if (!row.importedFrom) return;
+  const receipt = row.importedFrom;
+  const original = JSON.parse(receipt.original);
+  validateAsset(original);
+  requireValue(
+    canonical(original) === receipt.original && original.id === receipt.id,
+    "import_identity",
+  );
+  requireValue(
+    (await sha256(receipt.original)) === receipt.digest,
+    "import_identity",
+  );
+  requireValue(
+    (await sha256("lg0-import:" + receipt.id + ":" + receipt.digest)) ===
+      row.id,
+    "import_identity",
+  );
+  // Personal edits are allowed; every immutable field must still match the
+  // retained original. The original personal content is retained and counted too.
+  const immutable = (value) => {
+    const { id, personal, updatedAt, importedFrom, ...rest } = value;
+    return canonical(rest);
+  };
+  requireValue(immutable(original) === immutable(row), "import_identity");
+}
+
+export async function restore(db, epoch, incoming, options = {}) {
+  const captured = structuredClone(incoming);
+  return change(db, epoch, (rows) => mergeAssets(rows, captured), options);
+}
+
 export async function saveCapture(db, epoch, row, evidence, options = {}) {
   // Capture is checked both before work and immediately before commit. Production
   // adapters must supply live evidence, never a backup snapshot as current proof.
   const captured = structuredClone(row);
-  assertCapture(captured, evidence());
+  validateAsset(captured);
+  requireValue(captured.importedFrom === null, "capture_import_identity");
+  cancelled(options.signal);
+  const state = await readState(db);
+  requireValue(state.meta.epoch === epoch, "stale_epoch");
+  const saved = state.assets.find((item) => item.id === captured.id);
+  if (saved) {
+    requireValue(
+      canonical(saved) === canonical(captured),
+      "save_identity_conflict",
+    );
+    return state.assets;
+  }
+  let creating = true;
   return change(
     db,
     epoch,
     (rows) => {
-      assertCapture(captured, evidence());
       const existing = rows.find((item) => item.id === captured.id);
+      creating = !existing;
       if (existing) {
         requireValue(
           canonical(existing) === canonical(captured),
@@ -303,9 +352,15 @@ export async function saveCapture(db, epoch, row, evidence, options = {}) {
         );
         return rows;
       }
+      assertCapture(captured, evidence());
       return [...rows, captured];
     },
-    { ...options, beforeWrite: () => assertCapture(captured, evidence()) },
+    {
+      ...options,
+      beforeWrite: () => {
+        if (creating) assertCapture(captured, evidence());
+      },
+    },
   );
 }
 

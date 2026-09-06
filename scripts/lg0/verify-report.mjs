@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -192,12 +193,24 @@ export async function verifyBindings(
     "src/background/storage/db.ts",
     "src/background/storage/current-video-transcript-migration.ts",
   ];
+  if (Object.hasOwn(report.sources, "scripts/lg0/verify-report.mjs"))
+    expected.push("scripts/lg0/verify-report.mjs");
   assert.deepEqual(Object.keys(report.sources).sort(), expected.sort());
   for (const input of expected) {
-    const sha = createHash("sha256")
-      .update(await readSource(input))
-      .digest("hex");
-    assert.equal(sha, report.sources[input], `source changed: ${input}`);
+    const bytes = await readSource(input);
+    const source = bytes.toString("utf8");
+    const candidates =
+      report.sourceEncoding === "utf8-lf"
+        ? [source.replace(/\r\n/g, "\n")]
+        : [bytes, source.replace(/\r?\n/g, "\r\n")];
+    assert.ok(
+      candidates.some(
+        (value) =>
+          createHash("sha256").update(value).digest("hex") ===
+          report.sources[input],
+      ),
+      `source changed: ${input}`,
+    );
   }
   return true;
 }
@@ -206,7 +219,7 @@ if (
   process.argv[1] &&
   path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  const [mode, input] = process.argv.slice(2);
+  const [mode, input, revision] = process.argv.slice(2);
   assert.ok(
     ["--verify", "--archive"].includes(mode) && input,
     "Use --verify|--archive <run-directory>",
@@ -228,7 +241,22 @@ if (
   assert.deepEqual(preflight.sources, report.sources);
   assert.deepEqual(preflight.browser, report.browser);
   const result = evaluateReport(report);
-  result.currentSourceBindingsVerified = await verifyBindings(report);
+  if (revision) {
+    assert.equal(mode, "--verify");
+    assert.match(revision, /^[a-f0-9]{40}$/);
+    execFileSync("git", ["merge-base", "--is-ancestor", revision, "HEAD"], {
+      cwd: root,
+    });
+    await verifyBindings(report, async (input) =>
+      execFileSync("git", ["show", `${revision}:${input}`], {
+        cwd: root,
+        maxBuffer: 4 * 1024 * 1024,
+      }),
+    );
+    result.historicalSourceCommit = revision;
+    result.currentSourceBindingsVerified = false;
+    result.historicalSourceBindingsVerified = true;
+  } else result.currentSourceBindingsVerified = await verifyBindings(report);
   if (mode === "--archive") {
     assert.match(report.runId, /^[0-9TZ-]+-[a-f0-9]{8}$/);
     const destination = path.join(

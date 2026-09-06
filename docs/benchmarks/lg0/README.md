@@ -6,6 +6,14 @@
 
 **产物验证 pass；性能候选 fail；LG-0 未完成，不能开始 LG-1。**
 
+当前修正版为 [第二轮 48-run 收据](2026-09-06T08-31-42-524Z-77f22d7e/report.json)及其 [verdict](2026-09-06T08-31-42-524Z-77f22d7e/verdict.json)。当前源码绑定与重建浏览器 bundle SHA-256 均匹配。收据 commit 是测量时的已有 HEAD，未提交的测试源码以逐文件 sources 和实际 bundleSha256 绑定，不宣称 commit 本身包含全部被测变更。首轮基线保存在提交 `c813ea4d264b5b5731dea72e5f5d80165d17ee35`，只作为历史失败证据；修正版未覆盖或删除首轮记录。两轮共 96 次，当前结果不能借首轮较低的内存数值来表达。
+
+第二轮修复了中立复核发现的并发恢复覆盖风险、导入副本身份伪造、成功保存后的确认重试，以及新测试目录清理和 runner 故障收据核验。未作性能优化或放宽候选：搜索最大 cold p95 为 173.1ms、warm p95 为 198.3ms；最长主线程任务仍有 776ms，单条 10 MiB 场景阶段采样堆增长达到 690.0 MiB。三个场景超过主线程候选，两个超过 256 MiB 采样增长候选。
+
+第二轮全部运行无异常，18 个新建合成 profile 已在 runner 完成后清理。首轮遗留的 18 个合成 profile 的 PowerShell 清理请求被平台策略拒绝；没有换工具绕过，也没有读取或提交其内容，仍位于本地忽略的 release-artifacts/lg0 首轮目录。该清理残留需单独处理，不将其伪装成已清理。
+
+## 首轮记录
+
 首轮原始收据在 [2026-09-06T08-18-46-671Z-a891606c](2026-09-06T08-18-46-671Z-a891606c/report.json)，测前冻结记录在 [preflight.json](2026-09-06T08-18-46-671Z-a891606c/preflight.json)，完整裁决在 [verdict.json](2026-09-06T08-18-46-671Z-a891606c/verdict.json)。runner 的 lg0GateStatus 是未裁决占位，最终以 verifier 的 candidateGateStatus 为准；不得用占位值掩盖已测出的失败。
 
 6 个固定场景，每个 3 cold + 5 warm，共 48 次，无运行错误、无页面外部请求。真实 Chrome 152.0.7977.77（已安装 stable）、Node v24.14.1。官方 2026-09-04 的 [stable 元数据](https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json) 为 152.0.7977.82；本轮未自动升级浏览器，不声称验证最新 patch。精确 OS/CPU/内存见收据。
@@ -21,7 +29,7 @@
 
 搜索均达到 cold <=2000ms / warm <=500ms 候选。后三场景主线程任务超过 200ms；两个 10 MiB 场景的阶段采样增长超过预先声明的 256 MiB 候选。采样不是绝对峰值，但已观察到的超额足以证明该方案未达到该候选，不需要将未测到的峰值当作通过。
 
-全部 48 次往返提交回读一致；18 次播种后的正常浏览器关闭/重开保留数据，21 个真实 v13 schema 的合成表均保持内容不变。注入升级失败、事务 abort/quota、提交前取消与清空后的旧 epoch 写入均被拒绝且不损害已有记录。以上不证明真实磁盘配额耗尽、强制杀进程或扩展 service worker 被终止后的行为。
+全部 48 次同一运行内往返提交回读一致；18 次播种后的正常浏览器关闭/重开保留数量与规范字节大小（未记录跨进程完整内容哈希，不能据此声称逐字节重启一致性已验收），21 个真实 v13 schema 的合成表均保持内容不变。注入升级失败、事务 abort/quota、提交前取消与清空后的旧 epoch 写入均被拒绝且不损害已有记录。以上不证明真实磁盘配额耗尽、强制杀进程或扩展 service worker 被终止后的行为。
 
 ## 解释与最小修复方向
 
@@ -31,9 +39,10 @@
 
 ## 验证与边界
 
-- `node --test tests/lg0-learning-contract.test.ts`：初版 11/11。
-- `node scripts/lg0/verify-report.mjs --verify docs/benchmarks/lg0/2026-09-06T08-18-46-671Z-a891606c`：检查场景、次数、计时、容量、故障及源码绑定；验证器 PASS 不等于候选通过。
-- 全量测试初版 619/620；唯一失败仍是现有 CI 文件 CRLF 与 LF-only 正则不兼容（tests/gate-014-b1-matrix-runner.test.ts:99），未改该文件或测试。
+- `node --test tests/lg0*.test.ts`：数据合同与报告验证器回归 19/19。
+- `node scripts/lg0/verify-report.mjs --verify docs/benchmarks/lg0/2026-09-06T08-31-42-524Z-77f22d7e`：检查场景、次数、计时、容量、故障及当前源码绑定；验证器 PASS 不等于候选通过。
+- 验证历史首轮时使用 `node scripts/lg0/verify-report.mjs --verify docs/benchmarks/lg0/2026-09-06T08-18-46-671Z-a891606c c813ea4d264b5b5731dea72e5f5d80165d17ee35`，只检查明确的祖先提交，不把旧结果绑定到修正版。
+- 全量测试修正版 627/628；唯一失败仍是现有 CI 文件 CRLF 与 LF-only 正则不兼容（tests/gate-014-b1-matrix-runner.test.ts:99），未改该文件或测试。
 - typecheck / build 通过；release distribution 18 notices、8 entries、14 chunks；npm audit 0 vulnerabilities。
 - 历史 B1 verify 仍 pass，4680 operations，绑定未改；没有重跑或替换旧 B1。
 - 未读 Cookie、用户 profile、登录状态、凭据或用户库，未采集字幕、调用 AI、修改 release/tag/package。

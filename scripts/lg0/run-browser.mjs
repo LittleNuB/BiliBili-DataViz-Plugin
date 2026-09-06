@@ -1,13 +1,14 @@
 import { build } from "esbuild";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, realpath, rm } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { SCENARIOS, SEED } from "./fixtures.mjs";
 import { MAX_ASSETS, MAX_BYTES, MAX_FILE_BYTES } from "./learning-lab.mjs";
+import { evaluateReport } from "./verify-report.mjs";
 
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -40,6 +41,7 @@ const inputs = [
   "scripts/lg0/legacy-fixture.mjs",
   "scripts/lg0/browser-lab.mjs",
   "scripts/lg0/run-browser.mjs",
+  "scripts/lg0/verify-report.mjs",
   "docs/architecture/lg0-bounded-learning-contract.md",
   "package-lock.json",
   "src/background/storage/db.ts",
@@ -47,9 +49,12 @@ const inputs = [
 ];
 const sources = {};
 for (const input of inputs)
-  sources[input] = hash(await readFile(path.join(root, input)));
+  sources[input] = hash(
+    (await readFile(path.join(root, input), "utf8")).replace(/\r\n/g, "\n"),
+  );
 const preflight = {
   runId,
+  sourceEncoding: "utf8-lf",
   seed: SEED,
   startedAt: new Date().toISOString(),
   commit: execFileSync("git", ["rev-parse", "HEAD"], {
@@ -108,7 +113,22 @@ const report = {
   networkRejected: [],
 };
 let context;
+const profiles = new Set();
+async function removeProfile(profile) {
+  const resolved = await realpath(profile);
+  const allowed = await realpath(output);
+  if (!resolved.startsWith(allowed + path.sep))
+    throw new Error("unsafe_cleanup_path");
+  await rm(resolved, {
+    recursive: true,
+    force: true,
+    maxRetries: 8,
+    retryDelay: 250,
+  });
+  profiles.delete(profile);
+}
 async function launch(profile) {
+  profiles.add(profile);
   context = await chromium.launchPersistentContext(profile, {
     executablePath: chromePath,
     headless: true,
@@ -198,6 +218,7 @@ try {
       }
       await context.close();
       context = null;
+      await removeProfile(profile);
     }
     console.log(`LG0 ${scenario}: 3 cold + 5 warm recorded`);
   }
@@ -205,14 +226,33 @@ try {
   report.errors.push({ type: "runner", message: String(error) });
   process.exitCode = 1;
 } finally {
-  if (context) await context.close();
+  try {
+    if (context) await context.close();
+  } catch (error) {
+    report.errors.push({ type: "close", message: String(error) });
+  }
   await new Promise((resolve) => server.close(resolve));
+  for (const profile of [...profiles]) {
+    try {
+      await removeProfile(profile);
+    } catch (error) {
+      report.errors.push({ type: "cleanup", message: String(error) });
+    }
+  }
   report.completedAt = new Date().toISOString();
   report.status =
     report.runs.length === 48 && report.errors.length === 0
       ? "measured"
       : "incomplete";
   report.lg0GateStatus = "insufficient_evidence";
+  try {
+    report.verdict = evaluateReport(report);
+    report.lg0GateStatus = report.verdict.candidateGateStatus;
+  } catch (error) {
+    report.status = "invalid";
+    report.errors.push({ type: "receipt-validation", message: String(error) });
+    process.exitCode = 1;
+  }
   await writeFile(
     path.join(output, "report.json"),
     JSON.stringify(report, null, 2) + "\n",
