@@ -1,6 +1,6 @@
 import { LearningWorkerClient } from "./worker-client.mjs";
 import { fixture } from "./fixtures.mjs";
-import { encodeBackup } from "./learning-lab.mjs";
+import { encodeBackup, MAX_BYTES, MAX_FILE_BYTES } from "./learning-lab.mjs";
 
 let client;
 let name;
@@ -20,7 +20,8 @@ globalThis.safety = {
   async setup(databaseName) {
     await connect(databaseName);
     const file = await client.request("fixture", { scenario: "typical" });
-    await client.request("restore", { file, epoch: 0 });
+    const state = await client.request("state");
+    await client.request("restore", { file, epoch: state.epoch });
     const changed = fixture("typical");
     changed.forEach(row => { row.personal.note += " changed incoming content"; });
     incoming = new Blob([await encodeBackup(changed)]);
@@ -31,8 +32,17 @@ globalThis.safety = {
     return client.request("state");
   },
   async cancel(command, phaseToCancel) {
-    const before = await client.request("state");
+    // Export must operate on the actual capacity-sized database too.
+    const original = await client.request("export");
     const file = await client.request("fixture", { scenario: "single-large" });
+    if (command === "export") {
+      await client.request("clear");
+      const empty = await client.request("state");
+      await client.request("restore", { file, epoch: empty.epoch });
+    }
+    const before = await client.request("state");
+    check(file.size === MAX_FILE_BYTES, "cancel_input_not_at_capacity");
+    if (command === "export") check(before.bytes === MAX_BYTES, "cancel_export_not_at_capacity");
     const phases = [];
     const controller = new AbortController();
     let requested;
@@ -56,19 +66,28 @@ globalThis.safety = {
     await delay(Math.max(0, requested + 2100 - performance.now()));
     const later = await client.request("state");
     check(same(before, after) && same(before, later), "cancel_late_write");
-    return { command, phaseToCancel, phases, error,
+    const result = { command, phaseToCancel, phases, error, fileBytes: file.size,
+      before, after, later,
       acknowledgementMs: acknowledged - requested,
       afterCheckMs: performance.now() - requested, stateUnchanged: true };
+    if (command === "export") {
+      await client.request("clear");
+      const empty = await client.request("state");
+      await client.request("restore", { file: original, epoch: empty.epoch });
+    }
+    return result;
   },
-  startInterruption(phaseToHold) {
+  async startInterruption(phaseToHold) {
+    const before = await client.request("state");
     globalThis.interruptionPhase = null;
     globalThis.interruptionOutcome = null;
-    void client.request("restore", { file: incoming, epoch: 0, holdAfterWrite: phaseToHold === "written" }, {
+    void client.request("restore", { file: incoming, epoch: before.epoch, holdAfterWrite: phaseToHold === "written" }, {
       onPhase: phase => {
         if (phase === phaseToHold) globalThis.interruptionPhase = phase;
       },
     }).then(result => { globalThis.interruptionOutcome = result; },
       error => { globalThis.interruptionOutcome = { error: error.message }; });
+    return before;
   },
   async quota() {
     const before = await client.request("state");
@@ -85,12 +104,13 @@ globalThis.safety = {
     const file = new Blob([await encodeBackup(rows)]);
     let error;
     let errorName;
+    let errorNames;
     try { await client.request("restore", { file, epoch: before.epoch }); }
-    catch (failure) { error = failure.message; errorName = failure.name; }
+    catch (failure) { error = failure.message; errorName = failure.name; errorNames = failure.errorNames; }
     const after = await client.request("state");
-    check(errorName === "QuotaExceededError" || /quota/i.test(error ?? ""), `browser_quota_not_enforced:${errorName ?? "none"}:${error ?? "write_succeeded"}`);
+    check(errorNames?.includes("QuotaExceededError"), `browser_quota_not_enforced:${JSON.stringify(errorNames)}:${error ?? "write_succeeded"}`);
     check(same(before, after), "quota_partial_write");
-    return { errorName, reason: error, fileBytes: file.size, stateUnchanged: true, before, after };
+    return { errorName, errorNames, reason: error, fileBytes: file.size, stateUnchanged: true, before, after };
   },
   async recover() {
     const before = await client.request("state");
@@ -101,7 +121,12 @@ globalThis.safety = {
     check(same(after, await client.request("state")), "post_fault_not_idempotent");
     return { restoredCount: 60, idempotent: true, state: after };
   },
-  async restoreInput(text) {
+  async adversarial(scenario) {
+    const text = scenario === "over-file-limit" ? "x".repeat(MAX_FILE_BYTES + 1)
+      : scenario === "wide-array" ? ("[" + "0,".repeat(4097) + "0]").padEnd(MAX_FILE_BYTES, " ")
+        : scenario === "malformed-max" ? '{"assets":"'.padEnd(MAX_FILE_BYTES, "x")
+          : null;
+    check(text !== null, "unknown_adversarial_case");
     const before = await client.request("state");
     const file = new Blob([text]);
     let error;
@@ -110,7 +135,8 @@ globalThis.safety = {
     catch (failure) { error = failure.message; }
     const elapsedMs = performance.now() - start;
     check(Boolean(error) && same(before, await client.request("state")), "invalid_input_changed_state");
-    return { error, elapsedMs, fileBytes: file.size, stateUnchanged: true };
+    const after = await client.request("state");
+    return { scenario, error, elapsedMs, fileBytes: file.size, before, after, stateUnchanged: true };
   },
   dispose() { client?.dispose(); },
 };

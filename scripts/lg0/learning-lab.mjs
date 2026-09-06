@@ -230,9 +230,10 @@ export function assertCapture(row, evidence) {
 
 export async function encodeBackup(rows, { signal, onPhase } = {}) {
   cancelled(signal);
-  onPhase?.("encoding");
+  onPhase?.("before-encode");
   await new Promise((resolve) => setTimeout(resolve, 0));
   cancelled(signal);
+  onPhase?.("encoding");
   validateAssets(rows);
   for (const row of rows) await validateImportIdentity(row);
   const encoded = PREFIX + canonical(ordered(rows)) + SUFFIX;
@@ -298,7 +299,7 @@ export function parseBoundedBackupJson(text) {
   return JSON.parse(text);
 }
 
-export async function decodeBackup(file, { signal } = {}) {
+export async function decodeBackup(file, { signal, onPhase } = {}) {
   cancelled(signal);
   requireValue(
     Number.isSafeInteger(file.size) &&
@@ -309,6 +310,7 @@ export async function decodeBackup(file, { signal } = {}) {
   const bytes = await file.arrayBuffer();
   cancelled(signal);
   requireValue(bytes.byteLength === file.size, "file_size");
+  onPhase?.("decoding");
   const text = new TextDecoder("utf-8", {
     fatal: true,
     ignoreBOM: true,
@@ -318,7 +320,7 @@ export async function decodeBackup(file, { signal } = {}) {
   requireValue(data.format === FORMAT && data.version === 1, "format");
   // Exact encoding also rejects duplicate JSON keys, reordered assets and padded files.
   requireValue(
-    (await encodeBackup(data.assets)) === text,
+    (await encodeBackup(data.assets, { signal })) === text,
     "noncanonical_backup",
   );
   cancelled(signal);

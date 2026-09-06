@@ -59,3 +59,13 @@ test("LG-0 Worker progress covers the whole cancellable export interval", () => 
   input.runs[0].stages[1].elapsedMs = 2005;
   assert.equal(evaluateWorkerReport(input).candidatePerformanceStatus, "pass");
 });
+
+test("LG-0 Worker verifier refuses unmeasured commits and sparse heap evidence", () => {
+  const missingEnd = report();
+  missingEnd.runs[0].stages[2].phases.pop();
+  assert.throws(() => evaluateWorkerReport(missingEnd), /unmeasured commit end/);
+  const sparse = report();
+  sparse.runs[0].memory.samples[1].timestampMs = 251;
+  sparse.runs[0].memory.maximumSampleGapMs = 251;
+  assert.equal(evaluateWorkerReport(sparse).candidatePerformanceStatus, "insufficient_evidence");
+});

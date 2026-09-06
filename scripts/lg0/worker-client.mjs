@@ -22,6 +22,7 @@ export class LearningWorkerClient {
       if (data.error) {
         const error = new Error(data.error);
         error.name = data.errorName ?? "Error";
+        error.errorNames = data.errorNames ?? [error.name];
         entry.reject(error);
       }
       else entry.resolve(data.result);

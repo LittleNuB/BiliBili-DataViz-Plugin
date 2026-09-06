@@ -36,7 +36,7 @@ test("LG-0 export observes queued cancellation and keeps canonical output", asyn
       setTimeout(() => controller.abort(), 0);
     },
   }), /cancelled/);
-  assert.deepEqual(phases, ["encoding"]);
+  assert.deepEqual(phases, ["before-encode"]);
   assert.deepEqual(await decodeBackup(new Blob([await encodeBackup(rows)])), rows);
 });
 

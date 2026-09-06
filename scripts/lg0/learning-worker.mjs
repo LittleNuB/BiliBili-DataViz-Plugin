@@ -26,9 +26,10 @@ async function execute(command, payload, job) {
     return new Blob([await encodeBackup(fixture(payload.scenario))]);
   }
   if (command === "restore") {
-    postMessage({ id: job.id, phase: "parsing" });
+    postMessage({ id: job.id, phase: "before-decode" });
     const incoming = await decodeBackup(payload.file, {
       signal: job.controller.signal,
+      onPhase: (phase) => postMessage({ id: job.id, phase }),
     });
     const rows = await restore(db, payload.epoch, incoming, {
       signal: job.controller.signal,
@@ -98,7 +99,17 @@ self.onmessage = async ({ data }) => {
     const result = await execute(command, payload ?? {}, job);
     postMessage({ id, result });
   } catch (error) {
-    postMessage({ id, error: error.message, errorName: error.name });
+    const errorNames = [];
+    const pending = [error];
+    const seen = new Set();
+    while (pending.length && seen.size < 32) {
+      const current = pending.shift();
+      if (!current || typeof current !== "object" || seen.has(current)) continue;
+      seen.add(current);
+      if (typeof current.name === "string") errorNames.push(current.name);
+      pending.push(current.inner, current.cause, ...Object.values(current.failures ?? {}).slice(0, 32));
+    }
+    postMessage({ id, error: error.message, errorName: error.name, errorNames });
   } finally {
     active = null;
   }

@@ -35,8 +35,10 @@ export function evaluateWorkerReport(report) {
   assert.match(report.browser.product, /^Chrome\/\d+\.\d+\.\d+\.\d+$/);
   assert.equal(report.runs.length, 48);
   const failures = [];
+  const evidenceGaps = [];
   const summary = [];
   for (const scenario of SCENARIOS) {
+    const runCommitIntervals = [];
     const runs = report.runs.filter(run => run.scenario === scenario);
     assert.equal(runs.length, 8);
     const expectedCount = scenario === "empty" ? 0 : scenario === "typical" ? 30 : scenario === "single-large" ? 1 : 1000;
@@ -64,16 +66,29 @@ export function evaluateWorkerReport(report) {
         finite(stage.elapsedMs);
         let previous = 0;
         let committing = false;
+        let commitStarted;
         for (const phase of stage.phases) {
           finite(phase.elapsedMs);
           assert.ok(phase.elapsedMs >= previous && phase.elapsedMs <= stage.elapsedMs);
           if (!committing && phase.elapsedMs - previous > 2000) failures.push({ scenario, target: "progress", actual: phase.elapsedMs - previous });
-          if (["prepared", "preparing", "parsing"].includes(phase.phase)) committing = false;
-          else if (phase.phase === "committing") committing = true;
+          if (["prepared", "preparing", "parsing", "before-decode"].includes(phase.phase)) {
+            if (committing) {
+              runCommitIntervals.push(phase.elapsedMs - commitStarted);
+              committing = false;
+            }
+          } else if (phase.phase === "committing") {
+            assert.equal(committing, false, "duplicate commit start");
+            committing = true; commitStarted = phase.elapsedMs;
+          } else if (phase.phase === "committed") {
+            assert.equal(committing, true, "commit end without start");
+            runCommitIntervals.push(phase.elapsedMs - commitStarted);
+            committing = false;
+          }
           previous = phase.elapsedMs;
         }
         if (stage.name !== "search") {
           assert.ok(stage.phases.length > 0);
+          assert.equal(committing, false, "unmeasured commit end");
           if (!committing && stage.elapsedMs - previous > 2000) failures.push({ scenario, target: "progress", actual: stage.elapsedMs - previous });
         }
       }
@@ -91,6 +106,8 @@ export function evaluateWorkerReport(report) {
       const gap = Math.max(...memory.samples.slice(1).map((s, i) => s.timestampMs - memory.samples[i].timestampMs));
       finite(gap);
       assert.equal(memory.maximumSampleGapMs, gap);
+      if (gap > 250 || memory.samples.some(s => s.sampleDurationMs > 250))
+        evidenceGaps.push({ scenario, target: "heap_sampling_gap", maximumGapMs: gap });
     }
     const metrics = {
       scenario,
@@ -99,40 +116,43 @@ export function evaluateWorkerReport(report) {
       maximumMainTaskMs: Math.max(0, ...runs.flatMap(r => r.longTasks.map(t => t.durationMs))),
       sampledCombinedHeapGrowthBytes: Math.max(...runs.map(r => r.memory.sampledCombinedHeapGrowthBytes)),
       maximumSampleGapMs: Math.max(...runs.map(r => r.memory.maximumSampleGapMs)),
+      maximumCommitIntervalMs: Math.max(0, ...runCommitIntervals),
     };
     for (const [key, limit] of [["coldP95Ms", 2000], ["warmP95Ms", 500], ["maximumMainTaskMs", 200], ["sampledCombinedHeapGrowthBytes", 256 * 1024 * 1024]]) {
       if (metrics[key] > limit) failures.push({ scenario, target: key, actual: metrics[key], limit });
     }
     summary.push(metrics);
   }
-  return { artifactStatus: "pass", candidatePerformanceStatus: failures.length ? "fail" : "pass",
-    lg1Unlocked: false, failures, summary,
+  return { artifactStatus: "pass", candidatePerformanceStatus: failures.length ? "fail" : evidenceGaps.length ? "insufficient_evidence" : "pass",
+    lg1Unlocked: false, failures, evidenceGaps, summary,
     disclosure: "Performance evidence only. Requires safety receipts and PM/reviewer acceptance; sampling is not an absolute heap/RSS guarantee. Historical receipts unchanged." };
 }
 
-export async function verifyWorkerBindings(report, root, commit = report.commit) {
+export async function verifyWorkerBindings(report, root, commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), config = {}) {
   assert.equal(report.commit, commit);
-  assert.deepEqual(Object.keys(report.sources).sort(), [...WORKER_INPUTS].sort());
-  for (const input of WORKER_INPUTS) {
+  const inputs = config.inputs ?? WORKER_INPUTS;
+  assert.deepEqual(Object.keys(report.sources).sort(), [...inputs].sort());
+  for (const input of inputs) {
     const bytes = execFileSync("git", ["show", `${commit}:${input}`], { cwd: root, maxBuffer: 4 * 1024 * 1024 });
     const hash = createHash("sha256").update(bytes.toString("utf8").replace(/\r\n/g, "\n")).digest("hex");
     assert.equal(hash, report.sources[input], `source_commit_mismatch: ${input}`);
   }
-  const bundles = await buildWorkerBundles(root, commit);
+  const bundles = await buildWorkerBundles(root, commit, config);
   assert.deepEqual(report.bundles, Object.fromEntries(Object.entries(bundles).map(([url, bytes]) =>
     [url, createHash("sha256").update(bytes).digest("hex")])));
 }
 
-export async function buildWorkerBundles(root, commit) {
+export async function buildWorkerBundles(root, commit, { inputs = WORKER_INPUTS,
+  entries = [["/formal.js", "worker-formal-browser.mjs"], ["/worker.js", "learning-worker.mjs"]] } = {}) {
   const bundles = {};
-  for (const [url, entry] of [["/formal.js", "worker-formal-browser.mjs"], ["/worker.js", "learning-worker.mjs"]]) {
+  for (const [url, entry] of entries) {
     const result = await build({ absWorkingDir: root, entryPoints: ["scripts/lg0/" + entry],
       bundle: true, write: false, metafile: true, format: "esm", platform: "browser", target: "chrome152",
       plugins: commit ? [{ name: "bound-commit-source", setup(builder) {
         builder.onLoad({ filter: /\.(mjs|ts)$/ }, args => {
           const relative = path.relative(root, args.path).replaceAll(path.sep, "/");
           if (relative.startsWith("node_modules/") || relative.startsWith("../")) return;
-          assert.ok(WORKER_INPUTS.includes(relative), `unbound_source: ${relative}`);
+          assert.ok(inputs.includes(relative), `unbound_source: ${relative}`);
           return { contents: execFileSync("git", ["show", `${commit}:${relative}`], { cwd: root, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 }),
             loader: relative.endsWith(".ts") ? "ts" : "js", resolveDir: path.dirname(args.path) };
         });
@@ -140,7 +160,7 @@ export async function buildWorkerBundles(root, commit) {
     });
     for (const input of Object.keys(result.metafile.inputs)) {
       const relative = input.replaceAll("\\", "/");
-      assert.ok(relative.startsWith("node_modules/") || WORKER_INPUTS.includes(relative), `unbound_bundle_input: ${relative}`);
+      assert.ok(relative.startsWith("node_modules/") || inputs.includes(relative), `unbound_bundle_input: ${relative}`);
     }
     bundles[url] = result.outputFiles[0].contents;
   }
@@ -148,6 +168,8 @@ export async function buildWorkerBundles(root, commit) {
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const report = JSON.parse(await readFile(process.argv[2], "utf8"));
-  await verifyWorkerBindings(report, fileURLToPath(new URL("../../", import.meta.url)), process.argv[3] ?? report.commit);
-  console.log(JSON.stringify(evaluateWorkerReport(report), null, 2));
+  assert.ok(process.argv[3] === undefined || process.argv[3] === "--historical");
+  const historical = process.argv[3] === "--historical";
+  await verifyWorkerBindings(report, fileURLToPath(new URL("../../", import.meta.url)), historical ? report.commit : undefined);
+  console.log(JSON.stringify({ ...evaluateWorkerReport(report), verificationScope: historical ? "historical" : "HEAD", currentGateEligible: !historical }, null, 2));
 }
